@@ -8,13 +8,13 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
-use Monolog\Logger;
+use Psr\Log\LoggerInterface;
 
 class LoggingMiddleware implements MiddlewareInterface
 {
-    private Logger $logger;
+    private LoggerInterface $logger;
 
-    public function __construct(Logger $logger)
+    public function __construct(LoggerInterface $logger)
     {
         $this->logger = $logger;
     }
