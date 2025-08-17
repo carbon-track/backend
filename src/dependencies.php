@@ -5,6 +5,7 @@ declare(strict_types=1);
 use DI\Container;
 use Psr\Container\ContainerInterface;
 use Monolog\Logger;
+use Psr\Log\LoggerInterface;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\RotatingFileHandler;
 use Illuminate\Database\Capsule\Manager as Capsule;
@@ -57,6 +58,11 @@ return function (Container $container) {
             $fallbackLogger->error('Failed to create logger with configured handlers: ' . $e->getMessage());
             return $fallbackLogger;
         }
+    });
+
+    // Allow retrieving logger via interface
+    $container->set(LoggerInterface::class, function (Container $c) {
+        return $c->get(Logger::class);
     });
 
     // Database

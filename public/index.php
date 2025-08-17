@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use DI\Container;
+use Psr\Log\LoggerInterface;
 use Slim\Factory\AppFactory;
 use Slim\Factory\ServerRequestCreatorFactory;
 use Slim\ResponseEmitter;
@@ -21,17 +22,14 @@ try {
     $_ENV['APP_DEBUG'] = $_ENV['APP_DEBUG'] ?? 'true';
 }
 
-// Create Container
+// Create Container and register dependencies before creating the app
 $container = new Container();
+$dependencies = require __DIR__ . '/../src/dependencies.php';
+$dependencies($container);
 
-// Set container to create App with on AppFactory
+// Set container to create App with on AppFactory and then create the app
 AppFactory::setContainer($container);
-
-// Create App
 $app = AppFactory::create();
-
-// Register dependencies FIRST
-require __DIR__ . '/../src/dependencies.php';
 
 // Add Routing Middleware
 $app->addRoutingMiddleware();
@@ -44,7 +42,7 @@ $app->add(new CorsMiddleware());
 
 // Add Logging Middleware - now Logger is available in container
 try {
-    $logger = $container->get(\Monolog\Logger::class);
+    $logger = $container->get(LoggerInterface::class);
     $app->add(new LoggingMiddleware($logger));
 } catch (\Exception $e) {
     // If Logger creation fails, log error and continue without logging middleware
