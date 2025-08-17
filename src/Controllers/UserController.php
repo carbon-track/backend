@@ -1,0 +1,612 @@
+<?php
+
+declare(strict_types=1);
+
+namespace CarbonTrack\Controllers;
+
+use Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
+use CarbonTrack\Models\Avatar;
+use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\MessageService;
+use Monolog\Logger;
+use PDO;
+
+class UserController
+{
+    private AuthService $authService;
+    private AuditLogService $auditLogService;
+    private MessageService $messageService;
+    private Avatar $avatarModel;
+    private Logger $logger;
+    private PDO $db;
+
+    public function __construct(
+        AuthService $authService,
+        AuditLogService $auditLogService,
+        MessageService $messageService,
+        Avatar $avatarModel,
+        Logger $logger,
+        PDO $db
+    ) {
+        $this->authService = $authService;
+        $this->auditLogService = $auditLogService;
+        $this->messageService = $messageService;
+        $this->avatarModel = $avatarModel;
+        $this->logger = $logger;
+        $this->db = $db;
+    }
+
+    /**
+     * 更新用户资料
+     */
+    public function updateProfile(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $data = $request->getParsedBody();
+
+            // 获取当前用户完整信息
+            $stmt = $this->db->prepare("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL");
+            $stmt->execute([$user['id']]);
+            $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$currentUser) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'User not found',
+                    'code' => 'USER_NOT_FOUND'
+                ], 404);
+            }
+
+            // 准备更新数据
+            $updateData = [];
+            $allowedFields = ['real_name', 'class_name', 'avatar_id'];
+            $oldValues = [];
+
+            foreach ($allowedFields as $field) {
+                if (array_key_exists($field, $data)) {
+                    $oldValues[$field] = $currentUser[$field];
+                    $updateData[$field] = $data[$field];
+                }
+            }
+
+            // 特殊处理头像ID
+            if (isset($updateData['avatar_id'])) {
+                $avatarId = (int)$updateData['avatar_id'];
+                
+                // 验证头像是否可用
+                if (!$this->avatarModel->isAvatarAvailable($avatarId)) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Invalid avatar selection',
+                        'code' => 'INVALID_AVATAR'
+                    ], 400);
+                }
+            }
+
+            // 验证学校ID（如果提供）
+            if (isset($data['school_id'])) {
+                $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
+                $stmt->execute([$data['school_id']]);
+                if ($stmt->fetch()) {
+                    $oldValues['school_id'] = $currentUser['school_id'];
+                    $updateData['school_id'] = $data['school_id'];
+                } else {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Invalid school ID',
+                        'code' => 'INVALID_SCHOOL'
+                    ], 400);
+                }
+            }
+
+            if (empty($updateData)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'No valid fields to update',
+                    'code' => 'NO_UPDATE_DATA'
+                ], 400);
+            }
+
+            // 构建更新SQL
+            $fields = [];
+            $params = [];
+            
+            foreach ($updateData as $field => $value) {
+                $fields[] = "{$field} = ?";
+                $params[] = $value;
+            }
+            
+            $fields[] = "updated_at = NOW()";
+            $params[] = $user['id'];
+
+            $sql = "UPDATE users SET " . implode(', ', $fields) . " WHERE id = ? AND deleted_at IS NULL";
+            $stmt = $this->db->prepare($sql);
+            $success = $stmt->execute($params);
+
+            if (!$success) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Failed to update profile'
+                ], 500);
+            }
+
+            // 记录审计日志
+            $this->auditLogService->log([
+                'user_id' => $user['id'],
+                'action' => 'profile_updated',
+                'entity_type' => 'user',
+                'entity_id' => $user['id'],
+                'old_value' => json_encode($oldValues),
+                'new_value' => json_encode($updateData),
+                'notes' => 'User profile updated'
+            ]);
+
+            $this->logger->info('User profile updated', [
+                'user_id' => $user['id'],
+                'updated_fields' => array_keys($updateData)
+            ]);
+
+            // 获取更新后的用户信息
+            $stmt = $this->db->prepare("
+                SELECT u.*, s.name as school_name, a.file_path as avatar_url
+                FROM users u 
+                LEFT JOIN schools s ON u.school_id = s.id 
+                LEFT JOIN avatars a ON u.avatar_id = a.id
+                WHERE u.id = ? AND u.deleted_at IS NULL
+            ");
+            $stmt->execute([$user['id']]);
+            $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // 准备返回的用户信息
+            $userInfo = [
+                'id' => $updatedUser['id'],
+                'uuid' => $updatedUser['uuid'],
+                'username' => $updatedUser['username'],
+                'email' => $updatedUser['email'],
+                'real_name' => $updatedUser['real_name'],
+                'school_id' => $updatedUser['school_id'],
+                'school_name' => $updatedUser['school_name'],
+                'class_name' => $updatedUser['class_name'],
+                'points' => $updatedUser['points'],
+                'is_admin' => (bool)$updatedUser['is_admin'],
+                'avatar_id' => $updatedUser['avatar_id'],
+                'avatar_url' => $updatedUser['avatar_url'],
+                'last_login_at' => $updatedUser['last_login_at'],
+                'updated_at' => $updatedUser['updated_at']
+            ];
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Profile updated successfully',
+                'data' => $userInfo
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Update profile failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to update profile'
+            ], 500);
+        }
+    }
+
+    /**
+     * 选择用户头像
+     */
+    public function selectAvatar(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $data = $request->getParsedBody();
+
+            if (empty($data['avatar_id'])) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Avatar ID is required',
+                    'code' => 'MISSING_AVATAR_ID'
+                ], 400);
+            }
+
+            $avatarId = (int)$data['avatar_id'];
+
+            // 验证头像是否可用
+            if (!$this->avatarModel->isAvatarAvailable($avatarId)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid avatar selection',
+                    'code' => 'INVALID_AVATAR'
+                ], 400);
+            }
+
+            // 获取当前头像ID
+            $stmt = $this->db->prepare("SELECT avatar_id FROM users WHERE id = ? AND deleted_at IS NULL");
+            $stmt->execute([$user['id']]);
+            $currentAvatarId = $stmt->fetchColumn();
+
+            // 更新用户头像
+            $stmt = $this->db->prepare("UPDATE users SET avatar_id = ?, updated_at = NOW() WHERE id = ? AND deleted_at IS NULL");
+            $success = $stmt->execute([$avatarId, $user['id']]);
+
+            if (!$success) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Failed to update avatar'
+                ], 500);
+            }
+
+            // 获取新头像信息
+            $newAvatar = $this->avatarModel->getAvatarById($avatarId);
+
+            // 记录审计日志
+            $this->auditLogService->log([
+                'user_id' => $user['id'],
+                'action' => 'avatar_changed',
+                'entity_type' => 'user',
+                'entity_id' => $user['id'],
+                'old_value' => json_encode(['avatar_id' => $currentAvatarId]),
+                'new_value' => json_encode(['avatar_id' => $avatarId]),
+                'notes' => 'User changed avatar'
+            ]);
+
+            $this->logger->info('User avatar changed', [
+                'user_id' => $user['id'],
+                'old_avatar_id' => $currentAvatarId,
+                'new_avatar_id' => $avatarId
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Avatar updated successfully',
+                'data' => [
+                    'avatar_id' => $avatarId,
+                    'avatar_url' => $newAvatar['file_path'],
+                    'avatar_name' => $newAvatar['name']
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Select avatar failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to select avatar'
+            ], 500);
+        }
+    }
+
+    /**
+     * 获取用户积分历史
+     */
+    public function getPointsHistory(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $queryParams = $request->getQueryParams();
+            $page = max(1, (int)($queryParams['page'] ?? 1));
+            $limit = min(100, max(10, (int)($queryParams['limit'] ?? 20)));
+            $offset = ($page - 1) * $limit;
+
+            // 获取积分历史记录
+            $stmt = $this->db->prepare("
+                SELECT 
+                    pt.id,
+                    pt.uuid,
+                    pt.type,
+                    pt.points,
+                    pt.description,
+                    pt.status,
+                    pt.activity_id,
+                    ca.name_zh as activity_name,
+                    pt.created_at,
+                    pt.approved_at,
+                    pt.rejected_at,
+                    pt.admin_notes
+                FROM points_transactions pt
+                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
+                WHERE pt.user_id = ? AND pt.deleted_at IS NULL
+                ORDER BY pt.created_at DESC
+                LIMIT ? OFFSET ?
+            ");
+            $stmt->execute([$user['id'], $limit, $offset]);
+            $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 获取总数
+            $stmt = $this->db->prepare("
+                SELECT COUNT(*) as total
+                FROM points_transactions 
+                WHERE user_id = ? AND deleted_at IS NULL
+            ");
+            $stmt->execute([$user['id']]);
+            $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
+
+            // 格式化数据
+            foreach ($transactions as &$transaction) {
+                $transaction['points'] = (int)$transaction['points'];
+                $transaction['status_text'] = $this->getStatusText($transaction['status']);
+            }
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'transactions' => $transactions,
+                    'pagination' => [
+                        'page' => $page,
+                        'limit' => $limit,
+                        'total' => $total,
+                        'pages' => ceil($total / $limit)
+                    ]
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Get points history failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get points history'
+            ], 500);
+        }
+    }
+
+    /**
+     * 获取用户统计信息
+     */
+    public function getUserStats(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            // 获取积分统计
+            $stmt = $this->db->prepare("
+                SELECT 
+                    SUM(CASE WHEN type = 'earn' AND status = 'approved' THEN points ELSE 0 END) as total_earned,
+                    SUM(CASE WHEN type = 'spend' AND status = 'approved' THEN points ELSE 0 END) as total_spent,
+                    COUNT(CASE WHEN type = 'earn' AND status = 'approved' THEN 1 END) as earn_count,
+                    COUNT(CASE WHEN type = 'spend' AND status = 'approved' THEN 1 END) as spend_count,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count
+                FROM points_transactions 
+                WHERE user_id = ? AND deleted_at IS NULL
+            ");
+            $stmt->execute([$user['id']]);
+            $pointsStats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // 获取本月积分统计
+            $stmt = $this->db->prepare("
+                SELECT 
+                    SUM(CASE WHEN type = 'earn' AND status = 'approved' THEN points ELSE 0 END) as monthly_earned,
+                    COUNT(CASE WHEN type = 'earn' AND status = 'approved' THEN 1 END) as monthly_activities
+                FROM points_transactions 
+                WHERE user_id = ? AND deleted_at IS NULL 
+                AND DATE_FORMAT(created_at, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
+            ");
+            $stmt->execute([$user['id']]);
+            $monthlyStats = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            // 获取最近的活动
+            $stmt = $this->db->prepare("
+                SELECT 
+                    pt.points,
+                    pt.description,
+                    pt.created_at,
+                    ca.name_zh as activity_name
+                FROM points_transactions pt
+                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
+                WHERE pt.user_id = ? AND pt.type = 'earn' AND pt.status = 'approved' AND pt.deleted_at IS NULL
+                ORDER BY pt.created_at DESC
+                LIMIT 5
+            ");
+            $stmt->execute([$user['id']]);
+            $recentActivities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 获取当前用户信息
+            $stmt = $this->db->prepare("
+                SELECT points, created_at
+                FROM users 
+                WHERE id = ? AND deleted_at IS NULL
+            ");
+            $stmt->execute([$user['id']]);
+            $userInfo = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            $stats = [
+                'current_points' => (int)$userInfo['points'],
+                'total_earned' => (int)($pointsStats['total_earned'] ?? 0),
+                'total_spent' => (int)($pointsStats['total_spent'] ?? 0),
+                'earn_count' => (int)($pointsStats['earn_count'] ?? 0),
+                'spend_count' => (int)($pointsStats['spend_count'] ?? 0),
+                'pending_count' => (int)($pointsStats['pending_count'] ?? 0),
+                'monthly_earned' => (int)($monthlyStats['monthly_earned'] ?? 0),
+                'monthly_activities' => (int)($monthlyStats['monthly_activities'] ?? 0),
+                'member_since' => $userInfo['created_at'],
+                'recent_activities' => $recentActivities
+            ];
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $stats
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Get user stats failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get user stats'
+            ], 500);
+        }
+    }
+
+    /**
+     * 用户仪表盘图表数据（最近30天）
+     */
+    public function getChartData(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $stmt = $this->db->prepare("
+                SELECT 
+                    DATE(created_at) as date,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) as carbon_saved,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) as points
+                FROM carbon_records 
+                WHERE user_id = :user_id AND deleted_at IS NULL
+                    AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                GROUP BY DATE(created_at)
+                ORDER BY date ASC
+            ");
+            $stmt->execute(['user_id' => $user['id']]);
+            $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('Get chart data failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get chart data'
+            ], 500);
+        }
+    }
+
+    /**
+     * 最近活动列表（用于仪表盘）
+     */
+    public function getRecentActivities(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $stmt = $this->db->prepare("
+                SELECT 
+                    r.id,
+                    a.name_zh as activity_name_zh,
+                    a.name_en as activity_name_en,
+                    r.unit,
+                    r.amount as data,
+                    r.carbon_saved,
+                    r.points_earned,
+                    r.status,
+                    r.created_at
+                FROM carbon_records r
+                LEFT JOIN carbon_activities a ON r.activity_id = a.id
+                WHERE r.user_id = :user_id AND r.deleted_at IS NULL
+                ORDER BY r.created_at DESC
+                LIMIT 10
+            ");
+            $stmt->execute(['user_id' => $user['id']]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $rows
+            ]);
+        } catch (\Exception $e) {
+            $this->logger->error('Get recent activities failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get recent activities'
+            ], 500);
+        }
+    }
+
+    /**
+     * 获取状态文本
+     */
+    private function getStatusText(string $status): string
+    {
+        $statusMap = [
+            'pending' => '待审核',
+            'approved' => '已通过',
+            'rejected' => '已拒绝'
+        ];
+
+        return $statusMap[$status] ?? $status;
+    }
+
+    /**
+     * 返回JSON响应
+     */
+    private function jsonResponse(Response $response, array $data, int $status = 200): Response
+    {
+        $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus($status);
+    }
+}
+

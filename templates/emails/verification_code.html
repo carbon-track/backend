@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CarbonTrack - 邮箱验证码</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo {
+            font-size: 28px;
+            font-weight: bold;
+            color: #34C759;
+            margin-bottom: 10px;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 20px;
+        }
+        .verification-code {
+            background: linear-gradient(135deg, #34C759, #30D158);
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 30px 0;
+            letter-spacing: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        .content {
+            font-size: 16px;
+            line-height: 1.8;
+            margin-bottom: 20px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 14px;
+            color: #856404;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e5e7;
+            text-align: center;
+            font-size: 14px;
+            color: #8e8e93;
+        }
+        .footer a {
+            color: #007AFF;
+            text-decoration: none;
+        }
+        .bilingual {
+            margin-bottom: 15px;
+        }
+        .chinese {
+            font-weight: 500;
+        }
+        .english {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">🌱 CarbonTrack</div>
+            <h1 class="title">邮箱验证码 / Email Verification</h1>
+        </div>
+
+        <div class="content">
+            <div class="bilingual">
+                <div class="chinese">亲爱的 {{username}}，</div>
+                <div class="english">Dear {{username}},</div>
+            </div>
+
+            <div class="bilingual">
+                <div class="chinese">感谢您注册CarbonTrack！请使用以下验证码完成邮箱验证：</div>
+                <div class="english">Thank you for registering with CarbonTrack! Please use the following verification code to complete your email verification:</div>
+            </div>
+
+            <div class="verification-code">
+                {{verification_code}}
+            </div>
+
+            <div class="bilingual">
+                <div class="chinese">此验证码将在 {{expiry_minutes}} 分钟后过期。</div>
+                <div class="english">This verification code will expire in {{expiry_minutes}} minutes.</div>
+            </div>
+
+            <div class="warning">
+                <div class="bilingual">
+                    <div class="chinese">⚠️ 请勿将此验证码分享给任何人。CarbonTrack工作人员不会主动向您索要验证码。</div>
+                    <div class="english">⚠️ Do not share this verification code with anyone. CarbonTrack staff will never ask for your verification code.</div>
+                </div>
+            </div>
+
+            <div class="bilingual">
+                <div class="chinese">如果您没有注册CarbonTrack账户，请忽略此邮件。</div>
+                <div class="english">If you did not register for a CarbonTrack account, please ignore this email.</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="bilingual">
+                <div class="chinese">如有疑问，请联系我们：<a href="mailto:carbontrack666@gmail.com">carbontrack666@gmail.com</a></div>
+                <div class="english">If you have any questions, please contact us: <a href="mailto:carbontrack666@gmail.com">carbontrack666@gmail.com</a></div>
+            </div>
+            <p>© {{current_year}} CarbonTrack. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>
+

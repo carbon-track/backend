@@ -1,0 +1,25 @@
+🌱 CarbonTrack - 邮箱验证码 / Email Verification
+
+亲爱的 {{username}}，
+Dear {{username}},
+
+感谢您注册CarbonTrack！请使用以下验证码完成邮箱验证：
+Thank you for registering with CarbonTrack! Please use the following verification code to complete your email verification:
+
+验证码 / Verification Code: {{verification_code}}
+
+此验证码将在 {{expiry_minutes}} 分钟后过期。
+This verification code will expire in {{expiry_minutes}} minutes.
+
+⚠️ 重要提醒 / Important Notice:
+请勿将此验证码分享给任何人。CarbonTrack工作人员不会主动向您索要验证码。
+Do not share this verification code with anyone. CarbonTrack staff will never ask for your verification code.
+
+如果您没有注册CarbonTrack账户，请忽略此邮件。
+If you did not register for a CarbonTrack account, please ignore this email.
+
+如有疑问，请联系我们：carbontrack666@gmail.com
+If you have any questions, please contact us: carbontrack666@gmail.com
+
+© {{current_year}} CarbonTrack. All rights reserved.
+
