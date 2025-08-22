@@ -245,9 +245,11 @@ return function (Container $container) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new AuthController(
             $c->get(AuthService::class),
-            $c->get(AuditLogService::class),
             $c->get(EmailService::class),
             $c->get(TurnstileService::class),
+            $c->get(AuditLogService::class),
+            $c->get(MessageService::class),
+            $c->get(Logger::class),
             $db
         );
     });
