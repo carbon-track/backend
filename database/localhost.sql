@@ -1,0 +1,612 @@
+-- phpMyAdmin SQL Dump
+-- version 5.0.2
+-- https://www.phpmyadmin.net/
+--
+-- 主机： localhost:3306
+-- 生成日期： 2025-08-19 16:25:28
+-- 服务器版本： 5.6.51-log
+-- PHP 版本： 7.4.33
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+--
+-- 数据库： `dev_carbontracka`
+--
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `audit_logs`
+--
+
+CREATE TABLE `audit_logs` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `action` varchar(100) NOT NULL,
+  `data` longtext,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `avatars`
+--
+
+CREATE TABLE `avatars` (
+  `id` int(11) NOT NULL,
+  `uuid` varchar(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(100) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `file_path` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `thumbnail_path` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `category` varchar(50) COLLATE utf8mb4_unicode_ci DEFAULT 'default',
+  `sort_order` int(11) DEFAULT '0',
+  `is_active` tinyint(1) DEFAULT '1',
+  `is_default` tinyint(1) DEFAULT '0',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- 转存表中的数据 `avatars`
+--
+
+INSERT INTO `avatars` (`id`, `uuid`, `name`, `description`, `file_path`, `thumbnail_path`, `category`, `sort_order`, `is_active`, `is_default`, `created_at`, `updated_at`, `deleted_at`) VALUES
+(1, '550e8400-e29b-41d4-a716-446655440001', '默认头像1', NULL, '/avatars/default/avatar_01.png', NULL, 'default', 1, 1, 1, '2025-08-16 14:20:12', '2025-08-16 14:20:12', NULL);
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `carbon_activities`
+--
+
+CREATE TABLE `carbon_activities` (
+  `id` char(36) NOT NULL,
+  `name_zh` varchar(255) NOT NULL,
+  `name_en` varchar(255) NOT NULL,
+  `category` varchar(100) NOT NULL,
+  `carbon_factor` decimal(10,4) NOT NULL,
+  `unit` varchar(50) NOT NULL,
+  `description_zh` text,
+  `description_en` text,
+  `icon` varchar(100) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int(11) NOT NULL DEFAULT '0',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- 转存表中的数据 `carbon_activities`
+--
+
+INSERT INTO `carbon_activities` (`id`, `name_zh`, `name_en`, `category`, `carbon_factor`, `unit`, `description_zh`, `description_en`, `icon`, `is_active`, `sort_order`, `created_at`, `updated_at`, `deleted_at`) VALUES
+('550e8400-e29b-41d4-a716-446655440001', '购物时自带袋子', 'Bring your own bag when shopping', 'daily', '0.0190', 'times', NULL, NULL, 'shopping-bag', 1, 1, '2025-08-16 14:11:05', '2025-08-16 14:11:05', NULL),
+('550e8400-e29b-41d4-a716-446655440002', '早睡觉一小时', 'Sleep an hour earlier', 'daily', '0.0950', 'times', NULL, NULL, 'moon', 1, 2, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440003', '刷牙时关掉水龙头', 'Turn off the tap while brushing teeth', 'daily', '0.0090', 'times', NULL, NULL, 'water-drop', 1, 3, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440004', '出门自带水杯', 'Bring your own water bottle', 'daily', '0.0400', 'times', NULL, NULL, 'bottle', 1, 4, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440005', '垃圾分类', 'Sort waste properly', 'daily', '0.0004', 'times', NULL, NULL, 'recycle', 1, 5, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440006', '减少打印纸', 'Reduce unnecessary printing paper', 'daily', '0.0040', 'sheets', NULL, NULL, 'printer', 1, 6, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440007', '减少使用一次性餐盒', 'Reduce disposable meal boxes', 'daily', '0.1900', 'times', NULL, NULL, 'takeaway-box', 1, 7, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440008', '简易包装礼物', 'Use minimal gift wrapping', 'daily', '0.1400', 'times', NULL, NULL, 'gift', 1, 8, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440009', '夜跑', 'Night running', 'daily', '0.0950', 'times', NULL, NULL, 'running', 1, 9, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440010', '自然风干湿发', 'Air-dry wet hair', 'daily', '0.1520', 'times', NULL, NULL, 'hair-dryer', 1, 10, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440011', '点外卖选择\"无需餐具\"', 'Choose No-Cutlery when ordering delivery', 'daily', '0.0540', 'times', NULL, NULL, 'cutlery', 1, 11, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440012', '下班时关电脑和灯', 'Turn off computer and lights when off-duty', 'daily', '0.1660', 'times', NULL, NULL, 'power-off', 1, 12, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440013', '晚上睡觉全程关灯', 'Keep lights off at night', 'daily', '0.1100', 'times', NULL, NULL, 'light-bulb', 1, 13, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440014', '快速洗澡', 'Take a quick shower', 'daily', '0.1200', 'times', NULL, NULL, 'shower', 1, 14, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440015', '阳光晾晒衣服', 'Sun-dry clothes', 'daily', '0.3230', 'times', NULL, NULL, 'clothes-line', 1, 15, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440016', '夏天空调调至26°C以上', 'Set AC to above 78°F during Summer', 'daily', '0.2190', 'times', NULL, NULL, 'air-conditioner', 1, 16, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440017', '攒够一桶衣服再洗', 'Save and wash a full load of clothes', 'daily', '0.4730', 'times', NULL, NULL, 'washing-machine', 1, 17, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440018', '化妆品用完购买替代装', 'Buy refillable cosmetics or toiletries', 'consumption', '0.0850', 'times', NULL, NULL, 'cosmetics', 1, 18, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440019', '购买本地应季水果', 'Buy local seasonal fruits', 'consumption', '2.9800', 'kg', NULL, NULL, 'fruit', 1, 19, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440020', '自己做饭', 'Cook at home', 'consumption', '0.1900', 'times', NULL, NULL, 'cooking', 1, 20, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440021', '吃一顿轻食', 'Have a light meal', 'consumption', '0.3600', 'times', NULL, NULL, 'salad', 1, 21, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440022', '吃完水果蔬菜', 'Finish all fruits and vegetables', 'consumption', '0.0163', 'times', NULL, NULL, 'vegetables', 1, 22, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440023', '光盘行动', 'Finish all food on the plate', 'consumption', '0.0163', 'times', NULL, NULL, 'clean-plate', 1, 23, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440024', '喝燕麦奶或植物基食品', 'Drink oat milk or plant-based food', 'consumption', '0.6430', 'times', NULL, NULL, 'plant-milk', 1, 24, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440025', '公交地铁通勤', 'Use public transport', 'transport', '0.1005', 'km', NULL, NULL, 'bus', 1, 25, '2025-08-16 14:11:05', '2025-08-16 14:11:05', NULL),
+('550e8400-e29b-41d4-a716-446655440026', '骑行探索城市', 'Explore the city by bike', 'transport', '0.1490', 'km', NULL, NULL, 'bicycle', 1, 26, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440027', '乘坐快轨去机场', 'Take high-speed rail to the airport', 'transport', '3.8700', 'times', NULL, NULL, 'train', 1, 27, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440028', '拼车', 'Carpool', 'transport', '0.0450', 'km', NULL, NULL, 'carpool', 1, 28, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440029', '自行车出行', 'Travel by bike', 'transport', '0.1490', 'km', NULL, NULL, 'bike-travel', 1, 29, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440030', '种一棵树', 'Plant a tree', 'environmental', '10.0000', 'trees', NULL, NULL, 'tree', 1, 30, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440031', '购买二手书', 'Buy a second-hand book', 'consumption', '2.8800', 'books', NULL, NULL, 'book', 1, 31, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440032', '旅行时自备洗漱用品', 'Bring your own toiletries when traveling', 'travel', '0.0470', 'times', NULL, NULL, 'toiletries', 1, 32, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440033', '旧物改造', 'Repurpose old items', 'consumption', '0.7700', 'items', NULL, NULL, 'recycle-item', 1, 33, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440034', '购买一级能效家电', 'Buy an energy-efficient appliance', 'consumption', '2.1500', 'appliances', NULL, NULL, 'energy-star', 1, 34, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440035', '购买白色或浅色衣物', 'Buy white or light-colored clothes', 'consumption', '3.4300', 'items', NULL, NULL, 'white-clothes', 1, 35, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440036', '花一天享受户外', 'Spend a full day outdoors', 'lifestyle', '0.7570', 'days', NULL, NULL, 'outdoor', 1, 36, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440037', '自己种菜并吃', 'Grow and eat your own vegetables', 'environmental', '0.0250', 'kg', NULL, NULL, 'garden', 1, 37, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440038', '减少使用手机时间', 'Reduce screen time', 'lifestyle', '0.0003', 'minutes', NULL, NULL, 'phone-time', 1, 38, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440039', '节约用电1度', 'Save 1 kWh electricity', 'energy', '1.0000', 'kWh', NULL, NULL, 'electricity', 1, 39, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440040', '节约用水1L', 'Save 1L water', 'water', '1.0000', 'liters', NULL, NULL, 'water-save', 1, 40, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL),
+('550e8400-e29b-41d4-a716-446655440041', '垃圾分类1次', 'Sort waste once', 'waste', '145.0000', 'times', NULL, NULL, 'waste-sort', 1, 41, '2025-08-16 22:24:01', '2025-08-16 22:24:01', NULL);
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `carbon_records`
+--
+
+CREATE TABLE `carbon_records` (
+  `id` char(36) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `activity_id` char(36) NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `unit` varchar(50) NOT NULL,
+  `carbon_saved` decimal(12,4) NOT NULL DEFAULT '0.0000',
+  `points_earned` int(11) NOT NULL DEFAULT '0',
+  `date` date NOT NULL,
+  `description` text,
+  `images` longtext,
+  `status` enum('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  `reviewed_by` int(11) DEFAULT NULL,
+  `reviewed_at` datetime DEFAULT NULL,
+  `review_note` text,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `error_logs`
+--
+
+CREATE TABLE `error_logs` (
+  `id` int(11) NOT NULL,
+  `error_type` varchar(50) DEFAULT NULL,
+  `error_message` text,
+  `error_file` varchar(255) DEFAULT NULL,
+  `error_line` int(11) DEFAULT NULL,
+  `error_time` datetime DEFAULT NULL,
+  `script_name` varchar(255) DEFAULT NULL,
+  `client_get` text,
+  `client_post` text,
+  `client_files` text,
+  `client_cookie` text,
+  `client_session` text,
+  `client_server` text
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `idempotency_records`
+--
+
+CREATE TABLE `idempotency_records` (
+  `id` int(11) NOT NULL,
+  `idempotency_key` varchar(36) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `request_method` varchar(10) NOT NULL,
+  `request_uri` varchar(512) NOT NULL,
+  `request_body` longtext,
+  `response_status` int(11) NOT NULL,
+  `response_body` longtext NOT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(512) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `login_attempts`
+--
+
+CREATE TABLE `login_attempts` (
+  `id` int(11) NOT NULL,
+  `username` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ip_address` varchar(45) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `success` tinyint(1) NOT NULL DEFAULT '0',
+  `user_agent` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `attempted_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `messages`
+--
+
+CREATE TABLE `messages` (
+  `id` int(11) NOT NULL,
+  `sender_id` int(11) DEFAULT NULL,
+  `receiver_id` int(11) NOT NULL,
+  `title` varchar(255) NOT NULL DEFAULT '',
+  `content` text NOT NULL,
+  `is_read` tinyint(1) NOT NULL DEFAULT '0',
+  `created_at` datetime DEFAULT NULL,
+  `updated_at` datetime DEFAULT NULL,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `points_transactions`
+--
+
+CREATE TABLE `points_transactions` (
+  `username` text,
+  `id` int(11) NOT NULL,
+  `email` varchar(255) NOT NULL,
+  `time` datetime NOT NULL,
+  `img` varchar(512) DEFAULT NULL,
+  `points` decimal(10,2) NOT NULL,
+  `auth` varchar(50) DEFAULT NULL,
+  `raw` decimal(10,2) NOT NULL,
+  `act` varchar(255) DEFAULT NULL,
+  `uid` int(11) NOT NULL,
+  `activity_id` char(36) DEFAULT NULL,
+  `type` varchar(50) DEFAULT NULL,
+  `notes` text,
+  `activity_date` date DEFAULT NULL,
+  `status` enum('pending','approved','rejected','deleted') NOT NULL DEFAULT 'pending',
+  `approved_by` int(11) DEFAULT NULL,
+  `approved_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `point_exchanges`
+--
+
+CREATE TABLE `point_exchanges` (
+  `id` char(36) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `product_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL DEFAULT '1',
+  `points_used` int(11) NOT NULL,
+  `product_name` varchar(255) NOT NULL,
+  `product_price` int(11) NOT NULL,
+  `delivery_address` varchar(255) DEFAULT NULL,
+  `contact_phone` varchar(50) DEFAULT NULL,
+  `notes` text,
+  `status` enum('pending','processing','shipped','completed','cancelled') NOT NULL DEFAULT 'pending',
+  `tracking_number` varchar(100) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `products`
+--
+
+CREATE TABLE `products` (
+  `name` text NOT NULL,
+  `category` varchar(100) DEFAULT NULL,
+  `id` int(11) NOT NULL,
+  `points_required` int(10) NOT NULL,
+  `description` text NOT NULL,
+  `image_path` text NOT NULL,
+  `images` longtext COMMENT 'JSON images',
+  `stock` int(11) NOT NULL,
+  `status` enum('active','inactive') NOT NULL DEFAULT 'active',
+  `sort_order` int(11) NOT NULL DEFAULT '0',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `schools`
+--
+
+CREATE TABLE `schools` (
+  `id` int(11) NOT NULL,
+  `name` text NOT NULL,
+  `deleted_at` datetime DEFAULT NULL,
+  `location` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1'
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `spec_points_transactions`
+--
+
+CREATE TABLE `spec_points_transactions` (
+  `username` text,
+  `id` int(11) NOT NULL,
+  `email` text NOT NULL,
+  `time` text NOT NULL,
+  `img` text NOT NULL,
+  `points` double DEFAULT NULL,
+  `auth` text,
+  `raw` double NOT NULL,
+  `act` text NOT NULL,
+  `uid` int(11) NOT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `transactions`
+--
+
+CREATE TABLE `transactions` (
+  `id` int(11) NOT NULL,
+  `points_spent` double NOT NULL,
+  `transaction_time` text NOT NULL,
+  `product_id` int(11) NOT NULL,
+  `user_email` text NOT NULL,
+  `school` text,
+  `location` text
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `users`
+--
+
+CREATE TABLE `users` (
+  `id` int(11) NOT NULL,
+  `username` varchar(255) DEFAULT NULL,
+  `password` varchar(255) NOT NULL,
+  `lastlgn` datetime DEFAULT NULL,
+  `email` varchar(255) NOT NULL,
+  `points` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `school` varchar(255) DEFAULT NULL,
+  `location` varchar(255) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL,
+  `status` enum('active','inactive','suspended') NOT NULL DEFAULT 'active',
+  `is_admin` tinyint(1) NOT NULL DEFAULT '0',
+  `class_name` varchar(100) DEFAULT NULL,
+  `school_id` int(11) DEFAULT NULL,
+  `avatar_id` int(11) DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+--
+-- 转储表的索引
+--
+
+--
+-- 表的索引 `audit_logs`
+--
+ALTER TABLE `audit_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_audit_logs_user` (`user_id`),
+  ADD KEY `idx_audit_logs_created_at` (`created_at`);
+
+--
+-- 表的索引 `avatars`
+--
+ALTER TABLE `avatars`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uuid` (`uuid`);
+
+--
+-- 表的索引 `carbon_activities`
+--
+ALTER TABLE `carbon_activities`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_carbon_activities_category` (`category`),
+  ADD KEY `idx_carbon_activities_is_active` (`is_active`),
+  ADD KEY `idx_carbon_activities_sort_order` (`sort_order`);
+
+--
+-- 表的索引 `carbon_records`
+--
+ALTER TABLE `carbon_records`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_carbon_records_user` (`user_id`),
+  ADD KEY `idx_carbon_records_activity` (`activity_id`),
+  ADD KEY `idx_carbon_records_status` (`status`),
+  ADD KEY `idx_carbon_records_date` (`date`);
+
+--
+-- 表的索引 `error_logs`
+--
+ALTER TABLE `error_logs`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- 表的索引 `idempotency_records`
+--
+ALTER TABLE `idempotency_records`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `idx_idempotency_key` (`idempotency_key`),
+  ADD KEY `idx_user_id` (`user_id`),
+  ADD KEY `idx_created_at` (`created_at`),
+  ADD KEY `idx_request_uri` (`request_uri`(191));
+
+--
+-- 表的索引 `login_attempts`
+--
+ALTER TABLE `login_attempts`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- 表的索引 `messages`
+--
+ALTER TABLE `messages`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- 表的索引 `points_transactions`
+--
+ALTER TABLE `points_transactions`
+  ADD UNIQUE KEY `id_3` (`id`),
+  ADD UNIQUE KEY `id_4` (`id`),
+  ADD UNIQUE KEY `id_5` (`id`),
+  ADD KEY `id` (`id`),
+  ADD KEY `id_2` (`id`),
+  ADD KEY `points` (`points`),
+  ADD KEY `points_2` (`points`),
+  ADD KEY `points_3` (`points`),
+  ADD KEY `points_4` (`points`),
+  ADD KEY `id_6` (`id`),
+  ADD KEY `id_7` (`id`),
+  ADD KEY `idx_activity_date` (`activity_date`),
+  ADD KEY `idx_points_transactions_status` (`status`),
+  ADD KEY `idx_points_transactions_approved_by` (`approved_by`),
+  ADD KEY `idx_points_transactions_approved_at` (`approved_at`),
+  ADD KEY `idx_points_transactions_deleted_at` (`deleted_at`),
+  ADD KEY `idx_points_transactions_created_at` (`created_at`),
+  ADD KEY `idx_points_transactions_type` (`type`),
+  ADD KEY `idx_points_transactions_activity_id` (`activity_id`);
+
+--
+-- 表的索引 `point_exchanges`
+--
+ALTER TABLE `point_exchanges`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_point_exchanges_user_id` (`user_id`),
+  ADD KEY `idx_point_exchanges_product_id` (`product_id`),
+  ADD KEY `idx_point_exchanges_status` (`status`);
+
+--
+-- 表的索引 `products`
+--
+ALTER TABLE `products`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_products_status` (`status`),
+  ADD KEY `idx_products_category` (`category`),
+  ADD KEY `idx_products_sort_order` (`sort_order`);
+
+--
+-- 表的索引 `schools`
+--
+ALTER TABLE `schools`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `id` (`id`);
+
+--
+-- 表的索引 `spec_points_transactions`
+--
+ALTER TABLE `spec_points_transactions`
+  ADD UNIQUE KEY `id_3` (`id`),
+  ADD UNIQUE KEY `id_4` (`id`),
+  ADD UNIQUE KEY `id_5` (`id`),
+  ADD KEY `id` (`id`),
+  ADD KEY `id_2` (`id`),
+  ADD KEY `points` (`points`),
+  ADD KEY `points_2` (`points`),
+  ADD KEY `points_3` (`points`),
+  ADD KEY `points_4` (`points`),
+  ADD KEY `id_6` (`id`),
+  ADD KEY `id_7` (`id`);
+
+--
+-- 表的索引 `transactions`
+--
+ALTER TABLE `transactions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `id_2` (`id`),
+  ADD UNIQUE KEY `id_4` (`id`),
+  ADD KEY `id` (`id`),
+  ADD KEY `id_3` (`id`);
+
+--
+-- 表的索引 `users`
+--
+ALTER TABLE `users`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `id` (`id`),
+  ADD UNIQUE KEY `idx_users_email_unique` (`email`),
+  ADD KEY `idx_users_username` (`username`),
+  ADD KEY `idx_users_deleted_at` (`deleted_at`),
+  ADD KEY `idx_users_status` (`status`),
+  ADD KEY `idx_users_is_admin` (`is_admin`),
+  ADD KEY `idx_users_created_at` (`created_at`);
+
+--
+-- 在导出的表使用AUTO_INCREMENT
+--
+
+--
+-- 使用表AUTO_INCREMENT `audit_logs`
+--
+ALTER TABLE `audit_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `avatars`
+--
+ALTER TABLE `avatars`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+
+--
+-- 使用表AUTO_INCREMENT `error_logs`
+--
+ALTER TABLE `error_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `idempotency_records`
+--
+ALTER TABLE `idempotency_records`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `login_attempts`
+--
+ALTER TABLE `login_attempts`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `messages`
+--
+ALTER TABLE `messages`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `points_transactions`
+--
+ALTER TABLE `points_transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `products`
+--
+ALTER TABLE `products`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `schools`
+--
+ALTER TABLE `schools`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `spec_points_transactions`
+--
+ALTER TABLE `spec_points_transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `transactions`
+--
+ALTER TABLE `transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `users`
+--
+ALTER TABLE `users`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+COMMIT;
