@@ -75,6 +75,8 @@ return function (App $app) {
             $carbon->get('/transactions', [CarbonTrackController::class, 'getUserRecords']);
             $carbon->get('/transactions/{id:[0-9a-fA-F\-]+}', [CarbonTrackController::class, 'getRecordDetail']);
             // Admin review actions
+            // Unified review endpoint (expects body with { action: 'approve'|'reject' } or { status: 'approved'|'rejected' })
+            $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}', [CarbonTrackController::class, 'reviewRecord']);
             $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/approve', [CarbonTrackController::class, 'reviewRecord']);
             $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/reject', [CarbonTrackController::class, 'reviewRecord']);
             // Optional: delete (soft delete) transaction
@@ -97,7 +99,7 @@ return function (App $app) {
         $group->group('/exchange', function (RouteCollectorProxy $exchange) {
             $exchange->post('', [ProductController::class, 'exchangeProduct']);
             $exchange->get('/transactions', [ProductController::class, 'getExchangeTransactions']);
-            $exchange->get('/transactions/{id:[0-9]+}', [ProductController::class, 'getExchangeTransaction']);
+            $exchange->get('/transactions/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeTransaction']);
         })->add(AuthMiddleware::class);
 
         // Message routes
@@ -128,12 +130,14 @@ return function (App $app) {
             // Carbon activities management
             $admin->get('/carbon-activities', [CarbonActivityController::class, 'getActivitiesForAdmin']);
             $admin->post('/carbon-activities', [CarbonActivityController::class, 'createActivity']);
+            // 将具体的静态路由放在变量路由之前
+            $admin->get('/carbon-activities/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
+            $admin->put('/carbon-activities/sort-orders', [CarbonActivityController::class, 'updateSortOrders']);
+            // 然后是变量路由
             $admin->put('/carbon-activities/{id}', [CarbonActivityController::class, 'updateActivity']);
             $admin->delete('/carbon-activities/{id}', [CarbonActivityController::class, 'deleteActivity']);
             $admin->post('/carbon-activities/{id}/restore', [CarbonActivityController::class, 'restoreActivity']);
             $admin->get('/carbon-activities/{id}/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
-            $admin->get('/carbon-activities/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
-            $admin->put('/carbon-activities/sort-orders', [CarbonActivityController::class, 'updateSortOrders']);
 
             // Admin activities review (alias for pending records)
             $admin->get('/activities', [CarbonTrackController::class, 'getPendingRecords']);
@@ -141,7 +145,12 @@ return function (App $app) {
 
             // Admin exchanges
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
-            $admin->put('/exchanges/{id:[0-9]+}/status', [ProductController::class, 'updateExchangeStatus']);
+            // Detail endpoint for a single exchange
+            $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);
+            // Backward-compatible status endpoint
+            $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}/status', [ProductController::class, 'updateExchangeStatus']);
+            // Alias to support OpenAPI/Frontend using PUT /admin/exchanges/{id}
+            $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
 
             // Admin products
             $admin->get('/products', [ProductController::class, 'getProducts']);
@@ -151,15 +160,17 @@ return function (App $app) {
             
             // Avatar management
             $admin->get('/avatars', [AvatarController::class, 'getAvatars']);
-            $admin->get('/avatars/{id:[0-9]+}', [AvatarController::class, 'getAvatar']);
             $admin->post('/avatars', [AvatarController::class, 'createAvatar']);
+            // 将具体的静态路由放在变量路由之前
+            $admin->put('/avatars/sort-orders', [AvatarController::class, 'updateSortOrders']);
+            $admin->get('/avatars/usage-stats', [AvatarController::class, 'getAvatarUsageStats']);
+            $admin->post('/avatars/upload', [AvatarController::class, 'uploadAvatarFile']);
+            // 然后是变量路由
+            $admin->get('/avatars/{id:[0-9]+}', [AvatarController::class, 'getAvatar']);
             $admin->put('/avatars/{id:[0-9]+}', [AvatarController::class, 'updateAvatar']);
             $admin->delete('/avatars/{id:[0-9]+}', [AvatarController::class, 'deleteAvatar']);
             $admin->post('/avatars/{id:[0-9]+}/restore', [AvatarController::class, 'restoreAvatar']);
             $admin->put('/avatars/{id:[0-9]+}/set-default', [AvatarController::class, 'setDefaultAvatar']);
-            $admin->put('/avatars/sort-orders', [AvatarController::class, 'updateSortOrders']);
-            $admin->get('/avatars/usage-stats', [AvatarController::class, 'getAvatarUsageStats']);
-            $admin->post('/avatars/upload', [AvatarController::class, 'uploadAvatarFile']);
         })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
 
         // File upload routes (authenticated users)

@@ -310,6 +310,38 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertEquals(200, $resp->getStatusCode());
     }
 
+    public function testReviewRecordUnifiedStatusApproved(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id'=>9]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        // fetch record
+        $fetch = $this->createMock(\PDOStatement::class);
+        $fetch->method('execute')->willReturn(true);
+        $fetch->method('fetch')->willReturn(['id'=>'r9','user_id'=>1,'points_earned'=>30,'status'=>'pending']);
+        // update record status
+        $update = $this->createMock(\PDOStatement::class);
+        $update->method('execute')->willReturn(true);
+        // update user points
+        $updatePoints = $this->createMock(\PDOStatement::class);
+        $updatePoints->method('execute')->willReturn(true);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
+
+        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $request = makeRequest('PUT', '/carbon-track/transactions/r9', ['status' => 'approved']);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->reviewRecord($request, $response, ['id' => 'r9']);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+    }
+
     public function testDeleteTransactionForOwner(): void
     {
         $pdo = $this->createMock(\PDO::class);

@@ -353,8 +353,15 @@ class CarbonTrackController
             $recordId = $args['id'];
             $data = $request->getParsedBody();
 
-            if (!isset($data['action']) || !in_array($data['action'], ['approve', 'reject'])) {
-                return $this->json($response, ['error' => 'Invalid action'], 400);
+            // Accept either { action: 'approve'|'reject' } or { status: 'approved'|'rejected' }
+            $action = $data['action'] ?? null;
+            if (!$action && isset($data['status'])) {
+                if (in_array($data['status'], ['approved', 'rejected'])) {
+                    $action = $data['status'] === 'approved' ? 'approve' : 'reject';
+                }
+            }
+            if (!in_array($action, ['approve', 'reject'], true)) {
+                return $this->json($response, ['error' => 'Invalid action or status'], 400);
             }
 
             // 获取记录信息
@@ -367,7 +374,6 @@ class CarbonTrackController
                 return $this->json($response, ['error' => 'Record already reviewed'], 400);
             }
 
-            $action = $data['action'];
             $reviewNote = $data['review_note'] ?? null;
 
             // 更新记录状态

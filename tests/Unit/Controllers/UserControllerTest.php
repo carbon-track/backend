@@ -204,6 +204,117 @@ class UserControllerTest extends TestCase
         $this->assertEquals(300, $json['data']['total_earned']);
         $this->assertEquals('2024-01-01', $json['data']['member_since']);
     }
+
+    public function testGetCurrentUserSuccess(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetch')->willReturn([
+            'id' => 1,
+            'uuid' => 'u-1',
+            'username' => 'john',
+            'email' => 'john@example.com',
+            'real_name' => 'John',
+            'school_id' => 5,
+            'school_name' => 'Test School',
+            'class_name' => 'C1',
+            'points' => 200,
+            'is_admin' => 0,
+            'avatar_id' => 10,
+            'avatar_url' => '/a.png',
+            'last_login_at' => null,
+            'updated_at' => '2025-01-01 00:00:00'
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+        $request = makeRequest('GET', '/users/me');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getCurrentUser($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertEquals('john', $json['data']['username']);
+    }
+
+    public function testUpdateCurrentUserDelegatesToUpdateProfile(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+        $avatar->method('isAvatarAvailable')->willReturn(true);
+        $avatar->method('getAvatarById')->willReturn([
+            'id' => 10,
+            'name' => 'Test Avatar',
+            'file_path' => '/avatars/default/avatar_01.png'
+        ]);
+        $audit->expects($this->once())->method('log');
+
+        // 1) SELECT current user / 2) UPDATE users / 3) SELECT joined user
+        $stmtSelectUser = $this->createMock(\PDOStatement::class);
+        $stmtSelectUser->method('execute')->willReturn(true);
+        $stmtSelectUser->method('fetch')->willReturn([
+            'id' => 1,
+            'username' => 'john',
+            'real_name' => 'John',
+            'class_name' => 'C1',
+            'avatar_id' => null,
+            'school_id' => null
+        ]);
+
+        $stmtUpdate = $this->createMock(\PDOStatement::class);
+        $stmtUpdate->method('execute')->willReturn(true);
+
+        $stmtJoined = $this->createMock(\PDOStatement::class);
+        $stmtJoined->method('execute')->willReturn(true);
+        $stmtJoined->method('fetch')->willReturn([
+            'id' => 1,
+            'uuid' => 'u-1',
+            'username' => 'john',
+            'email' => 'john@example.com',
+            'real_name' => 'John',
+            'school_id' => null,
+            'school_name' => null,
+            'class_name' => 'C1',
+            'points' => 0,
+            'is_admin' => 0,
+            'avatar_id' => 10,
+            'avatar_url' => '/avatars/default/avatar_01.png',
+            'last_login_at' => null,
+            'updated_at' => '2025-01-01 00:00:00'
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        // prepare 顺序: select user -> update -> select joined
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+            $stmtSelectUser,
+            $stmtUpdate,
+            $stmtJoined
+        );
+
+        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+        $request = makeRequest('PUT', '/users/me', ['real_name' => 'John', 'class_name' => 'C1', 'avatar_id' => 10]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->updateCurrentUser($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertEquals(10, $json['data']['avatar_id']);
+    }
 }
 
 

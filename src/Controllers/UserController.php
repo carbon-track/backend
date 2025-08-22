@@ -39,6 +39,82 @@ class UserController
     }
 
     /**
+     * 获取当前用户信息
+     */
+    public function getCurrentUser(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $stmt = $this->db->prepare("
+                SELECT u.*, s.name as school_name, a.file_path as avatar_url
+                FROM users u 
+                LEFT JOIN schools s ON u.school_id = s.id 
+                LEFT JOIN avatars a ON u.avatar_id = a.id
+                WHERE u.id = ? AND u.deleted_at IS NULL
+            ");
+            $stmt->execute([$user['id']]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'User not found',
+                    'code' => 'USER_NOT_FOUND'
+                ], 404);
+            }
+
+            $userInfo = [
+                'id' => $row['id'],
+                'uuid' => $row['uuid'] ?? null,
+                'username' => $row['username'],
+                'email' => $row['email'],
+                'real_name' => $row['real_name'],
+                'school_id' => $row['school_id'],
+                'school_name' => $row['school_name'],
+                'class_name' => $row['class_name'],
+                'points' => (int)$row['points'],
+                'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
+                'avatar_id' => $row['avatar_id'],
+                'avatar_url' => $row['avatar_url'],
+                'last_login_at' => $row['last_login_at'] ?? null,
+                'updated_at' => $row['updated_at'] ?? null
+            ];
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $userInfo
+            ]);
+
+        } catch (\Exception $e) {
+            $this->logger->error('Get current user failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => $user['id'] ?? null
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get current user'
+            ], 500);
+        }
+    }
+
+    /**
+     * 更新当前用户（兼容旧接口，转到 updateProfile）
+     */
+    public function updateCurrentUser(Request $request, Response $response): Response
+    {
+        return $this->updateProfile($request, $response);
+    }
+
+    /**
      * 更新用户资料
      */
     public function updateProfile(Request $request, Response $response): Response

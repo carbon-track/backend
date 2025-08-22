@@ -23,39 +23,54 @@ class LoggingMiddleware implements MiddlewareInterface
     {
         $start = microtime(true);
         
-        // Log request
-        $this->logger->info('Request received', [
-            'method' => $request->getMethod(),
-            'uri' => (string) $request->getUri(),
-            'ip' => $this->getClientIp($request),
-            'user_agent' => $request->getHeaderLine('User-Agent')
-        ]);
+        // Log request with error handling
+        try {
+            $this->logger->info('Request received', [
+                'method' => $request->getMethod(),
+                'uri' => (string) $request->getUri(),
+                'ip' => $this->getClientIp($request),
+                'user_agent' => $request->getHeaderLine('User-Agent')
+            ]);
+        } catch (\Exception $e) {
+            // 如果日志记录失败，不要中断请求处理
+            error_log('Logging failed: ' . $e->getMessage());
+        }
 
         try {
             $response = $handler->handle($request);
             
             $duration = microtime(true) - $start;
             
-            // Log response
-            $this->logger->info('Request completed', [
-                'method' => $request->getMethod(),
-                'uri' => (string) $request->getUri(),
-                'status' => $response->getStatusCode(),
-                'duration' => round($duration * 1000, 2) . 'ms'
-            ]);
+            // Log response with error handling
+            try {
+                $this->logger->info('Request completed', [
+                    'method' => $request->getMethod(),
+                    'uri' => (string) $request->getUri(),
+                    'status' => $response->getStatusCode(),
+                    'duration' => round($duration * 1000, 2) . 'ms'
+                ]);
+            } catch (\Exception $e) {
+                // 如果日志记录失败，不要中断响应
+                error_log('Logging failed: ' . $e->getMessage());
+            }
             
             return $response;
             
         } catch (\Exception $e) {
             $duration = microtime(true) - $start;
             
-            // Log error
-            $this->logger->error('Request failed', [
-                'method' => $request->getMethod(),
-                'uri' => (string) $request->getUri(),
-                'error' => $e->getMessage(),
-                'duration' => round($duration * 1000, 2) . 'ms'
-            ]);
+            // Log error with error handling
+            try {
+                $this->logger->error('Request failed', [
+                    'method' => $request->getMethod(),
+                    'uri' => (string) $request->getUri(),
+                    'error' => $e->getMessage(),
+                    'duration' => round($duration * 1000, 2) . 'ms'
+                ]);
+            } catch (\Exception $logError) {
+                // 如果日志记录失败，至少记录到error_log
+                error_log('Request failed and logging failed: ' . $e->getMessage() . ' | Log error: ' . $logError->getMessage());
+            }
             
             throw $e;
         }

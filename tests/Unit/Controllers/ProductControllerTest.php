@@ -331,6 +331,84 @@ class ProductControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['pagination']['total']);
     }
+
+    public function testGetExchangeRecordDetailSuccess(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id'=>9]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetch')->willReturn(['id'=>'e1','user_id'=>1,'product_name'=>'Gift']);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/admin/exchanges/e1');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getExchangeRecordDetail($request, $response, ['id' => 'e1']);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertEquals('e1', $json['data']['id']);
+    }
+
+    public function testGetExchangeTransactionsAliasSuccess(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id'=>5]);
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->method('execute')->willReturn(true);
+        $countStmt->method('fetch')->willReturn(['total'=>1]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->method('bindValue')->willReturn(true);
+        $listStmt->method('execute')->willReturn(true);
+        $listStmt->method('fetchAll')->willReturn([
+            ['id'=>'e1','current_product_images'=>null]
+        ]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/exchange/transactions');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getExchangeTransactions($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertEquals(1, $json['pagination']['total']);
+    }
+
+    public function testGetExchangeTransactionDetailSuccess(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id'=>5]);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetch')->willReturn(['id'=>'e1','user_id'=>5,'product_name'=>'Gift']);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/exchange/transactions/e1');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getExchangeTransaction($request, $response, ['id' => 'e1']);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertEquals('e1', $json['data']['id']);
+    }
 }
 
 

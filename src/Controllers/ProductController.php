@@ -300,6 +300,39 @@ class ProductController
     }
 
     /**
+     * 获取当前用户兑换历史（路由别名，复用 getUserExchanges）
+     */
+    public function getExchangeTransactions(Request $request, Response $response): Response
+    {
+        return $this->getUserExchanges($request, $response);
+    }
+
+    /**
+     * 获取当前用户某条兑换详情
+     */
+    public function getExchangeTransaction(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->json($response, ['error' => 'Unauthorized'], 401);
+            }
+            $exchangeId = $args['id'];
+            $sql = "SELECT * FROM point_exchanges WHERE id = :id AND user_id = :uid AND deleted_at IS NULL";
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute(['id' => $exchangeId, 'uid' => $user['id']]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                return $this->json($response, ['error' => 'Exchange not found'], 404);
+            }
+            return $this->json($response, ['success' => true, 'data' => $row]);
+        } catch (\Exception $e) {
+            error_log("Get exchange transaction error: " . $e->getMessage());
+            return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    /**
      * 获取用户兑换历史
      */
     public function getUserExchanges(Request $request, Response $response): Response
@@ -446,6 +479,47 @@ class ProductController
 
         } catch (\Exception $e) {
             error_log("Get exchange records error: " . $e->getMessage());
+            return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    /**
+     * 管理员获取单个兑换记录详情
+     */
+    public function getExchangeRecordDetail(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => 'Admin access required'], 403);
+            }
+
+            $exchangeId = $args['id'];
+            $sql = "
+                SELECT 
+                    e.*,
+                    u.username,
+                    u.email,
+                    p.name as current_product_name
+                FROM point_exchanges e
+                LEFT JOIN users u ON e.user_id = u.id
+                LEFT JOIN products p ON e.product_id = p.id
+                WHERE e.id = :id AND e.deleted_at IS NULL
+            ";
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute(['id' => $exchangeId]);
+            $exchange = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$exchange) {
+                return $this->json($response, ['error' => 'Exchange not found'], 404);
+            }
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $exchange
+            ]);
+        } catch (\Exception $e) {
+            error_log("Get exchange detail error: " . $e->getMessage());
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }

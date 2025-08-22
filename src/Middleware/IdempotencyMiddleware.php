@@ -52,7 +52,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
             return $this->badRequestResponse('X-Request-ID must be a valid UUID');
         }
         
-        try {
+    try {
             // Check if this request has been processed before
             $existingRecord = IdempotencyRecord::where('idempotency_key', $idempotencyKey)
                 ->where('created_at', '>', date('Y-m-d H:i:s', strtotime('-24 hours'))) // Only check last 24 hours
@@ -82,7 +82,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
             
             return $response;
             
-        } catch (\Exception $e) {
+    } catch (\Throwable $e) {
             $this->logger->error('Idempotency middleware error', [
                 'error' => $e->getMessage(),
                 'idempotency_key' => $idempotencyKey,
@@ -111,7 +111,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
 
     private function storeIdempotencyRecord(string $idempotencyKey, ServerRequestInterface $request, ResponseInterface $response): void
     {
-        try {
+    try {
             $userId = $request->getAttribute('user_id');
             $responseBody = (string) $response->getBody();
             
@@ -130,7 +130,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
                 'user_agent' => $request->getHeaderLine('User-Agent')
             ]);
             
-        } catch (\Exception $e) {
+    } catch (\Throwable $e) {
             $this->logger->error('Failed to store idempotency record', [
                 'error' => $e->getMessage(),
                 'idempotency_key' => $idempotencyKey

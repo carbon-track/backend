@@ -9,6 +9,8 @@ use Slim\Factory\ServerRequestCreatorFactory;
 use Slim\ResponseEmitter;
 use CarbonTrack\Middleware\CorsMiddleware;
 use CarbonTrack\Middleware\LoggingMiddleware;
+use CarbonTrack\Middleware\IdempotencyMiddleware;
+use CarbonTrack\Services\DatabaseService;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -42,8 +44,14 @@ $app->add(new CorsMiddleware());
 
 // Add Logging Middleware - now Logger is available in container
 try {
-    $logger = $container->get(LoggerInterface::class);
+    // 直接从容器获取Monolog Logger实例，而不是通过接口
+    $logger = $container->get(\Monolog\Logger::class);
     $app->add(new LoggingMiddleware($logger));
+    // 添加幂等性中间件，保护敏感写操作
+    $app->add(new IdempotencyMiddleware(
+        $container->get(DatabaseService::class),
+        $logger
+    ));
 } catch (\Exception $e) {
     // If Logger creation fails, log error and continue without logging middleware
     error_log('Failed to create LoggingMiddleware: ' . $e->getMessage());
@@ -60,8 +68,40 @@ $errorMiddleware = $app->addErrorMiddleware(
     true
 );
 
+// Custom error handler for 404 errors
+$errorMiddleware->setErrorHandler(
+    Slim\Exception\HttpNotFoundException::class,
+    function (Psr\Http\Message\ServerRequestInterface $request, Throwable $exception, bool $displayErrorDetails) {
+        $response = new \Slim\Psr7\Response();
+        $response->getBody()->write(json_encode([
+            'success' => false,
+            'error' => 'Not Found',
+            'message' => 'The requested resource was not found',
+            'path' => $request->getUri()->getPath(),
+            'method' => $request->getMethod(),
+            'timestamp' => date('Y-m-d H:i:s')
+        ]));
+        
+        return $response
+            ->withStatus(404)
+            ->withHeader('Content-Type', 'application/json');
+    }
+);
+
+// Add a debug route to test if routing is working
+$app->get('/debug', function ($request, $response) {
+    $response->getBody()->write(json_encode([
+        'success' => true,
+        'message' => 'Debug route working',
+        'routes' => 'Routes registered successfully',
+        'timestamp' => date('Y-m-d H:i:s')
+    ]));
+    return $response->withHeader('Content-Type', 'application/json');
+});
+
 // Register routes
-require __DIR__ . '/../src/routes.php';
+$routes = require __DIR__ . '/../src/routes.php';
+$routes($app);
 
 // Run App
 $response = $app->handle($request);

@@ -101,3 +101,4 @@ class DatabaseService
         return $this->capsule->getConnection()->getDatabaseName();
     }
 }
+

@@ -38,21 +38,44 @@ return function (Container $container) {
             // 检查环境变量是否设置，如果没有则使用默认值
             $appEnv = $_ENV['APP_ENV'] ?? 'development';
             
-            if ($appEnv === 'production') {
+            // 检查是否为Windows环境
+            $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+            
+            if ($appEnv === 'production' && !$isWindows) {
+                // 生产环境且非Windows系统
                 $logPath = __DIR__ . '/../logs/app.log';
-                // 确保日志目录存在
-                if (!is_dir(dirname($logPath))) {
-                    mkdir(dirname($logPath), 0755, true);
+                $logDir = dirname($logPath);
+                
+                // 确保日志目录存在并且有正确的权限
+                if (!is_dir($logDir)) {
+                    if (!mkdir($logDir, 0755, true)) {
+                        throw new \Exception("无法创建日志目录: {$logDir}");
+                    }
                 }
+                
+                // 检查目录是否可写
+                if (!is_writable($logDir)) {
+                    throw new \Exception("日志目录不可写: {$logDir}");
+                }
+                
+                // 尝试创建或写入日志文件
+                if (!file_exists($logPath)) {
+                    if (!touch($logPath)) {
+                        throw new \Exception("无法创建日志文件: {$logPath}");
+                    }
+                    chmod($logPath, 0644);
+                }
+                
                 $handler = new RotatingFileHandler($logPath, 0, Logger::INFO);
             } else {
+                // 开发环境或Windows系统使用标准输出
                 $handler = new StreamHandler('php://stdout', Logger::DEBUG);
             }
             
             $logger->pushHandler($handler);
             return $logger;
         } catch (\Exception $e) {
-            // 如果Logger创建失败，创建一个基本的Logger
+            // 如果Logger创建失败，创建一个基本的Logger到标准错误输出
             $fallbackLogger = new Logger('carbontrack');
             $fallbackLogger->pushHandler(new StreamHandler('php://stderr', Logger::ERROR));
             $fallbackLogger->error('Failed to create logger with configured handlers: ' . $e->getMessage());
@@ -68,7 +91,7 @@ return function (Container $container) {
     // Database
     $container->set(DatabaseService::class, function () {
         $capsule = new Capsule;
-        
+
         $capsule->addConnection([
             'driver' => 'mysql',
             'host' => $_ENV['DB_HOST'] ?? 'localhost',
@@ -85,10 +108,10 @@ return function (Container $container) {
                 PDO::ATTR_EMULATE_PREPARES => false,
             ],
         ]);
-        
+
         $capsule->setAsGlobal();
         $capsule->bootEloquent();
-        
+
         return new DatabaseService($capsule);
     });
 
