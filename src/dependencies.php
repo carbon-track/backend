@@ -30,7 +30,7 @@ use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
 
-return function (Container $container) {
+$__deps_initializer = function (Container $container) {
     // Logger
     $container->set(Logger::class, function () {
         try {
@@ -337,4 +337,12 @@ return function (Container $container) {
         );
     });
 };
+
+// If this file is included in a scope that already has a $container (e.g., tests),
+// initialize it immediately for convenience. Still return the initializer for normal usage.
+if (isset($container) && $container instanceof Container) {
+    $__deps_initializer($container);
+}
+
+return $__deps_initializer;
 
