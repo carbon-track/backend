@@ -36,10 +36,16 @@ class Avatar
         
         $sql .= " ORDER BY sort_order ASC, id ASC";
         
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            return $result;
+        } catch (\Exception $e) {
+            error_log("Avatar query failed: " . $e->getMessage());
+            return [];
+        }
     }
 
     /**
