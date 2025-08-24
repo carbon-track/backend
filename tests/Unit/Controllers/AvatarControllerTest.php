@@ -24,8 +24,7 @@ class AvatarControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'is_admin'=>0]);
         $avatarModel->method('getAvailableAvatars')->willReturn([
-            ['id'=>1,'name'=>'A','is_active'=>1],
-            ['id'=>2,'name'=>'B','is_active'=>0]
+            ['id'=>1,'name'=>'A','is_active'=>1]
         ]);
 
         $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger);

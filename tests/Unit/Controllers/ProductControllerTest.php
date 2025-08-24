@@ -55,10 +55,10 @@ class ProductControllerTest extends TestCase
         $this->assertEquals(200, $resp->getStatusCode());
         $json = json_decode((string) $resp->getBody(), true);
         $this->assertTrue($json['success']);
-        $this->assertEquals(1, $json['pagination']['total']);
-        $this->assertEquals('Eco Bottle', $json['data'][0]['name']);
-        $this->assertEquals(['/a.png'], $json['data'][0]['images']);
-        $this->assertTrue($json['data'][0]['is_available']);
+        $this->assertEquals(1, $json['data']['pagination']['total']);
+        $this->assertEquals('Eco Bottle', $json['data']['products'][0]['name']);
+        $this->assertEquals(['/a.png'], $json['data']['products'][0]['images']);
+        $this->assertTrue($json['data']['products'][0]['is_available']);
     }
 
     public function testGetProductDetail(): void
