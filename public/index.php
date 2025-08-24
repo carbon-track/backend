@@ -33,14 +33,14 @@ $dependencies($container);
 AppFactory::setContainer($container);
 $app = AppFactory::create();
 
+// Add CORS Middleware FIRST so it can short-circuit OPTIONS preflight before routing
+$app->add(new CorsMiddleware());
+
 // Add Routing Middleware
 $app->addRoutingMiddleware();
 
 // Add Body Parsing Middleware
 $app->addBodyParsingMiddleware();
-
-// Add CORS Middleware
-$app->add(new CorsMiddleware());
 
 // Add Logging Middleware - now Logger is available in container
 try {

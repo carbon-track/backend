@@ -82,6 +82,8 @@ class CorsMiddleware implements MiddlewareInterface
                     $preflight = $preflight->withHeader($name, $value);
                 }
             }
+            // Debug header to verify middleware is active
+            $preflight = $preflight->withHeader('X-CORS-Middleware', 'active');
             $preflight = $preflight->withAddedHeader('Vary', implode(', ', array_unique($varyValues)));
 
             // If client asked for a specific method, reflect it for clarity
@@ -95,13 +97,15 @@ class CorsMiddleware implements MiddlewareInterface
         }
 
         // For non-OPTIONS, proceed to downstream and then append headers
-        $response = $handler->handle($request);
+    $response = $handler->handle($request);
         foreach ($headersToSet as $name => $value) {
             if ($value !== null && $value !== '') {
                 $response = $response->withHeader($name, $value);
             }
         }
-        $response = $response->withAddedHeader('Vary', implode(', ', array_unique($varyValues)));
+    $response = $response->withAddedHeader('Vary', implode(', ', array_unique($varyValues)));
+    // Debug header as well for non-OPTIONS
+    $response = $response->withHeader('X-CORS-Middleware', 'active');
 
         return $response;
     }
