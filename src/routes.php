@@ -113,7 +113,7 @@ return function (App $app) {
         })->add(AuthMiddleware::class);
 
         // School routes (public for listing)
-        $group->get('/schools', [SchoolController::class, 'getSchools']);
+        $group->get('/schools', [SchoolController::class, 'index']);
         
         // Admin routes
         $group->group('/admin', function (RouteCollectorProxy $admin) {
@@ -123,9 +123,9 @@ return function (App $app) {
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get('/stats', [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
-            $admin->post('/schools', [SchoolController::class, 'createSchool']);
-            $admin->put('/schools/{id:[0-9]+}', [SchoolController::class, 'updateSchool']);
-            $admin->delete('/schools/{id:[0-9]+}', [SchoolController::class, 'deleteSchool']);
+            $admin->post('/schools', [SchoolController::class, 'store']);
+            $admin->put('/schools/{id:[0-9]+}', [SchoolController::class, 'update']);
+            $admin->delete('/schools/{id:[0-9]+}', [SchoolController::class, 'delete']);
             
             // Carbon activities management
             $admin->get('/carbon-activities', [CarbonActivityController::class, 'getActivitiesForAdmin']);

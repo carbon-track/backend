@@ -92,27 +92,47 @@ return function (Container $container) {
     $container->set(DatabaseService::class, function () {
         $capsule = new Capsule;
 
-        $capsule->addConnection([
-            'driver' => 'mysql',
-            'host' => $_ENV['DB_HOST'] ?? 'localhost',
-            'port' => $_ENV['DB_PORT'] ?? 3306,
-            'database' => $_ENV['DB_DATABASE'] ?? 'carbontrack',
-            'username' => $_ENV['DB_USERNAME'] ?? 'root',
-            'password' => $_ENV['DB_PASSWORD'] ?? '',
-            'charset' => 'utf8mb4',
-            'collation' => 'utf8mb4_unicode_ci',
-            'prefix' => '',
-            'options' => [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false,
-            ],
-        ]);
+        $dbConnection = $_ENV['DB_CONNECTION'] ?? 'mysql';
+        
+        if ($dbConnection === 'sqlite') {
+            $capsule->addConnection([
+                'driver' => 'sqlite',
+                'database' => $_ENV['DB_DATABASE'] ?? '/tmp/test.db',
+                'prefix' => '',
+                'options' => [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                ],
+            ]);
+        } else {
+            $capsule->addConnection([
+                'driver' => 'mysql',
+                'host' => $_ENV['DB_HOST'] ?? 'localhost',
+                'port' => $_ENV['DB_PORT'] ?? 3306,
+                'database' => $_ENV['DB_DATABASE'] ?? 'carbontrack',
+                'username' => $_ENV['DB_USERNAME'] ?? 'root',
+                'password' => $_ENV['DB_PASSWORD'] ?? '',
+                'charset' => 'utf8mb4',
+                'collation' => 'utf8mb4_unicode_ci',
+                'prefix' => '',
+                'options' => [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                ],
+            ]);
+        }
 
         $capsule->setAsGlobal();
         $capsule->bootEloquent();
 
         return new DatabaseService($capsule);
+    });
+
+    // PDO Service (for services that need direct PDO access)
+    $container->set(PDO::class, function (ContainerInterface $c) {
+        return $c->get(DatabaseService::class)->getConnection()->getPdo();
     });
 
     // Auth Service
@@ -171,7 +191,7 @@ return function (Container $container) {
     // Audit Log Service
     $container->set(AuditLogService::class, function (ContainerInterface $c) {
         return new AuditLogService(
-            $c->get(DatabaseService::class),
+            $c->get(PDO::class),
             $c->get(Logger::class)
         );
     });
@@ -225,9 +245,11 @@ return function (Container $container) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new AuthController(
             $c->get(AuthService::class),
-            $c->get(AuditLogService::class),
             $c->get(EmailService::class),
             $c->get(TurnstileService::class),
+            $c->get(AuditLogService::class),
+            $c->get(MessageService::class),
+            $c->get(Logger::class),
             $db
         );
     });

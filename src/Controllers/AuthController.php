@@ -51,7 +51,7 @@ class AuthController
             $data = $request->getParsedBody();
             
             // 验证必需字段
-            $requiredFields = ['username', 'email', 'password', 'confirm_password', 'real_name', 'school_id', 'class_name'];
+            $requiredFields = ['username', 'email', 'password', 'confirm_password'];
             foreach ($requiredFields as $field) {
                 if (empty($data[$field])) {
                     return $this->jsonResponse($response, [
@@ -72,8 +72,8 @@ class AuthController
             }
 
             // 验证Turnstile
-            if (!empty($data['turnstile_token'])) {
-                $turnstileValid = $this->turnstileService->verify($data['turnstile_token']);
+            if (!empty($data['cf_turnstile_response'])) {
+                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
                 if (!$turnstileValid) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -105,40 +105,41 @@ class AuthController
                 ], 409);
             }
 
-            // 验证学校是否存在
-            $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
-            $stmt->execute([$data['school_id']]);
-            if (!$stmt->fetch()) {
-                return $this->jsonResponse($response, [
-                    'success' => false,
-                    'message' => 'Invalid school ID',
-                    'code' => 'INVALID_SCHOOL'
-                ], 400);
+            // 验证学校是否存在 (optional)
+            if (!empty($data['school_id'])) {
+                $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
+                $stmt->execute([$data['school_id']]);
+                if (!$stmt->fetch()) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Invalid school ID',
+                        'code' => 'INVALID_SCHOOL'
+                    ], 400);
+                }
             }
 
             // 创建用户
             $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
-            $uuid = $this->generateUUID();
             
             $stmt = $this->db->prepare("
                 INSERT INTO users (
-                    uuid, username, email, password_hash, real_name, 
-                    school_id, class_name, points, is_admin, 
+                    username, email, password, 
+                    school_id, class_name, 
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, NOW(), NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ");
             
             $stmt->execute([
-                $uuid,
                 $data['username'],
                 $data['email'],
                 $hashedPassword,
-                $data['real_name'],
-                $data['school_id'],
-                $data['class_name']
+                $data['school_id'] ?? null,
+                $data['class_name'] ?? null,
+                date('Y-m-d H:i:s'),
+                date('Y-m-d H:i:s')
             ]);
 
-            $userId = $this->db->lastInsertId();
+            $userId = (int) $this->db->lastInsertId();
 
             // 记录审计日志
             $this->auditLogService->log([
@@ -149,9 +150,8 @@ class AuthController
                 'new_value' => json_encode([
                     'username' => $data['username'],
                     'email' => $data['email'],
-                    'real_name' => $data['real_name'],
-                    'school_id' => $data['school_id'],
-                    'class_name' => $data['class_name']
+                    'school_id' => $data['school_id'] ?? null,
+                    'class_name' => $data['class_name'] ?? null
                 ]),
                 'ip_address' => $this->getClientIP($request),
                 'user_agent' => $request->getHeaderLine('User-Agent'),
@@ -159,18 +159,17 @@ class AuthController
             ]);
 
             // 发送欢迎消息
-            $this->messageService->sendMessage([
-                'user_id' => $userId,
-                'type' => 'welcome',
-                'priority' => 'normal',
-                'title' => '欢迎加入CarbonTrack！',
-                'content' => '欢迎您加入CarbonTrack碳减排追踪平台！开始您的环保之旅，记录每一次碳减排行动，为地球贡献力量。',
-                'sender_type' => 'system'
-            ]);
+            $this->messageService->sendMessage(
+                $userId,
+                'welcome',
+                '欢迎加入CarbonTrack！',
+                '欢迎您加入CarbonTrack碳减排追踪平台！开始您的环保之旅，记录每一次碳减排行动，为地球贡献力量。',
+                'normal'
+            );
 
             // 发送欢迎邮件
             try {
-                $this->emailService->sendWelcomeEmail($data['email'], $data['real_name']);
+                $this->emailService->sendWelcomeEmail($data['email'], $data['username']);
             } catch (\Exception $e) {
                 $this->logger->warning('Failed to send welcome email', [
                     'user_id' => $userId,
@@ -228,8 +227,8 @@ class AuthController
             }
 
             // 验证Turnstile
-            if (!empty($data['turnstile_token'])) {
-                $turnstileValid = $this->turnstileService->verify($data['turnstile_token']);
+            if (!empty($data['cf_turnstile_response'])) {
+                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
                 if (!$turnstileValid) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -469,8 +468,8 @@ class AuthController
             }
 
             // 验证Turnstile
-            if (!empty($data['turnstile_token'])) {
-                $turnstileValid = $this->turnstileService->verify($data['turnstile_token']);
+            if (!empty($data['cf_turnstile_response'])) {
+                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
                 if (!$turnstileValid) {
                     return $this->jsonResponse($response, [
                         'success' => false,
