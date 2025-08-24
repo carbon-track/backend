@@ -58,12 +58,8 @@ class AvatarController
 
             $avatars = $this->avatarModel->getAvailableAvatars($category);
 
-            // 如果不是管理员，只返回激活的头像
-            if (!$isAdmin) {
-                $avatars = array_filter($avatars, function($avatar) {
-                    return $avatar['is_active'] == 1;
-                });
-            }
+            // The database query already filters for active avatars
+            // Additional filtering is only needed if admin is requesting inactive avatars
 
             return $this->jsonResponse($response, [
                 'success' => true,

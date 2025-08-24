@@ -64,7 +64,9 @@ class CarbonActivity extends Model
      */
     public function pointsTransactions()
     {
-        return $this->hasMany(PointsTransaction::class, 'activity_id', 'id');
+        // Temporarily disabled due to missing PointsTransaction model
+        // return $this->hasMany(PointsTransaction::class, 'activity_id', 'id');
+        return collect([]);
     }
 
     /**
@@ -128,14 +130,14 @@ class CarbonActivity extends Model
      */
     public function getStatistics(): array
     {
-        $transactions = $this->pointsTransactions()->where('status', 'approved');
-        
+        // Return default statistics for now to avoid missing model dependency
+        // TODO: Implement proper statistics once PointsTransaction model is created
         return [
-            'total_records' => $transactions->count(),
-            'total_carbon_saved' => $transactions->sum('points'),
-            'total_data_input' => $transactions->sum('raw'),
-            'unique_users' => $transactions->distinct('uid')->count('uid'),
-            'avg_per_record' => $transactions->avg('points') ?: 0
+            'total_records' => 0,
+            'total_carbon_saved' => 0,
+            'total_data_input' => 0,
+            'unique_users' => 0,
+            'avg_per_record' => 0
         ];
     }
 

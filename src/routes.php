@@ -32,6 +32,30 @@ return function (App $app) {
     // API v1 routes
     $app->group('/api/v1', function (RouteCollectorProxy $group) {
         
+        // API root endpoint
+        $group->get('', function ($request, $response) {
+            $response->getBody()->write(json_encode([
+                'success' => true,
+                'message' => 'CarbonTrack API v1',
+                'version' => '1.0.0',
+                'timestamp' => date('Y-m-d H:i:s'),
+                'endpoints' => [
+                    'auth' => '/api/v1/auth',
+                    'users' => '/api/v1/users',
+                    'carbon-activities' => '/api/v1/carbon-activities',
+                    'carbon-track' => '/api/v1/carbon-track',
+                    'products' => '/api/v1/products',
+                    'exchange' => '/api/v1/exchange',
+                    'messages' => '/api/v1/messages',
+                    'avatars' => '/api/v1/avatars',
+                    'schools' => '/api/v1/schools',
+                    'files' => '/api/v1/files',
+                    'admin' => '/api/v1/admin'
+                ]
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        });
+        
         // Authentication routes (public)
         $group->group('/auth', function (RouteCollectorProxy $auth) {
             $auth->post('/register', [AuthController::class, 'register']);
@@ -184,6 +208,7 @@ return function (App $app) {
 
         // Admin file management routes
         $group->group('/admin/files', function (RouteCollectorProxy $adminFiles) {
+            $adminFiles->get('', [FileUploadController::class, 'getFilesList']);
             $adminFiles->get('/stats', [FileUploadController::class, 'getStorageStats']);
             $adminFiles->post('/cleanup', [FileUploadController::class, 'cleanupExpiredFiles']);
         })->add(AuthMiddleware::class)->add(AdminMiddleware::class);

@@ -178,22 +178,49 @@ class CarbonCalculatorService
      */
     public function getAvailableActivities(?string $category = null, ?string $search = null): array
     {
-        // Mock data for testing
-        return [
-            [
-                'id' => 'uuid-123',
-                'name_zh' => '步行',
-                'name_en' => 'Walking',
-                'combined_name' => '步行 Walking',
-                'category' => 'transport',
-                'carbon_factor' => 2.5,
-                'unit' => 'km',
-                'description_zh' => '步行减少碳排放',
-                'description_en' => 'Walking reduces carbon emissions',
-                'icon' => 'walking',
-                'sort_order' => 1
-            ]
-        ];
+        try {
+            $query = CarbonActivity::where('is_active', true);
+            
+            if ($category) {
+                $query->where('category', $category);
+            }
+            
+            if ($search) {
+                $query->where(function($q) use ($search) {
+                    $q->where('name_zh', 'LIKE', '%' . $search . '%')
+                      ->orWhere('name_en', 'LIKE', '%' . $search . '%');
+                });
+            }
+            
+            $activities = $query->orderBy('sort_order')
+                              ->orderBy('created_at')
+                              ->get()
+                              ->map(function ($activity) {
+                                  return [
+                                      'id' => $activity->id,
+                                      'name_zh' => $activity->name_zh,
+                                      'name_en' => $activity->name_en,
+                                      'combined_name' => $activity->name_zh . ' ' . $activity->name_en,
+                                      'category' => $activity->category,
+                                      'carbon_factor' => (float) $activity->carbon_factor,
+                                      'unit' => $activity->unit,
+                                      'description_zh' => $activity->description_zh,
+                                      'description_en' => $activity->description_en,
+                                      'icon' => $activity->icon,
+                                      'sort_order' => $activity->sort_order
+                                  ];
+                              })
+                              ->toArray();
+            
+            return $activities;
+        } catch (\Exception $e) {
+            if ($this->logger) {
+                $this->logger->error('Failed to get activities from database: ' . $e->getMessage());
+            }
+            
+            // Return empty array if database query fails
+            return [];
+        }
     }
 
     /**
@@ -218,7 +245,23 @@ class CarbonCalculatorService
      */
     public function getCategories(): array
     {
-        return ['transport', 'energy', 'lifestyle', 'consumption'];
+        try {
+            $categories = CarbonActivity::where('is_active', true)
+                                      ->distinct()
+                                      ->pluck('category')
+                                      ->filter()
+                                      ->values()
+                                      ->toArray();
+            
+            return $categories ?: ['transport', 'energy', 'lifestyle', 'consumption'];
+        } catch (\Exception $e) {
+            if ($this->logger) {
+                $this->logger->error('Failed to get categories from database: ' . $e->getMessage());
+            }
+            
+            // Return default categories if database query fails
+            return ['transport', 'energy', 'lifestyle', 'consumption'];
+        }
     }
 
     /**

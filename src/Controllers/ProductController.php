@@ -106,12 +106,14 @@ class ProductController
 
             return $this->json($response, [
                 'success' => true,
-                'data' => $products,
-                'pagination' => [
-                    'page' => $page,
-                    'limit' => $limit,
-                    'total' => intval($total),
-                    'pages' => ceil($total / $limit)
+                'data' => [
+                    'products' => $products,
+                    'pagination' => [
+                        'page' => $page,
+                        'limit' => $limit,
+                        'total' => intval($total),
+                        'pages' => ceil($total / $limit)
+                    ]
                 ]
             ]);
 
