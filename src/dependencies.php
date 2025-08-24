@@ -111,8 +111,9 @@ return function (Container $container) {
                 'host' => $_ENV['DB_HOST'] ?? 'localhost',
                 'port' => $_ENV['DB_PORT'] ?? 3306,
                 'database' => $_ENV['DB_DATABASE'] ?? 'carbontrack',
-                'username' => $_ENV['DB_USERNAME'] ?? 'root',
-                'password' => $_ENV['DB_PASSWORD'] ?? '',
+                // Support both DB_USERNAME/DB_PASSWORD and legacy DB_USER/DB_PASS
+                'username' => $_ENV['DB_USERNAME'] ?? $_ENV['DB_USER'] ?? 'root',
+                'password' => $_ENV['DB_PASSWORD'] ?? $_ENV['DB_PASS'] ?? '',
                 'charset' => 'utf8mb4',
                 'collation' => 'utf8mb4_unicode_ci',
                 'prefix' => '',
@@ -137,10 +138,12 @@ return function (Container $container) {
 
     // Auth Service
     $container->set(AuthService::class, function (ContainerInterface $c) {
+        // Support both JWT_EXPIRATION and JWT_EXPIRES_IN
+        $jwtTtl = $_ENV['JWT_EXPIRATION'] ?? $_ENV['JWT_EXPIRES_IN'] ?? 86400;
         $authService = new AuthService(
             $_ENV['JWT_SECRET'],
             $_ENV['JWT_ALGORITHM'] ?? 'HS256',
-            (int) ($_ENV['JWT_EXPIRATION'] ?? 86400)
+            (int) $jwtTtl
         );
         
         // 设置数据库连接
@@ -323,6 +326,7 @@ return function (Container $container) {
     $container->set(FileUploadController::class, function (ContainerInterface $c) {
         return new FileUploadController(
             $c->get(CloudflareR2Service::class),
+            $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(Logger::class)
         );

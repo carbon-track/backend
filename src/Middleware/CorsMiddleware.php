@@ -13,30 +13,96 @@ class CorsMiddleware implements MiddlewareInterface
 {
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $response = $handler->handle($request);
-        
-        $allowedOrigins = explode(',', $_ENV['CORS_ALLOWED_ORIGINS'] ?? '*');
+        // Read config from env with sensible defaults
+        $allowedOriginsEnv = $_ENV['CORS_ALLOWED_ORIGINS'] ?? '*';
         $allowedMethods = $_ENV['CORS_ALLOWED_METHODS'] ?? 'GET,POST,PUT,DELETE,OPTIONS';
-        $allowedHeaders = $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
-        
+        $allowedHeadersDefault = $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
+        $exposeHeaders = $_ENV['CORS_EXPOSE_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
+        $allowCredentials = filter_var($_ENV['CORS_ALLOW_CREDENTIALS'] ?? 'true', FILTER_VALIDATE_BOOLEAN);
+
+        // Parse and trim allowed origins list
+        $allowedOrigins = array_values(array_filter(array_map(function ($o) {
+            return trim($o);
+        }, explode(',', $allowedOriginsEnv))));
+
         $origin = $request->getHeaderLine('Origin');
-        
-        // Check if origin is allowed
-        if (in_array('*', $allowedOrigins) || in_array($origin, $allowedOrigins)) {
-            $response = $response->withHeader('Access-Control-Allow-Origin', $origin ?: '*');
+        $method = strtoupper($request->getMethod());
+
+        // Helper to check wildcard origins like https://*.example.com
+        $isOriginAllowed = function (?string $origin) use ($allowedOrigins): bool {
+            if (!$origin) return false;
+            foreach ($allowedOrigins as $allowed) {
+                if ($allowed === '*') return true;
+                if (strcasecmp($allowed, $origin) === 0) return true;
+                // Wildcard subdomain match: https://*.example.com
+                if (strpos($allowed, '*.') !== false) {
+                    $pattern = '/^' . str_replace(['*.', '.', '/'], ['([^.]+)\.', '\\.', '\/'], preg_quote($allowed, '/')) . '$/i';
+                    if (preg_match($pattern, $origin)) return true;
+                }
+            }
+            return false;
+        };
+
+        // Determine headers for CORS (used for both preflight and actual responses)
+        $varyValues = ['Origin'];
+        $headersToSet = [
+            'Access-Control-Allow-Methods' => $allowedMethods,
+            'Access-Control-Expose-Headers' => $exposeHeaders,
+            'Access-Control-Max-Age' => '86400',
+        ];
+
+        // Access-Control-Allow-Headers: echo request headers if present, else use default
+        $requestHeaders = $request->getHeaderLine('Access-Control-Request-Headers');
+        if ($requestHeaders) {
+            $headersToSet['Access-Control-Allow-Headers'] = $requestHeaders;
+            $varyValues[] = 'Access-Control-Request-Headers';
+        } else {
+            $headersToSet['Access-Control-Allow-Headers'] = $allowedHeadersDefault;
         }
-        
-        $response = $response
-            ->withHeader('Access-Control-Allow-Methods', $allowedMethods)
-            ->withHeader('Access-Control-Allow-Headers', $allowedHeaders)
-            ->withHeader('Access-Control-Allow-Credentials', 'true')
-            ->withHeader('Access-Control-Max-Age', '86400');
-        
-        // Handle preflight requests
-        if ($request->getMethod() === 'OPTIONS') {
-            return $response->withStatus(200);
+
+        // Allow-Origin logic considering credentials
+        if ($isOriginAllowed($origin)) {
+            $headersToSet['Access-Control-Allow-Origin'] = $origin;
+            if ($allowCredentials) {
+                $headersToSet['Access-Control-Allow-Credentials'] = 'true';
+            }
+        } else {
+            // If no specific Origin header or not allowed:
+            // only set wildcard when credentials are not required
+            if (in_array('*', $allowedOrigins, true) && !$allowCredentials) {
+                $headersToSet['Access-Control-Allow-Origin'] = '*';
+            }
         }
-        
+
+        // Preflight should be handled BEFORE routing to avoid 405
+        if ($method === 'OPTIONS') {
+            $preflight = new \Slim\Psr7\Response(204);
+            foreach ($headersToSet as $name => $value) {
+                if ($value !== null && $value !== '') {
+                    $preflight = $preflight->withHeader($name, $value);
+                }
+            }
+            $preflight = $preflight->withAddedHeader('Vary', implode(', ', array_unique($varyValues)));
+
+            // If client asked for a specific method, reflect it for clarity
+            $reqMethod = $request->getHeaderLine('Access-Control-Request-Method');
+            if ($reqMethod) {
+                $preflight = $preflight->withHeader('Access-Control-Allow-Methods', $reqMethod);
+                $preflight = $preflight->withAddedHeader('Vary', 'Access-Control-Request-Method');
+            }
+
+            return $preflight;
+        }
+
+        // For non-OPTIONS, proceed to downstream and then append headers
+        $response = $handler->handle($request);
+        foreach ($headersToSet as $name => $value) {
+            if ($value !== null && $value !== '') {
+                $response = $response->withHeader($name, $value);
+            }
+        }
+        $response = $response->withAddedHeader('Vary', implode(', ', array_unique($varyValues)));
+
         return $response;
     }
 }
