@@ -8,6 +8,7 @@ use Monolog\Logger;
 use Psr\Log\LoggerInterface;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\RotatingFileHandler;
+use Monolog\Handler\ErrorLogHandler;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use CarbonTrack\Services\DatabaseService;
 use CarbonTrack\Services\AuthService;
@@ -68,8 +69,12 @@ return function (Container $container) {
                 
                 $handler = new RotatingFileHandler($logPath, 0, Logger::INFO);
             } else {
-                // 开发环境或Windows系统使用标准输出
-                $handler = new StreamHandler('php://stdout', Logger::DEBUG);
+                // 开发环境：Windows 下使用系统错误日志，避免 FastCGI 下 stdout 句柄问题
+                if ($isWindows) {
+                    $handler = new ErrorLogHandler(ErrorLogHandler::OPERATING_SYSTEM, Logger::DEBUG);
+                } else {
+                    $handler = new StreamHandler('php://stdout', Logger::DEBUG);
+                }
             }
             
             $logger->pushHandler($handler);
