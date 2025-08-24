@@ -79,7 +79,11 @@ class LoggingMiddleware implements MiddlewareInterface
     private function getClientIp(Request $request): string
     {
         $serverParams = $request->getServerParams();
-        
+
+        if (!empty($serverParams['HTTP_CF_CONNECTING_IP'])) {
+            return $serverParams['HTTP_CF_CONNECTING_IP'];
+        }
+
         if (!empty($serverParams['HTTP_X_FORWARDED_FOR'])) {
             return explode(',', $serverParams['HTTP_X_FORWARDED_FOR'])[0];
         }

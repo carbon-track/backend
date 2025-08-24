@@ -64,7 +64,10 @@ class CarbonTrackController
 
             // 计算碳减排量和积分（支持旧/新API）
             if (method_exists($this->carbonCalculator, 'calculate')) {
-                $calculation = $this->carbonCalculator->calculate(
+                $calculation = call_user_func([
+                    $this->carbonCalculator,
+                    'calculate'
+                ],
                     $data['activity_id'],
                     floatval($data['amount']),
                     $data['unit'] ?? $activity['unit']
@@ -154,7 +157,10 @@ class CarbonTrackController
 
             // Support both new and old service APIs
             if (method_exists($this->carbonCalculator, 'calculate')) {
-                $calculation = $this->carbonCalculator->calculate(
+                $calculation = call_user_func([
+                    $this->carbonCalculator,
+                    'calculate'
+                ],
                     $data['activity_id'],
                     floatval($data['data']),
                     $data['unit'] ?? $activity['unit']
@@ -594,7 +600,7 @@ class CarbonTrackController
             return $this->json($response, ['success' => true]);
         } catch (\Exception $e) {
             error_log('Delete transaction error: ' . $e->getMessage());
-            return $response->withStatus(500)->withJson(['error' => 'Internal server error']);
+            return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
 

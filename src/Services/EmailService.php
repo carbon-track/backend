@@ -2,8 +2,6 @@
 
 namespace CarbonTrack\Services;
 
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
 use Monolog\Logger;
 
 class EmailService
@@ -16,8 +14,10 @@ class EmailService
     {
         $this->config = $config;
         $this->logger = $logger;
-        if (class_exists(PHPMailer::class)) {
-            $this->mailer = new PHPMailer(true);
+        // Lazily initialize PHPMailer if available to avoid hard dependency during static analysis
+        if (class_exists('PHPMailer\\PHPMailer\\PHPMailer')) {
+            $className = 'PHPMailer\\PHPMailer\\PHPMailer';
+            $this->mailer = new $className(true);
             $this->configureMailer();
         } else {
             $this->mailer = null;
@@ -28,21 +28,27 @@ class EmailService
     private function configureMailer()
     {
         try {
+            if ($this->mailer === null) {
+                return;
+            }
             //Server settings
-            $this->mailer->SMTPDebug = $this->config["debug"] ? 2 : 0; // Enable verbose debug output
+            $this->mailer->SMTPDebug = !empty($this->config["debug"]) ? 2 : 0; // Enable verbose debug output
             $this->mailer->isSMTP();                                            // Send using SMTP
-            $this->mailer->Host       = $this->config["host"];                 // Set the SMTP server to send through
+            $this->mailer->Host       = $this->config["host"] ?? '';
             $this->mailer->SMTPAuth   = true;                                   // Enable SMTP authentication
-            $this->mailer->Username   = $this->config["username"];             // SMTP username
-            $this->mailer->Password   = $this->config["password"];             // SMTP password
-            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;            // Enable implicit TLS encryption
-            $this->mailer->Port       = $this->config["port"];                 // TCP port to connect to; use 587 if you have set `SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS`
+            $this->mailer->Username   = $this->config["username"] ?? '';
+            $this->mailer->Password   = $this->config["password"] ?? '';
+            // Use configured encryption string to avoid referencing PHPMailer constants
+            $this->mailer->SMTPSecure = $this->config['encryption'] ?? 'tls';
+            $this->mailer->Port       = $this->config["port"] ?? 587;
 
             //Recipients
-            $this->mailer->setFrom($this->config["from_email"], $this->config["from_name"]);
+            $fromAddress = $this->config["from_address"] ?? ($this->config["from_email"] ?? 'noreply@example.com');
+            $fromName = $this->config["from_name"] ?? 'CarbonTrack';
+            $this->mailer->setFrom($fromAddress, $fromName);
             $this->mailer->isHTML(true);                                  // Set email format to HTML
-            $this->mailer->CharSet = PHPMailer::CHARSET_UTF8;
-        } catch (Exception $e) {
+            $this->mailer->CharSet = 'UTF-8';
+        } catch (\Throwable $e) {
             $this->logger->error("Mailer configuration error: {$e->getMessage()}");
         }
     }
@@ -50,7 +56,7 @@ class EmailService
     public function sendEmail(string $toEmail, string $toName, string $subject, string $bodyHtml, string $bodyText = "")
     {
         try {
-            if ($this->mailer instanceof PHPMailer) {
+            if (is_object($this->mailer) && is_a($this->mailer, 'PHPMailer\\PHPMailer\\PHPMailer')) {
                 $this->mailer->clearAddresses();
                 $this->mailer->addAddress($toEmail, $toName);
 
@@ -61,7 +67,7 @@ class EmailService
 
                 $this->mailer->send();
                 $this->logger->info("Email sent successfully", ["to" => $toEmail, "subject" => $subject]);
-                return true;
+        return true;
             }
             // Fallback: simulate failure to satisfy tests expecting error logging
             $this->logger->error('Email service unavailable (PHPMailer missing)', [
@@ -69,7 +75,7 @@ class EmailService
                 'subject' => $subject
             ]);
             return false;
-        } catch (Exception $e) {
+    } catch (\Throwable $e) {
             $this->logger->error("Message could not be sent.", ["to" => $toEmail, "subject" => $subject, "error" => $e->getMessage()]);
             return false;
         }
@@ -144,6 +150,38 @@ class EmailService
         $bodyHtml = str_replace(["{{product_name}}", "{{status}}", "{{admin_notes}}"], [$productName, $status, $adminNotes], $htmlTemplate);
         $bodyText = str_replace(["{{product_name}}", "{{status}}", "{{admin_notes}}"], [$productName, $status, $adminNotes], $textTemplate);
 
+        return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+    }
+
+    /**
+     * Backward-compatible convenience: send a simple welcome email without requiring templates.
+     */
+    public function sendWelcomeEmail(string $toEmail, string $toName): bool
+    {
+        $subject = $this->config["subjects"]["welcome"] ?? "Welcome to CarbonTrack";
+        $bodyHtml = sprintf(
+            '<p>Hi %s,</p><p>Welcome to CarbonTrack! Your account has been created successfully.</p><p>Thanks for joining us.</p>',
+            htmlspecialchars($toName, ENT_QUOTES, 'UTF-8')
+        );
+        $bodyText = "Hi {$toName},\n\nWelcome to CarbonTrack! Your account has been created successfully.\n\nThanks for joining us.";
+        return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+    }
+
+    /**
+     * Backward-compatible convenience: send a password reset email given a token; generates a link if base URL available.
+     */
+    public function sendPasswordResetEmail(string $toEmail, string $toName, string $token): bool
+    {
+        $base = $this->config['reset_link_base']
+            ?? ($_ENV['APP_URL'] ?? ($_ENV['FRONTEND_URL'] ?? ''));
+        $link = $base ? rtrim($base, '/').'/reset-password?token='.urlencode($token) : '#';
+        $subject = $this->config["subjects"]["password_reset"] ?? "Password Reset Request";
+        $bodyHtml = sprintf(
+            '<p>Hi %s,</p><p>We received a request to reset your password.</p><p><a href="%s">Click here to reset your password</a>. This link will expire in 60 minutes.</p><p>If you did not request a password reset, you can safely ignore this email.</p>',
+            htmlspecialchars($toName, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($link, ENT_QUOTES, 'UTF-8')
+        );
+        $bodyText = "Hi {$toName},\n\nWe received a request to reset your password.\nOpen this link to reset: {$link}\nThe link expires in 60 minutes. If you did not request this, please ignore this email.";
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
 }

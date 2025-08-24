@@ -69,8 +69,8 @@ class AdminController
 
             $whereClause = implode(' AND ', $whereConditions);
 
-            // 排序
-            $orderBy = match($sort) {
+            // 排序（兼容 PHP 7.4）
+            $sortMap = [
                 'username_asc' => 'u.username ASC',
                 'username_desc' => 'u.username DESC',
                 'email_asc' => 'u.email ASC',
@@ -78,8 +78,9 @@ class AdminController
                 'points_asc' => 'u.points ASC',
                 'points_desc' => 'u.points DESC',
                 'created_at_asc' => 'u.created_at ASC',
-                default => 'u.created_at DESC'
-            };
+                'created_at_desc' => 'u.created_at DESC',
+            ];
+            $orderBy = $sortMap[$sort] ?? 'u.created_at DESC';
 
             // 获取用户列表
             $sql = "

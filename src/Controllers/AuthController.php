@@ -42,17 +42,12 @@ class AuthController
         $this->db = $db;
     }
 
-    /**
-     * 用户注册
-     */
     public function register(Request $request, Response $response): Response
     {
         try {
             $data = $request->getParsedBody();
-            
-            // 验证必需字段
-            $requiredFields = ['username', 'email', 'password', 'confirm_password'];
-            foreach ($requiredFields as $field) {
+            $required = ['username', 'email', 'password', 'confirm_password'];
+            foreach ($required as $field) {
                 if (empty($data[$field])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -61,8 +56,6 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 验证密码确认
             if ($data['password'] !== $data['confirm_password']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -70,11 +63,8 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-
-            // 验证Turnstile
             if (!empty($data['cf_turnstile_response'])) {
-                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
-                if (!$turnstileValid) {
+                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Turnstile verification failed',
@@ -82,9 +72,7 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 检查用户名是否已存在
-            $stmt = $this->db->prepare("SELECT id FROM users WHERE username = ? AND deleted_at IS NULL");
+            $stmt = $this->db->prepare('SELECT id FROM users WHERE username = ? AND deleted_at IS NULL');
             $stmt->execute([$data['username']]);
             if ($stmt->fetch()) {
                 return $this->jsonResponse($response, [
@@ -93,9 +81,7 @@ class AuthController
                     'code' => 'USERNAME_EXISTS'
                 ], 409);
             }
-
-            // 检查邮箱是否已存在
-            $stmt = $this->db->prepare("SELECT id FROM users WHERE email = ? AND deleted_at IS NULL");
+            $stmt = $this->db->prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL');
             $stmt->execute([$data['email']]);
             if ($stmt->fetch()) {
                 return $this->jsonResponse($response, [
@@ -104,10 +90,8 @@ class AuthController
                     'code' => 'EMAIL_EXISTS'
                 ], 409);
             }
-
-            // 验证学校是否存在 (optional)
             if (!empty($data['school_id'])) {
-                $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
+                $stmt = $this->db->prepare('SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL');
                 $stmt->execute([$data['school_id']]);
                 if (!$stmt->fetch()) {
                     return $this->jsonResponse($response, [
@@ -117,31 +101,19 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 创建用户
-            $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
-            
-            $stmt = $this->db->prepare("
-                INSERT INTO users (
-                    username, email, password, 
-                    school_id, class_name, 
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            ");
-            
+            $hashed = password_hash((string)$data['password'], PASSWORD_DEFAULT);
+            // 为兼容旧库，这里优先写入 password 列
+            $stmt = $this->db->prepare('INSERT INTO users (username, email, password, school_id, class_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
             $stmt->execute([
                 $data['username'],
                 $data['email'],
-                $hashedPassword,
+                $hashed,
                 $data['school_id'] ?? null,
                 $data['class_name'] ?? null,
                 date('Y-m-d H:i:s'),
                 date('Y-m-d H:i:s')
             ]);
-
-            $userId = (int) $this->db->lastInsertId();
-
-            // 记录审计日志
+            $userId = (int)$this->db->lastInsertId();
             $this->auditLogService->log([
                 'user_id' => $userId,
                 'action' => 'user_registered',
@@ -157,33 +129,11 @@ class AuthController
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'notes' => 'User registration'
             ]);
-
-            // 发送欢迎消息
-            $this->messageService->sendMessage(
-                $userId,
-                'welcome',
-                '欢迎加入CarbonTrack！',
-                '欢迎您加入CarbonTrack碳减排追踪平台！开始您的环保之旅，记录每一次碳减排行动，为地球贡献力量。',
-                'normal'
-            );
-
-            // 发送欢迎邮件
             try {
-                $this->emailService->sendWelcomeEmail($data['email'], $data['username']);
-            } catch (\Exception $e) {
-                $this->logger->warning('Failed to send welcome email', [
-                    'user_id' => $userId,
-                    'email' => $data['email'],
-                    'error' => $e->getMessage()
-                ]);
+                $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]);
             }
-
-            $this->logger->info('User registered successfully', [
-                'user_id' => $userId,
-                'username' => $data['username'],
-                'email' => $data['email']
-            ]);
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'User registered successfully',
@@ -193,14 +143,8 @@ class AuthController
                     'email' => $data['email']
                 ]
             ], 201);
-
-        } catch (\Exception $e) {
-            $this->logger->error('User registration failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'data' => $data ?? null
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('User registration failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Registration failed',
@@ -209,15 +153,10 @@ class AuthController
         }
     }
 
-    /**
-     * 用户登录
-     */
     public function login(Request $request, Response $response): Response
     {
         try {
             $data = $request->getParsedBody();
-            
-            // 验证必需字段
             if (empty($data['username']) || empty($data['password'])) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -225,11 +164,8 @@ class AuthController
                     'code' => 'MISSING_CREDENTIALS'
                 ], 400);
             }
-
-            // 验证Turnstile
             if (!empty($data['cf_turnstile_response'])) {
-                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
-                if (!$turnstileValid) {
+                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Turnstile verification failed',
@@ -237,19 +173,18 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 查找用户
-            $stmt = $this->db->prepare("
-                SELECT u.*, s.name as school_name 
-                FROM users u 
-                LEFT JOIN schools s ON u.school_id = s.id 
-                WHERE u.username = ? AND u.deleted_at IS NULL
-            ");
+            $stmt = $this->db->prepare('SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.username = ? AND u.deleted_at IS NULL');
             $stmt->execute([$data['username']]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$user || !password_verify($data['password'], $user['password_hash'])) {
-                // 记录失败的登录尝试
+            $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            $passwordField = null;
+            if ($user) {
+                if (!empty($user['password_hash'])) {
+                    $passwordField = 'password_hash';
+                } elseif (!empty($user['password'])) {
+                    $passwordField = 'password';
+                }
+            }
+            if (!$user || !$passwordField || !password_verify((string)$data['password'], (string)$user[$passwordField])) {
                 $this->auditLogService->log([
                     'action' => 'login_failed',
                     'entity_type' => 'user',
@@ -258,22 +193,24 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent'),
                     'notes' => 'Invalid credentials'
                 ]);
-
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Invalid credentials',
                     'code' => 'INVALID_CREDENTIALS'
                 ], 401);
             }
-
-            // 更新最后登录时间
-            $stmt = $this->db->prepare("UPDATE users SET last_login_at = NOW() WHERE id = ?");
-            $stmt->execute([$user['id']]);
-
-            // 生成JWT token
+            try {
+                $upd = $this->db->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
+                $upd->execute([$user['id']]);
+            } catch (\Throwable $e) {
+                try {
+                    $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
+                    $upd->execute([$user['id']]);
+                } catch (\Throwable $e2) {
+                    // ignore
+                }
+            }
             $token = $this->authService->generateToken($user);
-
-            // 记录成功登录
             $this->auditLogService->log([
                 'user_id' => $user['id'],
                 'action' => 'user_login',
@@ -283,28 +220,20 @@ class AuthController
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'notes' => 'Successful login'
             ]);
-
-            $this->logger->info('User logged in successfully', [
-                'user_id' => $user['id'],
-                'username' => $user['username']
-            ]);
-
-            // 准备返回的用户信息
             $userInfo = [
                 'id' => $user['id'],
-                'uuid' => $user['uuid'],
+                'uuid' => $user['uuid'] ?? null,
                 'username' => $user['username'],
-                'email' => $user['email'],
-                'real_name' => $user['real_name'],
-                'school_id' => $user['school_id'],
-                'school_name' => $user['school_name'],
-                'class_name' => $user['class_name'],
-                'points' => $user['points'],
-                'is_admin' => (bool)$user['is_admin'],
-                'avatar_url' => $user['avatar_url'],
-                'last_login_at' => $user['last_login_at']
+                'email' => $user['email'] ?? null,
+                'real_name' => $user['real_name'] ?? null,
+                'school_id' => $user['school_id'] ?? null,
+                'school_name' => $user['school_name'] ?? null,
+                'class_name' => $user['class_name'] ?? null,
+                'points' => (int)($user['points'] ?? 0),
+                'is_admin' => (bool)($user['is_admin'] ?? 0),
+                'avatar_url' => $user['avatar_url'] ?? null,
+                'last_login_at' => $user['last_login_at'] ?? ($user['lastlgn'] ?? null)
             ];
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Login successful',
@@ -313,14 +242,8 @@ class AuthController
                     'user' => $userInfo
                 ]
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('User login failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'username' => $data['username'] ?? null
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('User login failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Login failed',
@@ -329,16 +252,11 @@ class AuthController
         }
     }
 
-    /**
-     * 用户登出
-     */
     public function logout(Request $request, Response $response): Response
     {
         try {
             $user = $this->authService->getCurrentUser($request);
-            
             if ($user) {
-                // 记录登出
                 $this->auditLogService->log([
                     'user_id' => $user['id'],
                     'action' => 'user_logout',
@@ -348,24 +266,13 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent'),
                     'notes' => 'User logout'
                 ]);
-
-                $this->logger->info('User logged out', [
-                    'user_id' => $user['id'],
-                    'username' => $user['username']
-                ]);
             }
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Logout successful'
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('User logout failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('User logout failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Logout failed'
@@ -373,14 +280,10 @@ class AuthController
         }
     }
 
-    /**
-     * 获取当前用户信息
-     */
     public function me(Request $request, Response $response): Response
     {
         try {
             $user = $this->authService->getCurrentUser($request);
-            
             if (!$user) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -388,62 +291,41 @@ class AuthController
                     'code' => 'UNAUTHORIZED'
                 ], 401);
             }
-
-            // 获取完整用户信息
-            $stmt = $this->db->prepare("
-                SELECT u.*, s.name as school_name 
-                FROM users u 
-                LEFT JOIN schools s ON u.school_id = s.id 
-                WHERE u.id = ? AND u.deleted_at IS NULL
-            ");
+            $stmt = $this->db->prepare('SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = ? AND u.deleted_at IS NULL');
             $stmt->execute([$user['id']]);
-            $userInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if (!$userInfo) {
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'User not found',
                     'code' => 'USER_NOT_FOUND'
                 ], 404);
             }
-
-            // 获取未读消息数量
-            $stmt = $this->db->prepare("
-                SELECT COUNT(*) as unread_count 
-                FROM messages 
-                WHERE user_id = ? AND is_read = 0 AND deleted_at IS NULL
-            ");
+            $stmt = $this->db->prepare('SELECT COUNT(*) FROM messages WHERE user_id = ? AND is_read = 0 AND deleted_at IS NULL');
             $stmt->execute([$user['id']]);
-            $unreadMessages = $stmt->fetch(PDO::FETCH_ASSOC)['unread_count'];
-
+            $unread = (int)$stmt->fetchColumn();
             $userData = [
-                'id' => $userInfo['id'],
-                'uuid' => $userInfo['uuid'],
-                'username' => $userInfo['username'],
-                'email' => $userInfo['email'],
-                'real_name' => $userInfo['real_name'],
-                'school_id' => $userInfo['school_id'],
-                'school_name' => $userInfo['school_name'],
-                'class_name' => $userInfo['class_name'],
-                'points' => $userInfo['points'],
-                'is_admin' => (bool)$userInfo['is_admin'],
-                'avatar_url' => $userInfo['avatar_url'],
-                'last_login_at' => $userInfo['last_login_at'],
-                'created_at' => $userInfo['created_at'],
-                'unread_messages' => $unreadMessages
+                'id' => $row['id'],
+                'uuid' => $row['uuid'] ?? null,
+                'username' => $row['username'],
+                'email' => $row['email'] ?? null,
+                'real_name' => $row['real_name'] ?? null,
+                'school_id' => $row['school_id'] ?? null,
+                'school_name' => $row['school_name'] ?? null,
+                'class_name' => $row['class_name'] ?? null,
+                'points' => (int)($row['points'] ?? 0),
+                'is_admin' => (bool)($row['is_admin'] ?? 0),
+                'avatar_url' => $row['avatar_url'] ?? null,
+                'last_login_at' => $row['last_login_at'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+                'unread_messages' => $unread
             ];
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'data' => $userData
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('Get current user failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('Get current user failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to get user info'
@@ -451,14 +333,10 @@ class AuthController
         }
     }
 
-    /**
-     * 忘记密码
-     */
     public function forgotPassword(Request $request, Response $response): Response
     {
         try {
             $data = $request->getParsedBody();
-            
             if (empty($data['email'])) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -466,11 +344,8 @@ class AuthController
                     'code' => 'MISSING_EMAIL'
                 ], 400);
             }
-
-            // 验证Turnstile
             if (!empty($data['cf_turnstile_response'])) {
-                $turnstileValid = $this->turnstileService->verify($data['cf_turnstile_response']);
-                if (!$turnstileValid) {
+                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Turnstile verification failed',
@@ -478,42 +353,19 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 查找用户
-            $stmt = $this->db->prepare("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL");
+            $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL');
             $stmt->execute([$data['email']]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            // 无论用户是否存在，都返回成功消息（安全考虑）
+            $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             if ($user) {
-                // 生成重置令牌
                 $resetToken = bin2hex(random_bytes(32));
-                $expiresAt = date('Y-m-d H:i:s', time() + 3600); // 1小时后过期
-
-                // 保存重置令牌
-                $stmt = $this->db->prepare("
-                    UPDATE users 
-                    SET reset_token = ?, reset_token_expires_at = ?, updated_at = NOW() 
-                    WHERE id = ?
-                ");
-                $stmt->execute([$resetToken, $expiresAt, $user['id']]);
-
-                // 发送重置密码邮件
+                $expiresAt = date('Y-m-d H:i:s', time() + 3600);
+                $upd = $this->db->prepare('UPDATE users SET reset_token = ?, reset_token_expires_at = ?, updated_at = NOW() WHERE id = ?');
+                $upd->execute([$resetToken, $expiresAt, $user['id']]);
                 try {
-                    $this->emailService->sendPasswordResetEmail(
-                        $user['email'], 
-                        $user['real_name'], 
-                        $resetToken
-                    );
-                } catch (\Exception $e) {
-                    $this->logger->error('Failed to send password reset email', [
-                        'user_id' => $user['id'],
-                        'email' => $user['email'],
-                        'error' => $e->getMessage()
-                    ]);
+                    $this->emailService->sendPasswordResetEmail((string)$user['email'], (string)($user['real_name'] ?? $user['username']), $resetToken);
+                } catch (\Throwable $e) {
+                    $this->logger->warning('Failed to send password reset email', ['error' => $e->getMessage()]);
                 }
-
-                // 记录审计日志
                 $this->auditLogService->log([
                     'user_id' => $user['id'],
                     'action' => 'password_reset_requested',
@@ -523,25 +375,13 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent'),
                     'notes' => 'Password reset requested'
                 ]);
-
-                $this->logger->info('Password reset requested', [
-                    'user_id' => $user['id'],
-                    'email' => $user['email']
-                ]);
             }
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'If the email exists, a password reset link has been sent'
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('Forgot password failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'email' => $data['email'] ?? null
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('Forgot password failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to process password reset request'
@@ -549,17 +389,12 @@ class AuthController
         }
     }
 
-    /**
-     * 重置密码
-     */
     public function resetPassword(Request $request, Response $response): Response
     {
         try {
             $data = $request->getParsedBody();
-            
-            // 验证必需字段
-            $requiredFields = ['token', 'password', 'confirm_password'];
-            foreach ($requiredFields as $field) {
+            $required = ['token', 'password', 'confirm_password'];
+            foreach ($required as $field) {
                 if (empty($data[$field])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -568,8 +403,6 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 验证密码确认
             if ($data['password'] !== $data['confirm_password']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -577,17 +410,9 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-
-            // 查找有效的重置令牌
-            $stmt = $this->db->prepare("
-                SELECT * FROM users 
-                WHERE reset_token = ? 
-                AND reset_token_expires_at > NOW() 
-                AND deleted_at IS NULL
-            ");
+            $stmt = $this->db->prepare('SELECT * FROM users WHERE reset_token = ? AND reset_token_expires_at > NOW() AND deleted_at IS NULL');
             $stmt->execute([$data['token']]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-
+            $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             if (!$user) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -595,17 +420,19 @@ class AuthController
                     'code' => 'INVALID_TOKEN'
                 ], 400);
             }
-
-            // 更新密码
-            $hashedPassword = password_hash($data['password'], PASSWORD_DEFAULT);
-            $stmt = $this->db->prepare("
-                UPDATE users 
-                SET password_hash = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() 
-                WHERE id = ?
-            ");
-            $stmt->execute([$hashedPassword, $user['id']]);
-
-            // 记录审计日志
+            $hashed = password_hash((string)$data['password'], PASSWORD_DEFAULT);
+            try {
+                $upd = $this->db->prepare('UPDATE users SET password_hash = ?, password = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
+                $upd->execute([$hashed, $hashed, $user['id']]);
+            } catch (\Throwable $e) {
+                try {
+                    $upd = $this->db->prepare('UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
+                    $upd->execute([$hashed, $user['id']]);
+                } catch (\Throwable $e2) {
+                    $upd = $this->db->prepare('UPDATE users SET password = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
+                    $upd->execute([$hashed, $user['id']]);
+                }
+            }
             $this->auditLogService->log([
                 'user_id' => $user['id'],
                 'action' => 'password_reset_completed',
@@ -615,33 +442,12 @@ class AuthController
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'notes' => 'Password reset completed'
             ]);
-
-            // 发送密码重置成功通知
-            $this->messageService->sendMessage([
-                'user_id' => $user['id'],
-                'type' => 'notification',
-                'priority' => 'high',
-                'title' => '密码重置成功',
-                'content' => '您的密码已成功重置。如果这不是您的操作，请立即联系管理员。',
-                'sender_type' => 'system'
-            ]);
-
-            $this->logger->info('Password reset completed', [
-                'user_id' => $user['id'],
-                'username' => $user['username']
-            ]);
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Password reset successful'
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('Password reset failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('Password reset failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Password reset failed'
@@ -649,9 +455,6 @@ class AuthController
         }
     }
 
-    /**
-     * 修改密码
-     */
     public function changePassword(Request $request, Response $response): Response
     {
         try {
@@ -663,12 +466,9 @@ class AuthController
                     'code' => 'UNAUTHORIZED'
                 ], 401);
             }
-
             $data = $request->getParsedBody();
-            
-            // 验证必需字段
-            $requiredFields = ['current_password', 'new_password', 'confirm_password'];
-            foreach ($requiredFields as $field) {
+            $required = ['current_password', 'new_password', 'confirm_password'];
+            foreach ($required as $field) {
                 if (empty($data[$field])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -677,8 +477,6 @@ class AuthController
                     ], 400);
                 }
             }
-
-            // 验证新密码确认
             if ($data['new_password'] !== $data['confirm_password']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -686,27 +484,37 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-
-            // 获取当前用户信息
-            $stmt = $this->db->prepare("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL");
+            $stmt = $this->db->prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL');
             $stmt->execute([$user['id']]);
-            $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            // 验证当前密码
-            if (!password_verify($data['current_password'], $currentUser['password_hash'])) {
+            $current = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$current) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'User not found',
+                    'code' => 'USER_NOT_FOUND'
+                ], 404);
+            }
+            $passwordField = !empty($current['password_hash']) ? 'password_hash' : (!empty($current['password']) ? 'password' : null);
+            if (!$passwordField || !password_verify((string)$data['current_password'], (string)$current[$passwordField])) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Current password is incorrect',
                     'code' => 'INVALID_CURRENT_PASSWORD'
                 ], 400);
             }
-
-            // 更新密码
-            $hashedPassword = password_hash($data['new_password'], PASSWORD_DEFAULT);
-            $stmt = $this->db->prepare("UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?");
-            $stmt->execute([$hashedPassword, $user['id']]);
-
-            // 记录审计日志
+            $hashed = password_hash((string)$data['new_password'], PASSWORD_DEFAULT);
+            try {
+                $upd = $this->db->prepare('UPDATE users SET password_hash = ?, password = ?, updated_at = NOW() WHERE id = ?');
+                $upd->execute([$hashed, $hashed, $user['id']]);
+            } catch (\Throwable $e) {
+                try {
+                    $upd = $this->db->prepare('UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?');
+                    $upd->execute([$hashed, $user['id']]);
+                } catch (\Throwable $e2) {
+                    $upd = $this->db->prepare('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?');
+                    $upd->execute([$hashed, $user['id']]);
+                }
+            }
             $this->auditLogService->log([
                 'user_id' => $user['id'],
                 'action' => 'password_changed',
@@ -716,24 +524,12 @@ class AuthController
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'notes' => 'Password changed by user'
             ]);
-
-            $this->logger->info('Password changed', [
-                'user_id' => $user['id'],
-                'username' => $user['username']
-            ]);
-
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Password changed successfully'
             ]);
-
-        } catch (\Exception $e) {
-            $this->logger->error('Change password failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'user_id' => $user['id'] ?? null
-            ]);
-
+        } catch (\Throwable $e) {
+            $this->logger->error('Change password failed', ['error' => $e->getMessage()]);
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to change password'
@@ -741,60 +537,25 @@ class AuthController
         }
     }
 
-    /**
-     * 生成UUID
-     */
-    private function generateUUID(): string
-    {
-        return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
-    }
-
-    /**
-     * 获取客户端IP地址
-     */
-    private function getClientIP(Request $request): string
-    {
-        $headers = [
-            'HTTP_CF_CONNECTING_IP',     // Cloudflare
-            'HTTP_CLIENT_IP',            // Proxy
-            'HTTP_X_FORWARDED_FOR',      // Load balancer/proxy
-            'HTTP_X_FORWARDED',          // Proxy
-            'HTTP_X_CLUSTER_CLIENT_IP',  // Cluster
-            'HTTP_FORWARDED_FOR',        // Proxy
-            'HTTP_FORWARDED',            // Proxy
-            'REMOTE_ADDR'                // Standard
-        ];
-
-        foreach ($headers as $header) {
-            if ($request->hasHeader($header)) {
-                $ip = $request->getHeaderLine($header);
-                if (!empty($ip) && $ip !== 'unknown') {
-                    // 如果有多个IP，取第一个
-                    $ip = explode(',', $ip)[0];
-                    return trim($ip);
-                }
-            }
-        }
-
-        return '0.0.0.0';
-    }
-
-    /**
-     * 返回JSON响应
-     */
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
     {
         $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
-        return $response
-            ->withHeader('Content-Type', 'application/json')
-            ->withStatus($status);
+        return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+    }
+
+    private function getClientIP(Request $request): string
+    {
+        $server = $request->getServerParams();
+        $xff = $request->getHeaderLine('X-Forwarded-For');
+        if ($xff) {
+            $parts = explode(',', $xff);
+            return trim($parts[0]);
+        }
+        $cf = $request->getHeaderLine('CF-Connecting-IP');
+        if ($cf) {
+            return $cf;
+        }
+        return $server['REMOTE_ADDR'] ?? '0.0.0.0';
     }
 }
 
