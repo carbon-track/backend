@@ -134,6 +134,10 @@
     {
       "url": "http://localhost:8000/api/v1",
       "description": "本地开发环境"
+    },
+    {
+      "url": "/",
+      "description": "根路径服务器（用于健康检查 /）"
     }
   ],
   "security": [
@@ -555,7 +559,7 @@
           "404": { "description": "用户不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
-      },
+  },
       "put": {
         "tags": ["User"],
         "summary": "更新指定用户信息",
@@ -597,6 +601,34 @@
           "400": { "description": "请求参数错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "409": { "description": "冲突（如用户名或邮箱已存在）", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["User"],
+        "summary": "删除指定用户",
+        "description": "删除指定ID的用户（需要权限）。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "用户ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "用户删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "message": { "type": "string", "example": "User deleted successfully" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "用户不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
@@ -934,7 +966,7 @@
           "404": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
-      },
+  },
       "put": {
         "tags": ["Carbon Track"],
         "summary": "审核碳记录",
@@ -979,6 +1011,54 @@
           "404": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
+      },
+      "delete": {
+        "tags": ["Carbon Track"],
+        "summary": "删除碳记录",
+        "description": "删除指定ID的碳减排记录。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "碳记录ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "记录删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "message": { "type": "string", "example": "Record deleted successfully" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/carbon-track/transactions/{id}/approve": {
+      "put": {
+        "tags": ["Carbon Track"],
+        "summary": "审核通过碳记录 (别名)",
+        "description": "等价于 PUT /carbon-track/transactions/{id} 并在请求体中传 status=approved。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } } ],
+        "responses": { "200": { "description": "审核通过" }, "401": { "description": "未授权" }, "403": { "description": "禁止访问" }, "404": { "description": "记录不存在" } }
+      }
+    },
+    "/carbon-track/transactions/{id}/reject": {
+      "put": {
+        "tags": ["Carbon Track"],
+        "summary": "审核拒绝碳记录 (别名)",
+        "description": "等价于 PUT /carbon-track/transactions/{id} 并在请求体中传 status=rejected。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } } ],
+        "responses": { "200": { "description": "审核拒绝" }, "401": { "description": "未授权" }, "403": { "description": "禁止访问" }, "404": { "description": "记录不存在" } }
       }
     },
     "/admin/exchanges": {
@@ -1142,8 +1222,8 @@
           "403": { "description": "禁止访问，需要管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
-      },
-      "post": {
+  },
+  "post": {
         "tags": ["Admin", "Product"],
         "summary": "创建新产品 (管理员)",
         "description": "管理员创建新的可兑换产品。",
@@ -1168,7 +1248,9 @@
           "403": { "description": "禁止访问，需要管理员权限", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
-      },
+      }
+    },
+    "/admin/products/{id}": {
       "put": {
         "tags": ["Admin", "Product"],
         "summary": "更新产品信息 (管理员)",
@@ -1917,7 +1999,7 @@
         }
       }
     },
-    "/messages/mark-all-read": {
+  "/messages/mark-all-read": {
       "put": {
         "tags": ["Message"],
         "summary": "批量标记消息为已读",
@@ -1947,6 +2029,487 @@
           "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
+      }
+    },
+    "/messages": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取用户消息列表",
+        "description": "获取当前认证用户的消息列表。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "is_read", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取消息列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "integer" },
+                          "title": { "type": "string" },
+                          "content": { "type": "string" },
+                          "is_read": { "type": "boolean" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/{id}": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取消息详情",
+        "description": "获取指定ID的消息详情。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取消息详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "integer" },
+                        "title": { "type": "string" },
+                        "content": { "type": "string" },
+                        "is_read": { "type": "boolean" },
+                        "created_at": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Message"],
+        "summary": "删除消息",
+        "description": "删除指定ID的消息。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "消息删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/{id}/read": {
+      "put": {
+        "tags": ["Message"],
+        "summary": "标记消息为已读",
+        "description": "将指定ID的消息标记为已读。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "标记成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/unread-count": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取未读消息数量",
+        "description": "获取当前用户的未读消息数量。",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "成功获取未读数量",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": {"type":"object", "properties": { "unread_count": {"type":"integer"} } } } } } }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange": {
+      "post": {
+        "tags": ["Exchange"],
+        "summary": "兑换产品",
+        "description": "提交兑换请求，从用户积分中扣除，创建兑换记录。",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeRequest" } } } },
+        "responses": {
+          "200": { "description": "兑换成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeResponse" } } } },
+          "400": { "description": "请求参数错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "库存不足或积分不足", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange/transactions": {
+      "get": {
+        "tags": ["Exchange"],
+        "summary": "获取用户兑换记录",
+        "description": "获取当前认证用户的兑换记录列表。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": { "description": "成功获取兑换记录", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeTransactionsResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange/transactions/{id}": {
+      "get": {
+        "tags": ["Exchange"],
+        "summary": "获取兑换记录详情",
+        "description": "获取指定ID的兑换记录详情。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "兑换记录ID" } ],
+        "responses": {
+          "200": { "description": "成功获取兑换详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeTransactionResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品列表",
+        "description": "获取可兑换产品列表，支持搜索与分页。",
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "category", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "成功获取产品列表", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductsResponse" } } } }
+        }
+      },
+      "post": {
+        "tags": ["Product"],
+        "summary": "创建产品",
+        "description": "创建新产品（如果后端允许公共POST则保留；否则仅管理员，已在 /admin/products 记录）。",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateProductRequest" } } } },
+        "responses": { "201": { "description": "创建成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } } }
+      }
+    },
+    "/products/{id}": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品详情",
+        "description": "获取指定ID的产品详情。",
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "成功获取产品详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } }, "404": { "description": "产品不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "put": {
+        "tags": ["Product"],
+        "summary": "更新产品",
+        "description": "更新指定ID产品（如果允许普通用户；否则仅管理员路径生效）。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateProductRequest" } } } },
+        "responses": { "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } }, "404": { "description": "产品不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Product"],
+        "summary": "删除产品",
+        "description": "删除指定ID产品（如果允许普通用户；否则仅管理员路径生效）。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "删除成功" }, "404": { "description": "产品不存在" } }
+      }
+    },
+    "/products/categories": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品分类",
+        "description": "获取所有可用产品分类。",
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "type": "string" } } } } } } } }
+      }
+    },
+    "/schools": {
+      "get": {
+        "tags": ["School"],
+        "summary": "获取学校列表",
+        "description": "获取学校列表（公开接口）。",
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "type": "object", "properties": { "id": {"type":"integer"}, "name": {"type":"string"} } } } } } } } } }
+      }
+    },
+    "/admin/schools": {
+      "post": {
+        "tags": ["Admin", "School"],
+        "summary": "创建学校 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "201": { "description": "创建成功" } }
+      }
+    },
+    "/admin/schools/{id}": {
+      "put": {
+        "tags": ["Admin", "School"],
+        "summary": "更新学校 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "更新成功" }, "404": { "description": "学校不存在" } }
+      },
+      "delete": {
+        "tags": ["Admin", "School"],
+        "summary": "删除学校 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "删除成功" }, "404": { "description": "学校不存在" } }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": ["Admin", "User"],
+        "summary": "获取用户列表 (管理员)",
+        "description": "管理员获取用户列表，支持分页筛选。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }, { "name": "search", "in": "query", "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "$ref": "#/components/schemas/UserResponse" } } } } } } } }
+      }
+    },
+    "/admin/users/{id}": {
+      "put": {
+        "tags": ["Admin", "User"],
+        "summary": "更新用户 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "成功" }, "404": { "description": "用户不存在" } }
+      },
+      "delete": {
+        "tags": ["Admin", "User"],
+        "summary": "删除用户 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "成功" }, "404": { "description": "用户不存在" } }
+      }
+    },
+    "/admin/transactions/pending": {
+      "get": {
+        "tags": ["Admin", "Carbon Track"],
+        "summary": "获取待审核碳记录 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/stats": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "获取后台统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/logs": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "获取系统日志 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取碳活动列表 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      },
+      "post": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "创建碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCarbonActivityRequest" } } } },
+        "responses": { "201": { "description": "创建成功" } }
+      }
+    },
+    "/admin/carbon-activities/statistics": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取碳活动统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/sort-orders": {
+      "put": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "更新活动排序 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}": {
+      "put": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "更新碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCarbonActivityRequest" } } } },
+        "responses": { "200": { "description": "成功" } }
+      },
+      "delete": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "删除碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}/restore": {
+      "post": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "恢复碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}/statistics": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取单个活动统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/activities": {
+      "get": {
+        "tags": ["Admin", "Carbon Track"],
+        "summary": "获取待审核记录列表 (别名)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/activities/{id}/review": {
+      "put": {
+        "tags": ["Admin", "Carbon Track"],
+        "summary": "审核碳记录 (别名)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "type": "string", "enum": ["approved", "rejected"] }, "admin_notes": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "审核成功" }, "404": { "description": "记录不存在" } }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": ["System"],
+        "summary": "健康检查",
+        "description": "返回API运行状态。",
+        "responses": { "200": { "description": "服务运行中" } }
+      }
+    },
+    "/{routes}": {
+      "get": {
+        "tags": ["System"],
+        "summary": "未匹配路由 (GET)",
+        "description": "通配未匹配的路由，返回404。",
+        "responses": { "404": { "description": "Route not found" } }
+      },
+      "post": {
+        "tags": ["System"],
+        "summary": "未匹配路由 (POST)",
+        "responses": { "404": { "description": "Route not found" } }
+      },
+      "put": {
+        "tags": ["System"],
+        "summary": "未匹配路由 (PUT)",
+        "responses": { "404": { "description": "Route not found" } }
+      },
+      "delete": {
+        "tags": ["System"],
+        "summary": "未匹配路由 (DELETE)",
+        "responses": { "404": { "description": "Route not found" } }
+      },
+      "patch": {
+        "tags": ["System"],
+        "summary": "未匹配路由 (PATCH)",
+        "responses": { "404": { "description": "Route not found" } }
+      }
+    },
+    "/carbon-track/factors": {
+      "get": {
+        "tags": ["Carbon Track"],
+        "summary": "获取碳因子配置",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/carbon-track/stats": {
+      "get": {
+        "tags": ["Carbon Track"],
+        "summary": "获取用户碳统计",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserStatsResponse" } } } } }
       }
     }
   },
@@ -2427,6 +2990,408 @@
           "bearerFormat": "JWT",
           "description": "JWT认证，格式为'Bearer {token}'"
         }
+      }
+    }
+    ,
+    "/messages": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取用户消息列表",
+        "description": "获取当前认证用户的消息列表。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "is_read", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取消息列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "integer" },
+                          "title": { "type": "string" },
+                          "content": { "type": "string" },
+                          "is_read": { "type": "boolean" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/{id}": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取消息详情",
+        "description": "获取指定ID的消息详情。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取消息详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "integer" },
+                        "title": { "type": "string" },
+                        "content": { "type": "string" },
+                        "is_read": { "type": "boolean" },
+                        "created_at": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Message"],
+        "summary": "删除消息",
+        "description": "删除指定ID的消息。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "消息删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/{id}/read": {
+      "put": {
+        "tags": ["Message"],
+        "summary": "标记消息为已读",
+        "description": "将指定ID的消息标记为已读。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" }, "description": "消息ID" }
+        ],
+        "responses": {
+          "200": {
+            "description": "标记成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "消息不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/messages/unread-count": {
+      "get": {
+        "tags": ["Message"],
+        "summary": "获取未读消息数量",
+        "description": "获取当前用户的未读消息数量。",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "成功获取未读数量",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": {"type":"object", "properties": { "unread_count": {"type":"integer"} } } } } } }
+          },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange": {
+      "post": {
+        "tags": ["Exchange"],
+        "summary": "兑换产品",
+        "description": "提交兑换请求，从用户积分中扣除，创建兑换记录。",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeRequest" } } } },
+        "responses": {
+          "200": { "description": "兑换成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeResponse" } } } },
+          "400": { "description": "请求参数错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "库存不足或积分不足", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange/transactions": {
+      "get": {
+        "tags": ["Exchange"],
+        "summary": "获取用户兑换记录",
+        "description": "获取当前认证用户的兑换记录列表。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+        ],
+        "responses": {
+          "200": { "description": "成功获取兑换记录", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeTransactionsResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/exchange/transactions/{id}": {
+      "get": {
+        "tags": ["Exchange"],
+        "summary": "获取兑换记录详情",
+        "description": "获取指定ID的兑换记录详情。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "兑换记录ID" } ],
+        "responses": {
+          "200": { "description": "成功获取兑换详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExchangeTransactionResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品列表",
+        "description": "获取可兑换产品列表，支持搜索与分页。",
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "category", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "成功获取产品列表", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductsResponse" } } } }
+        }
+      },
+      "post": {
+        "tags": ["Product"],
+        "summary": "创建产品",
+        "description": "创建新产品（如果后端允许公共POST则保留；否则仅管理员，已在 /admin/products 记录）。",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateProductRequest" } } } },
+        "responses": { "201": { "description": "创建成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } } }
+      }
+    },
+    "/products/{id}": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品详情",
+        "description": "获取指定ID的产品详情。",
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "成功获取产品详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } }, "404": { "description": "产品不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "put": {
+        "tags": ["Product"],
+        "summary": "更新产品",
+        "description": "更新指定ID产品（如果允许普通用户；否则仅管理员路径生效）。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateProductRequest" } } } },
+        "responses": { "200": { "description": "更新成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductResponse" } } } }, "404": { "description": "产品不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } } }
+      },
+      "delete": {
+        "tags": ["Product"],
+        "summary": "删除产品",
+        "description": "删除指定ID产品（如果允许普通用户；否则仅管理员路径生效）。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "删除成功" }, "404": { "description": "产品不存在" } }
+      }
+    },
+    "/products/categories": {
+      "get": {
+        "tags": ["Product"],
+        "summary": "获取产品分类",
+        "description": "获取所有可用产品分类。",
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "type": "string" } } } } } } } }
+      }
+    },
+    "/schools": {
+      "get": {
+        "tags": ["School"],
+        "summary": "获取学校列表",
+        "description": "获取学校列表（公开接口）。",
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "type": "object", "properties": { "id": {"type":"integer"}, "name": {"type":"string"} } } } } } } } } }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": ["Admin", "User"],
+        "summary": "获取用户列表 (管理员)",
+        "description": "管理员获取用户列表，支持分页筛选。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }, { "name": "search", "in": "query", "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": {"type":"boolean"}, "data": { "type": "array", "items": { "$ref": "#/components/schemas/UserResponse" } } } } } } } }
+      }
+    },
+    "/admin/users/{id}": {
+      "put": {
+        "tags": ["Admin", "User"],
+        "summary": "更新用户 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "成功" }, "404": { "description": "用户不存在" } }
+      },
+      "delete": {
+        "tags": ["Admin", "User"],
+        "summary": "删除用户 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": { "200": { "description": "成功" }, "404": { "description": "用户不存在" } }
+      }
+    },
+    "/admin/transactions/pending": {
+      "get": {
+        "tags": ["Admin", "Carbon Track"],
+        "summary": "获取待审核碳记录 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/stats": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "获取后台统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/logs": {
+      "get": {
+        "tags": ["Admin"],
+        "summary": "获取系统日志 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取碳活动列表 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      },
+      "post": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "创建碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCarbonActivityRequest" } } } },
+        "responses": { "201": { "description": "创建成功" } }
+      }
+    },
+    "/admin/carbon-activities/statistics": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取碳活动统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/sort-orders": {
+      "put": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "更新活动排序 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}": {
+      "put": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "更新碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCarbonActivityRequest" } } } },
+        "responses": { "200": { "description": "成功" } }
+      },
+      "delete": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "删除碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}/restore": {
+      "post": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "恢复碳活动 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/admin/carbon-activities/{id}/statistics": {
+      "get": {
+        "tags": ["Admin", "Carbon Activity"],
+        "summary": "获取单个活动统计 (管理员)",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "成功" } }
+      }
+    },
+    "/carbon-track/factors": {
+      "get": {
+        "tags": ["Carbon Track"],
+        "summary": "获取碳因子配置",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "type": "object" } } } } }
+      }
+    },
+    "/carbon-track/stats": {
+      "get": {
+        "tags": ["Carbon Track"],
+        "summary": "获取用户碳统计",
+        "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserStatsResponse" } } } } }
       }
     }
   }
