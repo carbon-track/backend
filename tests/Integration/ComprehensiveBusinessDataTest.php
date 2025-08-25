@@ -97,11 +97,27 @@ class ComprehensiveBusinessDataTest extends TestCase
 
     protected function setUpTestData(): void
     {
-        // Clear existing test data
-        $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
-        $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
-        $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
-        $this->pdo->exec("DELETE FROM carbon_tracking WHERE id LIKE 'test-%'");
+        // Clear existing test data (ignore errors if tables don't exist)
+        try {
+            $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
+        } catch (\Throwable $e) {
+            // Ignore if table doesn't exist
+        }
+        try {
+            $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
+        } catch (\Throwable $e) {
+            // Ignore if table doesn't exist
+        }
+        try {
+            $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
+        } catch (\Throwable $e) {
+            // Ignore if table doesn't exist
+        }
+        try {
+            $this->pdo->exec("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
+        } catch (\Throwable $e) {
+            // Ignore if table doesn't exist
+        }
 
         // Create realistic test users
         $this->createTestUsers();
@@ -598,10 +614,26 @@ class ComprehensiveBusinessDataTest extends TestCase
     {
         // Clean up test data
         if ($this->pdo) {
-            $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
-            $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
-            $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
-            $this->pdo->exec("DELETE FROM carbon_tracking WHERE id LIKE 'test-%'");
+            try {
+                $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
+            } catch (\Throwable $e) {
+                // Ignore if table doesn't exist
+            }
+            try {
+                $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
+            } catch (\Throwable $e) {
+                // Ignore if table doesn't exist
+            }
+            try {
+                $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
+            } catch (\Throwable $e) {
+                // Ignore if table doesn't exist
+            }
+            try {
+                $this->pdo->exec("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
+            } catch (\Throwable $e) {
+                // Ignore if table doesn't exist
+            }
         }
         
         parent::tearDown();
