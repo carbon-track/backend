@@ -1,12 +1,11 @@
 <?php
+declare(strict_types=1);
 
 // --- Error Handling & Environment Setup ---
 // Prevent PHP warnings and notices from breaking the JSON response format.
 // In production, these should be logged, not displayed.
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
-
-declare(strict_types=1);
 
 use DI\Container;
 use Psr\Log\LoggerInterface;
