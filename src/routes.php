@@ -218,6 +218,18 @@ return function (App $app) {
         $group->get('/activities/categories', [CarbonActivityController::class, 'getActivities']);
     });
 
+    // Backward-compatible alias group for clients calling /api/auth/* (without version prefix)
+    $app->group('/api', function (RouteCollectorProxy $api) {
+        $api->group('/auth', function (RouteCollectorProxy $auth) {
+            $auth->post('/register', [AuthController::class, 'register']);
+            $auth->post('/login', [AuthController::class, 'login']);
+            $auth->post('/logout', [AuthController::class, 'logout']);
+            $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
+            $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
+            $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
+        });
+    });
+
     // Catch-all route for 404
     $app->map(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], '/{routes:.+}', function ($request, $response) {
         $response->getBody()->write(json_encode([

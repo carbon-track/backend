@@ -16,8 +16,9 @@ class CorsMiddleware implements MiddlewareInterface
         // Read config from env with sensible defaults
         $allowedOriginsEnv = $_ENV['CORS_ALLOWED_ORIGINS'] ?? '*';
         $allowedMethods = $_ENV['CORS_ALLOWED_METHODS'] ?? 'GET,POST,PUT,DELETE,OPTIONS';
-        $allowedHeadersDefault = $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
-        $exposeHeaders = $_ENV['CORS_EXPOSE_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
+    // 默认允许常见自定义头，覆盖时使用 CORS_ALLOWED_HEADERS
+    $allowedHeadersDefault = $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID,X-Requested-With,X-Turnstile-Token';
+    $exposeHeaders = $_ENV['CORS_EXPOSE_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
         $allowCredentials = filter_var($_ENV['CORS_ALLOW_CREDENTIALS'] ?? 'true', FILTER_VALIDATE_BOOLEAN);
 
         // Parse and trim allowed origins list
@@ -30,14 +31,31 @@ class CorsMiddleware implements MiddlewareInterface
 
         // Helper to check wildcard origins like https://*.example.com
         $isOriginAllowed = function (?string $origin) use ($allowedOrigins): bool {
-            if (!$origin) return false;
+            if (!$origin) {
+                return false;
+            }
+            // 允许特殊的 "null" 源（如 file:// 场景）当配置为通配或显式包含 null
+            if ($origin === 'null') {
+                foreach ($allowedOrigins as $allowed) {
+                    if ($allowed === '*' || strcasecmp($allowed, 'null') === 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }
             foreach ($allowedOrigins as $allowed) {
-                if ($allowed === '*') return true;
-                if (strcasecmp($allowed, $origin) === 0) return true;
+                if ($allowed === '*') {
+                    return true;
+                }
+                if (strcasecmp($allowed, $origin) === 0) {
+                    return true;
+                }
                 // Wildcard subdomain match: https://*.example.com
                 if (strpos($allowed, '*.') !== false) {
                     $pattern = '/^' . str_replace(['*.', '.', '/'], ['([^.]+)\.', '\\.', '\/'], preg_quote($allowed, '/')) . '$/i';
-                    if (preg_match($pattern, $origin)) return true;
+                    if (preg_match($pattern, $origin)) {
+                        return true;
+                    }
                 }
             }
             return false;

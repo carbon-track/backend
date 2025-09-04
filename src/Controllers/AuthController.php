@@ -157,10 +157,12 @@ class AuthController
     {
         try {
             $data = $request->getParsedBody();
-            if (empty($data['username']) || empty($data['password'])) {
+            // 兼容 identifier / username / email 三种输入
+            $identifier = $data['identifier'] ?? ($data['username'] ?? ($data['email'] ?? null));
+            if (empty($identifier) || empty($data['password'])) {
                 return $this->jsonResponse($response, [
                     'success' => false,
-                    'message' => 'Username and password are required',
+                    'message' => 'Identifier and password are required',
                     'code' => 'MISSING_CREDENTIALS'
                 ], 400);
             }
@@ -173,8 +175,10 @@ class AuthController
                     ], 400);
                 }
             }
-            $stmt = $this->db->prepare('SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.username = ? AND u.deleted_at IS NULL');
-            $stmt->execute([$data['username']]);
+            $isEmail = filter_var($identifier, FILTER_VALIDATE_EMAIL) !== false;
+            $field = $isEmail ? 'u.email' : 'u.username';
+            $stmt = $this->db->prepare("SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE {$field} = ? AND u.deleted_at IS NULL");
+            $stmt->execute([$identifier]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             $passwordField = null;
             if ($user) {
@@ -188,7 +192,7 @@ class AuthController
                 $this->auditLogService->log([
                     'action' => 'login_failed',
                     'entity_type' => 'user',
-                    'old_value' => json_encode(['username' => $data['username']]),
+                    'old_value' => json_encode(['identifier' => $identifier]),
                     'ip_address' => $this->getClientIP($request),
                     'user_agent' => $request->getHeaderLine('User-Agent'),
                     'notes' => 'Invalid credentials'
