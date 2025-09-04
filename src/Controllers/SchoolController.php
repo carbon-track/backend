@@ -6,21 +6,61 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
+use PDO;
 
 class SchoolController extends BaseController
 {
     protected $auditLogService;
+    /** @var PDO */
+    protected $db;
+
+    private const ERR_SCHOOL_NOT_FOUND = 'School not found';
+    private const CODE_SCHOOL_NOT_FOUND = 'SCHOOL_NOT_FOUND';
 
     public function __construct($container)
     {
         $this->auditLogService = $container->get(AuditLogService::class);
+        // 获取 PDO 以便处理班级相关的原生查询
+        $this->db = $container->get(PDO::class);
     }
 
-    // Get all schools (publicly accessible)
+    // Get schools with optional fuzzy search and pagination (public)
     public function index(Request $request, Response $response, array $args)
     {
-        $schools = School::all();
-        return $this->response($response, ["schools" => $schools]);
+        $params = $request->getQueryParams();
+
+        $limit = (int)($params['limit'] ?? 20);
+        $limit = max(1, min(100, $limit));
+        $page = (int)($params['page'] ?? 1);
+        $page = max(1, $page);
+        $offset = ($page - 1) * $limit;
+
+        $query = School::query()->whereNull('deleted_at')->where('is_active', true);
+
+        if (!empty($params['search'])) {
+            $search = trim((string)$params['search']);
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('location', 'LIKE', '%' . $search . '%');
+            });
+        }
+
+        // 获取总数与数据
+        $total = (clone $query)->count();
+        $items = $query->orderBy('sort_order', 'asc')->offset($offset)->limit($limit)->get();
+
+        return $this->response($response, [
+            'success' => true,
+            'data' => [
+                'schools' => $items,
+                'pagination' => [
+                    'total_items' => $total,
+                    'current_page' => $page,
+                    'per_page' => $limit,
+                    'total_pages' => (int)ceil($total / $limit)
+                ]
+            ]
+        ]);
     }
 
     // Admin: Get all schools with pagination and filters
@@ -76,12 +116,65 @@ class SchoolController extends BaseController
         return $this->response($response, ["school" => $school], 201);
     }
 
+    // Public: Create or fetch a school (authenticated users)
+    public function createOrFetch(Request $request, Response $response, array $args)
+    {
+        $data = $request->getParsedBody();
+        $name = trim((string)($data['name'] ?? ''));
+        $location = isset($data['location']) ? trim((string)$data['location']) : null;
+
+        if ($name === '') {
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'School name is required',
+                'code' => 'MISSING_NAME'
+            ], 400);
+        }
+
+        // 查找同名（不区分大小写）学校
+        $existing = School::whereRaw('LOWER(name) = LOWER(?)', [$name])
+            ->whereNull('deleted_at')
+            ->first();
+
+        if ($existing) {
+            return $this->response($response, [
+                'success' => true,
+                'data' => ['school' => $existing]
+            ], 200);
+        }
+
+        $school = School::create([
+            'name' => $name,
+            'location' => $location,
+            'is_active' => true,
+            'sort_order' => 0
+        ]);
+
+        // 记录审计
+        $this->auditLogService->log(
+            $request->getAttribute('user_id'),
+            'School',
+            $school->id,
+            'create',
+            'User created school (public): ' . $school->name
+        );
+
+        return $this->response($response, [
+            'success' => true,
+            'data' => ['school' => $school]
+        ], 201);
+    }
+
     // Admin: Get a single school
     public function show(Request $request, Response $response, array $args)
     {
         $school = School::find($args["id"]);
         if (!$school) {
-            throw new \Exception("School not found", 404);
+            return $this->response($response, [
+                'success' => false,
+                'message' => self::ERR_SCHOOL_NOT_FOUND,
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
         }
         return $this->response($response, ["school" => $school]);
     }
@@ -91,7 +184,11 @@ class SchoolController extends BaseController
     {
         $school = School::find($args["id"]);
         if (!$school) {
-            throw new \Exception("School not found", 404);
+            return $this->response($response, [
+                'success' => false,
+                'message' => self::ERR_SCHOOL_NOT_FOUND,
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
         }
 
         $data = $request->getParsedBody();
@@ -121,7 +218,11 @@ class SchoolController extends BaseController
     {
         $school = School::find($args["id"]);
         if (!$school) {
-            throw new \Exception("School not found", 404);
+            return $this->response($response, [
+                'success' => false,
+                'message' => self::ERR_SCHOOL_NOT_FOUND,
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
         }
 
         $school->delete(); // Soft delete
@@ -142,7 +243,11 @@ class SchoolController extends BaseController
     {
         $school = School::onlyTrashed()->find($args["id"]);
         if (!$school) {
-            throw new \Exception("Soft deleted school not found", 404);
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'Soft deleted school not found',
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
         }
 
         $school->restore();
@@ -163,7 +268,11 @@ class SchoolController extends BaseController
     {
         $school = School::onlyTrashed()->find($args["id"]);
         if (!$school) {
-            throw new \Exception("School not found in trash", 404);
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'School not found in trash',
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
         }
 
         $school->forceDelete();
@@ -193,6 +302,145 @@ class SchoolController extends BaseController
             "inactive_schools" => $inactiveSchools,
             "deleted_schools" => $deletedSchools,
         ]);
+    }
+
+    // Public: List classes for a school with optional fuzzy search and pagination
+    public function listClasses(Request $request, Response $response, array $args)
+    {
+        $schoolId = (int)($args['id'] ?? 0);
+        if ($schoolId <= 0) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'Invalid school id',
+                'code' => 'INVALID_SCHOOL_ID'
+            ], 400);
+        }
+
+        // Ensure school exists
+        $exists = School::where('id', $schoolId)->whereNull('deleted_at')->exists();
+        if (!$exists) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => self::ERR_SCHOOL_NOT_FOUND,
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
+        }
+
+        $params = $request->getQueryParams();
+        $limit = (int)($params['limit'] ?? 20);
+        $limit = max(1, min(100, $limit));
+        $page = (int)($params['page'] ?? 1);
+        $page = max(1, $page);
+        $offset = ($page - 1) * $limit;
+        $search = trim((string)($params['search'] ?? ''));
+
+        $where = 'WHERE school_id = :sid AND (deleted_at IS NULL)';
+        $bind = ['sid' => $schoolId];
+        if ($search !== '') {
+            $where .= ' AND name LIKE :kw';
+            $bind['kw'] = '%' . $search . '%';
+        }
+
+        $totalStmt = $this->db->prepare("SELECT COUNT(*) FROM school_classes $where");
+        $totalStmt->execute($bind);
+        $total = (int)$totalStmt->fetchColumn();
+
+        $sql = "SELECT id, school_id, name, is_active, created_at, updated_at FROM school_classes $where ORDER BY name ASC LIMIT :limit OFFSET :offset";
+        $stmt = $this->db->prepare($sql);
+        foreach ($bind as $k => $v) {
+            $paramType = is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR;
+            $stmt->bindValue(':' . $k, $v, $paramType);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        $items = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        return $this->response($response, [
+            'success' => true,
+            'data' => [
+                'classes' => $items,
+                'pagination' => [
+                    'total_items' => $total,
+                    'current_page' => $page,
+                    'per_page' => $limit,
+                    'total_pages' => (int)ceil($total / $limit)
+                ]
+            ]
+        ]);
+    }
+
+    // Authenticated: Create a class for a school (idempotent by name)
+    public function createClass(Request $request, Response $response, array $args)
+    {
+        $schoolId = (int)($args['id'] ?? 0);
+        if ($schoolId <= 0) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'Invalid school id',
+                'code' => 'INVALID_SCHOOL_ID'
+            ], 400);
+        }
+
+        // Ensure school exists
+        $exists = School::where('id', $schoolId)->whereNull('deleted_at')->exists();
+        if (!$exists) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => self::ERR_SCHOOL_NOT_FOUND,
+                'code' => self::CODE_SCHOOL_NOT_FOUND
+            ], 404);
+        }
+
+        $data = $request->getParsedBody();
+        $name = trim((string)($data['name'] ?? ''));
+    $body = null;
+
+        if ($name === '') {
+            $httpStatus = 400;
+            $body = [
+                'success' => false,
+                'message' => 'Class name is required',
+                'code' => 'MISSING_NAME'
+            ];
+        } else {
+            // Check existing (case-insensitive)
+            $check = $this->db->prepare('SELECT id, school_id, name, is_active FROM school_classes WHERE school_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1');
+            $check->execute([$schoolId, $name]);
+            $existing = $check->fetch(PDO::FETCH_ASSOC) ?: null;
+            if ($existing) {
+                $httpStatus = 200;
+                $body = [
+                    'success' => true,
+                    'data' => ['class' => $existing]
+                ];
+            } else {
+                $ins = $this->db->prepare('INSERT INTO school_classes (school_id, name, is_active, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())');
+                $ins->execute([$schoolId, $name]);
+                $id = (int)$this->db->lastInsertId();
+
+                $sel = $this->db->prepare('SELECT id, school_id, name, is_active, created_at, updated_at FROM school_classes WHERE id = ?');
+                $sel->execute([$id]);
+                $row = $sel->fetch(PDO::FETCH_ASSOC);
+
+                // 审计日志
+                $this->auditLogService->log(
+                    $request->getAttribute('user_id'),
+                    'SchoolClass',
+                    $id,
+                    'create',
+                    'User created class for school #' . $schoolId . ': ' . $name
+                );
+
+                $httpStatus = 201;
+                $body = [
+                    'success' => true,
+                    'data' => ['class' => $row]
+                ];
+            }
+        }
+
+        return $this->response($response, $body ?? [ 'success' => false, 'message' => 'Unexpected state' ], $httpStatus);
     }
 }
 

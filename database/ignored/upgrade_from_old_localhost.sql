@@ -709,6 +709,53 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
   KEY `idx_audit_logs_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- === SCHOOL CLASSES (new table) ===
+-- Supports per-school classes with soft-delete and activity flags
+CREATE TABLE IF NOT EXISTS `school_classes` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `school_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Helpful indexes (idempotent) for school_classes
+SET @sql = (SELECT IF(EXISTS(
+  SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE table_schema = DATABASE() AND table_name = 'school_classes' AND index_name = 'idx_school_classes_school_id'
+),
+  'SELECT "idx_school_classes_school_id exists"',
+  'CREATE INDEX `idx_school_classes_school_id` ON `school_classes` (`school_id`)'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(EXISTS(
+  SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE table_schema = DATABASE() AND table_name = 'school_classes' AND index_name = 'idx_school_classes_name'
+),
+  'SELECT "idx_school_classes_name exists"',
+  'CREATE INDEX `idx_school_classes_name` ON `school_classes` (`name`)'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql = (SELECT IF(EXISTS(
+  SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE table_schema = DATABASE() AND table_name = 'school_classes' AND index_name = 'idx_school_classes_deleted_at'
+),
+  'SELECT "idx_school_classes_deleted_at exists"',
+  'CREATE INDEX `idx_school_classes_deleted_at` ON `school_classes` (`deleted_at`)'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Unique per-school class name (case-insensitive by default collation)
+SET @sql = (SELECT IF(EXISTS(
+  SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS 
+  WHERE table_schema = DATABASE() AND table_name = 'school_classes' AND index_name = 'uniq_school_class_name'
+),
+  'SELECT "uniq_school_class_name exists"',
+  'ALTER TABLE `school_classes` ADD UNIQUE KEY `uniq_school_class_name` (`school_id`,`name`)'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- End of upgrade
 
 
