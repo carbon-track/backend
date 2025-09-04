@@ -17,6 +17,7 @@ use CarbonTrack\Middleware\CorsMiddleware;
 use CarbonTrack\Middleware\LoggingMiddleware;
 use CarbonTrack\Middleware\IdempotencyMiddleware;
 use CarbonTrack\Services\DatabaseService;
+use Slim\Middleware\ErrorMiddleware;
 
 require __DIR__ . '/../vendor/autoload.php';
 
@@ -39,45 +40,46 @@ $dependencies($container);
 AppFactory::setContainer($container);
 $app = AppFactory::create();
 
-// Add CORS Middleware FIRST so it can short-circuit OPTIONS preflight before routing
-$app->add(new CorsMiddleware());
+// --- Middleware Registration (Order is important: LIFO - Last In, First Out) ---
+// The last middleware added is the first to be executed.
 
-// Add Routing Middleware
-$app->addRoutingMiddleware();
-
-// Add Body Parsing Middleware
-$app->addBodyParsingMiddleware();
-
-// Add Logging Middleware - now Logger is available in container
-try {
-    // 直接从容器获取Monolog Logger实例，而不是通过接口
-    $logger = $container->get(\Monolog\Logger::class);
-    $app->add(new LoggingMiddleware($logger));
-    // 添加幂等性中间件，保护敏感写操作
-    $app->add(new IdempotencyMiddleware(
-        $container->get(DatabaseService::class),
-        $logger
-    ));
-} catch (\Exception $e) {
-    // If Logger creation fails, log error and continue without logging middleware
-    error_log('Failed to create LoggingMiddleware: ' . $e->getMessage());
-}
-
-// Create Request object from globals
-$serverRequestCreator = ServerRequestCreatorFactory::create();
-$request = $serverRequestCreator->createServerRequestFromGlobals();
-
-// Add Error Middleware with default error handling
+// 1. Error Middleware - Added first, so it executes last, catching all exceptions.
 $errorMiddleware = $app->addErrorMiddleware(
     (bool) ($_ENV['APP_DEBUG'] ?? false),
     true,
     true
 );
 
+// 2. Routing Middleware - This must run before the app's routes are processed.
+$app->addRoutingMiddleware();
+
+// 3. Body Parsing Middleware
+$app->addBodyParsingMiddleware();
+
+// 4. Application-specific middleware
+try {
+    $logger = $container->get(\Monolog\Logger::class);
+    $app->add(new LoggingMiddleware($logger));
+    $app->add(new IdempotencyMiddleware(
+        $container->get(DatabaseService::class),
+        $logger
+    ));
+} catch (\Exception $e) {
+    error_log('Failed to create application middleware: ' . $e->getMessage());
+}
+
+// 5. CORS Middleware - Added last, so it executes first.
+// This allows it to intercept preflight OPTIONS requests before the router even runs.
+$app->add(new CorsMiddleware());
+
+// Create Request object from globals
+$serverRequestCreator = ServerRequestCreatorFactory::create();
+$request = $serverRequestCreator->createServerRequestFromGlobals();
+
 // Custom error handler for 404 errors
 $errorMiddleware->setErrorHandler(
     Slim\Exception\HttpNotFoundException::class,
-    function (Psr\Http\Message\ServerRequestInterface $request, Throwable $exception, bool $displayErrorDetails) {
+    function (Psr\Http\Message\ServerRequestInterface $request) {
         $response = new \Slim\Psr7\Response();
         $response->getBody()->write(json_encode([
             'success' => false,
