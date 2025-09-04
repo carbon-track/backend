@@ -58,6 +58,13 @@ class AuthService
     public function verifyToken(string $token): ?array
     {
         try {
+            // 允许少量时钟偏移，默认 60 秒，可通过环境变量 JWT_LEEWAY 配置
+            if (class_exists(\Firebase\JWT\JWT::class)) {
+                $leeway = isset($_ENV['JWT_LEEWAY']) ? (int)$_ENV['JWT_LEEWAY'] : 60;
+                if ($leeway > 0) {
+                    \Firebase\JWT\JWT::$leeway = $leeway;
+                }
+            }
             $decoded = JWT::decode($token, new Key($this->jwtSecret, $this->jwtAlgorithm));
             return (array)$decoded;
         } catch (\Exception $e) {
