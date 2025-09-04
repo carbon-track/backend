@@ -7,6 +7,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
 use PDO;
+use Illuminate\Database\QueryException;
 
 class SchoolController extends BaseController
 {
@@ -47,7 +48,12 @@ class SchoolController extends BaseController
 
         // 获取总数与数据
         $total = (clone $query)->count();
-        $items = $query->orderBy('sort_order', 'asc')->offset($offset)->limit($limit)->get();
+        // 优先按 sort_order 排序；若目标数据库缺少该列，则回退到按 name 排序
+        try {
+            $items = (clone $query)->orderBy('sort_order', 'asc')->offset($offset)->limit($limit)->get();
+        } catch (QueryException $e) {
+            $items = (clone $query)->orderBy('name', 'asc')->offset($offset)->limit($limit)->get();
+        }
 
         return $this->response($response, [
             'success' => true,
@@ -143,12 +149,21 @@ class SchoolController extends BaseController
             ], 200);
         }
 
-        $school = School::create([
-            'name' => $name,
-            'location' => $location,
-            'is_active' => true,
-            'sort_order' => 0
-        ]);
+        // 兼容缺少 sort_order 列的数据库：优先携带 sort_order 创建，失败则回退为不带该字段
+        try {
+            $school = School::create([
+                'name' => $name,
+                'location' => $location,
+                'is_active' => true,
+                'sort_order' => 0
+            ]);
+        } catch (QueryException $e) {
+            $school = School::create([
+                'name' => $name,
+                'location' => $location,
+                'is_active' => true
+            ]);
+        }
 
         // 记录审计
         $this->auditLogService->log(

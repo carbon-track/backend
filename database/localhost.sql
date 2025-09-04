@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- 主机： localhost:3306
--- 生成日期： 2025-08-19 16:25:28
+-- 生成日期： 2025-09-04 21:14:16
 -- 服务器版本： 5.6.51-log
 -- PHP 版本： 7.4.33
 
@@ -12,7 +12,7 @@ START TRANSACTION;
 SET time_zone = "+00:00";
 
 --
--- 数据库： `dev_carbontracka`
+-- 数据库： `dev_api_carbontr`
 --
 
 -- --------------------------------------------------------
@@ -323,6 +323,22 @@ CREATE TABLE `schools` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `school_classes`
+--
+
+CREATE TABLE `school_classes` (
+  `id` int(11) NOT NULL,
+  `school_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `deleted_at` datetime DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `spec_points_transactions`
 --
 
@@ -379,6 +395,13 @@ CREATE TABLE `users` (
   `school_id` int(11) DEFAULT NULL,
   `avatar_id` int(11) DEFAULT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+--
+-- 转存表中的数据 `users`
+--
+
+INSERT INTO `users` (`id`, `username`, `password`, `lastlgn`, `email`, `points`, `school`, `location`, `created_at`, `updated_at`, `deleted_at`, `status`, `is_admin`, `class_name`, `school_id`, `avatar_id`) VALUES
+(1, 'demo', '$2y$10$rRKKzQAnfxz4nlJCvisTOOKrTaklDYvJDPlBSSemIYR0MmGGzC1Pu', '2025-09-04 20:48:01', 'demo@cbt.internal', '0.00', NULL, NULL, '2025-09-04 20:47:25', '2025-09-04 20:48:01', NULL, 'active', 0, NULL, NULL, NULL);
 
 --
 -- 转储表的索引
@@ -496,6 +519,16 @@ ALTER TABLE `schools`
   ADD UNIQUE KEY `id` (`id`);
 
 --
+-- 表的索引 `school_classes`
+--
+ALTER TABLE `school_classes`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_school_class_name` (`school_id`,`name`),
+  ADD KEY `idx_school_classes_school_id` (`school_id`),
+  ADD KEY `idx_school_classes_name` (`name`),
+  ADD KEY `idx_school_classes_deleted_at` (`deleted_at`);
+
+--
 -- 表的索引 `spec_points_transactions`
 --
 ALTER TABLE `spec_points_transactions`
@@ -593,6 +626,12 @@ ALTER TABLE `schools`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- 使用表AUTO_INCREMENT `school_classes`
+--
+ALTER TABLE `school_classes`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- 使用表AUTO_INCREMENT `spec_points_transactions`
 --
 ALTER TABLE `spec_points_transactions`
@@ -608,5 +647,5 @@ ALTER TABLE `transactions`
 -- 使用表AUTO_INCREMENT `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 COMMIT;

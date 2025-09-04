@@ -29,8 +29,7 @@ class School extends Model
     ];
 
     protected $attributes = [
-        'is_active' => true,
-        'sort_order' => 0
+        'is_active' => true
     ];
 
     // Scope for active schools
