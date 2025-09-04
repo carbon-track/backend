@@ -28,222 +28,223 @@ defined('PATH_TRANSACTIONS_ID_UUID') || define('PATH_TRANSACTIONS_ID_UUID', '/tr
 defined('PATH_STATS') || define('PATH_STATS', '/stats');
 defined('PATH_PRODUCTS') || define('PATH_PRODUCTS', '/products');
 defined('PATH_SCHOOLS') || define('PATH_SCHOOLS', '/schools');
+defined('PATH_CLASSES_SUFFIX') || define('PATH_CLASSES_SUFFIX', '/classes');
 defined('PATTERN_ID_NUMERIC') || define('PATTERN_ID_NUMERIC', '/{id:[0-9]+}');
 defined('PATH_AUTH') || define('PATH_AUTH', '/auth');
 defined('PATH_USERS') || define('PATH_USERS', '/users');
 
-// Helper: Health check route
-function registerHealthCheck(App $app): void {
-    $app->get('/', function ($request, $response) {
-        // touch request to satisfy linters
-        $request->getMethod();
-        $response->getBody()->write(json_encode([
-            'success' => true,
-            'message' => 'CarbonTrack API is running',
-            'version' => '1.0.0',
-            'timestamp' => date('Y-m-d H:i:s')
-        ]));
-        return $response->withHeader('Content-Type', CONTENT_TYPE_JSON);
-    });
-}
-
-// Helper: API v1 root description
-function registerApiV1Root(RouteCollectorProxy $group): void {
-    $group->get('', function ($request, $response) {
-        // touch request to satisfy linters
-        $request->getMethod();
-        $response->getBody()->write(json_encode([
-            'success' => true,
-            'message' => 'CarbonTrack API v1',
-            'version' => '1.0.0',
-            'timestamp' => date('Y-m-d H:i:s'),
-            'endpoints' => [
-                'auth' => API_V1_PREFIX . PATH_AUTH,
-                'users' => API_V1_PREFIX . PATH_USERS,
-                'carbon-activities' => API_V1_PREFIX . PATH_CARBON_ACTIVITIES,
-                'carbon-track' => API_V1_PREFIX . '/carbon-track',
-                'products' => API_V1_PREFIX . PATH_PRODUCTS,
-                'exchange' => API_V1_PREFIX . '/exchange',
-                'messages' => API_V1_PREFIX . '/messages',
-                'avatars' => API_V1_PREFIX . PATH_AVATARS,
-                'schools' => API_V1_PREFIX . PATH_SCHOOLS,
-                'files' => API_V1_PREFIX . '/files',
-                'admin' => API_V1_PREFIX . '/admin'
-            ]
-        ]));
-        return $response->withHeader('Content-Type', CONTENT_TYPE_JSON);
-    });
-}
-
-function registerAuthRoutes(RouteCollectorProxy $group): void {
-    $group->group(PATH_AUTH, function (RouteCollectorProxy $auth) {
-        $auth->post('/register', [AuthController::class, 'register']);
-        $auth->post('/login', [AuthController::class, 'login']);
-        $auth->post('/logout', [AuthController::class, 'logout']);
-        $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
-        $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
-        $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
-    });
-}
-
-function registerUserRoutes(RouteCollectorProxy $group): void {
-    $group->group(PATH_USERS, function (RouteCollectorProxy $users) {
-        $users->get('/me', [UserController::class, 'getCurrentUser']);
-        $users->put('/me', [UserController::class, 'updateCurrentUser']);
-        $users->put('/me/profile', [UserController::class, 'updateProfile']);
-        $users->put('/me/avatar', [UserController::class, 'selectAvatar']);
-        $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
-        $users->get('/me/stats', [UserController::class, 'getUserStats']);
-        $users->get('/me/chart-data', [UserController::class, 'getChartData']);
-        $users->get(PATTERN_ID_NUMERIC, [UserController::class, 'getUser']);
-        $users->put(PATTERN_ID_NUMERIC, [UserController::class, 'updateUser']);
-        $users->delete(PATTERN_ID_NUMERIC, [UserController::class, 'deleteUser']);
-    })->add(AuthMiddleware::class);
-}
-
-function registerAvatarRoutes(RouteCollectorProxy $group): void {
-    $group->get(PATH_AVATARS, [AvatarController::class, 'getAvatars']);
-    $group->get(PATH_AVATARS . '/categories', [AvatarController::class, 'getAvatarCategories']);
-}
-
-function registerCarbonActivitiesRoutes(RouteCollectorProxy $group): void {
-    $group->get(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'getActivities']);
-    $group->get(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'getActivity']);
-}
-
-function registerCarbonTrackRoutes(RouteCollectorProxy $group): void {
-    $group->group('/carbon-track', function (RouteCollectorProxy $carbon) {
-        $carbon->post('/calculate', [CarbonTrackController::class, 'calculate']);
-        $carbon->post('/record', [CarbonTrackController::class, 'submitRecord']);
-        $carbon->get('/transactions', [CarbonTrackController::class, 'getUserRecords']);
-        $carbon->get(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'getRecordDetail']);
-        $carbon->put(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'reviewRecord']);
-        $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/approve', [CarbonTrackController::class, 'reviewRecord']);
-        $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/reject', [CarbonTrackController::class, 'reviewRecord']);
-        $carbon->delete(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'deleteTransaction']);
-        $carbon->get('/factors', [CarbonTrackController::class, 'getCarbonFactors']);
-        $carbon->get(PATH_STATS, [CarbonTrackController::class, 'getUserStats']);
-    })->add(AuthMiddleware::class);
-}
-
-function registerProductRoutes(RouteCollectorProxy $group): void {
-    $group->group(PATH_PRODUCTS, function (RouteCollectorProxy $products) {
-        $products->get('', [ProductController::class, 'getProducts']);
-        $products->get(PATTERN_ID_NUMERIC, [ProductController::class, 'getProductDetail']);
-        $products->get('/categories', [ProductController::class, 'getCategories']);
-        $products->post('', [ProductController::class, 'createProduct']);
-        $products->put(PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);
-        $products->delete(PATTERN_ID_NUMERIC, [ProductController::class, 'deleteProduct']);
-    });
-}
-
-function registerExchangeRoutes(RouteCollectorProxy $group): void {
-    $group->group('/exchange', function (RouteCollectorProxy $exchange) {
-        $exchange->post('', [ProductController::class, 'exchangeProduct']);
-        $exchange->get('/transactions', [ProductController::class, 'getExchangeTransactions']);
-        $exchange->get(PATH_TRANSACTIONS_ID_UUID, [ProductController::class, 'getExchangeTransaction']);
-    })->add(AuthMiddleware::class);
-}
-
-function registerMessageRoutes(RouteCollectorProxy $group): void {
-    $group->group('/messages', function (RouteCollectorProxy $messages) {
-        $messages->get('', [MessageController::class, 'getUserMessages']);
-        $messages->get(PATTERN_ID_NUMERIC, [MessageController::class, 'getMessageDetail']);
-        $messages->put(PATTERN_ID_NUMERIC . '/read', [MessageController::class, 'markAsRead']);
-        $messages->delete(PATTERN_ID_NUMERIC, [MessageController::class, 'deleteMessage']);
-        $messages->get('/unread-count', [MessageController::class, 'getUnreadCount']);
-        $messages->put('/mark-all-read', [MessageController::class, 'markAllAsRead']);
-    })->add(AuthMiddleware::class);
-}
-
-function registerSchoolRoutes(RouteCollectorProxy $group): void {
-    // Public listing and search; authenticated create; classes APIs
-    $group->get(PATH_SCHOOLS, [SchoolController::class, 'index']);
-    $group->post(PATH_SCHOOLS, [SchoolController::class, 'createOrFetch'])->add(AuthMiddleware::class);
-    $group->get(PATH_SCHOOLS . PATTERN_ID_NUMERIC . '/classes', [SchoolController::class, 'listClasses']);
-    $group->post(PATH_SCHOOLS . PATTERN_ID_NUMERIC . '/classes', [SchoolController::class, 'createClass'])->add(AuthMiddleware::class);
-}
-
-function registerAdminRoutes(RouteCollectorProxy $group): void {
-    $group->group('/admin', function (RouteCollectorProxy $admin) {
-    $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
-        $admin->put(PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
-        $admin->delete(PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
-        $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
-        $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
-        $admin->get('/logs', [AdminController::class, 'getLogs']);
-        $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
-        $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
-        $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);
-        
-        // Carbon activities management
-        $admin->get(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'getActivitiesForAdmin']);
-        $admin->post(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'createActivity']);
-        $admin->get(PATH_CARBON_ACTIVITIES . '/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
-        $admin->put(PATH_CARBON_ACTIVITIES . '/sort-orders', [CarbonActivityController::class, 'updateSortOrders']);
-        $admin->put(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'updateActivity']);
-        $admin->delete(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'deleteActivity']);
-        $admin->post(PATH_CARBON_ACTIVITY_ID . '/restore', [CarbonActivityController::class, 'restoreActivity']);
-        $admin->get(PATH_CARBON_ACTIVITY_ID . '/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
-
-        // Admin activities review (alias for pending records)
-        $admin->get('/activities', [CarbonTrackController::class, 'getPendingRecords']);
-        $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
-
-        // Admin exchanges
-        $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
-        $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);
-        $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}/status', [ProductController::class, 'updateExchangeStatus']);
-        $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
-
-        // Admin products
-        $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
-        $admin->post(PATH_PRODUCTS, [ProductController::class, 'createProduct']);
-        $admin->put(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);
-        $admin->delete(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'deleteProduct']);
-        
-        // Avatar management
-        $admin->get(PATH_AVATARS, [AvatarController::class, 'getAvatars']);
-        $admin->post(PATH_AVATARS, [AvatarController::class, 'createAvatar']);
-        $admin->put(PATH_AVATARS . '/sort-orders', [AvatarController::class, 'updateSortOrders']);
-        $admin->get(PATH_AVATARS . '/usage-stats', [AvatarController::class, 'getAvatarUsageStats']);
-        $admin->post(PATH_AVATARS . '/upload', [AvatarController::class, 'uploadAvatarFile']);
-        $admin->get(PATH_AVATAR_ID, [AvatarController::class, 'getAvatar']);
-        $admin->put(PATH_AVATAR_ID, [AvatarController::class, 'updateAvatar']);
-        $admin->delete(PATH_AVATAR_ID, [AvatarController::class, 'deleteAvatar']);
-        $admin->post(PATH_AVATAR_ID . '/restore', [AvatarController::class, 'restoreAvatar']);
-        $admin->put(PATH_AVATAR_ID . '/set-default', [AvatarController::class, 'setDefaultAvatar']);
-    })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
-}
-
-function registerFileRoutes(RouteCollectorProxy $group): void {
-    $group->group('/files', function (RouteCollectorProxy $files) {
-        $files->post('/upload', [FileUploadController::class, 'uploadFile']);
-        $files->post('/upload-multiple', [FileUploadController::class, 'uploadMultipleFiles']);
-        $files->delete('/{path:.+}', [FileUploadController::class, 'deleteFile']);
-        $files->get('/{path:.+}/info', [FileUploadController::class, 'getFileInfo']);
-        $files->get('/{path:.+}/presigned-url', [FileUploadController::class, 'generatePresignedUrl']);
-    })->add(AuthMiddleware::class);
-}
 
 return function (App $app) {
+    // 所有 helper 函数仅在闭包内部声明，避免全局污染
+    $registerHealthCheck = function (App $app) {
+        $app->get('/', function ($request, $response) {
+            $request->getMethod();
+            $response->getBody()->write(json_encode([
+                'success' => true,
+                'message' => 'CarbonTrack API is running',
+                'version' => '1.0.0',
+                'timestamp' => date('Y-m-d H:i:s')
+            ]));
+            return $response->withHeader('Content-Type', CONTENT_TYPE_JSON);
+        });
+    };
+
+    $registerApiV1Root = function (RouteCollectorProxy $group) {
+        $group->get('', function ($request, $response) {
+            $request->getMethod();
+            $response->getBody()->write(json_encode([
+                'success' => true,
+                'message' => 'CarbonTrack API v1',
+                'version' => '1.0.0',
+                'timestamp' => date('Y-m-d H:i:s'),
+                'endpoints' => [
+                    'auth' => API_V1_PREFIX . PATH_AUTH,
+                    'users' => API_V1_PREFIX . PATH_USERS,
+                    'carbon-activities' => API_V1_PREFIX . PATH_CARBON_ACTIVITIES,
+                    'carbon-track' => API_V1_PREFIX . '/carbon-track',
+                    'products' => API_V1_PREFIX . PATH_PRODUCTS,
+                    'exchange' => API_V1_PREFIX . '/exchange',
+                    'messages' => API_V1_PREFIX . '/messages',
+                    'avatars' => API_V1_PREFIX . PATH_AVATARS,
+                    'schools' => API_V1_PREFIX . PATH_SCHOOLS,
+                    'files' => API_V1_PREFIX . '/files',
+                    'admin' => API_V1_PREFIX . '/admin'
+                ]
+            ]));
+            return $response->withHeader('Content-Type', CONTENT_TYPE_JSON);
+        });
+    };
+
+    $registerAuthRoutes = function (RouteCollectorProxy $group) {
+        $group->group(PATH_AUTH, function (RouteCollectorProxy $auth) {
+            $auth->post('/register', [AuthController::class, 'register']);
+            $auth->post('/login', [AuthController::class, 'login']);
+            $auth->post('/logout', [AuthController::class, 'logout']);
+            $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
+            $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
+            $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
+        });
+    };
+
+    $registerUserRoutes = function (RouteCollectorProxy $group) {
+        $group->group(PATH_USERS, function (RouteCollectorProxy $users) {
+            $users->get('/me', [UserController::class, 'getCurrentUser']);
+            $users->put('/me', [UserController::class, 'updateCurrentUser']);
+            $users->put('/me/profile', [UserController::class, 'updateProfile']);
+            $users->put('/me/avatar', [UserController::class, 'selectAvatar']);
+            $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
+            $users->get('/me/stats', [UserController::class, 'getUserStats']);
+            $users->get('/me/chart-data', [UserController::class, 'getChartData']);
+            $users->get(PATTERN_ID_NUMERIC, [UserController::class, 'getUser']);
+            $users->put(PATTERN_ID_NUMERIC, [UserController::class, 'updateUser']);
+            $users->delete(PATTERN_ID_NUMERIC, [UserController::class, 'deleteUser']);
+        })->add(AuthMiddleware::class);
+    };
+
+    $registerAvatarRoutes = function (RouteCollectorProxy $group) {
+        $group->get(PATH_AVATARS, [AvatarController::class, 'getAvatars']);
+        $group->get(PATH_AVATARS . '/categories', [AvatarController::class, 'getAvatarCategories']);
+    };
+
+    $registerCarbonActivitiesRoutes = function (RouteCollectorProxy $group) {
+        $group->get(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'getActivities']);
+        $group->get(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'getActivity']);
+    };
+
+    $registerCarbonTrackRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/carbon-track', function (RouteCollectorProxy $carbon) {
+            $carbon->post('/calculate', [CarbonTrackController::class, 'calculate']);
+            $carbon->post('/record', [CarbonTrackController::class, 'submitRecord']);
+            $carbon->get('/transactions', [CarbonTrackController::class, 'getUserRecords']);
+            $carbon->get(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'getRecordDetail']);
+            $carbon->put(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'reviewRecord']);
+            $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/approve', [CarbonTrackController::class, 'reviewRecord']);
+            $carbon->put('/transactions/{id:[0-9a-fA-F\-]+}/reject', [CarbonTrackController::class, 'reviewRecord']);
+            $carbon->delete(PATH_TRANSACTIONS_ID_UUID, [CarbonTrackController::class, 'deleteTransaction']);
+            $carbon->get('/factors', [CarbonTrackController::class, 'getCarbonFactors']);
+            $carbon->get(PATH_STATS, [CarbonTrackController::class, 'getUserStats']);
+        })->add(AuthMiddleware::class);
+    };
+
+    $registerProductRoutes = function (RouteCollectorProxy $group) {
+        $group->group(PATH_PRODUCTS, function (RouteCollectorProxy $products) {
+            $products->get('', [ProductController::class, 'getProducts']);
+            $products->get(PATTERN_ID_NUMERIC, [ProductController::class, 'getProductDetail']);
+            $products->get('/categories', [ProductController::class, 'getCategories']);
+            $products->post('', [ProductController::class, 'createProduct']);
+            $products->put(PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);
+            $products->delete(PATTERN_ID_NUMERIC, [ProductController::class, 'deleteProduct']);
+        });
+    };
+
+    $registerExchangeRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/exchange', function (RouteCollectorProxy $exchange) {
+            $exchange->post('', [ProductController::class, 'exchangeProduct']);
+            $exchange->get('/transactions', [ProductController::class, 'getExchangeTransactions']);
+            $exchange->get(PATH_TRANSACTIONS_ID_UUID, [ProductController::class, 'getExchangeTransaction']);
+        })->add(AuthMiddleware::class);
+    };
+
+    $registerMessageRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/messages', function (RouteCollectorProxy $messages) {
+            $messages->get('', [MessageController::class, 'getUserMessages']);
+            $messages->get(PATTERN_ID_NUMERIC, [MessageController::class, 'getMessageDetail']);
+            $messages->put(PATTERN_ID_NUMERIC . '/read', [MessageController::class, 'markAsRead']);
+            $messages->delete(PATTERN_ID_NUMERIC, [MessageController::class, 'deleteMessage']);
+            $messages->get('/unread-count', [MessageController::class, 'getUnreadCount']);
+            $messages->put('/mark-all-read', [MessageController::class, 'markAllAsRead']);
+        })->add(AuthMiddleware::class);
+    };
+
+    $registerSchoolRoutes = function (RouteCollectorProxy $group) {
+        $group->get(PATH_SCHOOLS, [SchoolController::class, 'index']);
+        $group->post(PATH_SCHOOLS, [SchoolController::class, 'createOrFetch'])->add(AuthMiddleware::class);
+        $group->get(PATH_SCHOOLS . PATTERN_ID_NUMERIC . PATH_CLASSES_SUFFIX, [SchoolController::class, 'listClasses']);
+        $group->post(PATH_SCHOOLS . PATTERN_ID_NUMERIC . PATH_CLASSES_SUFFIX, [SchoolController::class, 'createClass'])->add(AuthMiddleware::class);
+    };
+
+    $registerAdminRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/admin', function (RouteCollectorProxy $admin) {
+            $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
+            $admin->put(PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
+            $admin->delete(PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
+            $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
+            $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
+            $admin->get('/logs', [AdminController::class, 'getLogs']);
+            $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
+            $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
+            $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);
+            $admin->get(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'getActivitiesForAdmin']);
+            $admin->post(PATH_CARBON_ACTIVITIES, [CarbonActivityController::class, 'createActivity']);
+            $admin->get(PATH_CARBON_ACTIVITIES . '/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
+            $admin->put(PATH_CARBON_ACTIVITIES . '/sort-orders', [CarbonActivityController::class, 'updateSortOrders']);
+            $admin->put(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'updateActivity']);
+            $admin->delete(PATH_CARBON_ACTIVITY_ID, [CarbonActivityController::class, 'deleteActivity']);
+            $admin->post(PATH_CARBON_ACTIVITY_ID . '/restore', [CarbonActivityController::class, 'restoreActivity']);
+            $admin->get(PATH_CARBON_ACTIVITY_ID . '/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
+            $admin->get('/activities', [CarbonTrackController::class, 'getPendingRecords']);
+            $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
+            $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
+            $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);
+            $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}/status', [ProductController::class, 'updateExchangeStatus']);
+            $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
+            $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
+            $admin->post(PATH_PRODUCTS, [ProductController::class, 'createProduct']);
+            $admin->put(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);
+            $admin->delete(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'deleteProduct']);
+            $admin->get(PATH_AVATARS, [AvatarController::class, 'getAvatars']);
+            $admin->post(PATH_AVATARS, [AvatarController::class, 'createAvatar']);
+            $admin->put(PATH_AVATARS . '/sort-orders', [AvatarController::class, 'updateSortOrders']);
+            $admin->get(PATH_AVATARS . '/usage-stats', [AvatarController::class, 'getAvatarUsageStats']);
+            $admin->post(PATH_AVATARS . '/upload', [AvatarController::class, 'uploadAvatarFile']);
+            $admin->get(PATH_AVATAR_ID, [AvatarController::class, 'getAvatar']);
+            $admin->put(PATH_AVATAR_ID, [AvatarController::class, 'updateAvatar']);
+            $admin->delete(PATH_AVATAR_ID, [AvatarController::class, 'deleteAvatar']);
+            $admin->post(PATH_AVATAR_ID . '/restore', [AvatarController::class, 'restoreAvatar']);
+            $admin->put(PATH_AVATAR_ID . '/set-default', [AvatarController::class, 'setDefaultAvatar']);
+        })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
+    };
+
+    $registerFileRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/files', function (RouteCollectorProxy $files) {
+            $files->post('/upload', [FileUploadController::class, 'uploadFile']);
+            $files->post('/upload-multiple', [FileUploadController::class, 'uploadMultipleFiles']);
+            $files->delete('/{path:.+}', [FileUploadController::class, 'deleteFile']);
+            $files->get('/{path:.+}/info', [FileUploadController::class, 'getFileInfo']);
+            $files->get('/{path:.+}/presigned-url', [FileUploadController::class, 'generatePresignedUrl']);
+        })->add(AuthMiddleware::class);
+    };
+
     // Health check
-    registerHealthCheck($app);
+    $registerHealthCheck($app);
 
     // API v1 routes
-    $app->group(API_V1_PREFIX, function (RouteCollectorProxy $group) {
-        registerApiV1Root($group);
-        registerAuthRoutes($group);
-        registerUserRoutes($group);
-        registerAvatarRoutes($group);
-        registerCarbonActivitiesRoutes($group);
-        registerCarbonTrackRoutes($group);
-        registerProductRoutes($group);
-        registerExchangeRoutes($group);
-        registerMessageRoutes($group);
-        registerSchoolRoutes($group);
-        registerAdminRoutes($group);
-        registerFileRoutes($group);
+    $app->group(API_V1_PREFIX, function (RouteCollectorProxy $group) use (
+        $registerApiV1Root,
+        $registerAuthRoutes,
+        $registerUserRoutes,
+        $registerAvatarRoutes,
+        $registerCarbonActivitiesRoutes,
+        $registerCarbonTrackRoutes,
+        $registerProductRoutes,
+        $registerExchangeRoutes,
+        $registerMessageRoutes,
+        $registerSchoolRoutes,
+        $registerAdminRoutes,
+        $registerFileRoutes
+    ) {
+        $registerApiV1Root($group);
+        $registerAuthRoutes($group);
+        $registerUserRoutes($group);
+        $registerAvatarRoutes($group);
+        $registerCarbonActivitiesRoutes($group);
+        $registerCarbonTrackRoutes($group);
+        $registerProductRoutes($group);
+        $registerExchangeRoutes($group);
+        $registerMessageRoutes($group);
+        $registerSchoolRoutes($group);
+        $registerAdminRoutes($group);
+        $registerFileRoutes($group);
 
         // Admin file management routes (separate prefix)
         $group->group('/admin/files', function (RouteCollectorProxy $adminFiles) {
@@ -258,7 +259,7 @@ return function (App $app) {
     });
 
     // Backward-compatible alias group for clients calling /api/auth/* (without version prefix)
-    $app->group('/api', function (RouteCollectorProxy $api) {
+    $app->group('/api', function (RouteCollectorProxy $api) use ($registerSchoolRoutes) {
         $api->group('/auth', function (RouteCollectorProxy $auth) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
@@ -267,11 +268,13 @@ return function (App $app) {
             $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
             $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
         });
+
+        // Backward-compatible aliases for schools endpoints (mirror /api/v1)
+        $registerSchoolRoutes($api);
     });
 
     // Catch-all route for 404
     $app->map(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], '/{routes:.+}', function ($request, $response) {
-        // touch request to satisfy linters
         $request->getMethod();
         $response->getBody()->write(json_encode([
             'success' => false,
