@@ -31,7 +31,7 @@ class CorsMiddlewareTest extends TestCase
         };
 
         $resp = $mw->process($request, $handler);
-        $this->assertEquals(200, $resp->getStatusCode());
+        $this->assertEquals(204, $resp->getStatusCode());
         $this->assertNotEmpty($resp->getHeaderLine('Access-Control-Allow-Methods'));
         $this->assertNotEmpty($resp->getHeaderLine('Access-Control-Allow-Headers'));
         $this->assertSame('true', $resp->getHeaderLine('Access-Control-Allow-Credentials'));
