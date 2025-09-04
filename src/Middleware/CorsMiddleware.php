@@ -21,10 +21,17 @@ class CorsMiddleware implements MiddlewareInterface
     $exposeHeaders = $_ENV['CORS_EXPOSE_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
         $allowCredentials = filter_var($_ENV['CORS_ALLOW_CREDENTIALS'] ?? 'true', FILTER_VALIDATE_BOOLEAN);
 
-        // Parse and trim allowed origins list
-        $allowedOrigins = array_values(array_filter(array_map(function ($o) {
-            return trim($o);
-        }, explode(',', $allowedOriginsEnv))));
+        // Parse and trim allowed origins list, and add localhost for dev env
+        $allowedOrigins = array_values(array_filter(array_map('trim', explode(',', $allowedOriginsEnv))));
+        if (($_ENV['APP_ENV'] ?? 'production') !== 'production') {
+            $localOrigins = [
+                'http://localhost:5173',
+                'http://localhost:3000',
+                'http://127.0.0.1:5173',
+                'http://127.0.0.1:3000'
+            ];
+            $allowedOrigins = array_unique(array_merge($allowedOrigins, $localOrigins));
+        }
 
         $origin = $request->getHeaderLine('Origin');
         $method = strtoupper($request->getMethod());
