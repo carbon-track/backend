@@ -32,7 +32,8 @@ class AuthControllerTest extends TestCase
             $mockAuditLogService,
             $mockMessageService,
             $mockLogger,
-            $mockPdo
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
         );
 
         $this->assertInstanceOf(AuthController::class, $authController);
@@ -72,7 +73,7 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(7, $parameters);
+    $this->assertCount(8, $parameters);
         
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -81,7 +82,8 @@ class AuthControllerTest extends TestCase
             'CarbonTrack\Services\AuditLogService',
             'CarbonTrack\Services\MessageService',
             'Monolog\Logger',
-            'PDO'
+            'PDO',
+            'CarbonTrack\Services\ErrorLogService'
         ];
 
         foreach ($parameters as $index => $parameter) {
@@ -134,7 +136,8 @@ class AuthControllerTest extends TestCase
             $mockAuditLogService,
             $mockMessageService,
             $mockLogger,
-            $mockPdo
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
         );
 
         $request = makeRequest('POST', '/login', ['username' => 'john', 'password' => 'secret']);

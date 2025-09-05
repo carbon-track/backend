@@ -134,7 +134,8 @@ class ProductController
                             $firstImage = $first;
                         }
                     }
-                    $product['image_url'] = $product['image_path'] ?: ($firstImage ?: null);
+                    $imagePath = $product['image_path'] ?? null;
+                    $product['image_url'] = $imagePath ?: ($firstImage ?: null);
                 }
                 $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
             }
@@ -159,6 +160,8 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
+            // Log original error for debugging in tests
+            error_log('ProductController::getProducts error: ' . $e->getMessage());
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
@@ -208,7 +211,8 @@ class ProductController
                         $firstImage = $first;
                     }
                 }
-                $product['image_url'] = $product['image_path'] ?: ($firstImage ?: null);
+                $imagePath = $product['image_path'] ?? null;
+                $product['image_url'] = $imagePath ?: ($firstImage ?: null);
             }
             $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
 
@@ -218,6 +222,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
+            error_log('ProductController::getProductDetail error: ' . $e->getMessage());
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }

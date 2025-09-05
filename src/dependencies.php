@@ -252,11 +252,11 @@ $__deps_initializer = function (Container $container) {
         return new UserController(
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
-            $c->get(ErrorLogService::class),
             $c->get(MessageService::class),
             $c->get(Avatar::class),
             $c->get(Logger::class),
-            $db
+            $db,
+            $c->get(ErrorLogService::class)
         );
     });
 

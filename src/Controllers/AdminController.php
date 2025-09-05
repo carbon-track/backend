@@ -81,7 +81,7 @@ class AdminController
             $whereClause = implode(' AND ', $whereConditions);
 
             // 排序（兼容 PHP 7.4）
-            $sortMap = [
+                            COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved
                 'username_asc' => 'u.username ASC',
                 'username_desc' => 'u.username DESC',
                 'email_asc' => 'u.email ASC',
@@ -195,6 +195,22 @@ class AdminController
                 ORDER BY pt.created_at ASC
                 LIMIT :limit OFFSET :offset
             ";
+                $sql = "
+                    SELECT 
+                        pt.id, pt.uid AS user_id, pt.activity_id,
+                        NULL AS amount, NULL AS unit,
+                        NULL AS carbon_amount, pt.points, pt.notes AS description, pt.img AS images,
+                        pt.status, pt.created_at, pt.updated_at,
+                        u.username, u.email, u.real_name,
+                        ca.name_zh as activity_name_zh, ca.name_en as activity_name_en,
+                        ca.category, ca.carbon_factor, ca.unit as activity_unit
+                    FROM points_transactions pt
+                    JOIN users u ON pt.uid = u.id
+                    LEFT JOIN carbon_activities ca ON pt.activity_id = ca.id
+                    WHERE pt.status = 'pending' AND pt.deleted_at IS NULL
+                    ORDER BY pt.created_at ASC
+                    LIMIT :limit OFFSET :offset
+                ";
 
             $stmt = $this->db->prepare($sql);
             $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
@@ -257,18 +273,25 @@ class AdminController
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 交易统计
+            // 交易统计（total_carbon_saved 来自 carbon_records，而非 points_transactions）
             $transactionStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_transactions,
                     COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_transactions,
                     COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_transactions,
                     COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_transactions,
-                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points ELSE 0 END), 0) as total_points_awarded,
-                    COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_amount ELSE 0 END), 0) as total_carbon_saved
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points ELSE 0 END), 0) as total_points_awarded
                 FROM points_transactions 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
+
+            // 从 carbon_records 统计总碳减排量（仅统计已审核通过的数据）
+            $totalCarbonSaved = $this->db->query("
+                SELECT COALESCE(SUM(carbon_saved), 0)
+                FROM carbon_records
+                WHERE status = 'approved' AND deleted_at IS NULL
+            ")->fetchColumn();
+            $transactionStats['total_carbon_saved'] = $totalCarbonSaved !== false ? (string)$totalCarbonSaved : '0';
 
             // 商品兑换统计（使用 point_exchanges 表，注意列名为 points_used）
             $exchangeStats = $this->db->query("
@@ -290,27 +313,51 @@ class AdminController
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 活动统计
+            // 活动统计（当前表使用 is_active 标识）
             $activityStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_activities,
-                    COUNT(CASE WHEN status = 'active' THEN 1 END) as active_activities
+                    COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_activities
                 FROM carbon_activities 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 最近30天的趋势数据
-            $trendData = $this->db->query("
-                SELECT 
-                    DATE(created_at) as date,
-                    COUNT(*) as transactions,
-                    COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_amount ELSE 0 END), 0) as carbon_saved
-                FROM points_transactions 
+            // 最近30天的趋势数据：
+            // - 交易数来自 points_transactions（所有状态，过滤删除标记）
+            // - 碳减排来自 carbon_records（仅已通过）
+            $txRows = $this->db->query("
+                SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+                FROM points_transactions
                 WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                    AND deleted_at IS NULL
+                  AND deleted_at IS NULL
                 GROUP BY DATE(created_at)
-                ORDER BY date ASC
-            ")->fetchAll(PDO::FETCH_ASSOC);
+            ")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+            $crStmt = $this->db->query("
+                SELECT DATE(created_at) AS d, COALESCE(SUM(carbon_saved),0) AS cs
+                FROM carbon_records
+                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                  AND status = 'approved'
+                  AND deleted_at IS NULL
+                GROUP BY DATE(created_at)
+            ");
+            $crRows = [];
+            foreach ($crStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $crRows[$row['d']] = $row['cs'];
+            }
+
+            // 生成日期序列并合并
+            $trendData = [];
+            $end = new \DateTime('today');
+            $start = (clone $end)->modify('-29 days'); // 共30天
+            for ($dt = clone $start; $dt <= $end; $dt->modify('+1 day')) {
+                $k = $dt->format('Y-m-d');
+                $trendData[] = [
+                    'date' => $k,
+                    'transactions' => isset($txRows[$k]) ? (int)$txRows[$k] : 0,
+                    'carbon_saved' => isset($crRows[$k]) ? (float)$crRows[$k] : 0.0,
+                ];
+            }
 
             return $this->jsonResponse($response, [
                 'success' => true,

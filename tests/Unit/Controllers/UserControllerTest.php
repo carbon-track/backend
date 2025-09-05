@@ -78,7 +78,7 @@ class UserControllerTest extends TestCase
             $stmtJoined
         );
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('PUT', '/users/me/profile', ['real_name' => 'John', 'class_name' => 'C1', 'avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
@@ -107,7 +107,7 @@ class UserControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
         $avatar->method('isAvatarAvailable')->willReturn(false);
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('PUT', '/users/me/avatar', ['avatar_id' => 999]);
         $response = new \Slim\Psr7\Response();
@@ -143,7 +143,7 @@ class UserControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('GET', '/users/me/points-history');
         $response = new \Slim\Psr7\Response();
@@ -193,7 +193,7 @@ class UserControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtPoints, $stmtMonthly, $stmtRecent, $stmtUserInfo);
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
