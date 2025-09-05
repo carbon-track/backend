@@ -138,6 +138,34 @@ class AuthController
             } catch (\Throwable $e) {
                 $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]);
             }
+            // 发送站内欢迎消息（与数据库字段对齐，仅使用 title/content/is_read/receiver_id）
+            try {
+                $title = '欢迎加入CarbonTrack! / Welcome to CarbonTrack!';
+                $content = "亲爱的用户，欢迎加入CarbonTrack碳减排追踪平台！\n\n" .
+                           "在这里，您可以：\n" .
+                           "• 记录您的碳减排活动\n" .
+                           "• 获得碳减排积分\n" .
+                           "• 兑换环保商品\n" .
+                           "• 查看您的环保贡献\n\n" .
+                           "让我们一起为地球环保贡献力量！\n\n" .
+                           "Dear user, welcome to CarbonTrack!\n\n" .
+                           "Here you can:\n" .
+                           "• Record your carbon reduction activities\n" .
+                           "• Earn carbon reduction points\n" .
+                           "• Exchange for eco-friendly products\n" .
+                           "• View your environmental contributions\n\n" .
+                           "Let's work together for a greener planet!";
+                // type/priority 在当前 schema 中未持久化，传入值仅用于审计日志/兼容
+                $this->messageService->sendSystemMessage(
+                    $userId,
+                    $title,
+                    $content,
+                    'welcome',
+                    'normal'
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to send welcome in-app message', ['error' => $e->getMessage()]);
+            }
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'User registered successfully',
