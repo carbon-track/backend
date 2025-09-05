@@ -8,6 +8,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Models\User;
 use PDO;
 
@@ -16,15 +17,18 @@ class AdminController
     private PDO $db;
     private AuthService $authService;
     private AuditLogService $auditLog;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         AuthService $authService,
-        AuditLogService $auditLog
+        AuditLogService $auditLog,
+        ErrorLogService $errorLogService
     ) {
         $this->db = $db;
         $this->authService = $authService;
         $this->auditLog = $auditLog;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -148,7 +152,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Admin getUsers error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -219,7 +223,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Admin getPendingTransactions error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -315,7 +319,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Admin getStats error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -424,7 +428,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Admin getLogs error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }

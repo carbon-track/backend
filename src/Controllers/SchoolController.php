@@ -6,12 +6,14 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use PDO;
 use Illuminate\Database\QueryException;
 
 class SchoolController extends BaseController
 {
     protected $auditLogService;
+    protected $errorLogService;
     /** @var PDO */
     protected $db;
 
@@ -21,6 +23,7 @@ class SchoolController extends BaseController
     public function __construct($container)
     {
         $this->auditLogService = $container->get(AuditLogService::class);
+        $this->errorLogService = $container->get(ErrorLogService::class);
         // 获取 PDO 以便处理班级相关的原生查询
         $this->db = $container->get(PDO::class);
     }
@@ -129,57 +132,78 @@ class SchoolController extends BaseController
         $name = trim((string)($data['name'] ?? ''));
         $location = isset($data['location']) ? trim((string)$data['location']) : null;
 
+        $httpStatus = 200;
+        $payload = null;
+
         if ($name === '') {
-            return $this->response($response, [
+            $httpStatus = 400;
+            $payload = [
                 'success' => false,
                 'message' => 'School name is required',
                 'code' => 'MISSING_NAME'
-            ], 400);
+            ];
+        } else {
+            // 查找同名（不区分大小写）学校
+            $existing = School::whereRaw('LOWER(name) = LOWER(?)', [$name])
+                ->whereNull('deleted_at')
+                ->first();
+
+            if ($existing) {
+                $httpStatus = 200;
+                $payload = [
+                    'success' => true,
+                    'data' => ['school' => $existing]
+                ];
+            } else {
+                // 兼容缺少 sort_order 列的数据库：优先携带 sort_order 创建，失败则回退为不带该字段
+                try {
+                    try {
+                        $school = School::create([
+                            'name' => $name,
+                            'location' => $location,
+                            'is_active' => true,
+                            'sort_order' => 0
+                        ]);
+                    } catch (QueryException $e) {
+                        $school = School::create([
+                            'name' => $name,
+                            'location' => $location,
+                            'is_active' => true
+                        ]);
+                    }
+
+                    // 记录审计
+                    $this->auditLogService->log(
+                        $request->getAttribute('user_id'),
+                        'School',
+                        $school->id,
+                        'create',
+                        'User created school (public): ' . $school->name
+                    );
+
+                    $httpStatus = 201;
+                    $payload = [
+                        'success' => true,
+                        'data' => ['school' => $school]
+                    ];
+                } catch (\Throwable $e) {
+                    try {
+                        $this->errorLogService->logException($e, $request);
+                    } catch (\Throwable $ignore) {
+                        error_log('ErrorLogService logging failed: ' . $ignore->getMessage());
+                    }
+                    $httpStatus = 500;
+                    $payload = [
+                        'success' => false,
+                        'message' => 'Failed to create school'
+                    ];
+                }
+            }
         }
 
-        // 查找同名（不区分大小写）学校
-        $existing = School::whereRaw('LOWER(name) = LOWER(?)', [$name])
-            ->whereNull('deleted_at')
-            ->first();
-
-        if ($existing) {
-            return $this->response($response, [
-                'success' => true,
-                'data' => ['school' => $existing]
-            ], 200);
-        }
-
-        // 兼容缺少 sort_order 列的数据库：优先携带 sort_order 创建，失败则回退为不带该字段
-        try {
-            $school = School::create([
-                'name' => $name,
-                'location' => $location,
-                'is_active' => true,
-                'sort_order' => 0
-            ]);
-        } catch (QueryException $e) {
-            $school = School::create([
-                'name' => $name,
-                'location' => $location,
-                'is_active' => true
-            ]);
-        }
-
-        // 记录审计
-        $this->auditLogService->log(
-            $request->getAttribute('user_id'),
-            'School',
-            $school->id,
-            'create',
-            'User created school (public): ' . $school->name
-        );
-
-        return $this->response($response, [
-            'success' => true,
-            'data' => ['school' => $school]
-        ], 201);
+        return $this->response($response, $payload ?? ['success' => false], $httpStatus);
     }
-
+    
     // Admin: Get a single school
     public function show(Request $request, Response $response, array $args)
     {

@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use Monolog\Logger;
 use PDO;
@@ -17,6 +18,7 @@ class UserController
 {
     private AuthService $authService;
     private AuditLogService $auditLogService;
+    private ErrorLogService $errorLogService;
     private MessageService $messageService;
     private Avatar $avatarModel;
     private Logger $logger;
@@ -25,6 +27,7 @@ class UserController
     public function __construct(
         AuthService $authService,
         AuditLogService $auditLogService,
+        ErrorLogService $errorLogService,
         MessageService $messageService,
         Avatar $avatarModel,
         Logger $logger,
@@ -32,6 +35,7 @@ class UserController
     ) {
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $this->messageService = $messageService;
         $this->avatarModel = $avatarModel;
         $this->logger = $logger;
@@ -98,6 +102,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
 
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -274,6 +279,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
 
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -370,6 +376,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
 
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -398,6 +405,9 @@ class UserController
             $limit = min(100, max(10, (int)($queryParams['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
 
+            // 兼容不同表结构的用户ID字段（user_id 或 uid）
+            $userIdColumn = $this->resolvePointsUserIdColumn();
+
             // 获取积分历史记录
             $stmt = $this->db->prepare("
                 SELECT 
@@ -415,7 +425,7 @@ class UserController
                     pt.admin_notes
                 FROM points_transactions pt
                 LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
-                WHERE pt.user_id = ? AND pt.deleted_at IS NULL
+                WHERE pt.{$userIdColumn} = ? AND pt.deleted_at IS NULL
                 ORDER BY pt.created_at DESC
                 LIMIT ? OFFSET ?
             ");
@@ -426,7 +436,7 @@ class UserController
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) as total
                 FROM points_transactions 
-                WHERE user_id = ? AND deleted_at IS NULL
+                WHERE {$userIdColumn} = ? AND deleted_at IS NULL
             ");
             $stmt->execute([$user['id']]);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
@@ -456,6 +466,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
 
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -479,68 +490,73 @@ class UserController
                 ], 401);
             }
 
-            // 获取积分统计
+            // 读取用户当前积分
+            $stmt = $this->db->prepare("SELECT points, created_at FROM users WHERE id = ? AND deleted_at IS NULL");
+            $stmt->execute([$user['id']]);
+            $userRow = $stmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null];
+
+            // 从 carbon_records 统计
             $stmt = $this->db->prepare("
                 SELECT 
-                    SUM(CASE WHEN type = 'earn' AND status = 'approved' THEN points ELSE 0 END) as total_earned,
-                    SUM(CASE WHEN type = 'spend' AND status = 'approved' THEN points ELSE 0 END) as total_spent,
-                    COUNT(CASE WHEN type = 'earn' AND status = 'approved' THEN 1 END) as earn_count,
-                    COUNT(CASE WHEN type = 'spend' AND status = 'approved' THEN 1 END) as spend_count,
-                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count
-                FROM points_transactions 
-                WHERE user_id = ? AND deleted_at IS NULL
+                    COUNT(*) as total_activities,
+                    COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_activities,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_activities,
+                    COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_activities,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) as total_carbon_saved,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) as total_points_earned
+                FROM carbon_records 
+                WHERE user_id = :user_id AND deleted_at IS NULL
             ");
-            $stmt->execute([$user['id']]);
-            $pointsStats = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->execute(['user_id' => $user['id']]);
+            $recStats = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 获取本月积分统计
-            $stmt = $this->db->prepare("
-                SELECT 
-                    SUM(CASE WHEN type = 'earn' AND status = 'approved' THEN points ELSE 0 END) as monthly_earned,
-                    COUNT(CASE WHEN type = 'earn' AND status = 'approved' THEN 1 END) as monthly_activities
-                FROM points_transactions 
-                WHERE user_id = ? AND deleted_at IS NULL 
-                AND DATE_FORMAT(created_at, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')
-            ");
-            $stmt->execute([$user['id']]);
-            $monthlyStats = $stmt->fetch(PDO::FETCH_ASSOC);
+            // 排名（按用户积分 points 降序）；总用户数
+            $rankSql = "SELECT COUNT(*) + 1 AS rank FROM users WHERE points > (SELECT points FROM users WHERE id = :uid) AND deleted_at IS NULL";
+            $rankStmt = $this->db->prepare($rankSql);
+            $rankStmt->execute(['uid' => $user['id']]);
+            $rankRow = $rankStmt->fetch(PDO::FETCH_ASSOC) ?: ['rank' => null];
 
-            // 获取最近的活动
-            $stmt = $this->db->prepare("
-                SELECT 
-                    pt.points,
-                    pt.description,
-                    pt.created_at,
-                    ca.name_zh as activity_name
-                FROM points_transactions pt
-                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
-                WHERE pt.user_id = ? AND pt.type = 'earn' AND pt.status = 'approved' AND pt.deleted_at IS NULL
-                ORDER BY pt.created_at DESC
-                LIMIT 5
-            ");
-            $stmt->execute([$user['id']]);
-            $recentActivities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $totalUsersStmt = $this->db->query("SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL");
+            $totalUsers = ($totalUsersStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-            // 获取当前用户信息
-            $stmt = $this->db->prepare("
-                SELECT points, created_at
-                FROM users 
-                WHERE id = ? AND deleted_at IS NULL
-            ");
-            $stmt->execute([$user['id']]);
-            $userInfo = $stmt->fetch(PDO::FETCH_ASSOC);
+            // 未读消息数（容错）
+            $unread = 0;
+            try {
+                $unreadStmt = $this->db->prepare("SELECT COUNT(*) AS unread FROM messages WHERE receiver_id = ? AND is_read = 0 AND deleted_at IS NULL");
+                $unreadStmt->execute([$user['id']]);
+                $unread = (int)($unreadStmt->fetch(PDO::FETCH_ASSOC)['unread'] ?? 0);
+            } catch (\Throwable $e) { /* ignore */ }
+
+            // 简单的排行榜（前5名）
+            $leaderboard = [];
+            try {
+                $leaderStmt = $this->db->query("SELECT id, username, points as total_points FROM users WHERE deleted_at IS NULL ORDER BY points DESC LIMIT 5");
+                $leaderboard = $leaderStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (\Throwable $e) { /* ignore */ }
 
             $stats = [
-                'current_points' => (int)$userInfo['points'],
-                'total_earned' => (int)($pointsStats['total_earned'] ?? 0),
-                'total_spent' => (int)($pointsStats['total_spent'] ?? 0),
-                'earn_count' => (int)($pointsStats['earn_count'] ?? 0),
-                'spend_count' => (int)($pointsStats['spend_count'] ?? 0),
-                'pending_count' => (int)($pointsStats['pending_count'] ?? 0),
-                'monthly_earned' => (int)($monthlyStats['monthly_earned'] ?? 0),
-                'monthly_activities' => (int)($monthlyStats['monthly_activities'] ?? 0),
-                'member_since' => $userInfo['created_at'],
-                'recent_activities' => $recentActivities
+                'total_points' => (float)$userRow['points'],
+                'total_carbon_saved' => (float)($recStats['total_carbon_saved'] ?? 0),
+                'total_activities' => (int)($recStats['total_activities'] ?? 0),
+                'approved_activities' => (int)($recStats['approved_activities'] ?? 0),
+                'pending_activities' => (int)($recStats['pending_activities'] ?? 0),
+                'rejected_activities' => (int)($recStats['rejected_activities'] ?? 0),
+                'rank' => isset($rankRow['rank']) ? (int)$rankRow['rank'] : null,
+                'total_users' => (int)$totalUsers,
+                // 趋势（占位，后续可计算）
+                'points_change' => 0,
+                'carbon_change' => 0,
+                'activities_change' => 0,
+                'rank_change' => 0,
+                // 快捷入口相关
+                'unread_messages' => $unread,
+                'pending_reviews' => 0,
+                'available_products' => 0,
+                'new_achievements' => 0,
+                // 其他拓展
+                'monthly_achievements' => [],
+                'leaderboard' => $leaderboard,
+                'member_since' => $userRow['created_at']
             ];
 
             return $this->jsonResponse($response, [
@@ -554,6 +570,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
 
             return $this->jsonResponse($response, [
                 'success' => false,
@@ -601,6 +618,7 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to get chart data'
@@ -623,6 +641,9 @@ class UserController
                 ], 401);
             }
 
+            $query = $request->getQueryParams();
+            $limit = min(50, max(1, (int)($query['limit'] ?? 10)));
+
             $stmt = $this->db->prepare("
                 SELECT 
                     r.id,
@@ -638,9 +659,11 @@ class UserController
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
                 WHERE r.user_id = :user_id AND r.deleted_at IS NULL
                 ORDER BY r.created_at DESC
-                LIMIT 10
+                LIMIT :limit
             ");
-            $stmt->execute(['user_id' => $user['id']]);
+            $stmt->bindValue('user_id', $user['id']);
+            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             return $this->jsonResponse($response, [
@@ -653,10 +676,26 @@ class UserController
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to get recent activities'
             ], 500);
+        }
+    }
+
+    /**
+     * 解析 points_transactions 表中用户ID列名（兼容 uid/user_id）
+     */
+    private function resolvePointsUserIdColumn(): string
+    {
+        try {
+            $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
+            $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+            return $hasUserId ? 'user_id' : 'uid';
+        } catch (\Throwable $e) {
+            // 默认 user_id
+            return 'user_id';
         }
     }
 

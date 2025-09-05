@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use CarbonTrack\Models\CarbonActivity;
 use CarbonTrack\Services\CarbonCalculatorService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use Slim\Psr7\Response;
 use Illuminate\Support\Str;
 
@@ -16,13 +17,16 @@ class CarbonActivityController
 {
     private CarbonCalculatorService $carbonCalculatorService;
     private AuditLogService $auditLogService;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         CarbonCalculatorService $carbonCalculatorService,
-        AuditLogService $auditLogService
+        AuditLogService $auditLogService,
+        ErrorLogService $errorLogService
     ) {
         $this->carbonCalculatorService = $carbonCalculatorService;
         $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -55,6 +59,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to fetch activities: ' . $e->getMessage(), 500);
         }
     }
@@ -97,6 +102,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to fetch activity: ' . $e->getMessage(), 500);
         }
     }
@@ -170,6 +176,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to fetch activities: ' . $e->getMessage(), 500);
         }
     }
@@ -241,6 +248,7 @@ class CarbonActivityController
             return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to create activity: ' . $e->getMessage(), 500);
         }
     }
@@ -320,6 +328,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to update activity: ' . $e->getMessage(), 500);
         }
     }
@@ -378,6 +387,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to delete activity: ' . $e->getMessage(), 500);
         }
     }
@@ -434,6 +444,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to restore activity: ' . $e->getMessage(), 500);
         }
     }
@@ -456,6 +467,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to fetch statistics: ' . $e->getMessage(), 500);
         }
     }
@@ -520,6 +532,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to update sort orders: ' . $e->getMessage(), 500);
         }
     }

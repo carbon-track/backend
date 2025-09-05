@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use Monolog\Logger;
 
 class FileUploadController
@@ -17,17 +18,20 @@ class FileUploadController
     private AuthService $authService;
     private AuditLogService $auditLogService;
     private Logger $logger;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         CloudflareR2Service $r2Service,
         AuthService $authService,
         AuditLogService $auditLogService,
-        Logger $logger
+        Logger $logger,
+        ErrorLogService $errorLogService
     ) {
         $this->r2Service = $r2Service;
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
         $this->logger = $logger;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -99,6 +103,7 @@ class FileUploadController
             ], 400);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('File upload failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -184,6 +189,7 @@ class FileUploadController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Multiple file upload failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -246,6 +252,7 @@ class FileUploadController
             }
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('File deletion failed', [
                 'error' => $e->getMessage(),
                 'file_path' => $args['path'] ?? '',
@@ -301,6 +308,7 @@ class FileUploadController
             }
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Get file info failed', [
                 'error' => $e->getMessage(),
                 'file_path' => $args['path'] ?? '',
@@ -360,6 +368,7 @@ class FileUploadController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Generate presigned URL failed', [
                 'error' => $e->getMessage(),
                 'file_path' => $args['path'] ?? '',
@@ -397,6 +406,7 @@ class FileUploadController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Get storage stats failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -445,6 +455,7 @@ class FileUploadController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Cleanup expired files failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()

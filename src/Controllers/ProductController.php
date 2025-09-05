@@ -7,6 +7,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 use PDO;
 
 class ProductController
@@ -15,17 +16,20 @@ class ProductController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         MessageService $messageService,
         AuditLogService $auditLog,
-        AuthService $authService
+        AuthService $authService,
+        ErrorLogService $errorLogService
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -118,7 +122,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get products error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -163,7 +167,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get product detail error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -296,7 +300,7 @@ class ProductController
             }
 
         } catch (\Exception $e) {
-            error_log("Exchange product error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => $e->getMessage()], 400);
         }
     }
@@ -329,7 +333,7 @@ class ProductController
             }
             return $this->json($response, ['success' => true, 'data' => $row]);
         } catch (\Exception $e) {
-            error_log("Get exchange transaction error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -400,7 +404,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get user exchanges error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -480,7 +484,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get exchange records error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -521,7 +525,7 @@ class ProductController
                 'data' => $exchange
             ]);
         } catch (\Exception $e) {
-            error_log("Get exchange detail error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -588,7 +592,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Update exchange status error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -619,7 +623,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get categories error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }

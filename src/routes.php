@@ -95,6 +95,7 @@ return function (App $app) {
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);
+            $users->get('/me/activities', [UserController::class, 'getRecentActivities']);
             $users->get(PATTERN_ID_NUMERIC, [UserController::class, 'getUser']);
             $users->put(PATTERN_ID_NUMERIC, [UserController::class, 'updateUser']);
             $users->delete(PATTERN_ID_NUMERIC, [UserController::class, 'deleteUser']);

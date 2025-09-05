@@ -8,6 +8,7 @@ use CarbonTrack\Services\CarbonCalculatorService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -18,19 +19,22 @@ class CarbonTrackController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         CarbonCalculatorService $carbonCalculator,
         MessageService $messageService,
         AuditLogService $auditLog,
-        AuthService $authService
+        AuthService $authService,
+        ErrorLogService $errorLogService
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -129,7 +133,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Submit record error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -181,7 +185,7 @@ class CarbonTrackController
                 ]
             ]);
         } catch (\Exception $e) {
-            error_log("Calculate error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -280,7 +284,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get user records error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -340,7 +344,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get record detail error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -423,7 +427,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Review record error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -497,7 +501,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get pending records error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -556,7 +560,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get user stats error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -599,7 +603,7 @@ class CarbonTrackController
 
             return $this->json($response, ['success' => true]);
         } catch (\Exception $e) {
-            error_log('Delete transaction error: ' . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }

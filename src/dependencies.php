@@ -17,6 +17,7 @@ use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
@@ -204,6 +205,14 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    // Error Log Service
+    $container->set(ErrorLogService::class, function (ContainerInterface $c) {
+        return new ErrorLogService(
+            $c->get(PDO::class),
+            $c->get(Logger::class)
+        );
+    });
+
     // Message Service
     $container->set(MessageService::class, function (ContainerInterface $c) {
         return new MessageService(
@@ -233,7 +242,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(CloudflareR2Service::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -242,6 +252,7 @@ $__deps_initializer = function (Container $container) {
         return new UserController(
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
             $c->get(MessageService::class),
             $c->get(Avatar::class),
             $c->get(Logger::class),
@@ -256,6 +267,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(EmailService::class),
             $c->get(TurnstileService::class),
             $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
             $c->get(MessageService::class),
             $c->get(Logger::class),
             $db
@@ -269,14 +281,16 @@ $__deps_initializer = function (Container $container) {
             $c->get(CarbonCalculatorService::class),
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
-            $c->get(AuthService::class)
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
     $container->set(CarbonActivityController::class, function (ContainerInterface $c) {
         return new CarbonActivityController(
             $c->get(CarbonCalculatorService::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -286,7 +300,8 @@ $__deps_initializer = function (Container $container) {
             $db,
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
-            $c->get(AuthService::class)
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -296,13 +311,12 @@ $__deps_initializer = function (Container $container) {
             $db,
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
-            $c->get(AuthService::class)
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
     $container->set(SchoolController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        
         // Create a mock container with the required services
         $mockContainer = new class($c) {
             private $container;
@@ -324,7 +338,8 @@ $__deps_initializer = function (Container $container) {
         return new AdminController(
             $db,
             $c->get(AuthService::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -333,7 +348,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(CloudflareR2Service::class),
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(ErrorLogService::class)
         );
     });
 };

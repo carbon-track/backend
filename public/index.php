@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+// Small shared constants
+const APP_DATE_FMT = 'Y-m-d H:i:s';
+const APP_JSON = 'application/json';
+
 // --- Error Handling & Environment Setup ---
 // Prevent PHP warnings and notices from breaking the JSON response format.
 // In production, these should be logged, not displayed.
@@ -16,9 +20,10 @@ use CarbonTrack\Middleware\CorsMiddleware;
 use CarbonTrack\Middleware\LoggingMiddleware;
 use CarbonTrack\Middleware\IdempotencyMiddleware;
 use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Services\ErrorLogService;
 use Slim\Middleware\ErrorMiddleware;
 
-require __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../vendor/autoload.php';
 
 // Load environment variables (with fallback)
 try {
@@ -32,7 +37,7 @@ try {
 
 // Create Container and register dependencies before creating the app
 $container = new Container();
-$dependencies = require __DIR__ . '/../src/dependencies.php';
+$dependencies = require_once __DIR__ . '/../src/dependencies.php';
 $dependencies($container);
 
 // Set container to create App with on AppFactory and then create the app
@@ -86,12 +91,42 @@ $errorMiddleware->setErrorHandler(
             'message' => 'The requested resource was not found',
             'path' => $request->getUri()->getPath(),
             'method' => $request->getMethod(),
-            'timestamp' => date('Y-m-d H:i:s')
+            'timestamp' => date(APP_DATE_FMT)
         ]));
         
         return $response
             ->withStatus(404)
-            ->withHeader('Content-Type', 'application/json');
+            ->withHeader('Content-Type', APP_JSON);
+    }
+);
+
+// Default error handler to ensure all unhandled exceptions are persisted to DB
+$errorMiddleware->setDefaultErrorHandler(
+    function (
+        Psr\Http\Message\ServerRequestInterface $request,
+        Throwable $exception,
+        bool $displayErrorDetails,
+        bool $logErrors,
+        bool $logErrorDetails
+    ) use ($container) {
+        try {
+            $els = $container->get(ErrorLogService::class);
+            $els->logException($exception, $request);
+        } catch (Throwable $e) {
+            error_log('Failed to persist unhandled exception: ' . $e->getMessage());
+        }
+
+        $response = new \Slim\Psr7\Response();
+        $payload = [
+            'success' => false,
+            'error' => 'Server Error',
+            'message' => $displayErrorDetails ? $exception->getMessage() : 'An internal error has occurred',
+            'timestamp' => date(APP_DATE_FMT),
+            'logged' => $logErrors,
+            'log_details' => $logErrorDetails
+        ];
+        $response->getBody()->write(json_encode($payload));
+        return $response->withStatus(500)->withHeader('Content-Type', APP_JSON);
     }
 );
 
@@ -101,13 +136,15 @@ $app->get('/debug', function ($request, $response) {
         'success' => true,
         'message' => 'Debug route working',
         'routes' => 'Routes registered successfully',
-        'timestamp' => date('Y-m-d H:i:s')
+        'path' => $request->getUri()->getPath(),
+        'method' => $request->getMethod(),
+        'timestamp' => date(APP_DATE_FMT)
     ]));
-    return $response->withHeader('Content-Type', 'application/json');
+    return $response->withHeader('Content-Type', APP_JSON);
 });
 
 // Register routes
-$routes = require __DIR__ . '/../src/routes.php';
+$routes = require_once __DIR__ . '/../src/routes.php';
 $routes($app);
 
 // Run App

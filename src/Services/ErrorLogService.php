@@ -10,6 +10,7 @@ use Psr\Log\LoggerInterface;
 
 class ErrorLogService
 {
+    private const DATE_FMT = 'Y-m-d H:i:s';
     private PDO $db;
     private LoggerInterface $logger;
 
@@ -29,7 +30,7 @@ class ErrorLogService
             'error_message' => $e->getMessage(),
             'error_file' => $e->getFile(),
             'error_line' => $e->getLine(),
-            'error_time' => date('Y-m-d H:i:s'),
+            'error_time' => date(self::DATE_FMT),
             'script_name' => $this->getScriptName($request),
             'client_get' => $this->safeJson($request->getQueryParams()),
             'client_post' => $this->safeJson($this->normalizeBody($request->getParsedBody())),
@@ -50,7 +51,7 @@ class ErrorLogService
             'error_message' => $message,
             'error_file' => $context['file'] ?? null,
             'error_line' => isset($context['line']) ? (int)$context['line'] : null,
-            'error_time' => date('Y-m-d H:i:s'),
+            'error_time' => date(self::DATE_FMT),
             'script_name' => $this->getScriptName($request),
             'client_get' => $this->safeJson($request->getQueryParams()),
             'client_post' => $this->safeJson($this->normalizeBody($request->getParsedBody())),
@@ -71,7 +72,7 @@ class ErrorLogService
                 $data['error_message'] ?? null,
                 $data['error_file'] ?? null,
                 $data['error_line'] ?? null,
-                $data['error_time'] ?? date('Y-m-d H:i:s'),
+                $data['error_time'] ?? date(self::DATE_FMT),
                 $data['script_name'] ?? null,
                 $data['client_get'] ?? null,
                 $data['client_post'] ?? null,
@@ -117,8 +118,12 @@ class ErrorLogService
 
     private function normalizeBody($body): array
     {
-        if (is_array($body)) return $body;
-        if (is_object($body)) return (array) $body;
+        if (is_array($body)) {
+            return $body;
+        }
+        if (is_object($body)) {
+            return (array) $body;
+        }
         return $body ? ['_raw' => $body] : [];
     }
 
@@ -138,7 +143,9 @@ class ErrorLogService
 
     private function fileInfo($uploadedFile): array
     {
-        if (!$uploadedFile) return [];
+        if (!$uploadedFile) {
+            return [];
+        }
         // UploadedFileInterface methods
         try {
             return [

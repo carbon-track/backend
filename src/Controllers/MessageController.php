@@ -7,6 +7,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 use PDO;
 
 class MessageController
@@ -15,17 +16,20 @@ class MessageController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         MessageService $messageService,
         AuditLogService $auditLog,
-        AuthService $authService
+        AuthService $authService,
+        ErrorLogService $errorLogService
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -126,7 +130,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get user messages error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -179,7 +183,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get message detail error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -215,7 +219,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Mark message as read error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -264,7 +268,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Mark all as read error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -311,7 +315,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Delete message error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -375,7 +379,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Delete messages error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -418,7 +422,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get unread count error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -500,7 +504,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Send system message error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -560,7 +564,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            error_log("Get message stats error: " . $e->getMessage());
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }

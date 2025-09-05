@@ -10,6 +10,7 @@ use CarbonTrack\Models\Avatar;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\ErrorLogService;
 use Monolog\Logger;
 
 class AvatarController
@@ -19,19 +20,22 @@ class AvatarController
     private AuditLogService $auditLogService;
     private CloudflareR2Service $r2Service;
     private Logger $logger;
+    private ErrorLogService $errorLogService;
 
     public function __construct(
         Avatar $avatarModel,
         AuthService $authService,
         AuditLogService $auditLogService,
         CloudflareR2Service $r2Service,
-        Logger $logger
+        Logger $logger,
+        ErrorLogService $errorLogService
     ) {
         $this->avatarModel = $avatarModel;
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
         $this->r2Service = $r2Service;
         $this->logger = $logger;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -67,6 +71,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Get avatars failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -93,6 +98,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Get avatar categories failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -137,6 +143,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Get avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -231,6 +238,7 @@ class AvatarController
             ], 201);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Create avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -348,6 +356,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Update avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -430,6 +439,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Delete avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -495,6 +505,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Restore avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -565,6 +576,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Set default avatar failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -647,6 +659,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Update sort orders failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -683,6 +696,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Get avatar usage stats failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -767,6 +781,7 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Upload avatar file failed', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
