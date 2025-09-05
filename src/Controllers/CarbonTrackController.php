@@ -5,6 +5,7 @@ namespace CarbonTrack\Controllers;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\CarbonCalculatorService;
+use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
@@ -20,6 +21,7 @@ class CarbonTrackController
     private AuditLogService $auditLog;
     private AuthService $authService;
     private ErrorLogService $errorLogService;
+    private CloudflareR2Service $r2Service;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -30,7 +32,8 @@ class CarbonTrackController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService
+        ErrorLogService $errorLogService,
+        CloudflareR2Service $r2Service
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -38,6 +41,7 @@ class CarbonTrackController
         $this->auditLog = $auditLog;
         $this->authService = $authService;
         $this->errorLogService = $errorLogService;
+        $this->r2Service = $r2Service;
     }
 
     /**
@@ -52,6 +56,28 @@ class CarbonTrackController
             }
 
             $data = $request->getParsedBody();
+
+            // 兼容 multipart/form-data 与 application/json
+            $uploadedFiles = $request->getUploadedFiles();
+            $imageFiles = [];
+            if (is_array($uploadedFiles)) {
+                foreach (['images', 'files', 'attachments', 'image'] as $field) {
+                    if (!empty($uploadedFiles[$field])) {
+                        $f = $uploadedFiles[$field];
+                        if (is_array($f)) {
+                            foreach ($f as $fi) {
+                                if ($fi && $fi->getError() === UPLOAD_ERR_OK) {
+                                    $imageFiles[] = $fi;
+                                }
+                            }
+                        } else {
+                            if ($f && $f->getError() === UPLOAD_ERR_OK) {
+                                $imageFiles[] = $f;
+                            }
+                        }
+                    }
+                }
+            }
             
             // 验证必需字段
             $requiredFields = ['activity_id', 'amount', 'date'];
@@ -91,6 +117,74 @@ class CarbonTrackController
                 ];
             }
 
+            // 先处理附件上传（如有），上传到 R2 并备好 images 数组
+            $images = [];
+            if (!empty($imageFiles)) {
+                // 限制最多 10 张
+                if (count($imageFiles) > 10) {
+                    return $this->json($response, ['error' => 'Too many files. Maximum 10 images allowed'], 400);
+                }
+
+                try {
+                    $uploadResult = $this->r2Service->uploadMultipleFiles(
+                        $imageFiles,
+                        'activities',
+                        $user['id'] ?? null,
+                        'carbon_record',
+                        null
+                    );
+
+                    foreach ($uploadResult['results'] as $res) {
+                        // 仅收集成功项
+                        if (!empty($res['success'])) {
+                            $images[] = [
+                                'file_path' => $res['file_path'] ?? null,
+                                'public_url' => $res['public_url'] ?? null,
+                                'original_name' => $res['original_name'] ?? null,
+                                'mime_type' => $res['mime_type'] ?? null,
+                                'file_size' => $res['file_size'] ?? null,
+                            ];
+                        } else {
+                            // 如果uploadMultipleFiles未标识success字段，也将非空结果记录
+                            if (isset($res['file_path']) || isset($res['public_url'])) {
+                                $images[] = [
+                                    'file_path' => $res['file_path'] ?? null,
+                                    'public_url' => $res['public_url'] ?? null,
+                                    'original_name' => $res['original_name'] ?? null,
+                                    'mime_type' => $res['mime_type'] ?? null,
+                                    'file_size' => $res['file_size'] ?? null,
+                                ];
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+                    return $this->json($response, ['error' => 'Image upload failed'], 500);
+                }
+            } else if (!empty($data['images'])) {
+                // 兼容前端直接传URL数组的旧逻辑
+                if (is_string($data['images'])) {
+                    $decoded = json_decode($data['images'], true);
+                    if (is_array($decoded)) {
+                        foreach ($decoded as $item) {
+                            if (is_string($item)) {
+                                $images[] = ['public_url' => $item];
+                            } elseif (is_array($item)) {
+                                $images[] = $item;
+                            }
+                        }
+                    }
+                } elseif (is_array($data['images'])) {
+                    foreach ($data['images'] as $item) {
+                        if (is_string($item)) {
+                            $images[] = ['public_url' => $item];
+                        } elseif (is_array($item)) {
+                            $images[] = $item;
+                        }
+                    }
+                }
+            }
+
             // 创建记录
             $recordId = $this->createCarbonRecord([
                 'user_id' => $user['id'],
@@ -101,7 +195,7 @@ class CarbonTrackController
                 'points_earned' => $pointsEarned,
                 'date' => $data['date'],
                 'description' => $data['description'] ?? null,
-                'images' => $data['images'] ?? null,
+                'images' => !empty($images) ? $images : ($data['images'] ?? null),
                 'status' => 'pending'
             ]);
 
@@ -130,7 +224,8 @@ class CarbonTrackController
                 'success' => true,
                 'record_id' => $recordId,
                 'calculation' => $calculation,
-                'message' => 'Record submitted successfully'
+                'message' => 'Record submitted successfully',
+                'uploaded_images' => $images
             ]);
 
         } catch (\Exception $e) {
