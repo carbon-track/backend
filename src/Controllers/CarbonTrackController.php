@@ -554,10 +554,29 @@ class CarbonTrackController
             $offset = ($page - 1) * $limit;
             $status = isset($params['status']) ? trim((string)$params['status']) : '';
             $search = isset($params['search']) ? trim((string)$params['search']) : '';
-            $sort = in_array(($params['sort'] ?? 'created_at_asc'), ['created_at_asc', 'created_at_desc'], true)
-                ? $params['sort']
-                : 'created_at_asc';
-            $order = $sort === 'created_at_desc' ? 'DESC' : 'ASC';
+            // 兼容旧 sort（created_at_asc/created_at_desc）与新 sort_by + order
+            $allowedSortBy = [
+                'created_at' => 'r.created_at',
+                'date' => 'r.date',
+                'carbon_saved' => 'r.carbon_saved',
+                'points_earned' => 'r.points_earned',
+                'amount' => 'r.amount',
+                'status' => 'r.status'
+            ];
+            $sort = isset($params['sort']) ? (string)$params['sort'] : '';
+            $sortByParam = isset($params['sort_by']) ? (string)$params['sort_by'] : '';
+            $orderParam = isset($params['order']) ? (string)$params['order'] : '';
+            if ($sortByParam !== '') {
+                $sortBy = $allowedSortBy[$sortByParam] ?? 'r.created_at';
+                $order = strtoupper($orderParam) === 'DESC' ? 'DESC' : 'ASC';
+            } else if ($sort !== '') {
+                // 旧版：created_at_asc / created_at_desc
+                $sortBy = 'r.created_at';
+                $order = str_ends_with($sort, '_desc') ? 'DESC' : 'ASC';
+            } else {
+                $sortBy = 'r.created_at';
+                $order = 'ASC';
+            }
 
             // 构建筛选条件
             $where = ['r.deleted_at IS NULL'];
@@ -570,6 +589,17 @@ class CarbonTrackController
                 $where[] = '(u.username LIKE :search OR u.email LIKE :search OR a.name_zh LIKE :search OR a.name_en LIKE :search)';
                 $bindings['search'] = "%{$search}%";
             }
+            // 额外筛选条件
+            if (!empty($params['activity_id'])) { $where[] = 'r.activity_id = :activity_id'; $bindings['activity_id'] = $params['activity_id']; }
+            if (!empty($params['user_id'])) { $where[] = 'r.user_id = :user_id'; $bindings['user_id'] = $params['user_id']; }
+            if (!empty($params['school_id'])) { $where[] = 'u.school_id = :school_id'; $bindings['school_id'] = $params['school_id']; }
+            if (!empty($params['category'])) { $where[] = 'a.category = :category'; $bindings['category'] = $params['category']; }
+            if (!empty($params['date_from'])) { $where[] = 'r.date >= :date_from'; $bindings['date_from'] = $params['date_from']; }
+            if (!empty($params['date_to'])) { $where[] = 'r.date <= :date_to'; $bindings['date_to'] = $params['date_to']; }
+            if (isset($params['min_carbon']) && $params['min_carbon'] !== '') { $where[] = 'r.carbon_saved >= :min_carbon'; $bindings['min_carbon'] = (float)$params['min_carbon']; }
+            if (isset($params['max_carbon']) && $params['max_carbon'] !== '') { $where[] = 'r.carbon_saved <= :max_carbon'; $bindings['max_carbon'] = (float)$params['max_carbon']; }
+            if (isset($params['min_points']) && $params['min_points'] !== '') { $where[] = 'r.points_earned >= :min_points'; $bindings['min_points'] = (float)$params['min_points']; }
+            if (isset($params['max_points']) && $params['max_points'] !== '') { $where[] = 'r.points_earned <= :max_points'; $bindings['max_points'] = (float)$params['max_points']; }
             $whereClause = implode(' AND ', $where);
 
             // 获取总数（包含联表以支持 search 条件）
@@ -600,7 +630,7 @@ class CarbonTrackController
                 LEFT JOIN users u ON r.user_id = u.id
                 LEFT JOIN schools s ON u.school_id = s.id
                 WHERE {$whereClause}
-                ORDER BY r.created_at {$order}
+                ORDER BY {$sortBy} {$order}
                 LIMIT :limit OFFSET :offset
             ";
 

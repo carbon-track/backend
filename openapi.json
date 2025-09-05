@@ -2449,8 +2449,27 @@
     "/admin/activities": {
       "get": {
         "tags": ["Admin", "Carbon Track"],
-        "summary": "获取待审核记录列表 (别名)",
+        "summary": "获取碳减排记录列表（支持筛选与分页）",
         "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending", "approved", "rejected", ""] }, "description": "状态筛选，留空为全部" },
+          { "name": "search", "in": "query", "schema": { "type": "string" }, "description": "关键字，匹配用户名/邮箱/活动中英名称" },
+          { "name": "activity_id", "in": "query", "schema": { "type": "string" }, "description": "按活动ID筛选" },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" }, "description": "按用户ID筛选" },
+          { "name": "school_id", "in": "query", "schema": { "type": "integer" }, "description": "按学校ID筛选" },
+          { "name": "category", "in": "query", "schema": { "type": "string" }, "description": "按活动类别筛选" },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "起始日期（含）" },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "结束日期（含）" },
+          { "name": "min_carbon", "in": "query", "schema": { "type": "number" }, "description": "最小碳减排量（含）" },
+          { "name": "max_carbon", "in": "query", "schema": { "type": "number" }, "description": "最大碳减排量（含）" },
+          { "name": "min_points", "in": "query", "schema": { "type": "number" }, "description": "最小积分（含）" },
+          { "name": "max_points", "in": "query", "schema": { "type": "number" }, "description": "最大积分（含）" },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 }, "description": "页码（默认1）" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 }, "description": "每页数量（默认20，最大50）" },
+          { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["created_at_asc", "created_at_desc"] }, "description": "兼容旧版排序参数" },
+          { "name": "sort_by", "in": "query", "schema": { "type": "string", "enum": ["created_at", "date", "carbon_saved", "points_earned", "amount", "status"] }, "description": "排序字段（与 order 配合使用）" },
+          { "name": "order", "in": "query", "schema": { "type": "string", "enum": ["ASC", "DESC"] }, "description": "排序方向（默认ASC）" }
+        ],
         "responses": { "200": { "description": "成功" } }
       }
     },
