@@ -39,12 +39,11 @@ class CloudflareR2Service
         string $secretAccessKey,
         string $endpoint,
         string $bucketName,
-        string $publicUrl,
+        ?string $publicUrl,
         Logger $logger,
         AuditLogService $auditLogService
     ) {
         $this->bucketName = $bucketName;
-        $this->publicUrl = rtrim($publicUrl, '/');
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
 
@@ -63,6 +62,22 @@ class CloudflareR2Service
                 'connect_timeout' => 10,
             ]
         ]);
+
+        // 计算公共访问基地址
+        $derivedBase = $this->derivePublicBase($endpoint, $bucketName);
+        $finalPublicUrl = $publicUrl ? rtrim($publicUrl, '/') : $derivedBase;
+        $this->publicUrl = $finalPublicUrl;
+
+        if (!$publicUrl) {
+            // 记录一次警告，提示使用了推导的公共URL
+            try {
+                $this->logger->warning('R2 public base URL is not configured. Using derived fallback.', [
+                    'derived_public_base' => $derivedBase,
+                    'endpoint' => $endpoint,
+                    'bucket' => $bucketName
+                ]);
+            } catch (\Throwable $ignore) {}
+        }
     }
 
     /**
@@ -305,6 +320,41 @@ class CloudflareR2Service
     public function getPublicUrl(string $filePath): string
     {
         return $this->publicUrl . '/' . ltrim($filePath, '/');
+    }
+
+    /**
+     * 根据 endpoint 与 bucket 推导一个公共访问基地址
+     * 优先使用 Cloudflare R2 公共域名（pub-<account>.r2.dev/<bucket>），否则回退到 endpoint/<bucket>
+     */
+    private function derivePublicBase(string $endpoint, string $bucketName): string
+    {
+        $base = '';
+
+        // 尝试从 endpoint 中解析出 accountId
+        $host = '';
+        $scheme = 'https';
+        $parts = @parse_url($endpoint);
+        if (is_array($parts)) {
+            $host = $parts['host'] ?? '';
+            $scheme = $parts['scheme'] ?? 'https';
+        }
+
+        // 匹配 <account>.r2.cloudflarestorage.com
+        if ($host && preg_match('/^([a-z0-9]+)\.r2\.cloudflarestorage\.com$/i', $host, $m)) {
+            $accountId = $m[1];
+            $base = sprintf('https://pub-%s.r2.dev/%s', $accountId, $bucketName);
+        } elseif ($host) {
+            // 其他自定义或兼容 S3 的 endpoint，尽力拼接
+            $endpointTrimmed = rtrim($endpoint, '/');
+            $base = $endpointTrimmed . '/' . $bucketName;
+        }
+
+        // 确保非空，最差退回根路径，避免返回 null/空导致拼接异常
+        if ($base === '') {
+            $base = '/' . ltrim($bucketName, '/');
+        }
+
+        return rtrim($base, '/');
     }
 
     /**
