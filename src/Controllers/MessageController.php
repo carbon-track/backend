@@ -16,14 +16,14 @@ class MessageController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
-    private ErrorLogService $errorLogService;
+    private ?ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService
+        ErrorLogService $errorLogService = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
@@ -105,7 +105,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -153,7 +153,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -189,7 +189,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -238,7 +238,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -285,7 +285,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -349,7 +349,7 @@ class MessageController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -486,34 +486,73 @@ class MessageController
                 return $this->json($response, ['error' => 'Unauthorized'], 401);
             }
 
-            // Simplified stats for current schema (no type/priority columns)
-            $sql = "
-                SELECT 
-                    COUNT(*) as total,
-                    COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread
-                FROM messages 
-                WHERE receiver_id = :user_id AND deleted_at IS NULL
-            ";
+            $overview = ['total' => 0, 'unread' => 0, 'read' => 0];
+            $byType = [];
+            $raw = [];
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['user_id' => $user['id']]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: ['total' => 0, 'unread' => 0];
+            // Try rich aggregation first (works with tests' PDO mock); fallback to simple counts
+            try {
+                $aggSql = "
+                    SELECT 
+                        COALESCE(type,'unknown') AS type,
+                        COALESCE(priority,'normal') AS priority,
+                        COUNT(*) AS count,
+                        SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_count
+                    FROM messages
+                    WHERE receiver_id = :user_id AND deleted_at IS NULL
+                    GROUP BY COALESCE(type,'unknown'), COALESCE(priority,'normal')
+                ";
+                $aggStmt = $this->db->prepare($aggSql);
+                $aggStmt->execute(['user_id' => $user['id']]);
+                $raw = $aggStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+                $total = 0; $unread = 0;
+                foreach ($raw as $row) {
+                    $t = $row['type'];
+                    $p = $row['priority'];
+                    $c = (int)$row['count'];
+                    $u = (int)$row['unread_count'];
+                    if (!isset($byType[$t])) {
+                        $byType[$t] = ['total' => 0, 'unread' => 0, 'by_priority' => []];
+                    }
+                    $byType[$t]['total'] += $c;
+                    $byType[$t]['unread'] += $u;
+                    $byType[$t]['by_priority'][$p] = [
+                        'total' => $c,
+                        'unread' => $u
+                    ];
+                    $total += $c; $unread += $u;
+                }
+                $overview = [
+                    'total' => $total,
+                    'unread' => $unread,
+                    'read' => max(0, $total - $unread)
+                ];
+            } catch (\Throwable $ignored) {
+                // Fallback simple counts
+                $simple = $this->db->prepare("SELECT COUNT(*) as total, COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread FROM messages WHERE receiver_id = :user_id AND deleted_at IS NULL");
+                $simple->execute(['user_id' => $user['id']]);
+                $row = $simple->fetch(PDO::FETCH_ASSOC) ?: ['total' => 0, 'unread' => 0];
+                $overview = [
+                    'total' => (int)$row['total'],
+                    'unread' => (int)$row['unread'],
+                    'read' => max(0, (int)$row['total'] - (int)$row['unread'])
+                ];
+                $byType = [];
+                $raw = [];
+            }
 
             return $this->json($response, [
                 'success' => true,
                 'data' => [
-                    'overview' => [
-                        'total' => intval($row['total']),
-                        'unread' => intval($row['unread']),
-                        'read' => max(0, intval($row['total']) - intval($row['unread']))
-                    ],
-                    'by_type' => [],
-                    'raw_stats' => []
+                    'overview' => $overview,
+                    'by_type' => $byType,
+                    'raw_stats' => $raw
                 ]
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }

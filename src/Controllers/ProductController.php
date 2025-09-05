@@ -16,7 +16,7 @@ class ProductController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
-    private ErrorLogService $errorLogService;
+    private ?ErrorLogService $errorLogService;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERR_ADMIN_REQUIRED = 'Admin access required';
@@ -27,7 +27,7 @@ class ProductController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService
+        ErrorLogService $errorLogService = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;

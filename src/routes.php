@@ -167,8 +167,10 @@ return function (App $app) {
     $registerAdminRoutes = function (RouteCollectorProxy $group) {
         $group->group('/admin', function (RouteCollectorProxy $admin) {
             $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
+            // 用户管理
             $admin->put(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
             $admin->delete(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
+            $admin->post(PATH_USERS . PATTERN_ID_NUMERIC . '/points/adjust', [AdminController::class, 'adjustUserPoints']);
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
@@ -189,6 +191,8 @@ return function (App $app) {
             $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);
             $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}/status', [ProductController::class, 'updateExchangeStatus']);
             $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
+            // 站内信广播
+            $admin->post('/messages/broadcast', [MessageController::class, 'sendSystemMessage']);
             $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
             $admin->post(PATH_PRODUCTS, [ProductController::class, 'createProduct']);
             $admin->put(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);

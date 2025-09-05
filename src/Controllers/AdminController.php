@@ -17,13 +17,13 @@ class AdminController
     private PDO $db;
     private AuthService $authService;
     private AuditLogService $auditLog;
-    private ErrorLogService $errorLogService;
+    private ?ErrorLogService $errorLogService;
 
     public function __construct(
         PDO $db,
         AuthService $authService,
         AuditLogService $auditLog,
-        ErrorLogService $errorLogService
+        ErrorLogService $errorLogService = null
     ) {
         $this->db = $db;
         $this->authService = $authService;
@@ -159,7 +159,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -230,7 +230,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -270,23 +270,22 @@ class AdminController
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 商品兑换统计
+            // 商品兑换统计（使用 point_exchanges 表，注意列名为 points_used）
             $exchangeStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_exchanges,
                     COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_exchanges,
                     COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_exchanges,
-                    COALESCE(SUM(points_cost), 0) as total_points_spent
-                FROM product_exchanges 
+                    COALESCE(SUM(points_used), 0) as total_points_spent
+                FROM point_exchanges 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 消息统计
+            // 消息统计（messages 表只有 is_read，没有 status/type）
             $messageStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_messages,
-                    COUNT(CASE WHEN status = 'unread' THEN 1 END) as unread_messages,
-                    COUNT(CASE WHEN type = 'system' THEN 1 END) as system_messages
+                    COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread_messages
                 FROM messages 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
@@ -326,7 +325,7 @@ class AdminController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -543,6 +542,112 @@ class AdminController
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'User deleted successfully'
+            ]);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    /**
+     * 管理员调整用户积分（可正可负），并记录到积分流水
+     */
+    public function adjustUserPoints(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $userId = (int)($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            $data = $request->getParsedBody() ?: [];
+            $delta = isset($data['delta']) ? (float)$data['delta'] : 0.0;
+            $reason = trim((string)($data['reason'] ?? ''));
+
+            if ($delta === 0.0) {
+                return $this->jsonResponse($response, [
+                    'error' => 'Delta must be non-zero',
+                    'code' => 'INVALID_DELTA'
+                ], 400);
+            }
+
+            // 读取用户并更新积分
+            $this->db->beginTransaction();
+            try {
+                $stmt = $this->db->prepare('SELECT id, username, email, points FROM users WHERE id = :id AND deleted_at IS NULL FOR UPDATE');
+                $stmt->execute(['id' => $userId]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$user) {
+                    $this->db->rollBack();
+                    return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+                }
+
+                $newPoints = (float)$user['points'] + $delta;
+                if ($newPoints < 0) {
+                    // 不允许积分为负数（策略可调整）
+                    $this->db->rollBack();
+                    return $this->jsonResponse($response, [
+                        'error' => 'Insufficient points after adjustment',
+                        'code' => 'NEGATIVE_BALANCE'
+                    ], 400);
+                }
+
+                $upd = $this->db->prepare('UPDATE users SET points = :points, updated_at = NOW() WHERE id = :id');
+                $upd->execute(['points' => $newPoints, 'id' => $userId]);
+
+                // 记录到积分流水（兼容当前 points_transactions 表结构）
+                $ins = $this->db->prepare('INSERT INTO points_transactions (
+                        username, email, time, img, points, auth, raw, act, uid, activity_id,
+                        type, notes, activity_date, status, approved_by, approved_at, created_at, updated_at
+                    ) VALUES (
+                        :username, :email, NOW(), NULL, :points, :auth, :raw, :act, :uid, NULL,
+                        :type, :notes, NULL, :status, :approved_by, NOW(), NOW(), NOW()
+                    )');
+                $ins->execute([
+                    'username' => $user['username'] ?? null,
+                    'email' => $user['email'] ?? '',
+                    'points' => $delta,
+                    'auth' => 'admin',
+                    'raw' => $delta,
+                    'act' => 'admin_adjust',
+                    'uid' => $userId,
+                    'type' => 'admin_adjust',
+                    'notes' => $reason !== '' ? $reason : 'Admin points adjustment',
+                    'status' => 'approved',
+                    'approved_by' => (int)$admin['id']
+                ]);
+
+                $this->db->commit();
+            } catch (\Throwable $txe) {
+                $this->db->rollBack();
+                throw $txe;
+            }
+
+            // 审计日志
+            $this->auditLog->log(
+                $admin['id'],
+                'admin_user_points_adjusted',
+                'user',
+                $userId,
+                [
+                    'delta' => $delta,
+                    'reason' => $reason,
+                ]
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'User points adjusted successfully',
+                'data' => [
+                    'user_id' => $userId,
+                    'delta' => $delta,
+                    'new_balance' => $newPoints
+                ]
             ]);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }

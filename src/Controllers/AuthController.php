@@ -21,7 +21,7 @@ class AuthController
     private EmailService $emailService;
     private TurnstileService $turnstileService;
     private AuditLogService $auditLogService;
-    private ErrorLogService $errorLogService;
+    private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
     private Logger $logger;
     private PDO $db;
@@ -31,19 +31,19 @@ class AuthController
         EmailService $emailService,
         TurnstileService $turnstileService,
         AuditLogService $auditLogService,
-        ErrorLogService $errorLogService,
         MessageService $messageService,
         Logger $logger,
-        PDO $db
+        PDO $db,
+        ErrorLogService $errorLogService = null
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
         $this->turnstileService = $turnstileService;
         $this->auditLogService = $auditLogService;
-        $this->errorLogService = $errorLogService;
         $this->messageService = $messageService;
         $this->logger = $logger;
         $this->db = $db;
+        $this->errorLogService = $errorLogService;
     }
 
     public function register(Request $request, Response $response): Response
@@ -177,7 +177,7 @@ class AuthController
             ], 201);
         } catch (\Throwable $e) {
             $this->logger->error('User registration failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Registration failed',
@@ -281,7 +281,7 @@ class AuthController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('User login failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Login failed',
@@ -311,7 +311,7 @@ class AuthController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('User logout failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Logout failed'
@@ -366,7 +366,7 @@ class AuthController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Get current user failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to get user info'
@@ -423,7 +423,7 @@ class AuthController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Forgot password failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to process password reset request'
@@ -490,7 +490,7 @@ class AuthController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Password reset failed', ['error' => $e->getMessage()]);
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Password reset failed'

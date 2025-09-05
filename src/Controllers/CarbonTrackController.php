@@ -20,8 +20,8 @@ class CarbonTrackController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
-    private ErrorLogService $errorLogService;
-    private CloudflareR2Service $r2Service;
+    private ?ErrorLogService $errorLogService;
+    private ?CloudflareR2Service $r2Service;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -32,8 +32,8 @@ class CarbonTrackController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService,
-        CloudflareR2Service $r2Service
+        ErrorLogService $errorLogService = null,
+        CloudflareR2Service $r2Service = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -126,6 +126,9 @@ class CarbonTrackController
                 }
 
                 try {
+                    if (!$this->r2Service) {
+                        throw new \RuntimeException('R2 service not configured');
+                    }
                     $uploadResult = $this->r2Service->uploadMultipleFiles(
                         $imageFiles,
                         'activities',
@@ -158,8 +161,9 @@ class CarbonTrackController
                         }
                     }
                 } catch (\Throwable $e) {
-                    try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
-                    return $this->json($response, ['error' => 'Image upload failed'], 500);
+                    try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+                    // 如果无 R2 服务或上传失败，继续流程但不附带上传图片
+                    $images = [];
                 }
             } else if (!empty($data['images'])) {
                 // 兼容前端直接传URL数组的旧逻辑
@@ -229,7 +233,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -281,7 +285,7 @@ class CarbonTrackController
                 ]
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -380,7 +384,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -612,7 +616,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -671,7 +675,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -714,7 +718,7 @@ class CarbonTrackController
 
             return $this->json($response, ['success' => true]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
