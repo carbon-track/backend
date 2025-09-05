@@ -6,6 +6,7 @@ namespace CarbonTrack\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use DateTimeImmutable;
 
 class Message extends Model
 {
@@ -18,17 +19,13 @@ class Message extends Model
         'receiver_id',
         'title',
         'content',
-        'type',
         'is_read',
-        'read_at',
-        'related_entity_type',
-        'related_entity_id',
-        'priority'
+        // Following columns are not present in localhost.sql schema and must not be mass-assigned:
+        // 'type', 'read_at', 'related_entity_type', 'related_entity_id', 'priority'
     ];
 
     protected $casts = [
         'is_read' => 'boolean',
-        'read_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime'
@@ -90,7 +87,8 @@ class Message extends Model
      */
     public function scopeByType($query, string $type)
     {
-        return $query->where('type', $type);
+        // 'type' column not available in provided schema; no-op filter for compatibility
+        return $query;
     }
 
     /**
@@ -98,7 +96,8 @@ class Message extends Model
      */
     public function scopeByPriority($query, string $priority)
     {
-        return $query->where('priority', $priority);
+        // 'priority' column not available in provided schema; no-op filter for compatibility
+        return $query;
     }
 
     /**
@@ -122,7 +121,8 @@ class Message extends Model
      */
     public function scopeRecent($query, int $days = 30)
     {
-        return $query->where('created_at', '>', now()->subDays($days));
+        $threshold = (new DateTimeImmutable("now"))->modify("-{$days} days")->format('Y-m-d H:i:s');
+        return $query->where('created_at', '>', $threshold);
     }
 
     /**
@@ -133,7 +133,6 @@ class Message extends Model
         if (!$this->is_read) {
             $this->update([
                 'is_read' => true,
-                'read_at' => now()
             ]);
         }
     }
@@ -146,7 +145,6 @@ class Message extends Model
         if ($this->is_read) {
             $this->update([
                 'is_read' => false,
-                'read_at' => null
             ]);
         }
     }
@@ -156,7 +154,8 @@ class Message extends Model
      */
     public function isHighPriority(): bool
     {
-        return in_array($this->priority, [self::PRIORITY_HIGH, self::PRIORITY_URGENT]);
+        // Priority not stored in provided schema; always false
+        return false;
     }
 
     /**
@@ -164,7 +163,8 @@ class Message extends Model
      */
     public function isSystemMessage(): bool
     {
-        return $this->type === self::TYPE_SYSTEM || $this->sender_id === null;
+        // Without 'type' column, treat null sender as system message
+        return $this->sender_id === null;
     }
 
     /**
@@ -180,22 +180,8 @@ class Message extends Model
      */
     public function getRelatedEntity()
     {
-        if (!$this->related_entity_type || !$this->related_entity_id) {
-            return null;
-        }
-
-        switch ($this->related_entity_type) {
-            case 'points_transaction':
-                return PointsTransaction::find($this->related_entity_id);
-            case 'exchange_transaction':
-                return ExchangeTransaction::find($this->related_entity_id);
-            case 'product':
-                return Product::find($this->related_entity_id);
-            case 'user':
-                return User::find($this->related_entity_id);
-            default:
-                return null;
-        }
+        // Related entity columns are not available in the provided DB schema
+        return null;
     }
 
     /**
@@ -210,15 +196,13 @@ class Message extends Model
         ?string $relatedEntityType = null,
         ?int $relatedEntityId = null
     ): self {
+        // The provided DB schema (localhost.sql) does not include 'type', 'priority', 'related_entity_*', or 'read_at'.
+        // We store a minimal message compatible with that schema.
         return static::create([
             'sender_id' => null, // System message
             'receiver_id' => $receiverId,
             'title' => $title,
             'content' => $content,
-            'type' => $type,
-            'priority' => $priority,
-            'related_entity_type' => $relatedEntityType,
-            'related_entity_id' => $relatedEntityId,
             'is_read' => false
         ]);
     }
@@ -346,25 +330,14 @@ class Message extends Model
         $total = static::forUser($userId)->count();
         $unread = static::forUser($userId)->unread()->count();
         $read = static::forUser($userId)->read()->count();
-        
-        $byType = static::forUser($userId)
-            ->selectRaw('type, COUNT(*) as count')
-            ->groupBy('type')
-            ->pluck('count', 'type')
-            ->toArray();
 
-        $byPriority = static::forUser($userId)
-            ->selectRaw('priority, COUNT(*) as count')
-            ->groupBy('priority')
-            ->pluck('count', 'priority')
-            ->toArray();
-
+        // 'type' and 'priority' not available; return empty breakdowns for compatibility
         return [
             'total' => $total,
             'unread' => $unread,
             'read' => $read,
-            'by_type' => $byType,
-            'by_priority' => $byPriority
+            'by_type' => [],
+            'by_priority' => []
         ];
     }
 
@@ -373,9 +346,10 @@ class Message extends Model
      */
     public static function cleanupOldMessages(int $daysToKeep = 90): int
     {
-        return static::where('is_read', true)
-            ->where('created_at', '<', now()->subDays($daysToKeep))
-            ->where('priority', '!=', self::PRIORITY_URGENT)
+        // No 'priority' column; perform a simple cleanup based on is_read and age only
+        $threshold = (new DateTimeImmutable("now"))->modify("-{$daysToKeep} days")->format('Y-m-d H:i:s');
+        return (int) static::where('is_read', true)
+            ->where('created_at', '<', $threshold)
             ->delete();
     }
 

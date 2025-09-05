@@ -52,22 +52,10 @@ class MessageController
             $where = ['m.receiver_id = :user_id', 'm.deleted_at IS NULL'];
             $bindings = ['user_id' => $user['id']];
 
-            if (!empty($params['type'])) {
-                $where[] = 'm.type = :type';
-                $bindings['type'] = $params['type'];
-            }
-
-            if (!empty($params['priority'])) {
-                $where[] = 'm.priority = :priority';
-                $bindings['priority'] = $params['priority'];
-            }
-
+            // Optional filter by read status using is_read column (1/0)
             if (isset($params['is_read'])) {
-                if ($params['is_read'] === 'true' || $params['is_read'] === '1') {
-                    $where[] = 'm.read_at IS NOT NULL';
-                } else {
-                    $where[] = 'm.read_at IS NULL';
-                }
+                $where[] = 'm.is_read = :is_read';
+                $bindings['is_read'] = ($params['is_read'] === 'true' || $params['is_read'] === '1') ? 1 : 0;
             }
 
             $whereClause = implode(' AND ', $where);
@@ -81,22 +69,11 @@ class MessageController
             // 获取消息列表
             $sql = "
                 SELECT 
-                    m.*,
-                    CASE 
-                        WHEN m.read_at IS NULL THEN false
-                        ELSE true
-                    END as is_read
+                    m.*
                 FROM messages m
                 WHERE {$whereClause}
                 ORDER BY 
-                    CASE WHEN m.read_at IS NULL THEN 0 ELSE 1 END,
-                    CASE m.priority 
-                        WHEN 'urgent' THEN 1
-                        WHEN 'high' THEN 2
-                        WHEN 'normal' THEN 3
-                        WHEN 'low' THEN 4
-                        ELSE 5
-                    END,
+                    m.is_read ASC,
                     m.created_at DESC
                 LIMIT :limit OFFSET :offset
             ";
@@ -111,11 +88,9 @@ class MessageController
 
             $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // Ensure is_read field exists when mocking without SQL alias
+            // Cast is_read to boolean
             foreach ($messages as &$msg) {
-                if (!array_key_exists('is_read', $msg)) {
-                    $msg['is_read'] = isset($msg['read_at']) && $msg['read_at'] !== null;
-                }
+                $msg['is_read'] = (bool)($msg['is_read'] ?? false);
             }
 
             return $this->json($response, [
@@ -150,11 +125,7 @@ class MessageController
 
             $sql = "
                 SELECT 
-                    m.*,
-                    CASE 
-                        WHEN m.read_at IS NULL THEN false
-                        ELSE true
-                    END as is_read
+                    m.*
                 FROM messages m
                 WHERE m.id = :message_id AND m.receiver_id = :user_id AND m.deleted_at IS NULL
             ";
@@ -171,10 +142,9 @@ class MessageController
             }
 
             // 如果消息未读，标记为已读
-            if (!$message['is_read']) {
+            if (!($message['is_read'] ?? false)) {
                 $this->markMessageAsRead($messageId);
                 $message['is_read'] = true;
-                $message['read_at'] = date('Y-m-d H:i:s');
             }
 
             return $this->json($response, [
@@ -242,8 +212,8 @@ class MessageController
                 // 标记所有未读消息为已读
                 $sql = "
                     UPDATE messages 
-                    SET read_at = NOW() 
-                    WHERE receiver_id = :user_id AND read_at IS NULL AND deleted_at IS NULL
+                    SET is_read = 1, updated_at = NOW() 
+                    WHERE receiver_id = :user_id AND is_read = 0 AND deleted_at IS NULL
                 ";
                 $stmt = $this->db->prepare($sql);
                 $stmt->execute(['user_id' => $user['id']]);
@@ -253,8 +223,8 @@ class MessageController
                 $placeholders = str_repeat('?,', count($messageIds) - 1) . '?';
                 $sql = "
                     UPDATE messages 
-                    SET read_at = NOW() 
-                    WHERE receiver_id = ? AND id IN ({$placeholders}) AND read_at IS NULL AND deleted_at IS NULL
+                    SET is_read = 1, updated_at = NOW() 
+                    WHERE receiver_id = ? AND id IN ({$placeholders}) AND is_read = 0 AND deleted_at IS NULL
                 ";
                 $stmt = $this->db->prepare($sql);
                 $stmt->execute(array_merge([$user['id']], $messageIds));
@@ -397,13 +367,9 @@ class MessageController
 
             $sql = "
                 SELECT 
-                    COUNT(*) as total_unread,
-                    COUNT(CASE WHEN priority = 'urgent' THEN 1 END) as urgent_unread,
-                    COUNT(CASE WHEN priority = 'high' THEN 1 END) as high_unread,
-                    COUNT(CASE WHEN type = 'system' THEN 1 END) as system_unread,
-                    COUNT(CASE WHEN type = 'notification' THEN 1 END) as notification_unread
+                    COUNT(*) as total_unread
                 FROM messages 
-                WHERE receiver_id = :user_id AND read_at IS NULL AND deleted_at IS NULL
+                WHERE receiver_id = :user_id AND is_read = 0 AND deleted_at IS NULL
             ";
 
             $stmt = $this->db->prepare($sql);
@@ -414,10 +380,10 @@ class MessageController
                 'success' => true,
                 'data' => [
                     'total_unread' => intval($counts['total_unread']),
-                    'urgent_unread' => intval($counts['urgent_unread']),
-                    'high_unread' => intval($counts['high_unread']),
-                    'system_unread' => intval($counts['system_unread']),
-                    'notification_unread' => intval($counts['notification_unread'])
+                    'urgent_unread' => 0,
+                    'high_unread' => 0,
+                    'system_unread' => 0,
+                    'notification_unread' => 0
                 ]
             ]);
 
@@ -520,46 +486,29 @@ class MessageController
                 return $this->json($response, ['error' => 'Unauthorized'], 401);
             }
 
+            // Simplified stats for current schema (no type/priority columns)
             $sql = "
                 SELECT 
-                    type,
-                    priority,
-                    COUNT(*) as count,
-                    COUNT(CASE WHEN read_at IS NULL THEN 1 END) as unread_count
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread
                 FROM messages 
                 WHERE receiver_id = :user_id AND deleted_at IS NULL
-                GROUP BY type, priority
-                ORDER BY type, priority
             ";
 
             $stmt = $this->db->prepare($sql);
             $stmt->execute(['user_id' => $user['id']]);
-            $stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-            // 按类型分组统计
-            $typeStats = [];
-            foreach ($stats as $stat) {
-                $type = $stat['type'];
-                if (!isset($typeStats[$type])) {
-                    $typeStats[$type] = [
-                        'total' => 0,
-                        'unread' => 0,
-                        'priorities' => []
-                    ];
-                }
-                $typeStats[$type]['total'] += intval($stat['count']);
-                $typeStats[$type]['unread'] += intval($stat['unread_count']);
-                $typeStats[$type]['priorities'][$stat['priority']] = [
-                    'count' => intval($stat['count']),
-                    'unread' => intval($stat['unread_count'])
-                ];
-            }
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: ['total' => 0, 'unread' => 0];
 
             return $this->json($response, [
                 'success' => true,
                 'data' => [
-                    'by_type' => $typeStats,
-                    'raw_stats' => $stats
+                    'overview' => [
+                        'total' => intval($row['total']),
+                        'unread' => intval($row['unread']),
+                        'read' => max(0, intval($row['total']) - intval($row['unread']))
+                    ],
+                    'by_type' => [],
+                    'raw_stats' => []
                 ]
             ]);
 
@@ -574,7 +523,7 @@ class MessageController
      */
     private function markMessageAsRead(string $messageId): void
     {
-        $sql = "UPDATE messages SET read_at = NOW() WHERE id = :id AND read_at IS NULL";
+    $sql = "UPDATE messages SET is_read = 1, updated_at = NOW() WHERE id = :id AND is_read = 0";
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['id' => $messageId]);
     }

@@ -6,10 +6,6 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\Message;
 use CarbonTrack\Models\User;
-use CarbonTrack\Models\PointsTransaction;
-use CarbonTrack\Models\ExchangeTransaction;
-use CarbonTrack\Models\Product;
-use CarbonTrack\Models\CarbonActivity;
 use Monolog\Logger;
 
 class MessageService
@@ -32,19 +28,14 @@ class MessageService
         string $title,
         string $content,
         string $priority = Message::PRIORITY_NORMAL,
-        ?string $relatedEntityType = null,
-        ?string $relatedEntityId = null,
         ?int $senderId = null
     ): Message {
+        // Store only columns available in provided DB schema
         $message = Message::create([
             'sender_id' => $senderId,
             'receiver_id' => $receiverId,
             'title' => $title,
             'content' => $content,
-            'type' => $type,
-            'priority' => $priority,
-            'related_entity_type' => $relatedEntityType,
-            'related_entity_id' => $relatedEntityId,
             'is_read' => false
         ]);
 
@@ -100,10 +91,13 @@ class MessageService
     /**
      * Send carbon tracking submission notification
      */
-    public function sendCarbonTrackingSubmissionNotification(PointsTransaction $transaction): Message
+    /**
+     * @param mixed $transaction Backward-compatible transaction object/array
+     */
+    public function sendCarbonTrackingSubmissionNotification($transaction): Message
     {
-        $user = $transaction->user;
-        $activity = $transaction->activity;
+        $user = is_array($transaction) ? ($transaction['user'] ?? null) : ($transaction->user ?? null);
+        $activity = is_array($transaction) ? ($transaction['activity'] ?? null) : ($transaction->activity ?? null);
         
         $title = '碳减排记录提交成功 / Carbon Tracking Record Submitted';
         $content = "您的碳减排记录已成功提交，正在等待审核。\n\n" .
@@ -125,18 +119,21 @@ class MessageService
             $content,
             Message::TYPE_NOTIFICATION,
             Message::PRIORITY_NORMAL,
-            'points_transaction',
-            $transaction->id
+            null,
+            null
         );
     }
 
     /**
      * Send carbon tracking approval notification
      */
-    public function sendCarbonTrackingApprovalNotification(PointsTransaction $transaction, User $approver): Message
+    /**
+     * @param mixed $transaction Backward-compatible transaction object/array
+     */
+    public function sendCarbonTrackingApprovalNotification($transaction, User $approver): Message
     {
-        $user = $transaction->user;
-        $activity = $transaction->activity;
+        $user = is_array($transaction) ? ($transaction['user'] ?? null) : ($transaction->user ?? null);
+        $activity = is_array($transaction) ? ($transaction['activity'] ?? null) : ($transaction->activity ?? null);
         
         $title = '🎉 碳减排记录审核通过 / Carbon Tracking Record Approved';
         $content = "恭喜！您的碳减排记录已通过审核。\n\n" .
@@ -162,18 +159,21 @@ class MessageService
             $content,
             Message::TYPE_APPROVAL,
             Message::PRIORITY_HIGH,
-            'points_transaction',
-            $transaction->id
+            null,
+            null
         );
     }
 
     /**
      * Send carbon tracking rejection notification
      */
-    public function sendCarbonTrackingRejectionNotification(PointsTransaction $transaction, User $approver, ?string $reason = null): Message
+    /**
+     * @param mixed $transaction Backward-compatible transaction object/array
+     */
+    public function sendCarbonTrackingRejectionNotification($transaction, User $approver, ?string $reason = null): Message
     {
-        $user = $transaction->user;
-        $activity = $transaction->activity;
+        $user = is_array($transaction) ? ($transaction['user'] ?? null) : ($transaction->user ?? null);
+        $activity = is_array($transaction) ? ($transaction['activity'] ?? null) : ($transaction->activity ?? null);
         
         $title = '❌ 碳减排记录审核未通过 / Carbon Tracking Record Rejected';
         $content = "很抱歉，您的碳减排记录未通过审核。\n\n" .
@@ -207,18 +207,21 @@ class MessageService
             $content,
             Message::TYPE_REJECTION,
             Message::PRIORITY_HIGH,
-            'points_transaction',
-            $transaction->id
+            null,
+            null
         );
     }
 
     /**
      * Send product exchange confirmation notification
      */
-    public function sendProductExchangeConfirmation(ExchangeTransaction $exchange): Message
+    /**
+     * @param mixed $exchange Backward-compatible exchange object/array
+     */
+    public function sendProductExchangeConfirmation($exchange): Message
     {
-        $user = $exchange->user;
-        $product = $exchange->product;
+        $user = is_array($exchange) ? ($exchange['user'] ?? null) : ($exchange->user ?? null);
+        $product = is_array($exchange) ? ($exchange['product'] ?? null) : ($exchange->product ?? null);
         
         $title = '🛍️ 商品兑换成功 / Product Exchange Successful';
         $content = "您已成功兑换商品！\n\n" .
@@ -242,8 +245,8 @@ class MessageService
             $content,
             Message::TYPE_EXCHANGE,
             Message::PRIORITY_NORMAL,
-            'exchange_transaction',
-            $exchange->id
+            null,
+            null
         );
     }
 
@@ -310,10 +313,13 @@ class MessageService
     /**
      * Send admin notification for new pending transaction
      */
-    public function sendAdminPendingTransactionNotification(PointsTransaction $transaction): void
+    /**
+     * @param mixed $transaction Backward-compatible transaction object/array
+     */
+    public function sendAdminPendingTransactionNotification($transaction): void
     {
-        $user = $transaction->user;
-        $activity = $transaction->activity;
+        $user = is_array($transaction) ? ($transaction['user'] ?? null) : ($transaction->user ?? null);
+        $activity = is_array($transaction) ? ($transaction['activity'] ?? null) : ($transaction->activity ?? null);
         
         $title = '🔍 新的碳减排记录待审核 / New Carbon Record Pending Review';
         $content = "有新的碳减排记录需要审核：\n\n" .
@@ -341,8 +347,8 @@ class MessageService
                 $content,
                 Message::TYPE_NOTIFICATION,
                 Message::PRIORITY_HIGH,
-                'points_transaction',
-                $transaction->id
+                null,
+                null
             );
         }
     }
@@ -383,18 +389,19 @@ class MessageService
                     'id' => $message->id,
                     'title' => $message->title,
                     'content' => $message->content,
-                    'type' => $message->type,
-                    'priority' => $message->priority,
+                    // Columns may not exist in provided schema; return nulls for compatibility
+                    'type' => null,
+                    'priority' => null,
                     'is_read' => $message->is_read,
-                    'read_at' => $message->read_at,
+                    'read_at' => null,
                     'created_at' => $message->created_at,
                     'age' => $message->age,
                     'sender' => $message->sender ? [
                         'id' => $message->sender->id,
                         'username' => $message->sender->username
                     ] : null,
-                    'related_entity_type' => $message->related_entity_type,
-                    'related_entity_id' => $message->related_entity_id
+                    'related_entity_type' => null,
+                    'related_entity_id' => null
                 ];
             })->toArray(),
             'pagination' => [
@@ -437,10 +444,9 @@ class MessageService
     public function markAllAsRead(int $userId): int
     {
         $count = Message::forUser($userId)->unread()->count();
-        
+
         Message::forUser($userId)->unread()->update([
             'is_read' => true,
-            'read_at' => now()
         ]);
         
         $this->auditLogService->log([
@@ -501,7 +507,7 @@ class MessageService
         foreach ($userIds as $userId) {
             try {
                 if ($senderId) {
-                    $this->sendMessage($senderId, $userId, $title, $content, $type, $priority);
+                    $this->sendMessage($userId, $type, $title, $content, $priority, $senderId);
                 } else {
                     $this->sendSystemMessage($userId, $title, $content, $type, $priority);
                 }

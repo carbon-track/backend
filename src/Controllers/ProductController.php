@@ -18,6 +18,9 @@ class ProductController
     private AuthService $authService;
     private ErrorLogService $errorLogService;
 
+    private const ERR_INTERNAL = 'Internal server error';
+    private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
+
     public function __construct(
         PDO $db,
         MessageService $messageService,
@@ -122,8 +125,8 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -167,8 +170,8 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -276,9 +279,7 @@ class ProductController
                     'product_exchanged',
                     '商品兑换成功',
                     "您已成功兑换 {$product['name']} x{$quantity}，消耗 {$totalPoints} 积分。我们将尽快为您安排发货。",
-                    'normal',
-                    'point_exchanges',
-                    $exchangeId
+                    'normal'
                 );
 
                 // 通知管理员
@@ -300,7 +301,7 @@ class ProductController
             }
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
             return $this->json($response, ['error' => $e->getMessage()], 400);
         }
     }
@@ -333,8 +334,8 @@ class ProductController
             }
             return $this->json($response, ['success' => true, 'data' => $row]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -404,8 +405,8 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -484,8 +485,8 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -525,8 +526,8 @@ class ProductController
                 'data' => $exchange
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -723,9 +724,7 @@ class ProductController
                 'new_exchange_pending',
                 '新的商品兑换订单',
                 "用户 {$user['username']} 兑换了 {$product['name']} x{$quantity}，请及时处理。",
-                'high',
-                'point_exchanges',
-                $exchangeId
+                'high'
             );
         }
     }
@@ -758,9 +757,7 @@ class ProductController
             'exchange_status_updated',
             $title,
             $message,
-            'normal',
-            'point_exchanges',
-            $exchange['id']
+            'normal'
         );
     }
 

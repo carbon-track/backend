@@ -312,7 +312,8 @@ class AuthController
                     'code' => 'USER_NOT_FOUND'
                 ], 404);
             }
-            $stmt = $this->db->prepare('SELECT COUNT(*) FROM messages WHERE user_id = ? AND is_read = 0 AND deleted_at IS NULL');
+            // Align with messages schema: receiver_id holds the recipient user ID
+            $stmt = $this->db->prepare('SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0 AND deleted_at IS NULL');
             $stmt->execute([$user['id']]);
             $unread = (int)$stmt->fetchColumn();
             $userData = [

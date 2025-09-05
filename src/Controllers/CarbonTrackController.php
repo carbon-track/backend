@@ -21,6 +21,9 @@ class CarbonTrackController
     private AuthService $authService;
     private ErrorLogService $errorLogService;
 
+    private const ERR_INTERNAL = 'Internal server error';
+    private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
+
     public function __construct(
         PDO $db,
         CarbonCalculatorService $carbonCalculator,
@@ -117,9 +120,7 @@ class CarbonTrackController
                 'record_submitted',
                 '碳减排记录提交成功',
                 "您的{$activity['name_zh']}记录已提交，预计获得{$calculation['points_earned']}积分，等待审核。",
-                'normal',
-                'carbon_records',
-                $recordId
+                'normal'
             );
 
             // 通知管理员
@@ -133,8 +134,8 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -185,8 +186,8 @@ class CarbonTrackController
                 ]
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -284,8 +285,8 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -344,8 +345,8 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -427,8 +428,8 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -680,9 +681,7 @@ class CarbonTrackController
                 'new_record_pending',
                 '新的碳减排记录待审核',
                 "用户 {$user['username']} 提交了新的{$activity['name_zh']}记录，请及时审核。",
-                'high',
-                'carbon_records',
-                $recordId
+                'high'
             );
         }
     }
@@ -706,9 +705,7 @@ class CarbonTrackController
             $action === 'approve' ? 'record_approved' : 'record_rejected',
             $title,
             $message,
-            'normal',
-            'carbon_records',
-            $record['id']
+            'normal'
         );
     }
 
