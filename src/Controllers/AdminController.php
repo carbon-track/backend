@@ -46,42 +46,33 @@ class AdminController
             $page = max(1, (int)($params['page'] ?? 1));
             $limit = min(100, max(10, (int)($params['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
-            
-            $search = $params['search'] ?? '';
-            $status = $params['status'] ?? '';
-            // Note: DB schema does not have a `role` column; use is_admin boolean if admin filter is desired
-            $role = $params['role'] ?? '';
+
+            $search = trim((string)($params['search'] ?? ''));
+            $status = trim((string)($params['status'] ?? ''));
+            $role = trim((string)($params['role'] ?? ''));
             $sort = $params['sort'] ?? 'created_at_desc';
 
-            // 构建查询条件
             $whereConditions = ['u.deleted_at IS NULL'];
             $queryParams = [];
 
-            if (!empty($search)) {
-                // 当前数据库 schema 无 real_name 字段，这里仅按 username/email 搜索
+            if ($search !== '') {
                 $whereConditions[] = '(u.username LIKE :search OR u.email LIKE :search)';
                 $queryParams['search'] = "%{$search}%";
             }
-
-            if (!empty($status)) {
+            if ($status !== '') {
                 $whereConditions[] = 'u.status = :status';
                 $queryParams['status'] = $status;
             }
-
-            if (!empty($role)) {
+            if ($role !== '') {
                 if ($role === 'admin') {
                     $whereConditions[] = 'u.is_admin = 1';
                 } elseif ($role === 'user') {
-                    $whereConditions[] = 'u.is_admin = 0';
-                } else {
-                    // Unknown role filter; default to non-admin users to avoid SQL error
                     $whereConditions[] = 'u.is_admin = 0';
                 }
             }
 
             $whereClause = implode(' AND ', $whereConditions);
 
-            // 排序（兼容 PHP 7.4）
             $sortMap = [
                 'username_asc' => 'u.username ASC',
                 'username_desc' => 'u.username DESC',
@@ -94,10 +85,9 @@ class AdminController
             ];
             $orderBy = $sortMap[$sort] ?? 'u.created_at DESC';
 
-            // 获取用户列表
             $sql = "
                 SELECT 
-                    u.id, u.username, u.email, u.username AS real_name, NULL AS phone, u.school_id,
+                    u.id, u.username, u.email, NULL as real_name, NULL as phone, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,
@@ -113,7 +103,7 @@ class AdminController
                     FROM carbon_records
                     WHERE status = 'approved' AND deleted_at IS NULL
                     GROUP BY user_id
-                ) cr ON cr.user_id = u.id
+                ) cr ON u.id = cr.user_id
                 WHERE {$whereClause}
                 GROUP BY u.id
                 ORDER BY {$orderBy}
@@ -189,11 +179,10 @@ class AdminController
 
             $sql = "
                 SELECT 
-                    pt.id, pt.uid AS user_id, pt.activity_id,
-                    NULL AS amount, NULL AS unit,
-                    NULL AS carbon_amount, pt.points, pt.notes AS description, pt.img AS images,
+                    pt.id, pt.activity_id,
+                    pt.points, pt.notes, pt.img AS img,
                     pt.status, pt.created_at, pt.updated_at,
-                    u.username, u.email, u.username AS real_name,
+                    u.username, u.email,
                     ca.name_zh as activity_name_zh, ca.name_en as activity_name_en,
                     ca.category, ca.carbon_factor, ca.unit as activity_unit
                 FROM points_transactions pt
@@ -212,18 +201,17 @@ class AdminController
 
             // 处理图片数据
             foreach ($transactions as &$transaction) {
-                $img = $transaction['images'];
-                if ($img === null || $img === '') {
-                    $transaction['images'] = [];
-                } else {
-                    $trim = ltrim((string)$img);
-                    if ($trim !== '' && $trim[0] === '[') {
-                        $decoded = json_decode($trim, true);
-                        $transaction['images'] = is_array($decoded) ? $decoded : [];
+                $images = [];
+                if (!empty($transaction['img'])) {
+                    $maybe = json_decode((string)$transaction['img'], true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($maybe)) {
+                        $images = $maybe;
                     } else {
-                        $transaction['images'] = [(string)$img];
+                        $images = [(string)$transaction['img']];
                     }
                 }
+                $transaction['images'] = $images;
+                unset($transaction['img']);
             }
 
             // 获取总数
@@ -276,25 +264,26 @@ class AdminController
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 交易统计（total_carbon_saved 来自 carbon_records，而非 points_transactions）
+            // 交易统计
             $transactionStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_transactions,
                     COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_transactions,
                     COUNT(CASE WHEN status = 'approved' THEN 1 END) as approved_transactions,
                     COUNT(CASE WHEN status = 'rejected' THEN 1 END) as rejected_transactions,
-                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points ELSE 0 END), 0) as total_points_awarded
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points ELSE 0 END), 0) as total_points_awarded,
+                        0 as total_carbon_saved
                 FROM points_transactions 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 从 carbon_records 统计总碳减排量（仅统计已审核通过的数据）
-            $totalCarbonSaved = $this->db->query("
-                SELECT COALESCE(SUM(carbon_saved), 0)
-                FROM carbon_records
-                WHERE status = 'approved' AND deleted_at IS NULL
-            ")->fetchColumn();
-            $transactionStats['total_carbon_saved'] = $totalCarbonSaved !== false ? (string)$totalCarbonSaved : '0';
+                // 从 carbon_records 统计已审核通过的碳减排总量
+                $carbonSavedTotal = $this->db->query("
+                    SELECT COALESCE(SUM(carbon_saved), 0)
+                    FROM carbon_records
+                    WHERE status = 'approved' AND deleted_at IS NULL
+                ")->fetchColumn();
+                $transactionStats['total_carbon_saved'] = $carbonSavedTotal !== false ? (float)$carbonSavedTotal : 0.0;
 
             // 商品兑换统计（使用 point_exchanges 表，注意列名为 points_used）
             $exchangeStats = $this->db->query("
@@ -316,51 +305,50 @@ class AdminController
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 活动统计（当前表使用 is_active 标识）
+            // 活动统计
             $activityStats = $this->db->query("
                 SELECT 
                     COUNT(*) as total_activities,
-                    COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_activities
+                        COUNT(CASE WHEN is_active = 1 THEN 1 END) as active_activities
                 FROM carbon_activities 
                 WHERE deleted_at IS NULL
             ")->fetch(PDO::FETCH_ASSOC);
 
-            // 最近30天的趋势数据：
-            // - 交易数来自 points_transactions（所有状态，过滤删除标记）
-            // - 碳减排来自 carbon_records（仅已通过）
-            $txRows = $this->db->query("
-                SELECT DATE(created_at) AS d, COUNT(*) AS cnt
-                FROM points_transactions
-                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                  AND deleted_at IS NULL
-                GROUP BY DATE(created_at)
-            ")->fetchAll(PDO::FETCH_KEY_PAIR);
+            // 最近30天的趋势数据
+                // 最近30天的趋势数据：交易数量来自 points_transactions，碳减排来自 carbon_records
+                $trendTransactions = $this->db->query("
+                    SELECT DATE(created_at) as date, COUNT(*) as transactions
+                    FROM points_transactions
+                    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND deleted_at IS NULL
+                    GROUP BY DATE(created_at)
+                ")->fetchAll(PDO::FETCH_ASSOC);
 
-            $crStmt = $this->db->query("
-                SELECT DATE(created_at) AS d, COALESCE(SUM(carbon_saved),0) AS cs
-                FROM carbon_records
-                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-                  AND status = 'approved'
-                  AND deleted_at IS NULL
-                GROUP BY DATE(created_at)
-            ");
-            $crRows = [];
-            foreach ($crStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                $crRows[$row['d']] = $row['cs'];
-            }
+                $trendCarbon = $this->db->query("
+                    SELECT DATE(created_at) as date, COALESCE(SUM(carbon_saved), 0) as carbon_saved
+                    FROM carbon_records
+                    WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) AND deleted_at IS NULL AND status = 'approved'
+                    GROUP BY DATE(created_at)
+                ")->fetchAll(PDO::FETCH_ASSOC);
 
-            // 生成日期序列并合并
-            $trendData = [];
-            $end = new \DateTime('today');
-            $start = (clone $end)->modify('-29 days'); // 共30天
-            for ($dt = clone $start; $dt <= $end; $dt->modify('+1 day')) {
-                $k = $dt->format('Y-m-d');
-                $trendData[] = [
-                    'date' => $k,
-                    'transactions' => isset($txRows[$k]) ? (int)$txRows[$k] : 0,
-                    'carbon_saved' => isset($crRows[$k]) ? (float)$crRows[$k] : 0.0,
-                ];
-            }
+                // 合并趋势数据（补全缺失日期）
+                $trendMap = [];
+                for ($i = 29; $i >= 0; $i--) {
+                    $d = date('Y-m-d', strtotime("-{$i} days"));
+                    $trendMap[$d] = ['date' => $d, 'transactions' => 0, 'carbon_saved' => 0.0];
+                }
+                foreach ($trendTransactions as $row) {
+                    $d = $row['date'];
+                    if (isset($trendMap[$d])) {
+                        $trendMap[$d]['transactions'] = (int)($row['transactions'] ?? 0);
+                    }
+                }
+                foreach ($trendCarbon as $row) {
+                    $d = $row['date'];
+                    if (isset($trendMap[$d])) {
+                        $trendMap[$d]['carbon_saved'] = (float)($row['carbon_saved'] ?? 0);
+                    }
+                }
+                    $trendData = array_values($trendMap); // This line remains unchanged
 
             return $this->jsonResponse($response, [
                 'success' => true,
