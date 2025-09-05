@@ -167,8 +167,8 @@ return function (App $app) {
     $registerAdminRoutes = function (RouteCollectorProxy $group) {
         $group->group('/admin', function (RouteCollectorProxy $admin) {
             $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
-            $admin->put(PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
-            $admin->delete(PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
+            $admin->put(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
+            $admin->delete(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);

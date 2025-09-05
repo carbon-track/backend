@@ -713,7 +713,7 @@ class ProductController
     private function notifyAdminsNewExchange(string $exchangeId, array $user, array $product, int $quantity): void
     {
         // 获取所有管理员
-        $sql = "SELECT id FROM users WHERE role = 'admin' AND deleted_at IS NULL";
+        $sql = "SELECT id FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute();
         $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);

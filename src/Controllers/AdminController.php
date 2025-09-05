@@ -49,6 +49,7 @@ class AdminController
             
             $search = $params['search'] ?? '';
             $status = $params['status'] ?? '';
+            // Note: DB schema does not have a `role` column; use is_admin boolean if admin filter is desired
             $role = $params['role'] ?? '';
             $sort = $params['sort'] ?? 'created_at_desc';
 
@@ -67,8 +68,14 @@ class AdminController
             }
 
             if (!empty($role)) {
-                $whereConditions[] = 'u.role = :role';
-                $queryParams['role'] = $role;
+                if ($role === 'admin') {
+                    $whereConditions[] = 'u.is_admin = 1';
+                } elseif ($role === 'user') {
+                    $whereConditions[] = 'u.is_admin = 0';
+                } else {
+                    // Unknown role filter; default to non-admin users to avoid SQL error
+                    $whereConditions[] = 'u.is_admin = 0';
+                }
             }
 
             $whereClause = implode(' AND ', $whereConditions);
@@ -90,7 +97,7 @@ class AdminController
             $sql = "
                 SELECT 
                     u.id, u.username, u.email, u.real_name, u.phone, u.school_id,
-                    u.points, u.role, u.status, u.avatar_id, u.created_at, u.updated_at,
+                    u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,
                     COUNT(pt.id) as total_transactions,
@@ -427,6 +434,116 @@ class AdminController
                 ]
             ]);
 
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    /**
+     * 管理员更新用户信息（目前支持：is_admin, status）
+     */
+    public function updateUser(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $userId = (int)($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            $data = $request->getParsedBody() ?: [];
+
+            $fields = [];
+            $params = [];
+
+            if (array_key_exists('is_admin', $data)) {
+                $fields[] = 'is_admin = :is_admin';
+                $params['is_admin'] = (int)((bool)$data['is_admin']);
+            }
+
+            if (array_key_exists('status', $data)) {
+                $allowed = ['active', 'inactive'];
+                $status = in_array($data['status'], $allowed, true) ? $data['status'] : 'inactive';
+                $fields[] = 'status = :status';
+                $params['status'] = $status;
+            }
+
+            if (empty($fields)) {
+                return $this->jsonResponse($response, [
+                    'error' => 'No valid fields to update',
+                    'code' => 'NO_UPDATE_FIELDS'
+                ], 400);
+            }
+
+            $sql = 'UPDATE users SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
+            $stmt = $this->db->prepare($sql);
+            foreach ($params as $k => $v) {
+                $stmt->bindValue(':' . $k, $v);
+            }
+            $stmt->bindValue(':id', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            // 审计日志
+            $this->auditLog->log(
+                $admin['id'],
+                'admin_user_updated',
+                'user',
+                $userId,
+                ['updated_fields' => array_keys($data)]
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'User updated successfully'
+            ]);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    /**
+     * 管理员删除用户（软删除）
+     */
+    public function deleteUser(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $userId = (int)($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            // 不允许删除自己
+            if ((int)$admin['id'] === $userId) {
+                return $this->jsonResponse($response, ['error' => 'Cannot delete yourself'], 400);
+            }
+
+            $stmt = $this->db->prepare('UPDATE users SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL');
+            $stmt->bindValue(':id', $userId, PDO::PARAM_INT);
+            $stmt->execute();
+
+            $this->auditLog->log(
+                $admin['id'],
+                'admin_user_deleted',
+                'user',
+                $userId,
+                []
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'User deleted successfully'
+            ]);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
