@@ -129,7 +129,17 @@ class CarbonCalculatorService
             ];
         }
         
-        $totalCarbon = array_sum(array_column($activities, 'carbon_amount'));
+        // 兼容不同字段名：优先 carbon_saved，其次 carbon_savings，最后 carbon_amount
+        $totalCarbon = 0.0;
+        foreach ($activities as $act) {
+            if (isset($act['carbon_saved'])) {
+                $totalCarbon += (float)$act['carbon_saved'];
+            } elseif (isset($act['carbon_savings'])) {
+                $totalCarbon += (float)$act['carbon_savings'];
+            } elseif (isset($act['carbon_amount'])) {
+                $totalCarbon += (float)$act['carbon_amount'];
+            }
+        }
         $totalPoints = array_sum(array_column($activities, 'points'));
         $totalCount = count($activities);
         

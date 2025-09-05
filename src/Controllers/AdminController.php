@@ -58,7 +58,8 @@ class AdminController
             $queryParams = [];
 
             if (!empty($search)) {
-                $whereConditions[] = '(u.username LIKE :search OR u.email LIKE :search OR u.real_name LIKE :search)';
+                // 当前数据库 schema 无 real_name 字段，这里仅按 username/email 搜索
+                $whereConditions[] = '(u.username LIKE :search OR u.email LIKE :search)';
                 $queryParams['search'] = "%{$search}%";
             }
 
@@ -81,7 +82,7 @@ class AdminController
             $whereClause = implode(' AND ', $whereConditions);
 
             // 排序（兼容 PHP 7.4）
-                            COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved
+            $sortMap = [
                 'username_asc' => 'u.username ASC',
                 'username_desc' => 'u.username DESC',
                 'email_asc' => 'u.email ASC',
@@ -96,17 +97,23 @@ class AdminController
             // 获取用户列表
             $sql = "
                 SELECT 
-                    u.id, u.username, u.email, u.real_name, u.phone, u.school_id,
+                    u.id, u.username, u.email, u.username AS real_name, NULL AS phone, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,
                     COUNT(pt.id) as total_transactions,
                     COALESCE(SUM(CASE WHEN pt.status = 'approved' THEN pt.points ELSE 0 END), 0) as earned_points,
-                    COALESCE(SUM(CASE WHEN pt.status = 'approved' THEN pt.carbon_amount ELSE 0 END), 0) as total_carbon_saved
+                    COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
                 LEFT JOIN avatars a ON u.avatar_id = a.id
-                LEFT JOIN points_transactions pt ON u.id = pt.user_id AND pt.deleted_at IS NULL
+                LEFT JOIN points_transactions pt ON u.id = pt.uid AND pt.deleted_at IS NULL
+                LEFT JOIN (
+                    SELECT user_id, COALESCE(SUM(carbon_saved), 0) AS total_carbon_saved
+                    FROM carbon_records
+                    WHERE status = 'approved' AND deleted_at IS NULL
+                    GROUP BY user_id
+                ) cr ON cr.user_id = u.id
                 WHERE {$whereClause}
                 GROUP BY u.id
                 ORDER BY {$orderBy}
@@ -182,35 +189,20 @@ class AdminController
 
             $sql = "
                 SELECT 
-                    pt.id, pt.user_id, pt.activity_id, pt.amount, pt.unit,
-                    pt.carbon_amount, pt.points, pt.description, pt.images,
+                    pt.id, pt.uid AS user_id, pt.activity_id,
+                    NULL AS amount, NULL AS unit,
+                    NULL AS carbon_amount, pt.points, pt.notes AS description, pt.img AS images,
                     pt.status, pt.created_at, pt.updated_at,
-                    u.username, u.email, u.real_name,
+                    u.username, u.email, u.username AS real_name,
                     ca.name_zh as activity_name_zh, ca.name_en as activity_name_en,
                     ca.category, ca.carbon_factor, ca.unit as activity_unit
                 FROM points_transactions pt
-                JOIN users u ON pt.user_id = u.id
+                JOIN users u ON pt.uid = u.id
                 LEFT JOIN carbon_activities ca ON pt.activity_id = ca.id
                 WHERE pt.status = 'pending' AND pt.deleted_at IS NULL
                 ORDER BY pt.created_at ASC
                 LIMIT :limit OFFSET :offset
             ";
-                $sql = "
-                    SELECT 
-                        pt.id, pt.uid AS user_id, pt.activity_id,
-                        NULL AS amount, NULL AS unit,
-                        NULL AS carbon_amount, pt.points, pt.notes AS description, pt.img AS images,
-                        pt.status, pt.created_at, pt.updated_at,
-                        u.username, u.email, u.real_name,
-                        ca.name_zh as activity_name_zh, ca.name_en as activity_name_en,
-                        ca.category, ca.carbon_factor, ca.unit as activity_unit
-                    FROM points_transactions pt
-                    JOIN users u ON pt.uid = u.id
-                    LEFT JOIN carbon_activities ca ON pt.activity_id = ca.id
-                    WHERE pt.status = 'pending' AND pt.deleted_at IS NULL
-                    ORDER BY pt.created_at ASC
-                    LIMIT :limit OFFSET :offset
-                ";
 
             $stmt = $this->db->prepare($sql);
             $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
@@ -220,7 +212,18 @@ class AdminController
 
             // 处理图片数据
             foreach ($transactions as &$transaction) {
-                $transaction['images'] = $transaction['images'] ? json_decode($transaction['images'], true) : [];
+                $img = $transaction['images'];
+                if ($img === null || $img === '') {
+                    $transaction['images'] = [];
+                } else {
+                    $trim = ltrim((string)$img);
+                    if ($trim !== '' && $trim[0] === '[') {
+                        $decoded = json_decode($trim, true);
+                        $transaction['images'] = is_array($decoded) ? $decoded : [];
+                    } else {
+                        $transaction['images'] = [(string)$img];
+                    }
+                }
             }
 
             // 获取总数
