@@ -533,7 +533,12 @@ class CarbonTrackController
     }
 
     /**
-     * 管理员获取待审核记录
+     * 管理员获取碳减排记录列表（支持筛选与排序）
+     * 支持的查询参数：
+     * - status: pending|approved|rejected（留空为全部）
+     * - search: 关键字，匹配用户名/邮箱/活动名（中英）
+     * - sort: created_at_asc|created_at_desc（默认 created_at_asc）
+     * - page, limit: 分页
      */
     public function getPendingRecords(Request $request, Response $response): Response
     {
@@ -547,14 +552,36 @@ class CarbonTrackController
             $page = max(1, intval($params['page'] ?? 1));
             $limit = min(50, max(10, intval($params['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
+            $status = isset($params['status']) ? trim((string)$params['status']) : '';
+            $search = isset($params['search']) ? trim((string)$params['search']) : '';
+            $sort = in_array(($params['sort'] ?? 'created_at_asc'), ['created_at_asc', 'created_at_desc'], true)
+                ? $params['sort']
+                : 'created_at_asc';
+            $order = $sort === 'created_at_desc' ? 'DESC' : 'ASC';
 
-            // 获取总数
+            // 构建筛选条件
+            $where = ['r.deleted_at IS NULL'];
+            $bindings = [];
+            if ($status !== '') {
+                $where[] = 'r.status = :status';
+                $bindings['status'] = $status;
+            }
+            if ($search !== '') {
+                $where[] = '(u.username LIKE :search OR u.email LIKE :search OR a.name_zh LIKE :search OR a.name_en LIKE :search)';
+                $bindings['search'] = "%{$search}%";
+            }
+            $whereClause = implode(' AND ', $where);
+
+            // 获取总数（包含联表以支持 search 条件）
             $countSql = "
                 SELECT COUNT(*) as total
                 FROM carbon_records r
-                WHERE r.status = 'pending' AND r.deleted_at IS NULL
+                LEFT JOIN users u ON r.user_id = u.id
+                LEFT JOIN carbon_activities a ON r.activity_id = a.id
+                WHERE {$whereClause}
             ";
             $countStmt = $this->db->prepare($countSql);
+            foreach ($bindings as $k => $v) { $countStmt->bindValue($k, $v); }
             $countStmt->execute();
             $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
 
@@ -572,12 +599,13 @@ class CarbonTrackController
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
                 LEFT JOIN users u ON r.user_id = u.id
                 LEFT JOIN schools s ON u.school_id = s.id
-                WHERE r.status = 'pending' AND r.deleted_at IS NULL
-                ORDER BY r.created_at ASC
+                WHERE {$whereClause}
+                ORDER BY r.created_at {$order}
                 LIMIT :limit OFFSET :offset
             ";
 
             $stmt = $this->db->prepare($sql);
+            foreach ($bindings as $k => $v) { $stmt->bindValue($k, $v); }
             $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
             $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
             $stmt->execute();

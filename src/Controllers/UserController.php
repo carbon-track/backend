@@ -491,13 +491,15 @@ class UserController
             }
 
             // 1) 积分汇总（按单元测试约定的准备顺序）
+            // 兼容 points_transactions 的用户列：优先 user_id，不存在则回退 uid
+            $ptUserCol = $this->resolvePointsUserIdColumn();
             $pointsStmt = $this->db->prepare("SELECT 
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN points ELSE 0 END), 0) AS total_earned,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN -points ELSE 0 END), 0) AS total_spent,
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN 1 ELSE 0 END), 0) AS earn_count,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN 1 ELSE 0 END), 0) AS spend_count,
                     COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count
-                FROM points_transactions WHERE user_id = :uid AND deleted_at IS NULL");
+                FROM points_transactions WHERE {$ptUserCol} = :uid AND deleted_at IS NULL");
             $pointsStmt->execute(['uid' => $user['id']]);
             $pointsRow = $pointsStmt->fetch(PDO::FETCH_ASSOC) ?: [
                 'total_earned' => 0,
@@ -508,11 +510,19 @@ class UserController
             ];
 
             // 2) 月度统计（可用于前端趋势图）
-            $monthlyStmt = $this->db->prepare("SELECT strftime('%Y-%m', created_at) AS month,
+            // 兼容 MySQL/SQLite 的时间分组函数
+            try {
+                $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+            } catch (\Throwable $e) {
+                $driver = 'mysql';
+            }
+            $monthExpr = $driver === 'sqlite' ? "strftime('%Y-%m', created_at)" : "DATE_FORMAT(created_at, '%Y-%m')";
+            $monthlySql = "SELECT {$monthExpr} AS month,
                     COUNT(*) AS records_count,
                     COALESCE(SUM(carbon_saved), 0) AS carbon_saved,
                     COALESCE(SUM(points_earned), 0) AS points_earned
-                FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL GROUP BY month ORDER BY month DESC LIMIT 12");
+                FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL GROUP BY month ORDER BY month DESC LIMIT 12";
+            $monthlyStmt = $this->db->prepare($monthlySql);
             $monthlyStmt->execute(['uid' => $user['id']]);
             $monthly = $monthlyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
@@ -713,17 +723,40 @@ class UserController
     }
 
     /**
-     * 解析 points_transactions 表中用户ID列名（兼容 uid/user_id）
+     * 解析 points_transactions 表中用户ID列名（兼容 uid/user_id，适配 MySQL/SQLite）
      */
     private function resolvePointsUserIdColumn(): string
     {
         try {
-            $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
-            $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
-            return $hasUserId ? 'user_id' : 'uid';
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+            $column = 'uid'; // 默认更通用的列名
+
+            if ($driver === 'mysql') {
+                // MySQL: 使用 SHOW COLUMNS 检测列是否存在
+                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
+                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                $column = $hasUserId ? 'user_id' : 'uid';
+            } elseif ($driver === 'sqlite') {
+                // SQLite: 使用 PRAGMA table_info 检测列是否存在
+                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
+                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $names = array_map(static function ($c) { return $c['name'] ?? ''; }, $cols);
+                if (in_array('user_id', $names, true)) {
+                    $column = 'user_id';
+                } elseif (in_array('uid', $names, true)) {
+                    $column = 'uid';
+                } else {
+                    $column = 'uid';
+                }
+            } else {
+                // 其他驱动，尽量选择兼容性更高的 uid
+                $column = 'uid';
+            }
+
+            return $column;
         } catch (\Throwable $e) {
-            // 默认 user_id
-            return 'user_id';
+            // 发生异常时使用 uid，避免 Unknown column 错误
+            return 'uid';
         }
     }
 
