@@ -580,11 +580,21 @@ class CarbonTrackController
 
             $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // 处理图片字段
+            // 处理图片字段与前端期望的别名
             foreach ($records as &$record) {
                 $record['images'] = $record['images'] ? json_decode($record['images'], true) : [];
+                // 前端列表兼容字段
+                $record['user_username'] = $record['username'] ?? null;
+                $record['user_email'] = $record['email'] ?? null;
+                $record['activity_name'] = $record['activity_name_zh'] ?? ($record['activity_name_en'] ?? null);
+                $record['activity_category'] = $record['category'] ?? null;
+                $record['data_value'] = $record['amount'] ?? null;
+                $record['activity_unit'] = $record['unit'] ?? null;
+                $record['carbon_saved'] = $record['carbon_saved'] ?? ($record['carbon_amount'] ?? ($record['carbon_savings'] ?? 0));
+                // points_earned 字段已存在
             }
 
+            $pages = (int)ceil($total / $limit);
             return $this->json($response, [
                 'success' => true,
                 'data' => $records,
@@ -592,7 +602,12 @@ class CarbonTrackController
                     'page' => $page,
                     'limit' => $limit,
                     'total' => intval($total),
-                    'pages' => ceil($total / $limit)
+                    'pages' => $pages,
+                    // 别名，方便前端统一解析
+                    'current_page' => $page,
+                    'per_page' => $limit,
+                    'total_items' => intval($total),
+                    'total_pages' => $pages
                 ]
             ]);
 

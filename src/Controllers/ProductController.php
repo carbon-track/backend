@@ -19,6 +19,7 @@ class ProductController
     private ErrorLogService $errorLogService;
 
     private const ERR_INTERNAL = 'Internal server error';
+    private const ERR_ADMIN_REQUIRED = 'Admin access required';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
 
     public function __construct(
@@ -42,13 +43,25 @@ class ProductController
     {
         try {
             $params = $request->getQueryParams();
+            // 管理端调用该方法时，会经过 AdminMiddleware，这里再做一次判定用于放宽筛选条件
+            $currentUser = null;
+            try { $currentUser = $this->authService->getCurrentUser($request); } catch (\Throwable $ignore) {}
+            $isAdminCall = $currentUser && $this->authService->isAdminUser($currentUser);
             $page = max(1, intval($params['page'] ?? 1));
             $limit = min(50, max(10, intval($params['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
 
             // 构建查询条件
-            $where = ['p.deleted_at IS NULL', 'p.status = "active"'];
+            $where = ['p.deleted_at IS NULL'];
             $bindings = [];
+
+            // 前台商品列表默认仅展示 active；管理员列表可查看所有或按 status 过滤
+            if (!$isAdminCall) {
+                $where[] = 'p.status = "active"';
+            } else if (!empty($params['status'])) {
+                $where[] = 'p.status = :status';
+                $bindings['status'] = $params['status'];
+            }
 
             if (!empty($params['category'])) {
                 $where[] = 'p.category = :category';
@@ -109,8 +122,24 @@ class ProductController
             foreach ($products as &$product) {
                 $product['images'] = $product['images'] ? json_decode($product['images'], true) : [];
                 $product['is_available'] = $product['stock'] > 0 || $product['stock'] === -1; // -1表示无限库存
+                // 兼容前端显示字段：提供 image_url 与 price 的别名
+                if (empty($product['image_url'])) {
+                    // 优先使用 image_path，其次 images[0].public_url
+                    $firstImage = null;
+                    if (is_array($product['images']) && count($product['images']) > 0) {
+                        $first = $product['images'][0];
+                        if (is_array($first)) {
+                            $firstImage = $first['public_url'] ?? ($first['url'] ?? null);
+                        } elseif (is_string($first)) {
+                            $firstImage = $first;
+                        }
+                    }
+                    $product['image_url'] = $product['image_path'] ?: ($firstImage ?: null);
+                }
+                $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
             }
 
+            $pages = (int)ceil($total / $limit);
             return $this->json($response, [
                 'success' => true,
                 'data' => [
@@ -119,7 +148,12 @@ class ProductController
                         'page' => $page,
                         'limit' => $limit,
                         'total' => intval($total),
-                        'pages' => ceil($total / $limit)
+                        'pages' => $pages,
+                        // 别名，方便前端统一解析
+                        'current_page' => $page,
+                        'per_page' => $limit,
+                        'total_items' => intval($total),
+                        'total_pages' => $pages
                     ]
                 ]
             ]);
@@ -163,6 +197,20 @@ class ProductController
             // 处理图片字段
             $product['images'] = $product['images'] ? json_decode($product['images'], true) : [];
             $product['is_available'] = $product['stock'] > 0 || $product['stock'] === -1;
+            // 别名字段，兼容前端
+            if (empty($product['image_url'])) {
+                $firstImage = null;
+                if (is_array($product['images']) && count($product['images']) > 0) {
+                    $first = $product['images'][0];
+                    if (is_array($first)) {
+                        $firstImage = $first['public_url'] ?? ($first['url'] ?? null);
+                    } elseif (is_string($first)) {
+                        $firstImage = $first;
+                    }
+                }
+                $product['image_url'] = $product['image_path'] ?: ($firstImage ?: null);
+            }
+            $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
 
             return $this->json($response, [
                 'success' => true,
@@ -187,7 +235,7 @@ class ProductController
             }
 
             $data = $request->getParsedBody();
-            
+
             if (!isset($data['product_id'])) {
                 return $this->json($response, ['error' => 'Product ID is required'], 400);
             }
@@ -418,7 +466,7 @@ class ProductController
         try {
             $user = $this->authService->getCurrentUser($request);
             if (!$user || !$this->authService->isAdminUser($user)) {
-                return $this->json($response, ['error' => 'Admin access required'], 403);
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
             }
 
             $params = $request->getQueryParams();
@@ -454,7 +502,9 @@ class ProductController
                     e.*,
                     u.username,
                     u.email,
-                    p.name as current_product_name
+                    p.name as current_product_name,
+                    p.image_path as current_product_image_path,
+                    p.images as current_product_images
                 FROM point_exchanges e
                 LEFT JOIN users u ON e.user_id = u.id
                 LEFT JOIN products p ON e.product_id = p.id
@@ -473,6 +523,43 @@ class ProductController
 
             $exchanges = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // 映射前端期望字段
+            foreach ($exchanges as &$ex) {
+                // 别名：用户与积分
+                $ex['user_username'] = $ex['username'] ?? null;
+                $ex['user_email'] = $ex['email'] ?? null;
+                if (!isset($ex['total_points']) && isset($ex['points_used'])) {
+                    $ex['total_points'] = (int)$ex['points_used'];
+                }
+                if (!isset($ex['shipping_address']) && isset($ex['delivery_address'])) {
+                    $ex['shipping_address'] = $ex['delivery_address'];
+                }
+                if (!isset($ex['admin_notes']) && isset($ex['notes'])) {
+                    $ex['admin_notes'] = $ex['notes'];
+                }
+
+                // 产品图片URL
+                $imgUrl = null;
+                if (!empty($ex['current_product_images'])) {
+                    $imgs = json_decode($ex['current_product_images'], true);
+                    if (is_array($imgs) && count($imgs) > 0) {
+                        $first = $imgs[0];
+                        if (is_array($first)) {
+                            $imgUrl = $first['public_url'] ?? ($first['url'] ?? null);
+                        } elseif (is_string($first)) {
+                            $imgUrl = $first;
+                        }
+                    }
+                }
+                if (!$imgUrl && !empty($ex['current_product_image_path'])) {
+                    $imgUrl = $ex['current_product_image_path'];
+                }
+                if (!isset($ex['product_image_url'])) {
+                    $ex['product_image_url'] = $imgUrl;
+                }
+            }
+
+            $pages = (int)ceil($total / $limit);
             return $this->json($response, [
                 'success' => true,
                 'data' => $exchanges,
@@ -480,7 +567,12 @@ class ProductController
                     'page' => $page,
                     'limit' => $limit,
                     'total' => intval($total),
-                    'pages' => ceil($total / $limit)
+                    'pages' => $pages,
+                    // 别名
+                    'current_page' => $page,
+                    'per_page' => $limit,
+                    'total_items' => intval($total),
+                    'total_pages' => $pages
                 ]
             ]);
 
@@ -498,7 +590,7 @@ class ProductController
         try {
             $user = $this->authService->getCurrentUser($request);
             if (!$user || !$this->authService->isAdminUser($user)) {
-                return $this->json($response, ['error' => 'Admin access required'], 403);
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
             }
 
             $exchangeId = $args['id'];
@@ -507,7 +599,9 @@ class ProductController
                     e.*,
                     u.username,
                     u.email,
-                    p.name as current_product_name
+                    p.name as current_product_name,
+                    p.image_path as current_product_image_path,
+                    p.images as current_product_images
                 FROM point_exchanges e
                 LEFT JOIN users u ON e.user_id = u.id
                 LEFT JOIN products p ON e.product_id = p.id
@@ -520,6 +614,36 @@ class ProductController
             if (!$exchange) {
                 return $this->json($response, ['error' => 'Exchange not found'], 404);
             }
+
+            // 映射别名
+            $exchange['user_username'] = $exchange['username'] ?? null;
+            $exchange['user_email'] = $exchange['email'] ?? null;
+            if (!isset($exchange['total_points']) && isset($exchange['points_used'])) {
+                $exchange['total_points'] = (int)$exchange['points_used'];
+            }
+            if (!isset($exchange['shipping_address']) && isset($exchange['delivery_address'])) {
+                $exchange['shipping_address'] = $exchange['delivery_address'];
+            }
+            if (!isset($exchange['admin_notes']) && isset($exchange['notes'])) {
+                $exchange['admin_notes'] = $exchange['notes'];
+            }
+            // 产品图片
+            $imgUrl = null;
+            if (!empty($exchange['current_product_images'])) {
+                $imgs = json_decode($exchange['current_product_images'], true);
+                if (is_array($imgs) && count($imgs) > 0) {
+                    $first = $imgs[0];
+                    if (is_array($first)) {
+                        $imgUrl = $first['public_url'] ?? ($first['url'] ?? null);
+                    } elseif (is_string($first)) {
+                        $imgUrl = $first;
+                    }
+                }
+            }
+            if (!$imgUrl && !empty($exchange['current_product_image_path'])) {
+                $imgUrl = $exchange['current_product_image_path'];
+            }
+            $exchange['product_image_url'] = $exchange['product_image_url'] ?? $imgUrl;
 
             return $this->json($response, [
                 'success' => true,
@@ -539,7 +663,7 @@ class ProductController
         try {
             $user = $this->authService->getCurrentUser($request);
             if (!$user || !$this->authService->isAdminUser($user)) {
-                return $this->json($response, ['error' => 'Admin access required'], 403);
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
             }
 
             $exchangeId = $args['id'];
@@ -594,7 +718,7 @@ class ProductController
 
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
@@ -609,7 +733,7 @@ class ProductController
                     category,
                     COUNT(*) as product_count
                 FROM products 
-                WHERE status = 'active' AND deleted_at IS NULL
+                WHERE deleted_at IS NULL
                 GROUP BY category
                 ORDER BY category
             ";
@@ -625,7 +749,151 @@ class ProductController
 
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
+    /**
+     * 管理员创建商品
+     */
+    public function createProduct(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
+            }
+
+            $data = $request->getParsedBody() ?: [];
+
+            // 必填校验
+            if (empty($data['name']) || !isset($data['points_required']) || !isset($data['stock'])) {
+                return $this->json($response, ['error' => 'Missing required fields: name, points_required, stock'], 400);
+            }
+
+            $sql = "
+                INSERT INTO products (
+                    name, category, points_required, description, image_path, images,
+                    stock, status, sort_order, created_at
+                ) VALUES (
+                    :name, :category, :points_required, :description, :image_path, :images,
+                    :stock, :status, :sort_order, NOW()
+                )
+            ";
+
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute([
+                'name' => $data['name'],
+                'category' => $data['category'] ?? null,
+                'points_required' => (int)$data['points_required'],
+                'description' => $data['description'] ?? '',
+                'image_path' => $data['image_path'] ?? ($data['image_url'] ?? null),
+                'images' => isset($data['images']) ? (is_string($data['images']) ? $data['images'] : json_encode($data['images'])) : null,
+                'stock' => (int)$data['stock'],
+                'status' => in_array(($data['status'] ?? 'active'), ['active', 'inactive'], true) ? $data['status'] : 'active',
+                'sort_order' => (int)($data['sort_order'] ?? 0),
+            ]);
+
+            $newId = (int)$this->db->lastInsertId();
+
+            // 审计日志
+            $this->auditLog->log($user['id'], 'product_created', 'products', (string)$newId, [
+                'name' => $data['name']
+            ]);
+
+            return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully']);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
+    /**
+     * 管理员更新商品
+     */
+    public function updateProduct(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
+            }
+
+            $id = (int)($args['id'] ?? 0);
+            if ($id <= 0) {
+                return $this->json($response, ['error' => 'Invalid product id'], 400);
+            }
+
+            $data = $request->getParsedBody() ?: [];
+
+            $fields = [];
+            $params = ['id' => $id];
+
+            $assign = function(string $column, $value) use (&$fields, &$params) {
+                $fields[] = "$column = :$column";
+                $params[$column] = $value;
+            };
+
+            foreach (['name','category','description'] as $col) {
+                if (array_key_exists($col, $data)) { $assign($col, $data[$col]); }
+            }
+            if (array_key_exists('points_required', $data)) { $assign('points_required', (int)$data['points_required']); }
+            if (array_key_exists('stock', $data)) { $assign('stock', (int)$data['stock']); }
+            if (array_key_exists('status', $data)) {
+                $status = in_array($data['status'], ['active','inactive'], true) ? $data['status'] : 'inactive';
+                $assign('status', $status);
+            }
+            if (array_key_exists('sort_order', $data)) { $assign('sort_order', (int)$data['sort_order']); }
+            if (array_key_exists('image_path', $data) || array_key_exists('image_url', $data)) {
+                $assign('image_path', $data['image_path'] ?? $data['image_url']);
+            }
+            if (array_key_exists('images', $data)) {
+                $images = is_string($data['images']) ? $data['images'] : json_encode($data['images']);
+                $assign('images', $images);
+            }
+
+            if (empty($fields)) {
+                return $this->json($response, ['error' => 'No fields to update'], 400);
+            }
+
+            $sql = 'UPDATE products SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+
+            $this->auditLog->log($user['id'], 'product_updated', 'products', (string)$id, ['updated_fields' => array_keys($data)]);
+
+            return $this->json($response, ['success' => true, 'message' => 'Product updated successfully']);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
+    /**
+     * 管理员删除商品（软删除）
+     */
+    public function deleteProduct(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => self::ERR_ADMIN_REQUIRED], 403);
+            }
+
+            $id = (int)($args['id'] ?? 0);
+            if ($id <= 0) {
+                return $this->json($response, ['error' => 'Invalid product id'], 400);
+            }
+
+            $stmt = $this->db->prepare('UPDATE products SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL');
+            $stmt->execute(['id' => $id]);
+
+            $this->auditLog->log($user['id'], 'product_deleted', 'products', (string)$id, []);
+
+            return $this->json($response, ['success' => true, 'message' => 'Product deleted successfully']);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
 
