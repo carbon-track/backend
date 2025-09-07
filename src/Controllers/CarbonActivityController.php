@@ -214,14 +214,16 @@ class CarbonActivityController
             $activity = CarbonActivity::create($activityData);
 
             // Log the creation
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'carbon_activity_created',
-                'entity_type' => 'carbon_activity',
-                'entity_id' => $activity->id,
-                'new_value' => json_encode($activityData),
-                'notes' => 'Carbon activity created: ' . $activity->getCombinedName()
-            ]);
+            $this->auditLogService->logAdminOperation(
+                'carbon_activity_created',
+                $userId,
+                'carbon_management',
+                [
+                    'table' => 'carbon_activities',
+                    'record_id' => $activity->id,
+                    'new_data' => $activityData
+                ]
+            );
 
             $responseData = [
                 'success' => true,
@@ -293,15 +295,17 @@ class CarbonActivityController
             $activity->update($updateData);
 
             // Log the update
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'carbon_activity_updated',
-                'entity_type' => 'carbon_activity',
-                'entity_id' => $activity->id,
-                'old_value' => json_encode($oldValues),
-                'new_value' => json_encode($activity->fresh()->toArray()),
-                'notes' => 'Carbon activity updated: ' . $activity->getCombinedName()
-            ]);
+            $this->auditLogService->logAdminOperation(
+                'carbon_activity_updated',
+                $userId,
+                'carbon_management',
+                [
+                    'table' => 'carbon_activities',
+                    'record_id' => $activity->id,
+                    'old_data' => $oldValues,
+                    'new_data' => $updateData
+                ]
+            );
 
             $responseData = [
                 'success' => true,
@@ -363,15 +367,17 @@ class CarbonActivityController
             }
 
             // Log the deletion
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'carbon_activity_' . $action,
-                'entity_type' => 'carbon_activity',
-                'entity_id' => $activityId,
-                'old_value' => json_encode($oldValues ?? $activity->toArray()),
-                'notes' => 'Carbon activity ' . $action . ': ' . $activity->getCombinedName() . 
-                          ($transactionCount > 0 ? " (had {$transactionCount} transactions)" : '')
-            ]);
+            $this->auditLogService->logAdminOperation(
+                'carbon_activity_' . $action,
+                $userId,
+                'carbon_management',
+                [
+                    'table' => 'carbon_activities',
+                    'record_id' => $activityId,
+                    'old_data' => $oldValues,
+                    'transaction_count' => $transactionCount
+                ]
+            );
 
             $responseData = [
                 'success' => true,
@@ -413,14 +419,16 @@ class CarbonActivityController
             $activity->restore();
 
             // Log the restoration
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'carbon_activity_restored',
-                'entity_type' => 'carbon_activity',
-                'entity_id' => $activity->id,
-                'new_value' => json_encode($activity->toArray()),
-                'notes' => 'Carbon activity restored: ' . $activity->getCombinedName()
-            ]);
+            $this->auditLogService->logAdminOperation(
+                'carbon_activity_restored',
+                $userId,
+                'carbon_management',
+                [
+                    'table' => 'carbon_activities',
+                    'record_id' => $activity->id,
+                    'new_data' => $activity->toArray()
+                ]
+            );
 
             $responseData = [
                 'success' => true,
@@ -511,13 +519,16 @@ class CarbonActivityController
             }
 
             // Log the bulk update
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'carbon_activities_sort_order_updated',
-                'entity_type' => 'carbon_activity',
-                'new_value' => json_encode($updated),
-                'notes' => 'Bulk updated sort orders for ' . count($updated) . ' activities'
-            ]);
+            $this->auditLogService->logAdminOperation(
+                'carbon_activities_sort_order_updated',
+                $userId,
+                'carbon_management',
+                [
+                    'table' => 'carbon_activities',
+                    'updated_count' => count($updated),
+                    'updated_activities' => $updated
+                ]
+            );
 
             $responseData = [
                 'success' => true,

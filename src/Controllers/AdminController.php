@@ -680,14 +680,17 @@ class AdminController
             }
 
             // 审计日志
-            $this->auditLog->log(
+            $this->auditLog->logAdminOperation(
+                'user_points_adjusted',
                 $admin['id'],
-                'admin_user_points_adjusted',
-                'user',
-                $userId,
+                'user_management',
                 [
+                    'table' => 'users',
+                    'record_id' => $userId,
                     'delta' => $delta,
                     'reason' => $reason,
+                    'old_points' => $user['points'],
+                    'new_points' => $newPoints
                 ]
             );
 
