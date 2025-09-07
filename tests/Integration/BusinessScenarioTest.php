@@ -45,18 +45,17 @@ class BusinessScenarioTest extends TestCase
                 'username' => 'test_student_' . time(),
                 'email' => 'student_' . time() . '@test.com',
                 'password' => 'SecurePassword123!',
-                'real_name' => '测试学生',
-                'phone' => '13800138000',
+                // real_name 与 class_name 已弃用
+                // phone 字段已移除
                 'school_id' => 1,
-                'class_name' => '计算机科学2024级',
                 'token' => null
             ],
             'admin' => [
                 'username' => 'test_admin_' . time(),
-                'email' => 'admin_' . time() . '@test.com', 
+                'email' => 'admin_' . time() . '@test.com',
                 'password' => 'AdminPassword123!',
-                'real_name' => '测试管理员',
-                'phone' => '13900139000',
+                // real_name 已弃用
+                // phone 字段已移除
                 'school_id' => 1,
                 'role' => 'admin',
                 'token' => null
@@ -110,12 +109,10 @@ class BusinessScenarioTest extends TestCase
         // Step 1: User Registration
         $registrationData = [
             'username' => $student['username'],
-            'email' => $student['email'], 
+            'email' => $student['email'],
             'password' => $student['password'],
-            'real_name' => $student['real_name'],
-            'phone' => $student['phone'],
+            // 'phone' 字段已移除
             'school_id' => $student['school_id'],
-            'class_name' => $student['class_name'],
             'cf_turnstile_response' => 'test_token' // Mock turnstile
         ];
         
@@ -274,12 +271,5 @@ class BusinessScenarioTest extends TestCase
         echo "\n✅ Data validation test passed!\n";
     }
 
-    protected function tearDown(): void
-    {
-        // Clean up test users if they were created
-        // Note: In a real scenario, you'd want to clean up the test data
-        // For this demo, we'll rely on unique usernames/emails to avoid conflicts
-        
-        parent::tearDown();
-    }
+    // tearDown 使用基类默认实现
 }

@@ -42,10 +42,11 @@ class AuthService
             'sub' => $user['id'],
             'user' => [
                 'id' => $user['id'],
-                'uuid' => $user['uuid'],
+                // uuid 在某些旧库/测试数据库中可能不存在，使用 null 回退
+                'uuid' => $user['uuid'] ?? null,
                 'username' => $user['username'],
-                'email' => $user['email'],
-                'is_admin' => (bool)$user['is_admin']
+                'email' => $user['email'] ?? null,
+                'is_admin' => (bool)($user['is_admin'] ?? 0)
             ]
         ];
 
@@ -404,7 +405,15 @@ class AuthService
      */
     public function validateJwtToken(string $token): ?array
     {
-        return $this->verifyToken($token);
+        $decoded = $this->verifyToken($token);
+        if (!$decoded) {
+            return null;
+        }
+        // 统一过期校验：若 exp < 当前时间则视为无效
+        if (isset($decoded['exp']) && $decoded['exp'] < time()) {
+            return null;
+        }
+        return $decoded;
     }
 
     /**

@@ -14,8 +14,10 @@ use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Controllers\AvatarController;
+use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
+use CarbonTrack\Middleware\RequestLoggingMiddleware;
 
 // Constants to avoid duplicated literals
 defined('CONTENT_TYPE_JSON') || define('CONTENT_TYPE_JSON', 'application/json');
@@ -35,6 +37,8 @@ defined('PATH_USERS') || define('PATH_USERS', '/users');
 
 
 return function (App $app) {
+    // 全局请求日志中间件（放在最前，捕获所有请求）
+    try { $app->add(RequestLoggingMiddleware::class); } catch (\Throwable $e) { /* ignore if not resolvable */ }
     // 所有 helper 函数仅在闭包内部声明，避免全局污染
     $registerHealthCheck = function (App $app) {
         $app->get('/', function ($request, $response) {
@@ -186,6 +190,12 @@ return function (App $app) {
             $admin->post(PATH_CARBON_ACTIVITY_ID . '/restore', [CarbonActivityController::class, 'restoreActivity']);
             $admin->get(PATH_CARBON_ACTIVITY_ID . '/statistics', [CarbonActivityController::class, 'getActivityStatistics']);
             $admin->get('/activities', [CarbonTrackController::class, 'getPendingRecords']);
+            // 兼容别名：/admin/carbon-activities/pending 与 /admin/carbon-records
+            $admin->get('/carbon-activities/pending', [CarbonTrackController::class, 'getPendingRecords']);
+            $admin->get('/carbon-records', [CarbonTrackController::class, 'getPendingRecords']);
+            // 系统请求日志
+            $admin->get('/system-logs', [SystemLogController::class, 'list']);
+            $admin->get('/system-logs/{id:[0-9]+}', [SystemLogController::class, 'detail']);
             $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
             $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);

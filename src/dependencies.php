@@ -19,6 +19,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
 use CarbonTrack\Controllers\UserController;
@@ -30,6 +31,7 @@ use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
+use CarbonTrack\Middleware\RequestLoggingMiddleware;
 
 $__deps_initializer = function (Container $container) {
     // Logger
@@ -229,6 +231,14 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    // System Log Service
+    $container->set(SystemLogService::class, function (ContainerInterface $c) {
+        return new SystemLogService(
+            $c->get(PDO::class),
+            $c->get(Logger::class)
+        );
+    });
+
     // Models
     $container->set(Avatar::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
@@ -351,6 +361,15 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(Logger::class),
             $c->get(ErrorLogService::class)
+        );
+    });
+
+    // Request Logging Middleware
+    $container->set(RequestLoggingMiddleware::class, function (ContainerInterface $c) {
+        return new RequestLoggingMiddleware(
+            $c->get(SystemLogService::class),
+            $c->get(AuthService::class),
+            $c->get(Logger::class)
         );
     });
 };

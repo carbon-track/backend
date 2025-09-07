@@ -22,7 +22,8 @@ class CarbonActivityControllerTest extends TestCase
         $audit = $this->createMock(AuditLogService::class);
         $calc->method('getActivitiesGroupedByCategory')->willReturn(['daily'=>[['id'=>'a']]]);
         $calc->method('getCategories')->willReturn(['daily']);
-        $controller = new CarbonActivityController($calc, $audit);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new CarbonActivityController($calc, $audit, $errorLog);
 
         $request = makeRequest('GET', '/carbon-activities', null, ['grouped' => 'true']);
         $request = $request->withQueryParams(['grouped'=>'true']);
@@ -40,7 +41,8 @@ class CarbonActivityControllerTest extends TestCase
         $audit = $this->createMock(AuditLogService::class);
         $calc->method('validateActivityData')->willReturn(false);
 
-        $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit, $errorLog);
         $request = makeRequest('POST', '/admin/carbon-activities', []);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->createActivity($request, $response);
@@ -54,7 +56,8 @@ class CarbonActivityControllerTest extends TestCase
 
         // CarbonActivity::find will be called; we simulate via partial mocking using anonymous class
         // Here we just ensure controller returns success structure without real DB.
-        $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit, $errorLog);
         $request = makeRequest('PUT', '/admin/carbon-activities/sort-orders', ['activities' => [
                 ['id' => 'a1', 'sort_order' => 1],
                 ['id' => 'a2', 'sort_order' => 2]
@@ -70,7 +73,8 @@ class CarbonActivityControllerTest extends TestCase
         // Without mocking Eloquent static, we just call and expect 500 would not be acceptable. Instead, we rely on behavior check through minimal stub.
         $calc = $this->createMock(CarbonCalculatorService::class);
         $audit = $this->createMock(AuditLogService::class);
-        $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit, $errorLog);
         $request = makeRequest('GET', '/carbon-activities/not-exist');
         $response = new \Slim\Psr7\Response();
         // 仅验证方法存在（不运行 Eloquent 静态查询）
@@ -82,7 +86,8 @@ class CarbonActivityControllerTest extends TestCase
         $calc = $this->createMock(CarbonCalculatorService::class);
         $audit = $this->createMock(AuditLogService::class);
         $calc->method('getActivityStatistics')->willReturn(['total_records' => 5]);
-        $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\CarbonActivityController($calc, $audit, $errorLog);
         $request = makeRequest('GET', '/admin/carbon-activities/statistics');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getActivityStatistics($request, $response, []);

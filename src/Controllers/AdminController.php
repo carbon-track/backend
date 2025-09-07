@@ -87,7 +87,7 @@ class AdminController
 
             $sql = "
                 SELECT 
-                    u.id, u.username, u.email, NULL as real_name, NULL as phone, u.school_id,
+                    u.id, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,

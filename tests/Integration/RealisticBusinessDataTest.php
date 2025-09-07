@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use CarbonTrack\Services\DatabaseService;
 use Slim\App;
 use Slim\Psr7\Factory\ServerRequestFactory;
 use DI\Container;
@@ -29,11 +30,46 @@ class RealisticBusinessDataTest extends TestCase
         $_ENV['DB_DATABASE'] = $_ENV['DATABASE_PATH'];
         $_ENV['JWT_SECRET'] = 'test_jwt_secret_for_testing';
         $_ENV['TURNSTILE_SECRET_KEY'] = 'test_turnstile_secret';
+    // Provide dummy Cloudflare R2 env vars so CloudflareR2Service can be constructed without throwing
+    $_ENV['R2_ACCESS_KEY_ID'] = 'test_access_key';
+    $_ENV['R2_SECRET_ACCESS_KEY'] = 'test_secret_key';
+    $_ENV['R2_ENDPOINT'] = 'https://example.com';
+    $_ENV['R2_BUCKET_NAME'] = 'test-bucket';
+    $_ENV['R2_PUBLIC_URL'] = 'https://example.com/test-bucket';
+
+        // Ensure SQLite file exists
+        if (!file_exists($_ENV['DATABASE_PATH'])) {
+            touch($_ENV['DATABASE_PATH']);
+        }
 
         try {
-            // Create container with dependencies
             $this->container = new Container();
-            require __DIR__ . '/../../src/dependencies.php';
+
+            // Provide database config for dependencies.php (Illuminate setup)
+            $config = [
+                'database' => [
+                    'default' => 'sqlite',
+                    'connections' => [
+                        'sqlite' => [
+                            'driver' => 'sqlite',
+                            'database' => $_ENV['DATABASE_PATH'],
+                            'prefix' => '',
+                        ]
+                    ]
+                ]
+            ];
+            $this->container->set('config', $config);
+
+            // Load dependencies initializer and execute it with our container
+            $depsInitializer = require __DIR__ . '/../../src/dependencies.php';
+            if (is_callable($depsInitializer)) {
+                $depsInitializer($this->container);
+            }
+
+            // Initialize unified minimal schema + seed BEFORE app boot
+            /** @var DatabaseService $dbServiceSchema */
+            $dbServiceSchema = $this->container->get(DatabaseService::class);
+            TestSchemaBuilder::init($dbServiceSchema->getConnection()->getPdo());
 
             // Create Slim app
             $this->app = \Slim\Factory\AppFactory::createFromContainer($this->container);
@@ -42,9 +78,10 @@ class RealisticBusinessDataTest extends TestCase
             $this->app->addRoutingMiddleware();
 
             // Add routes
-            $routes = require __DIR__ . '/../../src/routes.php';
+            $routes = require_once __DIR__ . '/../../src/routes.php';
             $routes($this->app);
 
+            // Previously inline creation of carbon_activities & avatars now handled by TestSchemaBuilder
         } catch (\Exception $e) {
             $this->markTestSkipped('Could not set up test environment: ' . $e->getMessage());
         }
@@ -118,10 +155,14 @@ class RealisticBusinessDataTest extends TestCase
         
         $this->assertTrue($data['success']);
         $this->assertIsArray($data['data']);
+
+        // New API structure: data.activities holds list
+        $activitiesList = $data['data']['activities'] ?? $data['data'];
+        $this->assertIsArray($activitiesList, 'Activities list should be an array');
         
         // Verify we have carbon activities data with realistic structure
-        if (!empty($data['data'])) {
-            $activity = $data['data'][0];
+        if (!empty($activitiesList)) {
+            $activity = $activitiesList[0];
             $this->assertArrayHasKey('id', $activity);
             $this->assertArrayHasKey('name_zh', $activity);
             $this->assertArrayHasKey('name_en', $activity);
@@ -210,18 +251,16 @@ class RealisticBusinessDataTest extends TestCase
             'username' => 'test_user_' . time(), // Unique username
             'email' => 'test_user_' . time() . '@example.com', // Unique email
             'password' => 'SecurePassword123!',
-            'real_name' => '张伟测试', // Chinese characters
-            'phone' => '13812345678', // Valid Chinese mobile format
+            'confirm_password' => 'SecurePassword123!',
             'school_id' => 1,
-            'class_name' => 'CS2024级1班',
-            'cf_turnstile_response' => 'mock_turnstile_response'
+            // 省略 cf_turnstile_response 以跳过外部验证
         ];
 
         $request = $this->createRequest('POST', '/api/v1/auth/register', $realisticRegistrationData);
         $response = $this->app->handle($request);
 
         // Should either succeed or fail gracefully (not crash)
-        $this->assertContains($response->getStatusCode(), [200, 400, 422, 429], 
+    $this->assertContains($response->getStatusCode(), [200, 400, 422, 429],
             'Registration should handle realistic data gracefully');
         
         if ($response->getStatusCode() === 200) {
@@ -308,7 +347,7 @@ class RealisticBusinessDataTest extends TestCase
         $response = $this->app->handle($request);
         
         // Should handle large data gracefully (not crash with 500 error)
-        $this->assertNotEquals(500, $response->getStatusCode(), 
+    $this->assertNotEquals(500, $response->getStatusCode(),
             'Large data should not cause server errors');
     }
 
@@ -335,14 +374,10 @@ class RealisticBusinessDataTest extends TestCase
 
         // All requests should be handled consistently
         foreach ($responses as $response) {
-            $this->assertContains($response->getStatusCode(), [200, 401, 422], 
+            $this->assertContains($response->getStatusCode(), [200, 401, 422],
                 'Concurrent requests should be handled consistently');
         }
     }
 
-    protected function tearDown(): void
-    {
-        // Clean up any test data if needed
-        parent::tearDown();
-    }
+    // tearDown 使用基类默认实现
 }

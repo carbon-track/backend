@@ -17,25 +17,25 @@ class AvatarController
 {
     private Avatar $avatarModel;
     private AuthService $authService;
-    private AuditLogService $auditLogService;
-    private CloudflareR2Service $r2Service;
-    private Logger $logger;
-    private ErrorLogService $errorLogService;
+    private ?AuditLogService $auditLogService;
+    private ?CloudflareR2Service $r2Service;
+    private ?Logger $logger;
+    private ?ErrorLogService $errorLogService;
 
     public function __construct(
         Avatar $avatarModel,
         AuthService $authService,
-        AuditLogService $auditLogService,
-        CloudflareR2Service $r2Service,
-        Logger $logger,
-        ErrorLogService $errorLogService
+    AuditLogService $auditLogService = null,
+    CloudflareR2Service $r2Service = null,
+    Logger $logger = null,
+    ErrorLogService $errorLogService = null
     ) {
         $this->avatarModel = $avatarModel;
         $this->authService = $authService;
-        $this->auditLogService = $auditLogService;
-        $this->r2Service = $r2Service;
-        $this->logger = $logger;
-        $this->errorLogService = $errorLogService;
+            $this->auditLogService = $auditLogService;
+            $this->r2Service = $r2Service;
+            $this->logger = $logger;
+            $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -48,9 +48,20 @@ class AvatarController
             $category = $queryParams['category'] ?? null;
             $includeInactive = isset($queryParams['include_inactive']) && $queryParams['include_inactive'] === 'true';
 
-            // 检查是否为管理员
-            $user = $this->authService->getCurrentUser($request);
-            $isAdmin = $user && $user['is_admin'];
+            // 检查是否为管理员（容错：AuthService 可能在匿名请求时抛出异常）
+            $user = null;
+            $isAdmin = false;
+            try {
+                $user = $this->authService->getCurrentUser($request);
+                $isAdmin = $user && !empty($user['is_admin']);
+            } catch (\Throwable $authEx) {
+                // 记日志但不影响公开接口返回
+                if (isset($this->logger)) {
+                    $this->logger->debug('Anonymous avatar listing (auth not resolved)', [
+                        'error' => $authEx->getMessage()
+                    ]);
+                }
+            }
 
             if ($includeInactive && !$isAdmin) {
                 return $this->jsonResponse($response, [
@@ -71,15 +82,18 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            $this->logger->error('Get avatars failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            if ($this->logger) {
+                $this->logger->error('Get avatars failed', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
 
             return $this->jsonResponse($response, [
                 'success' => false,
-                'message' => 'Failed to get avatars'
+                'message' => 'Failed to get avatars',
+                'debug' => getenv('APP_ENV') === 'testing' ? ($e->getMessage()) : null
             ], 500);
         }
     }
@@ -98,11 +112,13 @@ class AvatarController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            $this->logger->error('Get avatar categories failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            if ($this->logger) {
+                $this->logger->error('Get avatar categories failed', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+            }
 
             return $this->jsonResponse($response, [
                 'success' => false,

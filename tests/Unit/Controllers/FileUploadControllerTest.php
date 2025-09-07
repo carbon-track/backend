@@ -21,7 +21,8 @@ class FileUploadControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $logger = $this->createMock(\Monolog\Logger::class);
         $auth->method('getCurrentUser')->willReturn(null);
-        $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger, $errorLog);
 
         $request = makeRequest('POST', '/files/upload');
         $response = new \Slim\Psr7\Response();
@@ -36,7 +37,8 @@ class FileUploadControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $logger = $this->createMock(\Monolog\Logger::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
-        $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger, $errorLog);
 
         $request = makeRequest('POST', '/files/upload', []);
         $response = new \Slim\Psr7\Response();
@@ -51,7 +53,8 @@ class FileUploadControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $logger = $this->createMock(\Monolog\Logger::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 2]);
-        $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger, $errorLog);
 
         $request = makeRequest('POST', '/files/upload-multiple', []);
         $response = new \Slim\Psr7\Response();
@@ -67,7 +70,8 @@ class FileUploadControllerTest extends TestCase
         $logger = $this->createMock(\Monolog\Logger::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 3]);
         $r2->method('fileExists')->willReturn(false);
-        $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger, $errorLog);
 
         $request = makeRequest('DELETE', '/files/delete');
         $response = new \Slim\Psr7\Response();
@@ -82,7 +86,8 @@ class FileUploadControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $logger = $this->createMock(\Monolog\Logger::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 4]);
-        $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    $controller = new \CarbonTrack\Controllers\FileUploadController($r2, $auth, $audit, $logger, $errorLog);
 
         $request = makeRequest('GET', '/files/info');
         $response = new \Slim\Psr7\Response();

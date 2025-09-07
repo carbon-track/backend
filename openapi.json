@@ -581,9 +581,7 @@
                 "properties": {
                   "username": { "type": "string", "minLength": 3, "maxLength": 50, "pattern": "^[a-zA-Z0-9_]+$", "description": "用户名，只能包含字母、数字和下划线" },
                   "email": { "type": "string", "format": "email", "description": "有效的邮箱地址" },
-                  "real_name": { "type": "string", "maxLength": 100, "description": "真实姓名" },
                   "school_id": { "type": "integer", "minimum": 1, "description": "学校ID" },
-                  "class_name": { "type": "string", "maxLength": 50, "description": "班级名称" },
                   "is_admin": { "type": "boolean", "description": "是否为管理员" },
                   "status": { "type": "string", "enum": ["active", "inactive", "suspended"], "description": "用户状态" }
                 }
@@ -2548,15 +2546,13 @@
       },
       "RegisterRequest": {
         "type": "object",
-        "required": ["username", "email", "password", "confirm_password", "cf_turnstile_response", "real_name", "school_id", "class_name"],
+        "required": ["username", "email", "password", "confirm_password", "cf_turnstile_response", "school_id"],
         "properties": {
           "username": { "type": "string", "minLength": 3, "maxLength": 50, "pattern": "^[a-zA-Z0-9_]+$", "description": "用户名，只能包含字母、数字和下划线" },
           "email": { "type": "string", "format": "email", "description": "有效的邮箱地址" },
           "password": { "type": "string", "format": "password", "description": "密码，至少8个字符，包含字母和数字" },
           "confirm_password": { "type": "string", "format": "password", "description": "确认密码" },
-          "real_name": { "type": "string", "maxLength": 100, "description": "真实姓名" },
           "school_id": { "type": "integer", "minimum": 1, "description": "学校ID" },
-          "class_name": { "type": "string", "maxLength": 50, "description": "班级名称" },
           "cf_turnstile_response": { "type": "string", "description": "Cloudflare Turnstile验证令牌" }
         }
       },
@@ -2591,7 +2587,6 @@
           "id": { "type": "integer", "description": "用户ID" },
           "username": { "type": "string", "description": "用户名" },
           "email": { "type": "string", "description": "邮箱地址" },
-          "real_name": { "type": "string", "description": "真实姓名" },
           "avatar_url": { "type": "string", "description": "头像URL" },
           "role": { "type": "string", "enum": ["user", "admin"], "description": "用户角色" },
           "status": { "type": "string", "enum": ["active", "inactive", "suspended"], "description": "用户状态" },
@@ -2602,9 +2597,7 @@
       "UpdateProfileRequest": {
         "type": "object",
         "properties": {
-          "real_name": { "type": "string", "maxLength": 100, "description": "真实姓名" },
           "school_id": { "type": "integer", "minimum": 1, "description": "学校ID" },
-          "class_name": { "type": "string", "maxLength": 50, "description": "班级名称" },
           "avatar_id": { "type": "integer", "description": "头像ID" }
         }
       },

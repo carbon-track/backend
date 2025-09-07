@@ -191,7 +191,7 @@ class CarbonActivityController
             $userId = $request->getAttribute('user_id');
 
             // Validate input data
-            $isValid = $this->carbonCalculatorService->validateActivityData($data);
+            $isValid = $this->carbonCalculatorService->validateActivityData($data, false);
             if (!$isValid) {
                 return $this->errorResponse($response, 'Validation failed', 400);
             }
@@ -272,7 +272,7 @@ class CarbonActivityController
             $oldValues = $activity->toArray();
 
             // Validate input data
-            $isValid = $this->carbonCalculatorService->validateActivityData($data);
+            $isValid = $this->carbonCalculatorService->validateActivityData($data, true);
             if (!$isValid) {
                 return $this->errorResponse($response, 'Validation failed', 400);
             }

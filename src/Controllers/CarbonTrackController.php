@@ -56,6 +56,31 @@ class CarbonTrackController
             }
 
             $data = $request->getParsedBody();
+            if (!is_array($data)) { $data = []; }
+
+            // 同义词兼容映射：将多种前端可能传入的键统一为内部标准键
+            $synonyms = [
+                // 统一数值 amount（旧代码个别使用 data、value）
+                'amount' => ['data', 'value', 'amount_value'],
+                // 日期
+                'date' => ['activity_date', 'record_date'],
+                // 描述/备注
+                'description' => ['notes', 'note', 'remark', 'comments'],
+                // 图片数组
+                'images' => ['proof_images', 'image_urls', 'files', 'attachments', 'photos'],
+                // 单位
+                'unit' => ['activity_unit']
+            ];
+            foreach ($synonyms as $primary => $alts) {
+                if (!array_key_exists($primary, $data) || $data[$primary] === '' || $data[$primary] === null) {
+                    foreach ($alts as $alt) {
+                        if (array_key_exists($alt, $data) && $data[$alt] !== '' && $data[$alt] !== null) {
+                            $data[$primary] = $data[$alt];
+                            break;
+                        }
+                    }
+                }
+            }
 
             // 兼容 multipart/form-data 与 application/json
             $uploadedFiles = $request->getUploadedFiles();
@@ -250,6 +275,14 @@ class CarbonTrackController
             }
 
             $data = $request->getParsedBody();
+            if (!is_array($data)) { $data = []; }
+
+            // 同义词：计算接口历史上使用 data，新前端可能用 amount
+            if (!isset($data['data']) && isset($data['amount'])) {
+                $data['data'] = $data['amount'];
+            } elseif (isset($data['data']) && !isset($data['amount'])) {
+                $data['amount'] = $data['data'];
+            }
             if (!isset($data['activity_id']) || !isset($data['data'])) {
                 return $this->json($response, ['error' => 'Missing required fields'], 400);
             }
@@ -773,6 +806,19 @@ class CarbonTrackController
                 $params['user_id'] = $user['id'];
             }
             $stmt->execute($params);
+
+            // 审计日志：软删除碳减排记录（不区分是否真的删除成功，这里记录用户意图）
+            try {
+                $this->auditLog->log(
+                    $user['id'],
+                    'carbon_record_deleted',
+                    'carbon_record',
+                    $recordId,
+                    [
+                        'by_admin' => $this->authService->isAdminUser($user),
+                    ]
+                );
+            } catch (\Throwable $ignore) { /* ignore audit failures */ }
 
             return $this->json($response, ['success' => true]);
         } catch (\Exception $e) {

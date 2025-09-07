@@ -79,10 +79,8 @@ class UserController
                 'uuid' => $row['uuid'] ?? null,
                 'username' => $row['username'],
                 'email' => $row['email'],
-                'real_name' => $row['real_name'],
                 'school_id' => $row['school_id'],
                 'school_name' => $row['school_name'],
-                'class_name' => $row['class_name'],
                 'points' => (int)$row['points'],
                 'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
                 'avatar_id' => $row['avatar_id'],
@@ -151,7 +149,8 @@ class UserController
 
             // 准备更新数据
             $updateData = [];
-            $allowedFields = ['real_name', 'class_name', 'avatar_id'];
+            // real_name 与 class_name 字段已废弃，不再允许更新
+            $allowedFields = ['avatar_id'];
             $oldValues = [];
 
             foreach ($allowedFields as $field) {
@@ -255,10 +254,8 @@ class UserController
                 'uuid' => $updatedUser['uuid'],
                 'username' => $updatedUser['username'],
                 'email' => $updatedUser['email'],
-                'real_name' => $updatedUser['real_name'],
                 'school_id' => $updatedUser['school_id'],
                 'school_name' => $updatedUser['school_name'],
-                'class_name' => $updatedUser['class_name'],
                 'points' => $updatedUser['points'],
                 'is_admin' => (bool)$updatedUser['is_admin'],
                 'avatar_id' => $updatedUser['avatar_id'],

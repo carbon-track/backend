@@ -18,8 +18,6 @@ class User extends Model
         'username',
         'email',
         'password',
-        'real_name',
-        'phone',
         'role',
         'status',
         'points',
@@ -85,21 +83,8 @@ class User extends Model
         return $this->email;
     }
 
-    /**
-     * Get real name
-     */
-    public function getRealName(): ?string
-    {
-        return $this->real_name ?? null;
-    }
+    // real_name 字段已废弃，不再提供访问方法
 
-    /**
-     * Get phone
-     */
-    public function getPhone(): ?string
-    {
-        return $this->phone ?? null;
-    }
 
     /**
      * Get role
@@ -132,6 +117,8 @@ class User extends Model
     {
         $array = parent::toArray();
         unset($array['password']);
+        // 安全隐藏已弃用或潜在敏感字段（数据库仍然可能存在列，但接口不暴露）
+        unset($array['real_name'], $array['class_name']);
         return $array;
     }
 
@@ -186,7 +173,7 @@ class User extends Model
      */
     public function getDisplayName(): string
     {
-        return $this->getRealName() ?: $this->getUsername();
+        return $this->getUsername();
     }
 
     /**

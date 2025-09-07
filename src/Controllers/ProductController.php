@@ -240,6 +240,25 @@ class ProductController
             }
 
             $data = $request->getParsedBody();
+            if (!is_array($data)) { $data = []; }
+
+            // 字段同义词兼容：shipping_address -> delivery_address, address -> delivery_address
+            // phone|mobile|contact -> contact_phone, remark|comments -> notes
+            $synonyms = [
+                'delivery_address' => ['shipping_address', 'address', 'ship_address'],
+                'contact_phone' => ['phone', 'mobile', 'tel', 'contact'],
+                'notes' => ['remark', 'remarks', 'comment', 'comments', 'note']
+            ];
+            foreach ($synonyms as $primary => $alts) {
+                if (!array_key_exists($primary, $data) || $data[$primary] === '' || $data[$primary] === null) {
+                    foreach ($alts as $alt) {
+                        if (array_key_exists($alt, $data) && $data[$alt] !== '' && $data[$alt] !== null) {
+                            $data[$primary] = $data[$alt];
+                            break;
+                        }
+                    }
+                }
+            }
 
             if (!isset($data['product_id'])) {
                 return $this->json($response, ['error' => 'Product ID is required'], 400);

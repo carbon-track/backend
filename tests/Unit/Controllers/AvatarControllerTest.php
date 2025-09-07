@@ -27,7 +27,14 @@ class AvatarControllerTest extends TestCase
             ['id'=>1,'name'=>'A','is_active'=>1]
         ]);
 
-        $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    /** @var \CarbonTrack\Models\Avatar $avatarModel */
+    /** @var \CarbonTrack\Services\AuthService $auth */
+    /** @var \CarbonTrack\Services\AuditLogService $audit */
+    /** @var \CarbonTrack\Services\CloudflareR2Service $r2 */
+    /** @var \Monolog\Logger $logger */
+    /** @var \CarbonTrack\Services\ErrorLogService $errorLog */
+    $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger, $errorLog);
         $request = makeRequest('GET', '/avatars');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getAvatars($request, $response);
@@ -47,7 +54,14 @@ class AvatarControllerTest extends TestCase
         $logger = $this->createMock(\Monolog\Logger::class);
 
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'is_admin'=>0]);
-        $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger);
+    $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+    /** @var \CarbonTrack\Models\Avatar $avatarModel */
+    /** @var \CarbonTrack\Services\AuthService $auth */
+    /** @var \CarbonTrack\Services\AuditLogService $audit */
+    /** @var \CarbonTrack\Services\CloudflareR2Service $r2 */
+    /** @var \Monolog\Logger $logger */
+    /** @var \CarbonTrack\Services\ErrorLogService $errorLog */
+    $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger, $errorLog);
         $request = makeRequest('GET', '/avatars/1');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getAvatar($request, $response, ['id'=>1]);

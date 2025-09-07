@@ -15,8 +15,6 @@ class UserTest extends TestCase
             'id' => 1,
             'username' => 'testuser',
             'email' => 'test@example.com',
-            'real_name' => 'Test User',
-            'phone' => '1234567890',
             'role' => 'user',
             'status' => 'active',
             'points' => 100,
@@ -29,8 +27,7 @@ class UserTest extends TestCase
         $this->assertEquals(1, $user->getId());
         $this->assertEquals('testuser', $user->getUsername());
         $this->assertEquals('test@example.com', $user->getEmail());
-        $this->assertEquals('Test User', $user->getRealName());
-        $this->assertEquals('1234567890', $user->getPhone());
+    // real_name 已废弃，不再测试
         $this->assertEquals('user', $user->getRole());
         $this->assertEquals('active', $user->getStatus());
         $this->assertEquals(100, $user->getPoints());
@@ -42,7 +39,6 @@ class UserTest extends TestCase
             'id' => 1,
             'username' => 'testuser',
             'email' => 'test@example.com',
-            'real_name' => 'Test User',
             'role' => 'user',
             'status' => 'active',
             'points' => 100
@@ -55,7 +51,7 @@ class UserTest extends TestCase
         $this->assertEquals($userData['id'], $array['id']);
         $this->assertEquals($userData['username'], $array['username']);
         $this->assertEquals($userData['email'], $array['email']);
-        $this->assertEquals($userData['real_name'], $array['real_name']);
+    $this->assertArrayNotHasKey('real_name', $array);
         $this->assertEquals($userData['role'], $array['role']);
         $this->assertEquals($userData['status'], $array['status']);
         $this->assertEquals($userData['points'], $array['points']);
@@ -134,18 +130,10 @@ class UserTest extends TestCase
 
     public function testUserModelGetDisplayName(): void
     {
-        $userWithRealName = new User([
-            'username' => 'testuser',
-            'real_name' => 'Test User'
+        $userA = new User([
+            'username' => 'testuser'
         ]);
-
-        $userWithoutRealName = new User([
-            'username' => 'testuser',
-            'real_name' => null
-        ]);
-
-        $this->assertEquals('Test User', $userWithRealName->getDisplayName());
-        $this->assertEquals('testuser', $userWithoutRealName->getDisplayName());
+        $this->assertEquals('testuser', $userA->getDisplayName());
     }
 
     public function testUserModelValidation(): void

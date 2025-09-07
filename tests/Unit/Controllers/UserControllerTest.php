@@ -37,8 +37,6 @@ class UserControllerTest extends TestCase
         $stmtSelectUser->method('fetch')->willReturn([
             'id' => 1,
             'username' => 'john',
-            'real_name' => 'John',
-            'class_name' => 'C1',
             'avatar_id' => null,
             'school_id' => null
         ]);
@@ -57,10 +55,8 @@ class UserControllerTest extends TestCase
             'uuid' => 'u-1',
             'username' => 'john',
             'email' => 'john@example.com',
-            'real_name' => 'John',
             'school_id' => 5,
             'school_name' => 'Test School',
-            'class_name' => 'C1',
             'points' => 0,
             'is_admin' => 0,
             'avatar_id' => 10,
@@ -80,7 +76,7 @@ class UserControllerTest extends TestCase
 
     $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
-        $request = makeRequest('PUT', '/users/me/profile', ['real_name' => 'John', 'class_name' => 'C1', 'avatar_id' => 10, 'school_id' => 5]);
+    $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
 
         try {
@@ -222,10 +218,8 @@ class UserControllerTest extends TestCase
             'uuid' => 'u-1',
             'username' => 'john',
             'email' => 'john@example.com',
-            'real_name' => 'John',
             'school_id' => 5,
             'school_name' => 'Test School',
-            'class_name' => 'C1',
             'points' => 200,
             'is_admin' => 0,
             'avatar_id' => 10,
@@ -270,8 +264,6 @@ class UserControllerTest extends TestCase
         $stmtSelectUser->method('fetch')->willReturn([
             'id' => 1,
             'username' => 'john',
-            'real_name' => 'John',
-            'class_name' => 'C1',
             'avatar_id' => null,
             'school_id' => null
         ]);
@@ -286,10 +278,8 @@ class UserControllerTest extends TestCase
             'uuid' => 'u-1',
             'username' => 'john',
             'email' => 'john@example.com',
-            'real_name' => 'John',
             'school_id' => null,
             'school_name' => null,
-            'class_name' => 'C1',
             'points' => 0,
             'is_admin' => 0,
             'avatar_id' => 10,
@@ -307,7 +297,7 @@ class UserControllerTest extends TestCase
         );
 
         $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
-        $request = makeRequest('PUT', '/users/me', ['real_name' => 'John', 'class_name' => 'C1', 'avatar_id' => 10]);
+    $request = makeRequest('PUT', '/users/me', ['avatar_id' => 10]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateCurrentUser($request, $response);
         $this->assertEquals(200, $resp->getStatusCode());
