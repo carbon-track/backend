@@ -185,6 +185,20 @@ class FileUploadController
                 usleep(250000); // 250ms
                 $info = $this->r2Service->getFileInfo($filePath);
             }
+            // 若仍未找到，尝试检测是否因为 endpoint 误包含 bucket 造成 key 实际被写成 bucketName/xxx
+            if (!$info) {
+                $altPath = $this->r2Service->getBucketName() . '/' . ltrim($filePath, '/');
+                $altInfo = $this->r2Service->getFileInfo($altPath);
+                if ($altInfo) {
+                    $this->logger->warning('File found only under bucketName-prefixed key; endpoint may include bucket path (misconfiguration).', [
+                        'expected_file_path' => $filePath,
+                        'actual_file_path' => $altPath,
+                        'user_id' => $user['id']
+                    ]);
+                    // 改用实际信息，但返回时仍提示
+                    $info = $altInfo;
+                }
+            }
             if (!$info) {
                 $this->logger->warning('Confirm direct upload: file not yet visible in R2', [
                     'file_path' => $filePath,

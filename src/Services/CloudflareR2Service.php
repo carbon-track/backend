@@ -104,6 +104,11 @@ class CloudflareR2Service
         return self::MAX_FILE_SIZE;
     }
 
+    public function getBucketName(): string
+    {
+        return $this->bucketName;
+    }
+
     /**
      * 生成用于前端直接上传的对象 key （不立即上传）
      * @param string $originalName 原始文件名
@@ -879,10 +884,22 @@ class CloudflareR2Service
         }
         // 计算 endpoint (用于调试展示)
         $endpoint = method_exists($this->s3Client, 'getEndpoint') ? (string)$this->s3Client->getEndpoint() : 'n/a';
+        // 解析 endpoint 是否错误地包含 bucketName（导致双重 /bucket/bucket/）
+        $parsed = parse_url($endpoint);
+        $path = $parsed['path'] ?? '';
+        $endpointHasBucketInPath = false;
+        $recommendedEndpoint = $endpoint;
+        if ($path && trim($path, '/') === $this->bucketName) {
+            $endpointHasBucketInPath = true;
+            // 去掉多余 path 的推荐写法
+            $recommendedEndpoint = rtrim(str_replace('/' . trim($path, '/'), '', $endpoint), '/');
+        }
         return [
             'bucket' => $this->bucketName,
             'endpoint' => $endpoint,
             'public_base' => $this->publicUrl,
+            'endpoint_has_bucket_path' => $endpointHasBucketInPath,
+            'recommended_endpoint' => $recommendedEndpoint,
             'checks' => $checks,
             'errors' => $errors,
             'timestamp' => date('c')
