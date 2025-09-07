@@ -15,11 +15,14 @@ use JsonException;
  */
 class AuditLogService
 {
+    private const SQL_AND_CREATED_AT_LTE = ' AND created_at <= ?';
+    private const SQL_AND_ACTOR_TYPE = ' AND actor_type = ?';
+    private const SQL_AND_OPERATION_CATEGORY = ' AND operation_category = ?';
     private PDO $db;
     private Logger $logger;
     private int $maxDataLength = 10000; // characters for data fields
     private array $sensitiveFields = [
-        'password', 'pass', 'token', 'authorization', 'auth', 'secret', 
+    'password', 'pass', 'token', 'authorization', 'auth', 'secret',
         'api_key', 'access_token', 'refresh_token', 'session_id', 'credit_card'
     ];
 
@@ -209,19 +212,29 @@ class AuditLogService
         ?int $userId,
         string $actorType = 'user',
         ?string $table = null,
-        ?int $recordId = null,
+        string|int|null $recordId = null,
         ?array $oldData = null,
         ?array $newData = null,
         array $context = []
     ): bool {
         
+        // 如果 recordId 非纯数字（例如 UUID），不要塞进 affected_id（int列），记录到上下文 data
+        $affectedId = null;
+        if ($recordId !== null && (is_int($recordId) || (ctype_digit((string)$recordId) && (string)$recordId === (string)(int)$recordId))) {
+            $affectedId = (int)$recordId;
+        } else {
+            if ($recordId !== null) {
+                $context['non_numeric_record_id'] = (string)$recordId;
+            }
+        }
+
         $logData = [
             'action' => $action,
             'operation_category' => $category,
             'user_id' => $userId,
             'actor_type' => $actorType,
             'affected_table' => $table,
-            'affected_id' => $recordId,
+            'affected_id' => $affectedId,
             'old_data' => $oldData ? $this->sanitizeData($oldData) : null,
             'new_data' => $newData ? $this->sanitizeData($newData) : null,
             'change_type' => $this->determineChangeType($oldData, $newData),
@@ -311,13 +324,13 @@ class AuditLogService
     public function getAuditStats(array $filters = []): array
     {
         try {
-            $sql = "SELECT 
+            $sql = "SELECT
                 actor_type,
                 operation_category,
                 COUNT(*) as count,
                 AVG(DATEDIFF(NOW(), created_at)) as avg_days_ago,
                 MAX(created_at) as last_activity
-            FROM audit_logs 
+            FROM audit_logs
             WHERE 1=1";
             
             $params = [];
@@ -326,15 +339,16 @@ class AuditLogService
                 $params[] = $filters['date_from'];
             }
             if (isset($filters['date_to'])) {
-                $sql .= " AND created_at <= ?";
+                // reused fragment constant like CREATED_AT_LTE could be extracted; keep inline for now
+                $sql .= self::SQL_AND_CREATED_AT_LTE;
                 $params[] = $filters['date_to'];
             }
             if (isset($filters['actor_type'])) {
-                $sql .= " AND actor_type = ?";
+                $sql .= self::SQL_AND_ACTOR_TYPE;
                 $params[] = $filters['actor_type'];
             }
             if (isset($filters['category'])) {
-                $sql .= " AND operation_category = ?";
+                $sql .= self::SQL_AND_OPERATION_CATEGORY;
                 $params[] = $filters['category'];
             }
 
@@ -371,11 +385,11 @@ class AuditLogService
                 $params[] = $filters['user_id'];
             }
             if (isset($filters['actor_type'])) {
-                $sql .= " AND actor_type = ?";
+                $sql .= self::SQL_AND_ACTOR_TYPE;
                 $params[] = $filters['actor_type'];
             }
             if (isset($filters['category'])) {
-                $sql .= " AND operation_category = ?";
+                $sql .= self::SQL_AND_OPERATION_CATEGORY;
                 $params[] = $filters['category'];
             }
             if (isset($filters['status'])) {
@@ -387,7 +401,7 @@ class AuditLogService
                 $params[] = $filters['date_from'];
             }
             if (isset($filters['date_to'])) {
-                $sql .= " AND created_at <= ?";
+                $sql .= self::SQL_AND_CREATED_AT_LTE;
                 $params[] = $filters['date_to'];
             }
 
@@ -424,11 +438,11 @@ class AuditLogService
                 $params[] = $filters['user_id'];
             }
             if (isset($filters['actor_type'])) {
-                $sql .= " AND actor_type = ?";
+                $sql .= self::SQL_AND_ACTOR_TYPE;
                 $params[] = $filters['actor_type'];
             }
             if (isset($filters['category'])) {
-                $sql .= " AND operation_category = ?";
+                $sql .= self::SQL_AND_OPERATION_CATEGORY;
                 $params[] = $filters['category'];
             }
             if (isset($filters['status'])) {
@@ -440,7 +454,7 @@ class AuditLogService
                 $params[] = $filters['date_from'];
             }
             if (isset($filters['date_to'])) {
-                $sql .= " AND created_at <= ?";
+                $sql .= self::SQL_AND_CREATED_AT_LTE;
                 $params[] = $filters['date_to'];
             }
 
