@@ -150,6 +150,38 @@
     }
   ],
   "paths": {
+    "/files/presign": {
+      "post": {
+        "tags": ["Files"],
+        "summary": "获取直传预签名 (含去重)",
+        "description": "如果提供 sha256 且已存在相同文件, 返回 duplicate=true 且不生成预签名URL。否则返回预签名 PUT 信息。",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FilePresignRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "成功", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FilePresignResponse"}}}},
+          "400": {"description": "参数错误", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "401": {"description": "未授权", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "500": {"description": "服务器错误", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/files/confirm": {
+      "post": {
+        "tags": ["Files"],
+        "summary": "确认直传完成并记录元数据", 
+        "description": "前端完成直传后调用。若携带 sha256 则进行去重引用计数维护。",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FileConfirmRequest"}}}},
+        "responses": {
+          "200": {"description": "确认成功", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FileConfirmResponse"}}}},
+          "400": {"description": "参数错误", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "401": {"description": "未授权", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "404": {"description": "文件不存在", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "500": {"description": "服务器错误", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
     "/auth/register": {
       "post": {
         "tags": ["Auth"],
@@ -2536,6 +2568,67 @@
   },
   "components": {
     "schemas": {
+      "FilePresignRequest": {
+        "type": "object",
+        "required": ["original_name","mime_type"],
+        "properties": {
+          "original_name": {"type": "string"},
+          "mime_type": {"type": "string"},
+          "file_size": {"type": "integer", "description": "可选-前端声明大小, 单位字节"},
+          "directory": {"type": "string", "default": "uploads"},
+          "sha256": {"type": "string", "description": "文件内容SHA256(64 hex)用于去重"},
+          "entity_type": {"type": "string"},
+          "entity_id": {"type": "integer"},
+          "expires_in": {"type": "integer", "default": 600}
+        }
+      },
+      "FilePresignResponse": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "data": {"type": "object", "properties": {
+            "duplicate": {"type": "boolean"},
+            "file_path": {"type": "string"},
+            "public_url": {"type": "string"},
+            "sha256": {"type": "string"},
+            "reference_count": {"type": "integer"},
+            "url": {"type": "string", "description": "预签名 PUT URL (当 duplicate=false)"},
+            "method": {"type": "string"},
+            "headers": {"type": "object"},
+            "expires_in": {"type": "integer"},
+            "expires_at": {"type": "string"},
+            "max_file_size": {"type": "integer"},
+            "confirm_required": {"type": "boolean"},
+            "declared_file_size": {"type": "integer"}
+          }}
+        }
+      },
+      "FileConfirmRequest": {
+        "type": "object",
+        "required": ["file_path","original_name"],
+        "properties": {
+          "file_path": {"type": "string"},
+          "original_name": {"type": "string"},
+            "sha256": {"type": "string"},
+          "entity_type": {"type": "string"},
+          "entity_id": {"type": "integer"}
+        }
+      },
+      "FileConfirmResponse": {
+        "type": "object",
+        "properties": {
+          "success": {"type": "boolean"},
+          "message": {"type": "string"},
+          "data": {"type": "object", "properties": {
+            "file_path": {"type": "string"},
+            "size": {"type": "integer"},
+            "mime_type": {"type": "string"},
+            "sha256": {"type": "string"},
+            "reference_count": {"type": "integer"},
+            "duplicate": {"type": "boolean"}
+          }}
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {

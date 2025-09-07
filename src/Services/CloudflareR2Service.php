@@ -81,6 +81,127 @@ class CloudflareR2Service
     }
 
     /**
+     * 暴露允许的 MIME 类型（只读）
+     */
+    public function getAllowedMimeTypes(): array
+    {
+        return self::ALLOWED_MIME_TYPES;
+    }
+
+    /**
+     * 暴露允许的扩展名（只读）
+     */
+    public function getAllowedExtensions(): array
+    {
+        return self::ALLOWED_EXTENSIONS;
+    }
+
+    /**
+     * 获取最大文件大小（字节）
+     */
+    public function getMaxFileSize(): int
+    {
+        return self::MAX_FILE_SIZE;
+    }
+
+    /**
+     * 生成用于前端直接上传的对象 key （不立即上传）
+     * @param string $originalName 原始文件名
+     * @param string $directory 目标目录
+     * @return array{file_name:string,file_path:string,public_url:string}
+     */
+    public function generateDirectUploadKey(string $originalName, string $directory = 'uploads'): array
+    {
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        // 复用内部的文件名生成逻辑（复制一份以避免修改私有方法签名）
+        $uuid = sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+        );
+        $fileName = $uuid . '.' . $extension;
+        $date = date('Y/m/d');
+        $filePath = trim($directory, '/') . '/' . $date . '/' . $fileName;
+        return [
+            'file_name' => $fileName,
+            'file_path' => $filePath,
+            'public_url' => $this->getPublicUrl($filePath)
+        ];
+    }
+
+    /**
+     * 为 PUT 上传生成预签名 URL（前端直传）
+     * @param string $filePath 对象 key
+     * @param string $contentType 内容类型
+     * @param int $expiresIn 过期秒数（默认 600，最大 3600）
+     * @return array{url:string,method:string,headers:array,expires_in:int,expires_at:string}
+     */
+    public function generateUploadPresignedUrl(string $filePath, string $contentType, int $expiresIn = 600): array
+    {
+        $expiresIn = max(60, min($expiresIn, 3600));
+        try {
+            $command = $this->s3Client->getCommand('PutObject', [
+                'Bucket' => $this->bucketName,
+                'Key' => $filePath,
+                'ContentType' => $contentType
+            ]);
+            $request = $this->s3Client->createPresignedRequest($command, "+{$expiresIn} seconds");
+            return [
+                'url' => (string)$request->getUri(),
+                'method' => 'PUT',
+                'headers' => [
+                    // 预签名请求必须保持与签名时一致的 Content-Type
+                    'Content-Type' => $contentType
+                ],
+                'expires_in' => $expiresIn,
+                'expires_at' => date('Y-m-d H:i:s', time() + $expiresIn)
+            ];
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to generate upload presigned URL', [
+                'error' => $e->getMessage(),
+                'file_path' => $filePath
+            ]);
+            throw new \RuntimeException('Failed to generate upload presigned URL: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 记录前端直传完成后的审计日志（在确认接口中调用）
+     * @param int $userId
+     * @param string|null $entityType
+     * @param int|null $entityId
+     * @param array $fileInfo 从 getFileInfo 获得
+     * @param string $originalName 原始文件名
+     */
+    public function logDirectUploadAudit(int $userId, ?string $entityType, ?int $entityId, array $fileInfo, string $originalName): void
+    {
+        try {
+            $this->auditLogService->log([
+                'user_id' => $userId,
+                'action' => 'file_uploaded',
+                'entity_type' => $entityType ?: 'file',
+                'entity_id' => $entityId,
+                'new_value' => json_encode([
+                    'file_path' => $fileInfo['file_path'] ?? '',
+                    'file_size' => $fileInfo['size'] ?? 0,
+                    'mime_type' => $fileInfo['mime_type'] ?? '',
+                    'original_name' => $originalName,
+                    'direct_upload' => true
+                ]),
+                'notes' => 'Direct file upload to Cloudflare R2 (presigned PUT)'
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to log direct upload audit', [
+                'error' => $e->getMessage(),
+                'file_path' => $fileInfo['file_path'] ?? ''
+            ]);
+        }
+    }
+
+    /**
      * 上传文件到R2
      */
     public function uploadFile(
@@ -571,6 +692,157 @@ class CloudflareR2Service
                 'bucket_name' => $this->bucketName,
                 'error' => $e->getMessage()
             ];
+        }
+    }
+
+    /**
+     * 列出文件（简单分页，最多 1000）
+     * @param string|null $prefix 目录前缀
+     * @param int $limit
+     * @return array
+     */
+    public function listFiles(?string $prefix = null, int $limit = 100): array
+    {
+        $limit = max(1, min($limit, 1000));
+        try {
+            $params = [
+                'Bucket' => $this->bucketName,
+                'MaxKeys' => $limit
+            ];
+            if ($prefix) {
+                $params['Prefix'] = rtrim($prefix, '/') . '/';
+            }
+            $result = $this->s3Client->listObjectsV2($params);
+            $files = [];
+            if (!empty($result['Contents'])) {
+                foreach ($result['Contents'] as $obj) {
+                    if (isset($obj['Key']) && substr($obj['Key'], -1) !== '/') {
+                        $files[] = [
+                            'file_path' => $obj['Key'],
+                            'size' => $obj['Size'] ?? 0,
+                            'last_modified' => $obj['LastModified'] ?? null,
+                            'public_url' => $this->getPublicUrl($obj['Key'])
+                        ];
+                    }
+                }
+            }
+            return [
+                'success' => true,
+                'files' => $files,
+                'count' => count($files)
+            ];
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to list files', ['error' => $e->getMessage(), 'prefix' => $prefix]);
+            return [
+                'success' => false,
+                'files' => [],
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * 初始化分片上传
+     * @return array{upload_id:string,file_path:string}
+     */
+    public function initMultipartUpload(string $originalName, string $directory, string $contentType): array
+    {
+        $keyInfo = $this->generateDirectUploadKey($originalName, $directory);
+        try {
+            $result = $this->s3Client->createMultipartUpload([
+                'Bucket' => $this->bucketName,
+                'Key' => $keyInfo['file_path'],
+                'ContentType' => $contentType
+            ]);
+            return [
+                'upload_id' => $result['UploadId'],
+                'file_path' => $keyInfo['file_path'],
+                'public_url' => $keyInfo['public_url']
+            ];
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to init multipart upload', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('Failed to init multipart upload: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 为指定 part 生成预签名 URL
+     * @return array{url:string,part_number:int,headers:array}
+     */
+    public function generateMultipartPartUrl(string $filePath, string $uploadId, int $partNumber, int $expiresIn = 900): array
+    {
+        $partNumber = max(1, min($partNumber, 10000));
+        $expiresIn = max(60, min($expiresIn, 3600));
+        try {
+            $command = $this->s3Client->getCommand('UploadPart', [
+                'Bucket' => $this->bucketName,
+                'Key' => $filePath,
+                'UploadId' => $uploadId,
+                'PartNumber' => $partNumber
+            ]);
+            $request = $this->s3Client->createPresignedRequest($command, "+{$expiresIn} seconds");
+            return [
+                'url' => (string)$request->getUri(),
+                'part_number' => $partNumber,
+                'headers' => []
+            ];
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to generate multipart part URL', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('Failed to generate multipart part URL: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 完成分片上传
+     * @param array<int,array{part_number:int,etag:string}> $parts
+     */
+    public function completeMultipartUpload(string $filePath, string $uploadId, array $parts): array
+    {
+        // 组装为 S3 需要的结构
+        $normalized = [];
+        foreach ($parts as $p) {
+            if (!isset($p['part_number'], $p['etag'])) continue;
+            $normalized[] = [
+                'PartNumber' => (int)$p['part_number'],
+                'ETag' => $p['etag']
+            ];
+        }
+        try {
+            $result = $this->s3Client->completeMultipartUpload([
+                'Bucket' => $this->bucketName,
+                'Key' => $filePath,
+                'UploadId' => $uploadId,
+                'MultipartUpload' => [
+                    'Parts' => $normalized
+                ]
+            ]);
+            return [
+                'success' => true,
+                'file_path' => $filePath,
+                'public_url' => $this->getPublicUrl($filePath),
+                'etag' => $result['ETag'] ?? null
+            ];
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to complete multipart upload', ['error' => $e->getMessage()]);
+            throw new \RuntimeException('Failed to complete multipart upload: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 终止分片上传（可用于取消）
+     */
+    public function abortMultipartUpload(string $filePath, string $uploadId): bool
+    {
+        try {
+            $this->s3Client->abortMultipartUpload([
+                'Bucket' => $this->bucketName,
+                'Key' => $filePath,
+                'UploadId' => $uploadId
+            ]);
+            return true;
+        } catch (AwsException $e) {
+            $this->logger->error('Failed to abort multipart upload', ['error' => $e->getMessage()]);
+            return false;
         }
     }
 }

@@ -482,6 +482,36 @@ CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW 
 --
 -- 表的索引 `audit_logs`
 --
+-- 表的索引前新增 `files` 表结构定义
+--
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `files`
+--
+
+CREATE TABLE `files` (
+  `id` bigint(20) unsigned NOT NULL,
+  `sha256` varchar(64) NOT NULL,
+  `file_path` varchar(191) NOT NULL,
+  `mime_type` varchar(128) DEFAULT NULL,
+  `size` bigint(20) unsigned NOT NULL DEFAULT '0',
+  `original_name` varchar(255) DEFAULT NULL,
+  `user_id` bigint(20) unsigned DEFAULT NULL,
+  `reference_count` int(10) unsigned NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
+
+-- --------------------------------------------------------
+
+--
+-- 索引结构 `files`
+-- (保持与其它表一致, 在统一索引区集中添加)
+--
+
+--
 ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
@@ -493,6 +523,13 @@ ALTER TABLE `audit_logs`
   ADD KEY `idx_audit_logs_user_id_actor` (`user_id`,`actor_type`),
   ADD KEY `idx_audit_logs_operation_category` (`operation_category`),
   ADD KEY `idx_audit_logs_change_type` (`change_type`);
+
+-- 表的索引 `files`
+ALTER TABLE `files`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `files_file_path_unique` (`file_path`),
+  ADD UNIQUE KEY `files_sha256_unique` (`sha256`),
+  ADD KEY `files_sha256_index` (`sha256`);
 
 --
 -- 表的索引 `avatars`
@@ -661,6 +698,10 @@ ALTER TABLE `audit_logs`
 --
 ALTER TABLE `avatars`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+-- 使用表AUTO_INCREMENT `files`
+ALTER TABLE `files`
+  MODIFY `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `error_logs`

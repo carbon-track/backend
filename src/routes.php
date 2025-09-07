@@ -222,6 +222,14 @@ return function (App $app) {
 
     $registerFileRoutes = function (RouteCollectorProxy $group) {
         $group->group('/files', function (RouteCollectorProxy $files) {
+            // 前端直传：获取预签名、确认
+            $files->post('/presign', [FileUploadController::class, 'getDirectUploadPresign']);
+            $files->post('/confirm', [FileUploadController::class, 'confirmDirectUpload']);
+            // 多分片上传
+            $files->post('/multipart/init', [FileUploadController::class, 'initMultipartUpload']);
+            $files->get('/multipart/part', [FileUploadController::class, 'getMultipartPartUrl']);
+            $files->post('/multipart/complete', [FileUploadController::class, 'completeMultipartUpload']);
+            $files->post('/multipart/abort', [FileUploadController::class, 'abortMultipartUpload']);
             $files->post('/upload', [FileUploadController::class, 'uploadFile']);
             $files->post('/upload-multiple', [FileUploadController::class, 'uploadMultipleFiles']);
             $files->delete('/{path:.+}', [FileUploadController::class, 'deleteFile']);

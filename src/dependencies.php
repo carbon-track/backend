@@ -20,6 +20,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\SystemLogService;
+use CarbonTrack\Services\FileMetadataService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
 use CarbonTrack\Controllers\UserController;
@@ -239,6 +240,13 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    // File Metadata Service (for deduplication)
+    $container->set(FileMetadataService::class, function (ContainerInterface $c) {
+        return new FileMetadataService(
+            $c->get(Logger::class)
+        );
+    });
+
     // Models
     $container->set(Avatar::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
@@ -360,7 +368,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(Logger::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(FileMetadataService::class)
         );
     });
 
