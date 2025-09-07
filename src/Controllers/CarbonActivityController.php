@@ -552,4 +552,3 @@ class CarbonActivityController
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
 }
-

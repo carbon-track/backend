@@ -118,19 +118,12 @@ class AuthController
                 date('Y-m-d H:i:s')
             ]);
             $userId = (int)$this->db->lastInsertId();
-            $this->auditLogService->log([
-                'user_id' => $userId,
-                'action' => 'user_registered',
-                'entity_type' => 'user',
-                'entity_id' => $userId,
-                'new_value' => json_encode([
+            $this->auditLogService->logAuthOperation('register', $userId, true, [
+                'request_data' => [
                     'username' => $data['username'],
                     'email' => $data['email'],
                     'school_id' => $data['school_id'] ?? null
-                ]),
-                'ip_address' => $this->getClientIP($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'User registration'
+                ]
             ]);
             try { $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']); } catch (\Throwable $e) { $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]); }
             // 发送站内欢迎消息暂时跳过（测试最小 schema 可能缺少完整列 / 触发 Eloquent timestamps 逻辑），以保持测试稳定
@@ -203,13 +196,10 @@ class AuthController
                 }
             }
             if (!$user || !$passwordField || !password_verify((string)$data['password'], (string)$user[$passwordField])) {
-                $this->auditLogService->log([
-                    'action' => 'login_failed',
-                    'entity_type' => 'user',
-                    'old_value' => json_encode(['identifier' => $identifier]),
+                $this->auditLogService->logAuthOperation('login', null, false, [
+                    'identifier' => $identifier,
                     'ip_address' => $this->getClientIP($request),
-                    'user_agent' => $request->getHeaderLine('User-Agent'),
-                    'notes' => 'Invalid credentials'
+                    'user_agent' => $request->getHeaderLine('User-Agent')
                 ]);
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -229,14 +219,9 @@ class AuthController
                 }
             }
             $token = $this->authService->generateToken($user);
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'user_login',
-                'entity_type' => 'user',
-                'entity_id' => $user['id'],
+            $this->auditLogService->logAuthOperation('login', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'Successful login'
+                'user_agent' => $request->getHeaderLine('User-Agent')
             ]);
             $userInfo = [
                 'id' => $user['id'],
@@ -274,14 +259,9 @@ class AuthController
         try {
             $user = $this->authService->getCurrentUser($request);
             if ($user) {
-                $this->auditLogService->log([
-                    'user_id' => $user['id'],
-                    'action' => 'user_logout',
-                    'entity_type' => 'user',
-                    'entity_id' => $user['id'],
+                $this->auditLogService->logAuthOperation('logout', $user['id'], true, [
                     'ip_address' => $this->getClientIP($request),
-                    'user_agent' => $request->getHeaderLine('User-Agent'),
-                    'notes' => 'User logout'
+                    'user_agent' => $request->getHeaderLine('User-Agent')
                 ]);
             }
             return $this->jsonResponse($response, [
@@ -384,14 +364,9 @@ class AuthController
                 } catch (\Throwable $e) {
                     $this->logger->warning('Failed to send password reset email', ['error' => $e->getMessage()]);
                 }
-                $this->auditLogService->log([
-                    'user_id' => $user['id'],
-                    'action' => 'password_reset_requested',
-                    'entity_type' => 'user',
-                    'entity_id' => $user['id'],
+                $this->auditLogService->logAuthOperation('password_reset_request', $user['id'], true, [
                     'ip_address' => $this->getClientIP($request),
-                    'user_agent' => $request->getHeaderLine('User-Agent'),
-                    'notes' => 'Password reset requested'
+                    'user_agent' => $request->getHeaderLine('User-Agent')
                 ]);
             }
             return $this->jsonResponse($response, [
@@ -452,14 +427,9 @@ class AuthController
                     $upd->execute([$hashed, $user['id']]);
                 }
             }
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'password_reset_completed',
-                'entity_type' => 'user',
-                'entity_id' => $user['id'],
+            $this->auditLogService->logAuthOperation('password_reset', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'Password reset completed'
+                'user_agent' => $request->getHeaderLine('User-Agent')
             ]);
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -535,14 +505,9 @@ class AuthController
                     $upd->execute([$hashed, $user['id']]);
                 }
             }
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'password_changed',
-                'entity_type' => 'user',
-                'entity_id' => $user['id'],
+            $this->auditLogService->logAuthOperation('password_change', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'Password changed by user'
+                'user_agent' => $request->getHeaderLine('User-Agent')
             ]);
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -579,4 +544,3 @@ class AuthController
         return $server['REMOTE_ADDR'] ?? '0.0.0.0';
     }
 }
-

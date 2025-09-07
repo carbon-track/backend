@@ -134,12 +134,16 @@ class AdminController
             $total = (int)$countStmt->fetchColumn();
 
             // 记录审计日志
-            $this->auditLog->log(
-                $user['id'],
-                'admin_users_list',
+            $this->auditLog->logDataChange(
                 'admin',
+                'users_list',
+                $user['id'],
+                'admin',
+                'users',
                 null,
-                ['filters' => $params]
+                null,
+                null,
+                ['filters' => $params, 'page' => $page, 'limit' => $limit]
             );
 
             return $this->jsonResponse($response, [
@@ -526,12 +530,17 @@ class AdminController
             $stmt->execute();
 
             // 审计日志
-            $this->auditLog->log(
+            $this->auditLog->logAdminOperation(
+                'user_updated',
                 $admin['id'],
-                'admin_user_updated',
-                'user',
-                $userId,
-                ['updated_fields' => array_keys($data)]
+                'user_management',
+                [
+                    'table' => 'users',
+                    'record_id' => $userId,
+                    'updated_fields' => array_keys($data),
+                    'old_data' => null,
+                    'new_data' => $data
+                ]
             );
 
             return $this->jsonResponse($response, [
@@ -569,12 +578,16 @@ class AdminController
             $stmt->bindValue(':id', $userId, PDO::PARAM_INT);
             $stmt->execute();
 
-            $this->auditLog->log(
+            $this->auditLog->logAdminOperation(
+                'user_deleted',
                 $admin['id'],
-                'admin_user_deleted',
-                'user',
-                $userId,
-                []
+                'user_management',
+                [
+                    'table' => 'users',
+                    'record_id' => $userId,
+                    'old_data' => null,
+                    'new_data' => null
+                ]
             );
 
             return $this->jsonResponse($response, [
@@ -704,4 +717,3 @@ class AdminController
             ->withStatus($status);
     }
 }
-

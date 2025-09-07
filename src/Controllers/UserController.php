@@ -222,15 +222,17 @@ class UserController
             }
 
             // 记录审计日志
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'profile_updated',
-                'entity_type' => 'user',
-                'entity_id' => $user['id'],
-                'old_value' => json_encode($oldValues),
-                'new_value' => json_encode($updateData),
-                'notes' => 'User profile updated'
-            ]);
+            $this->auditLogService->logDataChange(
+                'user_management',
+                'profile_update',
+                $user['id'],
+                'user',
+                'users',
+                $user['id'],
+                $oldValues,
+                $updateData,
+                ['request_data' => $data]
+            );
 
             $this->logger->info('User profile updated', [
                 'user_id' => $user['id'],
@@ -341,15 +343,17 @@ class UserController
             $newAvatar = $this->avatarModel->getAvatarById($avatarId);
 
             // 记录审计日志
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'avatar_changed',
-                'entity_type' => 'user',
-                'entity_id' => $user['id'],
-                'old_value' => json_encode(['avatar_id' => $currentAvatarId]),
-                'new_value' => json_encode(['avatar_id' => $avatarId]),
-                'notes' => 'User changed avatar'
-            ]);
+            $this->auditLogService->logDataChange(
+                'user_management',
+                'avatar_change',
+                $user['id'],
+                'user',
+                'users',
+                $user['id'],
+                ['avatar_id' => $currentAvatarId],
+                ['avatar_id' => $avatarId],
+                ['request_data' => $data]
+            );
 
             $this->logger->info('User avatar changed', [
                 'user_id' => $user['id'],
@@ -782,4 +786,3 @@ class UserController
             ->withStatus($status);
     }
 }
-

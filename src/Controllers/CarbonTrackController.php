@@ -229,12 +229,16 @@ class CarbonTrackController
             ]);
 
             // 记录审计日志
-            $this->auditLog->log(
+            $this->auditLog->logDataChange(
+                'carbon_management',
+                'record_submitted',
                 $user['id'],
-                'carbon_record_submitted',
+                'user',
                 'carbon_records',
                 $recordId,
-                ['activity_id' => $data['activity_id'], 'amount' => $data['amount']]
+                null,
+                ['activity_id' => $data['activity_id'], 'amount' => $data['amount']],
+                ['request_data' => $data]
             );
 
             // 发送站内信
@@ -275,9 +279,12 @@ class CarbonTrackController
 
             return $this->json($response, [
                 'success' => true,
+                'message' => 'Record submitted successfully',
                 'data' => [
-                    'overview' => $stats,
-                    'monthly' => $monthlyStats,
+                    'record_id' => $recordId,
+                    'carbon_saved' => $carbonSaved,
+                    'points_earned' => $pointsEarned,
+                    'status' => 'pending',
                     'monthly_achievements' => $monthlyAchievements
                 ]
             ]);
@@ -568,12 +575,17 @@ class CarbonTrackController
             }
 
             // 记录审计日志
-            $this->auditLog->log(
-                $user['id'],
+            $this->auditLog->logAdminOperation(
                 "carbon_record_{$action}",
-                'carbon_records',
-                $recordId,
-                ['review_note' => $reviewNote]
+                $user['id'],
+                'carbon_management',
+                [
+                    'table' => 'carbon_records',
+                    'record_id' => $recordId,
+                    'review_note' => $reviewNote,
+                    'old_data' => ['status' => 'pending'],
+                    'new_data' => ['status' => $action === 'approve' ? 'approved' : 'rejected']
+                ]
             );
 
             // 发送站内信通知用户
@@ -859,14 +871,16 @@ class CarbonTrackController
 
             // 审计日志：软删除碳减排记录（不区分是否真的删除成功，这里记录用户意图）
             try {
-                $this->auditLog->log(
+                $this->auditLog->logDataChange(
+                    'carbon_management',
+                    'record_deleted',
                     $user['id'],
-                    'carbon_record_deleted',
-                    'carbon_record',
+                    $this->authService->isAdminUser($user) ? 'admin' : 'user',
+                    'carbon_records',
                     $recordId,
-                    [
-                        'by_admin' => $this->authService->isAdminUser($user),
-                    ]
+                    null,
+                    null,
+                    ['by_admin' => $this->authService->isAdminUser($user)]
                 );
             } catch (\Throwable $ignore) { /* ignore audit failures */ }
 
