@@ -249,12 +249,37 @@ class CarbonTrackController
             // 通知管理员
             $this->notifyAdminsNewRecord($recordId, $user, $activity);
 
+            // 获取本月成就 - 按活动分组的积分明细
+            $currentMonth = date('Y-m');
+            $achievementsSql = "
+                SELECT 
+                    a.name_zh as name,
+                    SUM(r.points_earned) as points
+                FROM carbon_records r
+                LEFT JOIN carbon_activities a ON r.activity_id = a.id
+                WHERE r.user_id = :user_id 
+                    AND r.status = 'approved'
+                    AND DATE_FORMAT(r.date, '%Y-%m') = :current_month
+                    AND r.deleted_at IS NULL
+                GROUP BY r.activity_id, a.name_zh
+                ORDER BY SUM(r.points_earned) DESC
+                LIMIT 10
+            ";
+
+            $achievementsStmt = $this->db->prepare($achievementsSql);
+            $achievementsStmt->execute([
+                'user_id' => $user['id'],
+                'current_month' => $currentMonth
+            ]);
+            $monthlyAchievements = $achievementsStmt->fetchAll(PDO::FETCH_ASSOC);
+
             return $this->json($response, [
                 'success' => true,
-                'record_id' => $recordId,
-                'calculation' => $calculation,
-                'message' => 'Record submitted successfully',
-                'uploaded_images' => $images
+                'data' => [
+                    'overview' => $stats,
+                    'monthly' => $monthlyStats,
+                    'monthly_achievements' => $monthlyAchievements
+                ]
             ]);
 
         } catch (\Exception $e) {
@@ -757,11 +782,36 @@ class CarbonTrackController
             $monthlyStmt->execute(['user_id' => $user['id']]);
             $monthlyStats = $monthlyStmt->fetchAll(PDO::FETCH_ASSOC);
 
+            // 获取本月成就 - 按活动分组的积分明细
+            $currentMonth = date('Y-m');
+            $achievementsSql = "
+                SELECT 
+                    a.name_zh as name,
+                    SUM(r.points_earned) as points
+                FROM carbon_records r
+                LEFT JOIN carbon_activities a ON r.activity_id = a.id
+                WHERE r.user_id = :user_id 
+                    AND r.status = 'approved'
+                    AND DATE_FORMAT(r.date, '%Y-%m') = :current_month
+                    AND r.deleted_at IS NULL
+                GROUP BY r.activity_id, a.name_zh
+                ORDER BY SUM(r.points_earned) DESC
+                LIMIT 10
+            ";
+
+            $achievementsStmt = $this->db->prepare($achievementsSql);
+            $achievementsStmt->execute([
+                'user_id' => $user['id'],
+                'current_month' => $currentMonth
+            ]);
+            $monthlyAchievements = $achievementsStmt->fetchAll(PDO::FETCH_ASSOC);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => [
                     'overview' => $stats,
-                    'monthly' => $monthlyStats
+                    'monthly' => $monthlyStats,
+                    'monthly_achievements' => $monthlyAchievements
                 ]
             ]);
 
@@ -947,4 +997,3 @@ class CarbonTrackController
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
 }
-
