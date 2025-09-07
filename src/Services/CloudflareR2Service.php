@@ -47,6 +47,9 @@ class CloudflareR2Service
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
 
+    // 是否禁用 TLS 校验（仅用于开发/诊断）
+    $disableVerify = !empty($_ENV['R2_DISABLE_TLS_VERIFY']);
+
         // 初始化S3客户端（兼容Cloudflare R2）
         $this->s3Client = new S3Client([
             'version' => 'latest',
@@ -62,6 +65,30 @@ class CloudflareR2Service
                 'connect_timeout' => 10,
             ]
         ]);
+
+        // 直接在底层 guzzle 客户端上设置 verify (S3Client 支持透传 'verify' 配置)
+        if ($disableVerify) {
+            try {
+                $this->s3Client = new S3Client([
+                    'version' => 'latest',
+                    'region' => 'auto',
+                    'endpoint' => $endpoint,
+                    'credentials' => [
+                        'key' => $accessKeyId,
+                        'secret' => $secretAccessKey,
+                    ],
+                    'use_path_style_endpoint' => true,
+                    'http' => [
+                        'timeout' => 30,
+                        'connect_timeout' => 10,
+                    ],
+                    'verify' => false
+                ]);
+                $this->logger->warning('R2 TLS certificate verification DISABLED (R2_DISABLE_TLS_VERIFY=1). Do not use in production.');
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to recreate S3Client with verify=false', ['error' => $e->getMessage()]);
+            }
+        }
 
         // 计算公共访问基地址
         $derivedBase = $this->derivePublicBase($endpoint, $bucketName);
@@ -900,6 +927,7 @@ class CloudflareR2Service
             'public_base' => $this->publicUrl,
             'endpoint_has_bucket_path' => $endpointHasBucketInPath,
             'recommended_endpoint' => $recommendedEndpoint,
+            'tls_verify' => empty($_ENV['R2_DISABLE_TLS_VERIFY']),
             'checks' => $checks,
             'errors' => $errors,
             'timestamp' => date('c')
