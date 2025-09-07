@@ -36,12 +36,17 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS schools (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                status TEXT DEFAULT 'active',\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Point exchanges
             "CREATE TABLE IF NOT EXISTS point_exchanges (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                product_id INTEGER,\n                quantity INTEGER,\n                points_used INTEGER,\n                product_name TEXT,\n                product_price INTEGER,\n                delivery_address TEXT,\n                contact_phone TEXT,\n                notes TEXT,\n                status TEXT,\n                tracking_number TEXT,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT\n            )",
-            // Points transactions
-            "CREATE TABLE IF NOT EXISTS points_transactions (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                points REAL,\n                type TEXT,\n                description TEXT,\n                related_table TEXT,\n                related_id TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            // Points transactions (expanded to satisfy AdminController & joins)
+            // Production table has many columns; we include the ones accessed in tests/controllers.
+            // Needed columns (referenced): id, uid, user_id (some code may use either), points, status, img, notes,
+            // activity_id, type, raw, auth, created_at, updated_at, deleted_at, approved_by, approved_at, activity_date.
+            // Use TEXT/INTEGER with NULL defaults to stay permissive.
+            "CREATE TABLE IF NOT EXISTS points_transactions (\n                id TEXT PRIMARY KEY,\n                uid INTEGER,\n                user_id INTEGER,\n                username TEXT,\n                email TEXT,\n                points REAL,\n                raw REAL,\n                act TEXT,\n                type TEXT,\n                status TEXT,\n                img TEXT,\n                notes TEXT,\n                activity_id TEXT,\n                activity_date TEXT,\n                auth TEXT,\n                approved_by INTEGER,\n                approved_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT,\n                deleted_at TEXT,\n                related_table TEXT,\n                related_id TEXT\n            )",
             // Messages (minimal columns used in service)
             "CREATE TABLE IF NOT EXISTS messages (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                sender_id INTEGER,\n                receiver_id INTEGER,\n                title TEXT,\n                content TEXT,\n                is_read INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
-            // Audit logs (subset)
-            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                action TEXT,\n                entity_type TEXT,\n                entity_id TEXT,\n                old_values TEXT,\n                new_values TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                data TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
+            // Only a subset of data is critical for tests; optional columns kept nullable.
+            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Login attempts
             "CREATE TABLE IF NOT EXISTS login_attempts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT,\n                ip_address TEXT,\n                success INTEGER,\n                attempted_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Error logs (simplified)
@@ -59,8 +64,39 @@ class TestSchemaBuilder
             try { $pdo->exec($sql); } catch (\Throwable $e) { /* ignore */ }
         }
 
+        // Perform lightweight schema upgrades for existing SQLite file (idempotent)
+        self::ensureColumns($pdo, 'audit_logs', [
+            'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
+            'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT',
+            'referrer TEXT', 'operation_category TEXT', 'operation_subtype TEXT', 'change_type TEXT'
+        ]);
+        self::ensureColumns($pdo, 'points_transactions', [
+            'uid INTEGER', 'raw REAL', 'act TEXT', 'status TEXT', 'img TEXT', 'notes TEXT', 'activity_id TEXT',
+            'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',
+            'auth TEXT'
+        ]);
+
         // Seed minimal reference data if absent
         self::seed($pdo);
+    }
+
+    private static function ensureColumns(PDO $pdo, string $table, array $definitions): void
+    {
+        try {
+            $existing = [];
+            $res = $pdo->query("PRAGMA table_info($table)");
+            if ($res) {
+                foreach ($res->fetchAll(PDO::FETCH_ASSOC) as $col) {
+                    $existing[strtolower($col['name'])] = true;
+                }
+            }
+            foreach ($definitions as $def) {
+                [$name] = explode(' ', $def, 2);
+                if (!isset($existing[strtolower($name)])) {
+                    try { $pdo->exec("ALTER TABLE $table ADD COLUMN $def"); } catch (\Throwable $e) { /* ignore */ }
+                }
+            }
+        } catch (\Throwable $e) { /* ignore */ }
     }
 
     private static function seed(PDO $pdo): void

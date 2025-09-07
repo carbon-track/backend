@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- 主机： localhost:3306
--- 生成日期： 2025-09-04 21:14:16
+-- 生成日期： 2025-09-07 14:39:34
 -- 服务器版本： 5.6.51-log
 -- PHP 版本： 7.4.33
 
@@ -18,15 +18,62 @@ SET time_zone = "+00:00";
 -- --------------------------------------------------------
 
 --
+-- 替换视图以便查看 `admin_operations`
+-- （参见下面的实际视图）
+--
+CREATE TABLE `admin_operations` (
+`id` int(11)
+,`user_id` int(11)
+,`actor_type` enum('user','admin','system')
+,`action` varchar(100)
+,`data` longtext
+,`old_data` longtext
+,`new_data` longtext
+,`affected_table` varchar(100)
+,`affected_id` int(11)
+,`status` enum('success','failed','pending')
+,`response_code` int(11)
+,`session_id` varchar(255)
+,`referrer` varchar(512)
+,`operation_category` varchar(100)
+,`operation_subtype` varchar(100)
+,`change_type` enum('create','update','delete','read','other')
+,`ip_address` varchar(45)
+,`user_agent` varchar(512)
+,`request_method` varchar(10)
+,`endpoint` varchar(512)
+,`created_at` datetime
+,`admin_username` varchar(255)
+,`admin_email` varchar(255)
+);
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `audit_logs`
 --
 
 CREATE TABLE `audit_logs` (
   `id` int(11) NOT NULL,
   `user_id` int(11) DEFAULT NULL,
-  `action` varchar(100) NOT NULL,
-  `data` longtext,
+  `actor_type` enum('user','admin','system') NOT NULL DEFAULT 'user',
+  `action` varchar(100) NOT NULL COMMENT 'Specific action name (e.g., user_login, admin_user_update)',
+  `data` longtext COMMENT 'Original request/response data as JSON',
+  `old_data` longtext COMMENT 'Previous state data before operation as JSON',
+  `new_data` longtext COMMENT 'New state data after operation as JSON',
+  `affected_table` varchar(100) DEFAULT NULL COMMENT 'Database table affected by the operation',
+  `affected_id` int(11) DEFAULT NULL COMMENT 'Primary key of affected record',
+  `status` enum('success','failed','pending') NOT NULL DEFAULT 'success',
+  `response_code` int(11) DEFAULT NULL,
+  `session_id` varchar(255) DEFAULT NULL,
+  `referrer` varchar(512) DEFAULT NULL,
+  `operation_category` varchar(100) DEFAULT NULL COMMENT 'High-level category (e.g., authentication, user_management, carbon_calculation)',
+  `operation_subtype` varchar(100) DEFAULT NULL COMMENT 'Specific subtype of operation',
+  `change_type` enum('create','update','delete','read','other') DEFAULT 'other' COMMENT 'Type of data change performed',
   `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(512) DEFAULT NULL,
+  `request_method` varchar(10) DEFAULT NULL,
+  `endpoint` varchar(512) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -51,13 +98,6 @@ CREATE TABLE `avatars` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
---
--- 转存表中的数据 `avatars`
---
-
-INSERT INTO `avatars` (`id`, `uuid`, `name`, `description`, `file_path`, `thumbnail_path`, `category`, `sort_order`, `is_active`, `is_default`, `created_at`, `updated_at`, `deleted_at`) VALUES
-(1, '550e8400-e29b-41d4-a716-446655440001', '默认头像1', NULL, '/avatars/default/avatar_01.png', NULL, 'default', 1, 1, 1, '2025-08-16 14:20:12', '2025-08-16 14:20:12', NULL);
 
 -- --------------------------------------------------------
 
@@ -309,17 +349,36 @@ CREATE TABLE `products` (
 -- --------------------------------------------------------
 
 --
+-- 替换视图以便查看 `recent_audit_activities`
+-- （参见下面的实际视图）
+--
+CREATE TABLE `recent_audit_activities` (
+`id` int(11)
+,`actor_type` enum('user','admin','system')
+,`user_id` int(11)
+,`action` varchar(100)
+,`operation_category` varchar(100)
+,`operation_subtype` varchar(100)
+,`change_type` enum('create','update','delete','read','other')
+,`status` enum('success','failed','pending')
+,`ip_address` varchar(45)
+,`created_at` datetime
+);
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `schools`
 --
 
 CREATE TABLE `schools` (
   `id` int(11) NOT NULL,
   `name` text NOT NULL,
+  `deleted_at` datetime DEFAULT NULL,
   `location` varchar(255) DEFAULT NULL,
   `is_active` tinyint(1) NOT NULL DEFAULT '1',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `deleted_at` datetime DEFAULT NULL
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -398,12 +457,23 @@ CREATE TABLE `users` (
   `avatar_id` int(11) DEFAULT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
 
---
--- 转存表中的数据 `users`
---
+-- --------------------------------------------------------
 
-INSERT INTO `users` (`id`, `username`, `password`, `lastlgn`, `email`, `points`, `school`, `location`, `created_at`, `updated_at`, `deleted_at`, `status`, `is_admin`, `class_name`, `school_id`, `avatar_id`) VALUES
-(1, 'demo', '$2y$10$rRKKzQAnfxz4nlJCvisTOOKrTaklDYvJDPlBSSemIYR0MmGGzC1Pu', '2025-09-04 20:48:01', 'demo@cbt.internal', '0.00', NULL, NULL, '2025-09-04 20:47:25', '2025-09-04 20:48:01', NULL, 'active', 0, NULL, NULL, NULL);
+--
+-- 视图结构 `admin_operations`
+--
+DROP TABLE IF EXISTS `admin_operations`;
+
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `admin_operations`  AS  select `al`.`id` AS `id`,`al`.`user_id` AS `user_id`,`al`.`actor_type` AS `actor_type`,`al`.`action` AS `action`,`al`.`data` AS `data`,`al`.`old_data` AS `old_data`,`al`.`new_data` AS `new_data`,`al`.`affected_table` AS `affected_table`,`al`.`affected_id` AS `affected_id`,`al`.`status` AS `status`,`al`.`response_code` AS `response_code`,`al`.`session_id` AS `session_id`,`al`.`referrer` AS `referrer`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`ip_address` AS `ip_address`,`al`.`user_agent` AS `user_agent`,`al`.`request_method` AS `request_method`,`al`.`endpoint` AS `endpoint`,`al`.`created_at` AS `created_at`,`u`.`username` AS `admin_username`,`u`.`email` AS `admin_email` from (`audit_logs` `al` left join `users` `u` on((`al`.`user_id` = `u`.`id`))) where (`al`.`actor_type` = 'admin') order by `al`.`created_at` desc ;
+
+-- --------------------------------------------------------
+
+--
+-- 视图结构 `recent_audit_activities`
+--
+DROP TABLE IF EXISTS `recent_audit_activities`;
+
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `recent_audit_activities`  AS  select `al`.`id` AS `id`,`al`.`actor_type` AS `actor_type`,`al`.`user_id` AS `user_id`,`al`.`action` AS `action`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`status` AS `status`,`al`.`ip_address` AS `ip_address`,`al`.`created_at` AS `created_at` from `audit_logs` `al` where (`al`.`created_at` >= (now() - interval 7 day)) order by `al`.`created_at` desc ;
 
 --
 -- 转储表的索引
@@ -415,7 +485,14 @@ INSERT INTO `users` (`id`, `username`, `password`, `lastlgn`, `email`, `points`,
 ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
-  ADD KEY `idx_audit_logs_created_at` (`created_at`);
+  ADD KEY `idx_audit_logs_created_at` (`created_at`),
+  ADD KEY `idx_audit_logs_actor_type` (`actor_type`),
+  ADD KEY `idx_audit_logs_endpoint` (`endpoint`(191)),
+  ADD KEY `idx_audit_logs_affected_table` (`affected_table`),
+  ADD KEY `idx_audit_logs_status` (`status`),
+  ADD KEY `idx_audit_logs_user_id_actor` (`user_id`,`actor_type`),
+  ADD KEY `idx_audit_logs_operation_category` (`operation_category`),
+  ADD KEY `idx_audit_logs_change_type` (`change_type`);
 
 --
 -- 表的索引 `avatars`
@@ -583,7 +660,7 @@ ALTER TABLE `audit_logs`
 -- 使用表AUTO_INCREMENT `avatars`
 --
 ALTER TABLE `avatars`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `error_logs`
@@ -649,5 +726,5 @@ ALTER TABLE `transactions`
 -- 使用表AUTO_INCREMENT `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 COMMIT;

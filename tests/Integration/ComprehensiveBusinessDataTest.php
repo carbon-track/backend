@@ -593,6 +593,23 @@ class ComprehensiveBusinessDataTest extends TestCase
         $this->assertTrue($data['success']);
     }
 
+    public function testAdminStatsEndpoint(): void
+    {
+        $adminToken = $this->getAuthToken('wang.fang@testdomain.com');
+        $request = $this->createRequest('GET', '/api/v1/admin/stats', [], [
+            'Authorization' => 'Bearer ' . $adminToken
+        ]);
+        $response = $this->app->handle($request);
+        $this->assertEquals(200, $response->getStatusCode(), 'Admin stats status code');
+        $body = (string)$response->getBody();
+        $data = json_decode($body, true);
+        $this->assertIsArray($data, 'Response JSON decoded');
+        $this->assertTrue($data['success'] ?? false, 'Admin stats success flag');
+        $this->assertArrayHasKey('data', $data, 'Admin stats contains data');
+        $this->assertArrayHasKey('users', $data['data'], 'Users stats present');
+        $this->assertArrayHasKey('transactions', $data['data'], 'Transactions stats present');
+    }
+
     public function testApiErrorHandling(): void
     {
         // Test 1: Unauthorized access
