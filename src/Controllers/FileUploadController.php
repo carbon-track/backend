@@ -178,9 +178,18 @@ class FileUploadController
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'file_path and original_name are required'], 400);
             }
 
-            // 确认对象存在
+            // 初次获取对象信息
             $info = $this->r2Service->getFileInfo($filePath);
             if (!$info) {
+                // 可能为 R2 写入后延迟可见，等待再试一次
+                usleep(250000); // 250ms
+                $info = $this->r2Service->getFileInfo($filePath);
+            }
+            if (!$info) {
+                $this->logger->warning('Confirm direct upload: file not yet visible in R2', [
+                    'file_path' => $filePath,
+                    'user_id' => $user['id']
+                ]);
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'File not found in storage'], 404);
             }
 
@@ -811,6 +820,23 @@ class FileUploadController
         return $response
             ->withHeader('Content-Type', 'application/json')
             ->withStatus($status);
+    }
+
+    /**
+     * R2 诊断信息
+     */
+    public function r2Diagnostics(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, ['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $data = $this->r2Service->diagnostics();
+            return $this->jsonResponse($response, ['success' => true, 'data' => $data]);
+        } catch (\Throwable $e) {
+            return $this->jsonResponse($response, ['success' => false, 'message' => 'Diagnostics failed: ' . $e->getMessage()], 500);
+        }
     }
 }
 

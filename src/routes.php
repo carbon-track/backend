@@ -232,6 +232,7 @@ return function (App $app) {
             $files->post('/multipart/abort', [FileUploadController::class, 'abortMultipartUpload']);
             $files->post('/upload', [FileUploadController::class, 'uploadFile']);
             $files->post('/upload-multiple', [FileUploadController::class, 'uploadMultipleFiles']);
+            $files->get('/r2/diagnostics', [FileUploadController::class, 'r2Diagnostics']);
             $files->delete('/{path:.+}', [FileUploadController::class, 'deleteFile']);
             $files->get('/{path:.+}/info', [FileUploadController::class, 'getFileInfo']);
             $files->get('/{path:.+}/presigned-url', [FileUploadController::class, 'generatePresignedUrl']);

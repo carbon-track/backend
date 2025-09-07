@@ -845,5 +845,48 @@ class CloudflareR2Service
             return false;
         }
     }
+
+    /**
+     * 诊断服务可用性
+     */
+    public function diagnostics(): array
+    {
+        $errors = [];
+        $checks = [];
+        // Bucket list 权限
+        try {
+            $this->s3Client->listObjectsV2([
+                'Bucket' => $this->bucketName,
+                'MaxKeys' => 1
+            ]);
+            $checks['list_objects'] = true;
+        } catch (\Throwable $e) {
+            $checks['list_objects'] = false;
+            $errors[] = 'ListObjects failed: ' . $e->getMessage();
+        }
+        // 预签名 PUT
+        try {
+            $tmpKey = 'diagnostics/_probe_' . date('Ymd_His') . '_' . substr(bin2hex(random_bytes(6)),0,12) . '.txt';
+            $put = $this->generateUploadPresignedUrl($tmpKey, 'text/plain', 120);
+            $checks['presign_put'] = true;
+            $checks['presign_sample'] = [
+                'file_path' => $tmpKey,
+                'url_length' => strlen($put['url'])
+            ];
+        } catch (\Throwable $e) {
+            $checks['presign_put'] = false;
+            $errors[] = 'Presign failed: ' . $e->getMessage();
+        }
+        // 计算 endpoint (用于调试展示)
+        $endpoint = method_exists($this->s3Client, 'getEndpoint') ? (string)$this->s3Client->getEndpoint() : 'n/a';
+        return [
+            'bucket' => $this->bucketName,
+            'endpoint' => $endpoint,
+            'public_base' => $this->publicUrl,
+            'checks' => $checks,
+            'errors' => $errors,
+            'timestamp' => date('c')
+        ];
+    }
 }
 
