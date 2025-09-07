@@ -409,6 +409,55 @@ class AuditLogService
     }
 
     /**
+     * 获取审计日志总数（用于分页）
+     * @param array $filters 过滤条件
+     * @return int
+     */
+    public function getAuditLogsCount(array $filters = []): int
+    {
+        try {
+            $sql = "SELECT COUNT(*) FROM audit_logs WHERE 1=1";
+            $params = [];
+            
+            if (isset($filters['user_id'])) {
+                $sql .= " AND user_id = ?";
+                $params[] = $filters['user_id'];
+            }
+            if (isset($filters['actor_type'])) {
+                $sql .= " AND actor_type = ?";
+                $params[] = $filters['actor_type'];
+            }
+            if (isset($filters['category'])) {
+                $sql .= " AND operation_category = ?";
+                $params[] = $filters['category'];
+            }
+            if (isset($filters['status'])) {
+                $sql .= " AND status = ?";
+                $params[] = $filters['status'];
+            }
+            if (isset($filters['date_from'])) {
+                $sql .= " AND created_at >= ?";
+                $params[] = $filters['date_from'];
+            }
+            if (isset($filters['date_to'])) {
+                $sql .= " AND created_at <= ?";
+                $params[] = $filters['date_to'];
+            }
+
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+            
+            return (int)$stmt->fetchColumn();
+
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to get audit logs count', [
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
+
+    /**
      * 清理旧日志
      * @param int $days 保留天数
      * @return int 删除的记录数

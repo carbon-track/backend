@@ -141,15 +141,17 @@ class AdminController
             ]);
         } catch (\Exception $e) {
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
-                throw $e; // 直接抛出以便 PHPUnit 显示具体错误
+                throw $e;
             }
-            error_log('getStats exception: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            error_log('getUsers exception: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
 
-    /** 获取待审核交易列表 */
+    /**
+     * 获取待审核交易列表
+     */
     public function getPendingTransactions(Request $request, Response $response): Response
     {
         try {
@@ -213,7 +215,9 @@ class AdminController
         }
     }
 
-    /** 管理员统计数据（跨数据库兼容） */
+    /**
+     * 管理员统计数据（跨数据库兼容）
+     */
     public function getStats(Request $request, Response $response): Response
     {
         try {
@@ -317,7 +321,9 @@ class AdminController
         }
     }
 
-    /** 审计日志列表 */
+    /**
+     * 审计日志列表
+     */
     public function getLogs(Request $request, Response $response): Response
     {
         try {
@@ -331,42 +337,41 @@ class AdminController
             $limit = min(100, max(10, (int)($params['limit'] ?? 50)));
             $offset = ($page - 1) * $limit;
 
-            $action = trim((string)($params['action'] ?? ''));
-            $entityType = trim((string)($params['entity_type'] ?? ''));
-            $userId = trim((string)($params['user_id'] ?? ''));
-            $start = trim((string)($params['start_date'] ?? ''));
-            $end = trim((string)($params['end_date'] ?? ''));
-
-            $where = [];
-            $queryParams = [];
-            if ($action !== '') { $where[] = 'al.action LIKE :action'; $queryParams['action'] = "%{$action}%"; }
-            if ($entityType !== '') { $where[] = 'al.entity_type = :entity_type'; $queryParams['entity_type'] = $entityType; }
-            if ($userId !== '') { $where[] = 'al.user_id = :user_id'; $queryParams['user_id'] = $userId; }
-            if ($start !== '') { $where[] = 'al.created_at >= :start_date'; $queryParams['start_date'] = $start; }
-            if ($end !== '') { $where[] = 'al.created_at <= :end_date'; $queryParams['end_date'] = $end . ' 23:59:59'; }
-            $whereClause = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-
-            $sql = "SELECT al.id, al.user_id, al.action, al.entity_type, al.entity_id, al.old_values, al.new_values,
-                            al.ip_address, al.user_agent, al.created_at, u.username, u.email
-                    FROM audit_logs al
-                    LEFT JOIN users u ON al.user_id = u.id
-                    {$whereClause}
-                    ORDER BY al.created_at DESC
-                    LIMIT :limit OFFSET :offset";
-            $stmt = $this->db->prepare($sql);
-            foreach ($queryParams as $k => $v) { $stmt->bindValue(":{$k}", $v); }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
-            $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($logs as &$l) {
-                $l['old_values'] = $l['old_values'] ? json_decode($l['old_values'], true) : null;
-                $l['new_values'] = $l['new_values'] ? json_decode($l['new_values'], true) : null;
+            $filters = [];
+            if (!empty($params['action'])) {
+                $filters['action'] = '%' . trim($params['action']) . '%'; // Partial match for action
             }
-            $countStmt = $this->db->prepare("SELECT COUNT(*) FROM audit_logs al {$whereClause}");
-            foreach ($queryParams as $k => $v) { $countStmt->bindValue(":{$k}", $v); }
-            $countStmt->execute();
-            $total = (int)$countStmt->fetchColumn();
+            if (!empty($params['actor_type'])) {
+                $filters['actor_type'] = trim($params['actor_type']);
+            }
+            if (!empty($params['user_id'])) {
+                $filters['user_id'] = (int)$params['user_id'];
+            }
+            if (!empty($params['operation_category'])) {
+                $filters['category'] = trim($params['operation_category']);
+            }
+            if (!empty($params['status'])) {
+                $filters['status'] = trim($params['status']);
+            }
+            if (!empty($params['date_from'])) {
+                $filters['date_from'] = trim($params['date_from']) . ' 00:00:00';
+            }
+            if (!empty($params['date_to'])) {
+                $filters['date_to'] = trim($params['date_to']) . ' 23:59:59';
+            }
+
+            $logs = $this->auditLog->getAuditLogs($filters, $limit, $offset);
+
+            // Get total count for pagination
+            $countFilters = $filters;
+            unset($countFilters['limit'], $countFilters['offset']); // Not needed for count
+            $total = $this->auditLog->getAuditLogsCount($countFilters);
+
+            $this->auditLog->logAdminOperation('audit_logs_viewed', $user['id'], 'admin', [
+                'filters' => $filters,
+                'page' => $page,
+                'limit' => $limit
+            ]);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -386,7 +391,9 @@ class AdminController
         }
     }
 
-    /** 更新用户 is_admin / status */
+    /**
+     * 更新用户 is_admin / status
+     */
     public function updateUser(Request $request, Response $response, array $args): Response
     {
         try {
@@ -394,124 +401,4 @@ class AdminController
             if (!$admin || !$this->authService->isAdminUser($admin)) {
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
-            $userId = (int)($args['id'] ?? 0);
-            if ($userId <= 0) { return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400); }
-
-            $data = $request->getParsedBody() ?: [];
-            $fields = [];
-            $params = [];
-            if (array_key_exists('is_admin', $data)) { $fields[] = 'is_admin = :is_admin'; $params['is_admin'] = (int)((bool)$data['is_admin']); }
-            if (array_key_exists('status', $data)) {
-                $allowed = ['active','inactive'];
-                $status = in_array($data['status'], $allowed, true) ? $data['status'] : 'inactive';
-                $fields[] = 'status = :status';
-                $params['status'] = $status;
-            }
-            if (!$fields) {
-                return $this->jsonResponse($response, ['error' => 'No valid fields to update','code' => 'NO_UPDATE_FIELDS'], 400);
-            }
-            $sql = 'UPDATE users SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
-            $stmt = $this->db->prepare($sql);
-            foreach ($params as $k => $v) { $stmt->bindValue(':'.$k, $v); }
-            $stmt->bindValue(':id', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-
-            $this->auditLog->logAdminOperation('user_updated', $admin['id'], 'user_management', [
-                'table' => 'users', 'record_id' => $userId, 'updated_fields' => array_keys($data),
-                'old_data' => null, 'new_data' => $data
-            ]);
-
-            return $this->jsonResponse($response, ['success' => true, 'message' => 'User updated successfully']);
-        } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
-        }
-    }
-
-    /** 软删除用户 */
-    public function deleteUser(Request $request, Response $response, array $args): Response
-    {
-        try {
-            $admin = $this->authService->getCurrentUser($request);
-            if (!$admin || !$this->authService->isAdminUser($admin)) { return $this->jsonResponse($response, ['error' => 'Access denied'], 403); }
-            $userId = (int)($args['id'] ?? 0);
-            if ($userId <= 0) { return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400); }
-            if ((int)$admin['id'] === $userId) { return $this->jsonResponse($response, ['error' => 'Cannot delete yourself'], 400); }
-
-            $stmt = $this->db->prepare('UPDATE users SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL');
-            $stmt->bindValue(':id', $userId, PDO::PARAM_INT);
-            $stmt->execute();
-
-            $this->auditLog->logAdminOperation('user_deleted', $admin['id'], 'user_management', [
-                'table' => 'users','record_id' => $userId,'old_data' => null,'new_data' => null
-            ]);
-            return $this->jsonResponse($response, ['success' => true, 'message' => 'User deleted successfully']);
-        } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
-        }
-    }
-
-    /** 调整用户积分 */
-    public function adjustUserPoints(Request $request, Response $response, array $args): Response
-    {
-        try {
-            $admin = $this->authService->getCurrentUser($request);
-            if (!$admin || !$this->authService->isAdminUser($admin)) { return $this->jsonResponse($response, ['error' => 'Access denied'], 403); }
-            $userId = (int)($args['id'] ?? 0);
-            if ($userId <= 0) { return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400); }
-
-            $data = $request->getParsedBody() ?: [];
-            $delta = isset($data['delta']) ? (float)$data['delta'] : 0.0;
-            $reason = trim((string)($data['reason'] ?? ''));
-            if ($delta === 0.0) { return $this->jsonResponse($response, ['error' => 'Delta must be non-zero','code'=>'INVALID_DELTA'], 400); }
-
-            $this->db->beginTransaction();
-            try {
-                $stmt = $this->db->prepare('SELECT id, username, email, points FROM users WHERE id = :id AND deleted_at IS NULL FOR UPDATE');
-                $stmt->execute(['id' => $userId]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$user) { $this->db->rollBack(); return $this->jsonResponse($response, ['error' => 'User not found'], 404); }
-
-                $newPoints = (float)$user['points'] + $delta;
-                if ($newPoints < 0) { $this->db->rollBack(); return $this->jsonResponse($response, ['error' => 'Insufficient points after adjustment','code'=>'NEGATIVE_BALANCE'], 400); }
-
-                $upd = $this->db->prepare('UPDATE users SET points = :points, updated_at = NOW() WHERE id = :id');
-                $upd->execute(['points' => $newPoints, 'id' => $userId]);
-
-                $ins = $this->db->prepare('INSERT INTO points_transactions (username,email,time,img,points,auth,raw,act,uid,activity_id,type,notes,activity_date,status,approved_by,approved_at,created_at,updated_at)
-                        VALUES (:username,:email,NOW(),NULL,:points,:auth,:raw,:act,:uid,NULL,:type,:notes,NULL,:status,:approved_by,NOW(),NOW(),NOW())');
-                $ins->execute([
-                    'username' => $user['username'] ?? null,
-                    'email' => $user['email'] ?? '',
-                    'points' => $delta,
-                    'auth' => 'admin',
-                    'raw' => $delta,
-                    'act' => 'admin_adjust',
-                    'uid' => $userId,
-                    'type' => 'admin_adjust',
-                    'notes' => $reason !== '' ? $reason : 'Admin points adjustment',
-                    'status' => 'approved',
-                    'approved_by' => (int)$admin['id']
-                ]);
-                $this->db->commit();
-            } catch (\Throwable $t) { $this->db->rollBack(); throw $t; }
-
-            $this->auditLog->logAdminOperation('user_points_adjusted', $admin['id'], 'user_management', [
-                'table'=>'users','record_id'=>$userId,'delta'=>$delta,'reason'=>$reason,
-                'old_points'=>$user['points'],'new_points'=>$newPoints
-            ]);
-
-            return $this->jsonResponse($response, ['success'=>true,'message'=>'User points adjusted successfully','data'=>['user_id'=>$userId,'delta'=>$delta,'new_balance'=>$newPoints]]);
-        } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
-            return $this->jsonResponse($response, ['error'=>'Internal server error'],500);
-        }
-    }
-
-    private function jsonResponse(Response $response, array $data, int $status = 200): Response
-    {
-        $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
-        return $response->withHeader('Content-Type','application/json')->withStatus($status);
-    }
-}
+            $userId
