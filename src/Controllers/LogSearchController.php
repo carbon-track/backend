@@ -57,15 +57,36 @@ class LogSearchController
             $dateFrom = $q['date_from'] ?? null;
             $dateTo = $q['date_to'] ?? null;
 
+            // new explicit filter params
+            $systemFilters = [
+                'method' => $q['method'] ?? null,
+                'status_code' => $q['status_code'] ?? null,
+                'user_id' => $q['user_id'] ?? null,
+                'request_id' => $q['request_id'] ?? null,
+                'path' => $q['path'] ?? null,
+                'min_duration' => $q['min_duration'] ?? null,
+                'max_duration' => $q['max_duration'] ?? null,
+            ];
+            $auditFilters = [
+                'user_id' => $q['user_id'] ?? null,
+                'action' => $q['action'] ?? null,
+                'status' => $q['audit_status'] ?? null,
+                'request_id' => $q['request_id'] ?? null,
+            ];
+            $errorFilters = [
+                'error_type' => $q['error_type'] ?? null,
+                'request_id' => $q['request_id'] ?? null,
+            ];
+
             $result = [];
             if (in_array('system', $types, true)) {
-                $result['system'] = $this->searchSystem($keyword, $limit, $dateFrom, $dateTo, $systemPage);
+                $result['system'] = $this->searchSystem($keyword, $limit, $dateFrom, $dateTo, $systemPage, $systemFilters);
             }
             if (in_array('audit', $types, true)) {
-                $result['audit'] = $this->searchAudit($keyword, $limit, $dateFrom, $dateTo, $auditPage);
+                $result['audit'] = $this->searchAudit($keyword, $limit, $dateFrom, $dateTo, $auditPage, $auditFilters);
             }
             if (in_array('error', $types, true)) {
-                $result['error'] = $this->searchError($keyword, $limit, $dateFrom, $dateTo, $errorPage);
+                $result['error'] = $this->searchError($keyword, $limit, $dateFrom, $dateTo, $errorPage, $errorFilters);
             }
 
             return $this->json($response, ['success' => true, 'data' => $result]);
@@ -225,7 +246,7 @@ class LogSearchController
             return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
         }
 
-    private function searchSystem(string $kw, int $limit, ?string $from, ?string $to, int $page): array
+    private function searchSystem(string $kw, int $limit, ?string $from, ?string $to, int $page, array $filters = []): array
     {
         $conditions = [];
         $params = [];
@@ -241,20 +262,27 @@ class LogSearchController
         }
         if ($from) { $conditions[] = 'created_at >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'created_at <= :to'; $params['to'] = $this->normalizeEnd($to); }
-    $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
+        if (!empty($filters['method'])) { $conditions[] = 'method = :f_method'; $params['f_method'] = $filters['method']; }
+        if (!empty($filters['status_code'])) { $conditions[] = 'status_code = :f_status'; $params['f_status'] = (int)$filters['status_code']; }
+        if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :f_user'; $params['f_user'] = (int)$filters['user_id']; }
+        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :f_rid'; $params['f_rid'] = $filters['request_id']; }
+        if (!empty($filters['path'])) { $conditions[] = 'path LIKE :f_path'; $params['f_path'] = '%' . $filters['path'] . '%'; }
+        if (!empty($filters['min_duration'])) { $conditions[] = 'duration_ms >= :f_min_d'; $params['f_min_d'] = (int)$filters['min_duration']; }
+        if (!empty($filters['max_duration'])) { $conditions[] = 'duration_ms <= :f_max_d'; $params['f_max_d'] = (int)$filters['max_duration']; }
+        $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
         $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, method, path, status_code, user_id, duration_ms, created_at FROM system_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-    $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
+        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
-    private function searchAudit(string $kw, int $limit, ?string $from, ?string $to, int $page): array
+    private function searchAudit(string $kw, int $limit, ?string $from, ?string $to, int $page, array $filters = []): array
     {
         $conditions = [];
         $params = [];
@@ -270,20 +298,25 @@ class LogSearchController
         }
         if ($from) { $conditions[] = 'created_at >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'created_at <= :to'; $params['to'] = $this->normalizeEnd($to); }
-    $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
+        if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :a_user'; $params['a_user'] = (int)$filters['user_id']; }
+        if (!empty($filters['action'])) { $conditions[] = 'action = :a_action'; $params['a_action'] = $filters['action']; }
+        if (!empty($filters['status'])) { $conditions[] = 'status = :a_status'; $params['a_status'] = $filters['status']; }
+        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :a_rid'; $params['a_rid'] = $filters['request_id']; }
+        $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, user_id, actor_type, action, operation_category, status, ip_address, created_at FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+    // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
+    $sql = "SELECT SQL_CALC_FOUND_ROWS id, user_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-    $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
+        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
-    private function searchError(string $kw, int $limit, ?string $from, ?string $to, int $page): array
+    private function searchError(string $kw, int $limit, ?string $from, ?string $to, int $page, array $filters = []): array
     {
         $conditions = [];
         $params = [];
@@ -299,17 +332,19 @@ class LogSearchController
         }
         if ($from) { $conditions[] = 'error_time >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'error_time <= :to'; $params['to'] = $this->normalizeEnd($to); }
-    $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
-    $offset = ($page - 1) * $limit;
-    $sql = "SELECT SQL_CALC_FOUND_ROWS id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        if (!empty($filters['error_type'])) { $conditions[] = 'error_type = :e_type'; $params['e_type'] = $filters['error_type']; }
+        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :e_rid'; $params['e_rid'] = $filters['request_id']; }
+        $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
+        $offset = ($page - 1) * $limit;
+        $sql = "SELECT SQL_CALC_FOUND_ROWS id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
-    $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-    $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
+        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
-    return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
+        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
     private function normalizeStart(string $d): string

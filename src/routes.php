@@ -198,6 +198,9 @@ return function (App $app) {
             $admin->get('/system-logs', [SystemLogController::class, 'list']);
             $admin->get('/system-logs/{id:[0-9]+}', [SystemLogController::class, 'detail']);
             $admin->get('/logs/search', [LogSearchController::class, 'search']);
+            // Unified logs export & related (previously missing, causing 404 in frontend)
+            $admin->get('/logs/export', [LogSearchController::class, 'export']);
+            $admin->get('/logs/related', [LogSearchController::class, 'related']);
             $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
             $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);

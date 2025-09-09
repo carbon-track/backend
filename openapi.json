@@ -164,7 +164,17 @@
           { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 }, "description": "每种日志分页大小 (默认50, 上限200)" },
           { "name": "system_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "system 日志页码(>=1)" },
           { "name": "audit_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "audit 日志页码(>=1)" },
-          { "name": "error_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "error 日志页码(>=1)" }
+          { "name": "error_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "error 日志页码(>=1)" },
+          { "name": "method", "in": "query", "schema": { "type": "string" }, "description": "仅筛选 system_logs 的 HTTP 方法" },
+          { "name": "status_code", "in": "query", "schema": { "type": "integer" }, "description": "仅筛选 system_logs 的响应状态码" },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" }, "description": "匹配 system/audit 两类日志 user_id" },
+          { "name": "request_id", "in": "query", "schema": { "type": "string" }, "description": "按 request_id 精确匹配三类日志" },
+          { "name": "path", "in": "query", "schema": { "type": "string" }, "description": "system_logs path LIKE 模糊匹配" },
+          { "name": "min_duration", "in": "query", "schema": { "type": "integer" }, "description": "system_logs duration_ms 下限 (>=)" },
+          { "name": "max_duration", "in": "query", "schema": { "type": "integer" }, "description": "system_logs duration_ms 上限 (<=)" },
+          { "name": "action", "in": "query", "schema": { "type": "string" }, "description": "audit_logs action 精确匹配" },
+          { "name": "audit_status", "in": "query", "schema": { "type": "string" }, "description": "audit_logs status 精确匹配" },
+          { "name": "error_type", "in": "query", "schema": { "type": "string" }, "description": "error_logs error_type 精确匹配" }
         ],
         "responses": {
           "200": { "description": "查询成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnifiedLogSearchResponse" } } } },
@@ -184,8 +194,18 @@
           { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
           { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } },
           { "name": "types", "in": "query", "schema": { "type": "string", "example": "system,audit,error" } },
-            { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["csv", "ndjson"], "default": "csv" } },
-            { "name": "max", "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 10000 } }
+          { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["csv", "ndjson"], "default": "csv" } },
+          { "name": "max", "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 10000 } },
+          { "name": "method", "in": "query", "schema": { "type": "string" }, "description": "system_logs HTTP 方法" },
+          { "name": "status_code", "in": "query", "schema": { "type": "integer" }, "description": "system_logs 状态码" },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" }, "description": "system/audit user_id" },
+          { "name": "request_id", "in": "query", "schema": { "type": "string" }, "description": "按 request_id 过滤三类日志" },
+          { "name": "path", "in": "query", "schema": { "type": "string" }, "description": "system_logs path LIKE" },
+          { "name": "min_duration", "in": "query", "schema": { "type": "integer" }, "description": "system_logs duration_ms 下限" },
+          { "name": "max_duration", "in": "query", "schema": { "type": "integer" }, "description": "system_logs duration_ms 上限" },
+          { "name": "action", "in": "query", "schema": { "type": "string" }, "description": "audit_logs action" },
+          { "name": "audit_status", "in": "query", "schema": { "type": "string" }, "description": "audit_logs status" },
+          { "name": "error_type", "in": "query", "schema": { "type": "string" }, "description": "error_logs error_type" }
         ],
         "responses": {
           "200": { "description": "导出成功", "content": { "text/csv": { "schema": { "type": "string", "format": "binary" } }, "application/x-ndjson": { "schema": { "type": "string", "format": "binary" } } } },
