@@ -94,9 +94,27 @@ class AuthController
                     'code' => 'EMAIL_EXISTS'
                 ], 409);
             }
-            if (!empty($data['school_id'])) {
+            // 允许在注册时通过 new_school_name 创建新学校（防滥用：仅此处自动创建）
+            $schoolId = $data['school_id'] ?? null;
+            if (!empty($data['new_school_name']) && empty($schoolId)) {
+                $name = trim((string)$data['new_school_name']);
+                if ($name !== '') {
+                    // 先尝试查重（忽略大小写）
+                    $stmt = $this->db->prepare('SELECT id FROM schools WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1');
+                    $stmt->execute([$name]);
+                    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($row) {
+                        $schoolId = (int)$row['id'];
+                    } else {
+                        $ins = $this->db->prepare('INSERT INTO schools (name, created_at, updated_at) VALUES (?, ?, ?)');
+                        $now = date('Y-m-d H:i:s');
+                        $ins->execute([$name, $now, $now]);
+                        $schoolId = (int)$this->db->lastInsertId();
+                    }
+                }
+            } elseif (!empty($schoolId)) {
                 $stmt = $this->db->prepare('SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL');
-                $stmt->execute([$data['school_id']]);
+                $stmt->execute([$schoolId]);
                 if (!$stmt->fetch()) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -113,7 +131,7 @@ class AuthController
                 $data['username'],
                 $data['email'],
                 $hashed,
-                $data['school_id'] ?? null,
+                $schoolId,
                 date('Y-m-d H:i:s'),
                 date('Y-m-d H:i:s')
             ]);
@@ -122,7 +140,8 @@ class AuthController
                 'request_data' => [
                     'username' => $data['username'],
                     'email' => $data['email'],
-                    'school_id' => $data['school_id'] ?? null
+                    'school_id' => $schoolId,
+                    'new_school_name' => $data['new_school_name'] ?? null
                 ]
             ]);
             try { $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']); } catch (\Throwable $e) { $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]); }

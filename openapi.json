@@ -2639,15 +2639,17 @@
       },
       "RegisterRequest": {
         "type": "object",
-        "required": ["username", "email", "password", "confirm_password", "cf_turnstile_response", "school_id"],
+        "required": ["username", "email", "password", "confirm_password"],
         "properties": {
           "username": { "type": "string", "minLength": 3, "maxLength": 50, "pattern": "^[a-zA-Z0-9_]+$", "description": "用户名，只能包含字母、数字和下划线" },
           "email": { "type": "string", "format": "email", "description": "有效的邮箱地址" },
-          "password": { "type": "string", "format": "password", "description": "密码，至少8个字符，包含字母和数字" },
+          "password": { "type": "string", "format": "password", "description": "密码，至少8个字符" },
           "confirm_password": { "type": "string", "format": "password", "description": "确认密码" },
-          "school_id": { "type": "integer", "minimum": 1, "description": "学校ID" },
-          "cf_turnstile_response": { "type": "string", "description": "Cloudflare Turnstile验证令牌" }
-        }
+          "school_id": { "type": "integer", "minimum": 1, "description": "已存在学校ID；与 new_school_name 互斥且优先生效" },
+          "new_school_name": { "type": "string", "minLength": 1, "maxLength": 255, "description": "当用户找不到所属学校时可直接输入新名称，将在注册事务内自动创建（若不存在，忽略大小写匹配）；若同时提供 school_id 与 new_school_name，则使用 school_id 并忽略 new_school_name" },
+          "cf_turnstile_response": { "type": "string", "description": "Cloudflare Turnstile验证令牌（某些部署可选）" }
+        },
+        "description": "注册请求。允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
       },
       "RegisterSuccessResponse": {
         "type": "object",

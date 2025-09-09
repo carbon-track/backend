@@ -432,9 +432,10 @@ class CarbonTrackController
 
             $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // 处理图片字段
+            // 处理图片字段（统一为标准数组结构）
             foreach ($records as &$record) {
-                $record['images'] = $record['images'] ? json_decode($record['images'], true) : [];
+                $decoded = $record['images'] ? json_decode($record['images'], true) : [];
+                $record['images'] = $this->normalizeImages($decoded);
             }
 
             return $this->json($response, [
@@ -500,8 +501,9 @@ class CarbonTrackController
                 return $this->json($response, ['error' => 'Record not found'], 404);
             }
 
-            // 处理图片字段
-            $record['images'] = $record['images'] ? json_decode($record['images'], true) : [];
+            // 处理图片字段（详情）
+            $decoded = $record['images'] ? json_decode($record['images'], true) : [];
+            $record['images'] = $this->normalizeImages($decoded);
 
             return $this->json($response, [
                 'success' => true,
@@ -714,7 +716,8 @@ class CarbonTrackController
 
             // 处理图片字段与前端期望的别名
             foreach ($records as &$record) {
-                $record['images'] = $record['images'] ? json_decode($record['images'], true) : [];
+                $decoded = $record['images'] ? json_decode($record['images'], true) : [];
+                $record['images'] = $this->normalizeImages($decoded);
                 // 前端列表兼容字段
                 $record['user_username'] = $record['username'] ?? null;
                 $record['user_email'] = $record['email'] ?? null;
@@ -1004,6 +1007,54 @@ class CarbonTrackController
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
+    }
+    
+    /**
+     * 归一化 images 字段
+     * 支持以下历史格式：
+     * - 空/null -> []
+     * - ["url1","url2"] 简单字符串数组
+     * - [{ public_url:..., file_path:..., original_name:... }, ...]
+     * - 单个字符串 "url"
+     * 输出统一为：[{"url": "...", "file_path": "...", "original_name": "...", "mime_type": "...", "size": int|null }]
+     */
+    private function normalizeImages($raw): array
+    {
+        if (empty($raw)) { return []; }
+        // 若传入的是字符串（单个）
+        if (is_string($raw)) {
+            return [[ 'url' => $raw ]];
+        }
+        $result = [];
+        if (!is_array($raw)) { return []; }
+        foreach ($raw as $item) {
+            if (is_string($item)) {
+                $result[] = ['url' => $item];
+                continue;
+            }
+            if (!is_array($item)) { continue; }
+            $url = $item['public_url'] ?? $item['url'] ?? null;
+            // 如果没有 public_url 但有 file_path 且配置了 r2Service，可尝试构造（此处假设 CloudflareR2Service 暴露 buildPublicUrl 或类似；若无，则直接使用 file_path）
+            if (!$url && isset($item['file_path'])) {
+                try {
+                    if ($this->r2Service && method_exists($this->r2Service, 'getPublicUrl')) {
+                        $url = $this->r2Service->getPublicUrl($item['file_path']);
+                    } else {
+                        $url = $item['file_path'];
+                    }
+                } catch (\Throwable $e) {
+                    $url = $item['file_path'];
+                }
+            }
+            $result[] = [
+                'url' => $url,
+                'file_path' => $item['file_path'] ?? null,
+                'original_name' => $item['original_name'] ?? null,
+                'mime_type' => $item['mime_type'] ?? null,
+                'size' => $item['file_size'] ?? ($item['size'] ?? null)
+            ];
+        }
+        return $result;
     }
     private function json(Response $response, array $data, int $status = 200): Response
     {
