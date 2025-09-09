@@ -130,6 +130,10 @@ return function (App $app) {
             $carbon->get('/factors', [CarbonTrackController::class, 'getCarbonFactors']);
             $carbon->get(PATH_STATS, [CarbonTrackController::class, 'getUserStats']);
         })->add(AuthMiddleware::class);
+
+    // New standardized endpoint documented in OpenAPI replacing legacy /carbon-track/record
+    // Enforces image requirement in controller based on path containing '/api/v1/carbon-records'
+    $group->post('/carbon-records', [CarbonTrackController::class, 'submitRecord'])->add(AuthMiddleware::class);
     };
 
     $registerProductRoutes = function (RouteCollectorProxy $group) {

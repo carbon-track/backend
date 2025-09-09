@@ -34,8 +34,8 @@
     "idempotency": {
       "description": "幂等性中间件，防止重复提交敏感操作",
       "required_routes": ["/auth/register", "/carbon-track/record", "/exchange", "/messages"],
-      "headers": ["X-Request-ID"],
-      "requirements": "必须是有效的UUID格式，24小时内有效",
+  "headers": ["X-Request-ID"],
+  "requirements": "必须是16位小写十六进制字符串 (^[0-9a-f]{16}$)，24小时内有效。注意：旧文档/客户端可能仍使用UUID；服务端会接受并规范化为内部16hex request_id。",
       "error_codes": ["BAD_REQUEST", "IDEMPOTENCY_KEY_REQUIRED", "INVALID_UUID"]
     },
     "cors": {
@@ -96,9 +96,9 @@
       "implementation": "前端需要集成Cloudflare Turnstile组件，获取验证令牌后随请求发送"
     },
     "idempotency": {
-      "description": "敏感操作需要幂等性ID，防止重复提交",
+  "description": "敏感操作需要幂等性ID，防止重复提交。与日志 request_id 共用 X-Request-ID 头。",
       "required_operations": ["用户注册", "提交碳记录", "积分兑换", "发送消息"],
-      "implementation": "生成UUID作为X-Request-ID请求头，24小时内相同ID的请求将返回相同结果"
+  "implementation": "客户端应生成 16 位小写十六进制随机ID (例如使用随机8字节经 bin2hex / md5(random_bytes(8))截取) 作为 X-Request-ID。若未提供，系统会自动生成用于日志关联，但幂等性将失效。服务端在所有4xx/5xx响应中返回相同 request_id 字段与响应头 X-Request-ID 便于排障。"
     },
     "pagination": {
       "description": "列表类API支持分页，默认每页20条记录",
@@ -1006,7 +1006,7 @@
       "post": {
         "tags": ["Carbon Track"],
         "summary": "提交碳记录",
-        "description": "提交碳减排记录供审核。需要幂等性ID防止重复提交。",
+  "description": "提交碳减排记录供审核 (legacy 路径)。需要幂等性ID防止重复提交。为兼容旧版，该路径下 images 字段可为空数组或省略。推荐迁移到 /carbon-records。",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -1015,9 +1015,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "format": "uuid"
+              "pattern": "^[0-9a-f]{16}$",
+              "example": "a3f1c09e7b5d4c1a"
             },
-            "description": "幂等性请求ID，必须是有效的UUID格式，24小时内有效"
+            "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)，24小时内有效。旧客户端若仍发送UUID将被拒绝或忽略幂等语义。"
           }
         ],
         "requestBody": {
@@ -1039,6 +1040,67 @@
           "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "404": { "description": "Activity not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "Internal Server Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/carbon-records": {
+      "post": {
+        "tags": ["Carbon Track"],
+        "summary": "提交碳记录 (v1)",
+        "description": "提交碳减排记录 (推荐新客户端使用)。此端点要求至少提供一张 images。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "pattern": "^[0-9a-f]{16}$", "example": "b7e9a0f1c2d34e56" },
+            "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SubmitRecordRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Record submitted successfully", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SubmitRecordResponse" } } } },
+          "400": { "description": "Bad Request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Activity not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "Internal Server Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/admin/activities": {
+      "get": {
+        "tags": ["Admin", "Carbon Track"],
+        "summary": "获取碳减排记录列表（管理员审核）",
+        "description": "返回管理员审核所需的碳记录列表，已内联 images 可直接展示，无需再请求预签名。支持多条件筛选、分页、排序及旧字段别名。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending", "approved", "rejected", ""] } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "activity_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "school_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "category", "in": "query", "schema": { "type": "string" } },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "min_carbon", "in": "query", "schema": { "type": "number" } },
+          { "name": "max_carbon", "in": "query", "schema": { "type": "number" } },
+          { "name": "min_points", "in": "query", "schema": { "type": "number" } },
+          { "name": "max_points", "in": "query", "schema": { "type": "number" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } },
+          { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["created_at_asc", "created_at_desc"] } },
+          { "name": "sort_by", "in": "query", "schema": { "type": "string", "enum": ["created_at", "date", "carbon_saved", "points_earned", "amount", "status"] } },
+          { "name": "order", "in": "query", "schema": { "type": "string", "enum": ["ASC", "DESC"] } }
+        ],
+        "responses": {
+          "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminCarbonRecordsResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "禁止访问", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
@@ -2491,6 +2553,78 @@
         "responses": { "200": { "description": "成功" } }
       }
     },
+    "/admin/system-logs": {
+      "get": {
+        "tags": ["Admin", "Logs"],
+        "summary": "系统请求日志列表",
+        "description": "分页返回 system_logs（请求追踪日志）。支持按 request_id / user_id / method / status_code / path / date 范围过滤。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "default": 1 } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "maximum": 200 } },
+          { "name": "request_id", "in": "query", "schema": { "type": "string", "pattern": "^[0-9a-f]{16}$" } },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "method", "in": "query", "schema": { "type": "string" } },
+          { "name": "status_code", "in": "query", "schema": { "type": "integer" } },
+          { "name": "path", "in": "query", "schema": { "type": "string" } },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } }
+        ],
+        "responses": {
+          "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SystemLogListResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/admin/system-logs/{id}": {
+      "get": {
+        "tags": ["Admin", "Logs"],
+        "summary": "系统日志详情",
+        "description": "根据ID返回单条 system_log，包含请求与响应截断数据、错误信息、server_meta。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "responses": {
+          "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SystemLogDetailResponse" } } } },
+          "404": { "description": "未找到", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/admin/messages/broadcast": {
+      "post": {
+        "tags": ["Admin", "Message"],
+        "summary": "广播系统消息",
+        "description": "向所有用户或指定用户ID列表发送系统公告。target_users 为空数组或缺失表示全部用户。",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BroadcastMessageRequest" } } } },
+        "responses": { "200": { "description": "发送完成", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BroadcastMessageResponse" } } } }, "400": { "description": "参数缺失" } }
+      }
+    },
+    "/admin/users/{id}/points/adjust": {
+      "post": {
+        "tags": ["Admin", "User"],
+        "summary": "调整用户积分",
+        "description": "管理员增减指定用户积分。amount 正数增加，负数减少。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdjustUserPointsRequest" } } } },
+        "responses": { "200": { "description": "调整成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdjustUserPointsResponse" } } } }, "400": { "description": "参数错误" }, "404": { "description": "用户不存在" } }
+      }
+    },
+    "/schools/{id}/classes": {
+      "get": { "tags": ["School"], "summary": "获取学校班级列表", "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ], "responses": { "200": { "description": "成功" } } },
+      "post": { "tags": ["School"], "summary": "创建班级", "security": [{ "bearerAuth": [] }], "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } } ], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateClassRequest" } } } }, "responses": { "201": { "description": "创建成功" } } }
+    },
+    "/admin/carbon-activities/pending": {
+      "get": { "tags": ["Admin", "Carbon Track"], "summary": "待审核碳记录列表 (别名)", "description": "等同 /admin/activities 返回结构。", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminCarbonRecordsResponse" } } } } } }
+    },
+    "/admin/carbon-records": {
+      "get": { "tags": ["Admin", "Carbon Track"], "summary": "待审核碳记录列表 (别名)", "description": "等同 /admin/activities 返回结构。", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminCarbonRecordsResponse" } } } } } }
+    },
+    "/files/multipart/init": { "post": { "tags": ["Files"], "summary": "初始化分片上传", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartInitRequest" } } } }, "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartInitResponse" } } } } } } },
+    "/files/multipart/part": { "get": { "tags": ["Files"], "summary": "获取分片上传URL", "security": [{ "bearerAuth": [] }], "parameters": [ { "name": "file_path", "in": "query", "required": true, "schema": { "type": "string" } }, { "name": "upload_id", "in": "query", "required": true, "schema": { "type": "string" } }, { "name": "part_number", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 } } ], "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartPartResponse" } } } } } } },
+    "/files/multipart/complete": { "post": { "tags": ["Files"], "summary": "完成分片上传", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartCompleteRequest" } } } }, "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartCompleteResponse" } } } } } } },
+    "/files/multipart/abort": { "post": { "tags": ["Files"], "summary": "取消分片上传", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MultipartAbortRequest" } } } }, "responses": { "200": { "description": "已取消" } } } },
+    "/files/r2/diagnostics": { "get": { "tags": ["Files"], "summary": "R2 诊断信息", "description": "返回允许的MIME、扩展、最大文件配置等。", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/R2DiagnosticsResponse" } } } } } } },
     "/admin/carbon-activities": {
       "get": {
         "tags": ["Admin", "Carbon Activity"],
@@ -2555,33 +2689,6 @@
         "summary": "获取单个活动统计 (管理员)",
         "security": [{ "bearerAuth": [] }],
         "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
-        "responses": { "200": { "description": "成功" } }
-      }
-    },
-    "/admin/activities": {
-      "get": {
-        "tags": ["Admin", "Carbon Track"],
-        "summary": "获取碳减排记录列表（支持筛选与分页）",
-        "security": [{ "bearerAuth": [] }],
-        "parameters": [
-          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["pending", "approved", "rejected", ""] }, "description": "状态筛选，留空为全部" },
-          { "name": "search", "in": "query", "schema": { "type": "string" }, "description": "关键字，匹配用户名/邮箱/活动中英名称" },
-          { "name": "activity_id", "in": "query", "schema": { "type": "string" }, "description": "按活动ID筛选" },
-          { "name": "user_id", "in": "query", "schema": { "type": "integer" }, "description": "按用户ID筛选" },
-          { "name": "school_id", "in": "query", "schema": { "type": "integer" }, "description": "按学校ID筛选" },
-          { "name": "category", "in": "query", "schema": { "type": "string" }, "description": "按活动类别筛选" },
-          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "起始日期（含）" },
-          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "结束日期（含）" },
-          { "name": "min_carbon", "in": "query", "schema": { "type": "number" }, "description": "最小碳减排量（含）" },
-          { "name": "max_carbon", "in": "query", "schema": { "type": "number" }, "description": "最大碳减排量（含）" },
-          { "name": "min_points", "in": "query", "schema": { "type": "number" }, "description": "最小积分（含）" },
-          { "name": "max_points", "in": "query", "schema": { "type": "number" }, "description": "最大积分（含）" },
-          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1 }, "description": "页码（默认1）" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 }, "description": "每页数量（默认20，最大50）" },
-          { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["created_at_asc", "created_at_desc"] }, "description": "兼容旧版排序参数" },
-          { "name": "sort_by", "in": "query", "schema": { "type": "string", "enum": ["created_at", "date", "carbon_saved", "points_earned", "amount", "status"] }, "description": "排序字段（与 order 配合使用）" },
-          { "name": "order", "in": "query", "schema": { "type": "string", "enum": ["ASC", "DESC"] }, "description": "排序方向（默认ASC）" }
-        ],
         "responses": { "200": { "description": "成功" } }
       }
     },
@@ -2664,61 +2771,16 @@
           "expires_in": {"type": "integer", "default": 600}
         }
       },
-      "FilePresignResponse": {
-        "type": "object",
-        "properties": {
-          "success": {"type": "boolean"},
-          "data": {"type": "object", "properties": {
-            "duplicate": {"type": "boolean"},
-            "file_path": {"type": "string"},
-            "public_url": {"type": "string"},
-            "sha256": {"type": "string"},
-            "reference_count": {"type": "integer"},
-            "url": {"type": "string", "description": "预签名 PUT URL (当 duplicate=false)"},
-            "method": {"type": "string"},
-            "headers": {"type": "object"},
-            "expires_in": {"type": "integer"},
-            "expires_at": {"type": "string"},
-            "max_file_size": {"type": "integer"},
-            "confirm_required": {"type": "boolean"},
-            "declared_file_size": {"type": "integer"}
-          }}
-        }
-      },
-      "FileConfirmRequest": {
-        "type": "object",
-        "required": ["file_path","original_name"],
-        "properties": {
-          "file_path": {"type": "string"},
-          "original_name": {"type": "string"},
-            "sha256": {"type": "string"},
-          "entity_type": {"type": "string"},
-          "entity_id": {"type": "integer"}
-        }
-      },
-      "FileConfirmResponse": {
-        "type": "object",
-        "properties": {
-          "success": {"type": "boolean"},
-          "message": {"type": "string"},
-          "data": {"type": "object", "properties": {
-            "file_path": {"type": "string"},
-            "size": {"type": "integer"},
-            "mime_type": {"type": "string"},
-            "sha256": {"type": "string"},
-            "reference_count": {"type": "integer"},
-            "duplicate": {"type": "boolean"}
-          }}
-        }
-      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
           "success": { "type": "boolean", "example": false },
           "message": { "type": "string", "example": "错误描述" },
           "code": { "type": "string", "example": "错误代码" },
-          "request_id": { "type": "string", "nullable": true, "description": "请求ID，若反馈问题请附带此值" }
-        }
+          "request_id": { "type": "string", "nullable": true, "description": "请求ID，若反馈问题请附带此值。16位小写十六进制。", "pattern": "^[0-9a-f]{16}$", "example": "d4c1ab09ef23aa7b" },
+          "error": { "type": "string", "description": "旧接口错误字段（部分控制器仍返回）" }
+        },
+        "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。"
       },
       "RegisterRequest": {
         "type": "object",
@@ -2798,39 +2860,20 @@
       },
       "SubmitRecordRequest": {
         "type": "object",
-        "required": ["activity_id", "parameters", "images"],
+        "required": ["activity_id", "parameters"],
         "properties": {
           "activity_id": { "type": "string", "description": "活动ID" },
-          "parameters": {
-            "type": "object",
-            "additionalProperties": { "type": "string" },
-            "description": "与活动相关的参数键值对，例如 { 'distance_km': '5' }"
-          },
-          "images": {
-            "type": "array",
-            "description": "必填。至少一张图片，用于佐证。支持直接 URL 或上传后生成的对象。",
-            "items": { "$ref": "#/components/schemas/ImageObject" },
-            "minItems": 1
-          }
+          "parameters": { "type": "object", "additionalProperties": { "type": "string" }, "description": "与活动相关的参数键值对，例如 { 'distance_km': '5' }" },
+          "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageObject" }, "description": "图片数组。/api/v1/carbon-records 需至少一张；/carbon-track/record 可为空以兼容旧版。", "default": [] }
         }
       },
       "SubmitRecordResponse": {
         "type": "object",
         "properties": {
-          "record_id": { "type": "string", "description": "提交的记录ID" },
-          "status": { "type": "string", "enum": ["pending", "approved", "rejected"], "description": "记录状态" },
-          "images": {
-            "type": "array",
-            "description": "已保存的图片数组，始终为数组（可能为空）。",
-            "items": { "$ref": "#/components/schemas/ImageObject" },
-            "default": []
-          },
-          "monthly_achievements": {
-            "type": "array",
-            "description": "本月已达成的成就列表。",
-            "items": { "$ref": "#/components/schemas/MonthlyAchievement" },
-            "default": []
-          }
+          "success": { "type": "boolean", "example": true },
+          "message": { "type": "string" },
+          "calculation": { "type": "object", "properties": { "carbon_saved": { "type": "number" }, "points_earned": { "type": "integer" } } },
+          "data": { "type": "object", "properties": { "record_id": { "type": "string" }, "carbon_saved": { "type": "number" }, "points_earned": { "type": "integer" }, "status": { "type": "string", "enum": ["pending", "approved", "rejected"] }, "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageObject" }, "default": [] }, "monthly_achievements": { "type": "array", "items": { "$ref": "#/components/schemas/MonthlyAchievement" }, "default": [] } } }
         }
       },
       "ImageObject": {
@@ -2920,6 +2963,46 @@
                 "carbon_saved": { "type": "number", "description": "碳减排量" },
                 "points_awarded": { "type": "integer", "description": "奖励积分" },
                 "date": { "type": "string", "format": "date-time", "description": "活动日期" }
+              }
+            }
+          }
+        }
+      },
+      "AdminCarbonRecordsResponse": {
+        "type": "object",
+        "description": "管理员审核列表数据结构，包含直接可用的 images.url (已在后端填充 public_url 或回退 file_path 生成)。",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "data": {
+            "type": "object",
+            "properties": {
+              "records": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "user_id": { "type": "integer" },
+                    "username": { "type": "string" },
+                    "activity_id": { "type": "string" },
+                    "activity_name": { "type": "string" },
+                    "category": { "type": "string" },
+                    "carbon_saved": { "type": "number" },
+                    "points_earned": { "type": "integer" },
+                    "status": { "type": "string" },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "images": { "type": "array", "items": { "$ref": "#/components/schemas/ImageObject" }, "default": [] }
+                  }
+                }
+              },
+              "pagination": {
+                "type": "object",
+                "properties": {
+                  "page": { "type": "integer" },
+                  "limit": { "type": "integer" },
+                  "total": { "type": "integer" },
+                  "pages": { "type": "integer" }
+                }
               }
             }
           }
