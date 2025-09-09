@@ -30,11 +30,12 @@ class SystemLogService
         try {
             $requestBody = $this->sanitizeBody($data['request_body'] ?? null);
             $responseBody = $this->sanitizeBody($data['response_body'] ?? null);
+            $serverMeta = $this->buildServerMeta($data['server_params'] ?? []);
 
             // 为兼容 MySQL 与 SQLite：不显式写 created_at，使用表默认 CURRENT_TIMESTAMP 或触发器
             $stmt = $this->db->prepare("INSERT INTO system_logs (
-                request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)");
+                request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
 
             $stmt->execute([
                 $data['request_id'] ?? null,
@@ -46,7 +47,8 @@ class SystemLogService
                 $data['user_agent'] ?? null,
                 $data['duration_ms'] ?? null,
                 $requestBody,
-                $responseBody
+                $responseBody,
+                $serverMeta
             ]);
         } catch (\Throwable $e) {
             // 仅记录到应用日志，避免影响主业务
@@ -85,5 +87,27 @@ class SystemLogService
             $body = mb_substr($body, 0, $this->maxBodyLength, 'UTF-8') . '...[TRUNCATED]';
         }
         return $body;
+    }
+
+    private function buildServerMeta(array $server): string
+    {
+        // 深拷贝 + 脱敏（Authorization / 密码类） + 控制大小
+        $clone = $server;
+        $sensitiveKeys = ['HTTP_AUTHORIZATION','PHP_AUTH_PW','HTTP_COOKIE'];
+        foreach ($sensitiveKeys as $k) {
+            if (isset($clone[$k])) { $clone[$k] = '[REDACTED]'; }
+        }
+        // 添加精简 summary
+        $clone['_summary'] = [
+            'method' => $clone['REQUEST_METHOD'] ?? null,
+            'uri' => $clone['REQUEST_URI'] ?? null,
+            'ip' => $clone['REMOTE_ADDR'] ?? null,
+        ];
+        $json = json_encode($clone, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) { return '{}'; }
+        if (strlen($json) > 120000) { // 防止极端环境变量撑爆
+            $json = substr($json, 0, 120000) . '...[TRUNCATED]';
+        }
+        return $json;
     }
 }

@@ -58,6 +58,21 @@ class SystemLogController
             if (!empty($q['path'])) { $conditions[] = 'path LIKE :path'; $params['path'] = '%' . $q['path'] . '%'; }
             if (!empty($q['date_from'])) { $conditions[] = 'created_at >= :date_from'; $params['date_from'] = $this->normalizeDateStart($q['date_from']); }
             if (!empty($q['date_to'])) { $conditions[] = 'created_at <= :date_to'; $params['date_to'] = $this->normalizeDateEnd($q['date_to']); }
+            // super search q: 任意字段模糊匹配（大字段使用 LIKE 可能慢，可后续加全文索引）
+            if (!empty($q['q'])) {
+                $conditions[] = '(
+                    request_id LIKE :q OR
+                    path LIKE :q OR
+                    method LIKE :q OR
+                    user_agent LIKE :q OR
+                    ip_address LIKE :q OR
+                    CAST(status_code AS CHAR) LIKE :q OR
+                    request_body LIKE :q OR
+                    response_body LIKE :q OR
+                    server_meta LIKE :q
+                )';
+                $params['q'] = '%' . $q['q'] . '%';
+            }
 
             $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
 
@@ -123,6 +138,9 @@ class SystemLogController
 
             $log['request_body'] = $this->decodeMaybeJson($log['request_body']);
             $log['response_body'] = $this->decodeMaybeJson($log['response_body']);
+            if (array_key_exists('server_meta', $log)) {
+                $log['server_meta'] = $this->decodeMaybeJson($log['server_meta']);
+            }
             $log['request_body'] = $this->redact($log['request_body']);
             $log['response_body'] = $this->redact($log['response_body']);
 

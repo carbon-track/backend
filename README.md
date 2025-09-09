@@ -49,3 +49,26 @@ SQLite (本地 `test.db` 或测试环境):
 1. 确认为最新代码（`SystemLogService` 不再使用 `strftime()` 写入 created_at）。
 2. 确认表结构列名与插入语句匹配：`request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body`。
 3. 查看 PHP error log（或 `error_logs` 表）是否有 SQL 语法错误。
+
+### 新增字段：server_meta
+系统现在会把请求对应的 `$_SERVER`（经脱敏）整体序列化为 JSON 存入 `system_logs.server_meta`：
+- 脱敏键：`HTTP_AUTHORIZATION`, `PHP_AUTH_PW`, `HTTP_COOKIE`
+- 附加 `_summary` 节点包含 method / uri / ip
+- 过长（> 120KB）时会截断并追加 `...[TRUNCATED]`
+
+### 超级搜索参数：q
+列表接口 `/api/v1/admin/system-logs` 新增查询参数 `q`，会在以下字段做模糊匹配（LIKE）：
+- request_id
+- path
+- method
+- user_agent
+- ip_address
+- status_code（转换为字符串比较）
+- request_body
+- response_body
+- server_meta
+
+示例：
+`GET /api/v1/admin/system-logs?q=Mozilla`
+
+性能提示：在大数据量场景建议后续为常用字段建立专门索引或全文索引，并考虑将 `server_meta` 拆分或引入外部日志仓库（如 ELK / OpenSearch）。
