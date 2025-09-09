@@ -15,6 +15,7 @@ use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Controllers\AvatarController;
 use CarbonTrack\Controllers\SystemLogController;
+use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
@@ -196,6 +197,7 @@ return function (App $app) {
             // 系统请求日志
             $admin->get('/system-logs', [SystemLogController::class, 'list']);
             $admin->get('/system-logs/{id:[0-9]+}', [SystemLogController::class, 'detail']);
+            $admin->get('/logs/search', [LogSearchController::class, 'search']);
             $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
             $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);

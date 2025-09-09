@@ -72,3 +72,59 @@ SQLite (本地 `test.db` 或测试环境):
 `GET /api/v1/admin/system-logs?q=Mozilla`
 
 性能提示：在大数据量场景建议后续为常用字段建立专门索引或全文索引，并考虑将 `server_meta` 拆分或引入外部日志仓库（如 ELK / OpenSearch）。
+
+## 统一日志搜索 `/api/v1/admin/logs/search`
+
+聚合查询三类日志：
+1. system_logs （请求级别）
+2. audit_logs （审计操作）
+3. error_logs （运行时错误）
+
+### 查询参数
+| 参数 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| q | string | 关键字模糊匹配，多字段 LIKE |
+| date_from | date | 起始日期(含) YYYY-MM-DD |
+| date_to | date | 结束日期(含) YYYY-MM-DD |
+| types | string | 逗号分隔：system,audit,error；默认全部 |
+| limit_per_type | int | 每类最大返回数量(默认50, 上限200) |
+
+### 匹配字段
+- system: method, path, request_body, response_body, error_message, server_meta
+- audit: action, operation_category, details_raw, summary
+- error: error_type, error_message, error_file, stack_trace
+
+### 响应示例
+```json
+{
+  "success": true,
+  "data": {
+    "system": { "count": 123, "items": [ { "id": 1, "method": "GET", "path": "/api/v1/users/me", "status_code": 200, "user_id": 5, "duration_ms": 34, "request_id": "uuid", "created_at": "2025-09-09T10:00:00Z" } ] },
+    "audit": { "count": 4, "items": [ { "id": 10, "action": "USER_LOGIN", "operation_category": "auth", "actor_type": "user", "status": "success", "user_id": 5, "ip_address": "127.0.0.1", "created_at": "2025-09-09T10:00:00Z" } ] },
+    "error": { "count": 1, "items": [ { "id": 7, "error_type": "RuntimeException", "error_message": "Something failed", "error_file": "/var/www/app/File.php", "error_line": 42, "error_time": "2025-09-09T10:00:00Z" } ] }
+  }
+}
+```
+
+### 使用示例
+```
+GET /api/v1/admin/logs/search?q=login&date_from=2025-09-01&types=system,audit&limit_per_type=30
+Authorization: Bearer <token>
+```
+
+### 性能与索引建议
+短期内：
+- 在数据量 > 50k 时可为 `system_logs(path, method, status_code, created_at)`、`audit_logs(action, operation_category, created_at)`、`error_logs(error_type, created_at)` 建组合/单列索引。
+
+中长期：
+- 将长文本(request_body/response_body/server_meta/stack_trace)落到外部日志系统（Elastic/OpenSearch/ClickHouse）。
+- 采用异步写（消息队列）减轻主事务延迟。
+- 引入专门全文索引(如 MySQL 8 InnoDB FULLTEXT 或 Mroonga)。
+
+### 限制说明
+- 本查询为“快照式”非分页（每类 top N），若需要分页，可后续扩展 `cursor` 或 `offset` 协议（建议游标）。
+- `q` 使用前后 `%q%` 模糊，可能触发全表扫描——需要配合前述索引或全文方案优化。
+
+### 前端整合
+- 管理端页面 `/admin/system-logs` 已重构为 “统一日志中心”，调用该接口并按类别展示。
+

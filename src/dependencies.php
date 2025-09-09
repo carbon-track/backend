@@ -21,6 +21,7 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Controllers\SystemLogController;
+use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Services\FileMetadataService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
@@ -367,6 +368,16 @@ $__deps_initializer = function (Container $container) {
     $container->set(SystemLogController::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new SystemLogController(
+            $db,
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    // Unified Log Search Controller
+    $container->set(LogSearchController::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new LogSearchController(
             $db,
             $c->get(AuthService::class),
             $c->get(ErrorLogService::class)

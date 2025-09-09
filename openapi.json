@@ -150,6 +150,26 @@
     }
   ],
   "paths": {
+    "/admin/logs/search": {
+      "get": {
+        "tags": ["Admin", "Logs"],
+        "summary": "统一日志搜索 (system/audit/error)",
+        "description": "聚合查询 system_logs、audit_logs、error_logs 三类日志。支持关键字模糊(q)，时间范围(date_from/date_to)，日志类型过滤(types 逗号分隔) 以及 每类返回条数限制(limit_per_type)。关键字会在系统日志(method,path,request_body,response_body,error_message,server_meta)、审计日志(action,operation_category,details_raw,summary)、错误日志(error_type,error_message,error_file,stack_trace) 中执行 LIKE 匹配。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" }, "description": "关键字模糊匹配(可选)" },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "开始日期(含) YYYY-MM-DD" },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "结束日期(含) YYYY-MM-DD" },
+          { "name": "types", "in": "query", "schema": { "type": "string", "example": "system,audit,error" }, "description": "需要的日志类型集合，逗号分隔: system,audit,error (默认全部)" },
+          { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 }, "description": "每种日志最大返回条数 (默认50, 上限200)" }
+        ],
+        "responses": {
+          "200": { "description": "查询成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnifiedLogSearchResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/files/presign": {
       "post": {
         "tags": ["Files"],
@@ -3120,6 +3140,38 @@
               "sort_order": { "type": "integer" },
               "is_active": { "type": "boolean" },
               "is_default": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "UnifiedLogSearchResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "data": {
+            "type": "object",
+            "properties": {
+              "system": {
+                "type": "object",
+                "properties": {
+                  "count": { "type": "integer" },
+                  "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "method": { "type": "string" }, "path": { "type": "string" }, "status_code": { "type": "integer" }, "user_id": { "type": "integer", "nullable": true }, "duration_ms": { "type": "integer" }, "request_id": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } } }
+                }
+              },
+              "audit": {
+                "type": "object",
+                "properties": {
+                  "count": { "type": "integer" },
+                  "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "action": { "type": "string" }, "operation_category": { "type": "string", "nullable": true }, "actor_type": { "type": "string" }, "status": { "type": "string" }, "user_id": { "type": "integer", "nullable": true }, "ip_address": { "type": "string", "nullable": true }, "created_at": { "type": "string", "format": "date-time" } } } }
+                }
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "count": { "type": "integer" },
+                  "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "error_type": { "type": "string" }, "error_message": { "type": "string" }, "error_file": { "type": "string", "nullable": true }, "error_line": { "type": "integer", "nullable": true }, "error_time": { "type": "string", "format": "date-time" } } } }
+                }
+              }
             }
           }
         }
