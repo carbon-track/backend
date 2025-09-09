@@ -564,9 +564,9 @@ class FileUploadController
             // URL解码文件路径
             $filePath = urldecode($filePath);
 
-            // 获取过期时间（默认1小时）
+            // 获取过期时间（默认10分钟）
             $queryParams = $request->getQueryParams();
-            $expiresIn = isset($queryParams['expires_in']) ? (int)$queryParams['expires_in'] : 3600;
+            $expiresIn = isset($queryParams['expires_in']) ? (int)$queryParams['expires_in'] : 600;
 
             // 限制过期时间（最大24小时）
             $expiresIn = min($expiresIn, 86400);

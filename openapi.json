@@ -1928,7 +1928,7 @@
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "文件路径" },
-          { "name": "expires_in", "in": "query", "schema": { "type": "integer", "default": 3600 }, "description": "URL有效期（秒）" }
+          { "name": "expires_in", "in": "query", "schema": { "type": "integer", "default": 600 }, "description": "URL有效期（秒）（默认10分钟）" }
         ],
         "responses": {
           "200": {

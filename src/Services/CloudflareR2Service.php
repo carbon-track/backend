@@ -411,7 +411,7 @@ class CloudflareR2Service
     /**
      * 生成预签名URL（用于临时访问私有文件）
      */
-    public function generatePresignedUrl(string $filePath, int $expiresIn = 3600): string
+    public function generatePresignedUrl(string $filePath, int $expiresIn = 600): string
     {
         try {
             $command = $this->s3Client->getCommand('GetObject', [
@@ -801,7 +801,7 @@ class CloudflareR2Service
      * 为指定 part 生成预签名 URL
      * @return array{url:string,part_number:int,headers:array}
      */
-    public function generateMultipartPartUrl(string $filePath, string $uploadId, int $partNumber, int $expiresIn = 900): array
+    public function generateMultipartPartUrl(string $filePath, string $uploadId, int $partNumber, int $expiresIn = 600): array
     {
         $partNumber = max(1, min($partNumber, 10000));
         $expiresIn = max(60, min($expiresIn, 3600));

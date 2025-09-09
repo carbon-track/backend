@@ -1115,8 +1115,8 @@ class CarbonTrackController
             $presigned = null;
             if ($filePath && $this->r2Service && method_exists($this->r2Service, 'generatePresignedUrl')) {
                 try {
-                    // 默认 15 分钟有效期，前端可根据需要刷新
-                    $presigned = $this->r2Service->generatePresignedUrl($filePath, 900);
+                    // 默认 10 分钟有效期 (600s)，前端可根据需要刷新
+                    $presigned = $this->r2Service->generatePresignedUrl($filePath, 600);
                 } catch (\Throwable $e) {
                     // 忽略预签名失败, 保留基础 url
                 }
