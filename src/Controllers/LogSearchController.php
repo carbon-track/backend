@@ -230,8 +230,14 @@ class LogSearchController
         $conditions = [];
         $params = [];
         if ($kw !== '') {
-            $conditions[] = '(path LIKE :kw OR request_id LIKE :kw OR method LIKE :kw OR user_agent LIKE :kw OR ip_address LIKE :kw OR request_body LIKE :kw OR response_body LIKE :kw OR server_meta LIKE :kw)';
-            $params['kw'] = '%' . $kw . '%';
+            $likeCols = ['path','request_id','method','user_agent','ip_address','request_body','response_body','server_meta'];
+            $likeParts = [];
+            foreach ($likeCols as $i => $col) {
+                $ph = ':kw_s_' . $i;
+                $likeParts[] = "$col LIKE $ph";
+                $params['kw_s_' . $i] = '%' . $kw . '%';
+            }
+            $conditions[] = '(' . implode(' OR ', $likeParts) . ')';
         }
         if ($from) { $conditions[] = 'created_at >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'created_at <= :to'; $params['to'] = $this->normalizeEnd($to); }
@@ -253,8 +259,14 @@ class LogSearchController
         $conditions = [];
         $params = [];
         if ($kw !== '') {
-            $conditions[] = '(action LIKE :kw OR operation_category LIKE :kw OR operation_subtype LIKE :kw OR endpoint LIKE :kw OR ip_address LIKE :kw OR data LIKE :kw OR old_data LIKE :kw OR new_data LIKE :kw)';
-            $params['kw'] = '%' . $kw . '%';
+            $likeCols = ['action','operation_category','operation_subtype','endpoint','ip_address','data','old_data','new_data'];
+            $likeParts = [];
+            foreach ($likeCols as $i => $col) {
+                $ph = ':kw_a_' . $i;
+                $likeParts[] = "$col LIKE $ph";
+                $params['kw_a_' . $i] = '%' . $kw . '%';
+            }
+            $conditions[] = '(' . implode(' OR ', $likeParts) . ')';
         }
         if ($from) { $conditions[] = 'created_at >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'created_at <= :to'; $params['to'] = $this->normalizeEnd($to); }
@@ -276,8 +288,14 @@ class LogSearchController
         $conditions = [];
         $params = [];
         if ($kw !== '') {
-            $conditions[] = '(error_type LIKE :kw OR error_message LIKE :kw OR error_file LIKE :kw OR script_name LIKE :kw OR client_get LIKE :kw OR client_post LIKE :kw)';
-            $params['kw'] = '%' . $kw . '%';
+            $likeCols = ['error_type','error_message','error_file','script_name','client_get','client_post'];
+            $likeParts = [];
+            foreach ($likeCols as $i => $col) {
+                $ph = ':kw_e_' . $i;
+                $likeParts[] = "$col LIKE $ph";
+                $params['kw_e_' . $i] = '%' . $kw . '%';
+            }
+            $conditions[] = '(' . implode(' OR ', $likeParts) . ')';
         }
         if ($from) { $conditions[] = 'error_time >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'error_time <= :to'; $params['to'] = $this->normalizeEnd($to); }
