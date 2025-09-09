@@ -38,6 +38,7 @@ class ErrorLogService
             'client_cookie' => $this->safeJson($request->getCookieParams()),
             'client_session' => $this->safeJson($_SESSION ?? []),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $extra)),
+            'request_id' => $request->getHeaderLine('X-Request-ID') ?: ($request->getServerParams()['HTTP_X_REQUEST_ID'] ?? null),
         ]);
     }
 
@@ -59,13 +60,14 @@ class ErrorLogService
             'client_cookie' => $this->safeJson($request->getCookieParams()),
             'client_session' => $this->safeJson($_SESSION ?? []),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $context)),
+            'request_id' => $request->getHeaderLine('X-Request-ID') ?: ($request->getServerParams()['HTTP_X_REQUEST_ID'] ?? null),
         ]);
     }
 
     private function insertLog(array $data): void
     {
         try {
-            $sql = 'INSERT INTO error_logs (error_type, error_message, error_file, error_line, error_time, script_name, client_get, client_post, client_files, client_cookie, client_session, client_server) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)';
+            $sql = 'INSERT INTO error_logs (error_type, error_message, error_file, error_line, error_time, script_name, client_get, client_post, client_files, client_cookie, client_session, client_server, request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)';
             $stmt = $this->db->prepare($sql);
             $stmt->execute([
                 $data['error_type'] ?? null,
@@ -80,6 +82,7 @@ class ErrorLogService
                 $data['client_cookie'] ?? null,
                 $data['client_session'] ?? null,
                 $data['client_server'] ?? null,
+                $data['request_id'] ?? null,
             ]);
         } catch (\Throwable $ex) {
             // Fallback to application logger to avoid losing the error entirely

@@ -34,7 +34,11 @@ class RequestLoggingMiddleware implements MiddlewareInterface
     public function process(Request $request, RequestHandler $handler): Response
     {
         $start = microtime(true);
-        $requestId = $request->getHeaderLine('X-Request-ID') ?: $this->generateRequestId();
+    $requestId = $request->getHeaderLine('X-Request-ID') ?: $this->generateRequestId();
+    // 让后续服务/中间件能够获取 request_id：
+    $request = $request->withAttribute('request_id', $requestId);
+    // 将其写回 server params（兼容旧代码使用 $_SERVER['HTTP_X_REQUEST_ID']）
+    $_SERVER['HTTP_X_REQUEST_ID'] = $requestId;
 
         $path = $request->getUri()->getPath();
         $method = $request->getMethod();
@@ -83,7 +87,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
             ]);
         }
 
-        return $response->withHeader('X-Request-ID', $requestId);
+    return $response->withHeader('X-Request-ID', $requestId);
     }
 
     private function shouldSkip(string $path): bool

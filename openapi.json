@@ -161,10 +161,52 @@
           { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "开始日期(含) YYYY-MM-DD" },
           { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "结束日期(含) YYYY-MM-DD" },
           { "name": "types", "in": "query", "schema": { "type": "string", "example": "system,audit,error" }, "description": "需要的日志类型集合，逗号分隔: system,audit,error (默认全部)" },
-          { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 }, "description": "每种日志最大返回条数 (默认50, 上限200)" }
+          { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "minimum": 1, "maximum": 200 }, "description": "每种日志分页大小 (默认50, 上限200)" },
+          { "name": "system_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "system 日志页码(>=1)" },
+          { "name": "audit_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "audit 日志页码(>=1)" },
+          { "name": "error_page", "in": "query", "schema": { "type": "integer", "default": 1, "minimum": 1 }, "description": "error 日志页码(>=1)" }
         ],
         "responses": {
           "200": { "description": "查询成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnifiedLogSearchResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/admin/logs/export": {
+      "get": {
+        "tags": ["Admin", "Logs"],
+        "summary": "导出日志 (CSV / NDJSON)",
+        "description": "按过滤条件导出选定类型日志。若不指定 types 默认全部。max 限制总导出行数 (默认1000，上限10000)。CSV 使用UTF-8含表头，NDJSON每行一条JSON对象。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "types", "in": "query", "schema": { "type": "string", "example": "system,audit,error" } },
+            { "name": "format", "in": "query", "required": true, "schema": { "type": "string", "enum": ["csv", "ndjson"], "default": "csv" } },
+            { "name": "max", "in": "query", "schema": { "type": "integer", "default": 1000, "minimum": 1, "maximum": 10000 } }
+        ],
+        "responses": {
+          "200": { "description": "导出成功", "content": { "text/csv": { "schema": { "type": "string", "format": "binary" } }, "application/x-ndjson": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "description": "参数错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/admin/logs/related": {
+      "get": {
+        "tags": ["Admin", "Logs"],
+        "summary": "按 request_id 关联审计与错误日志",
+        "description": "根据已知 request_id 返回同一请求产生的 audit 和 error 日志(如果存在)。",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "request_id", "in": "query", "required": true, "schema": { "type": "string" }, "description": "请求ID" }
+        ],
+        "responses": {
+          "200": { "description": "查询成功", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RelatedLogsResponse" } } } },
+          "400": { "description": "参数错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "401": { "description": "未授权", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "500": { "description": "内部服务器错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
@@ -3155,6 +3197,9 @@
                 "type": "object",
                 "properties": {
                   "count": { "type": "integer" },
+                  "page": { "type": "integer" },
+                  "pages": { "type": "integer" },
+                  "limit": { "type": "integer" },
                   "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "method": { "type": "string" }, "path": { "type": "string" }, "status_code": { "type": "integer" }, "user_id": { "type": "integer", "nullable": true }, "duration_ms": { "type": "integer" }, "request_id": { "type": "string" }, "created_at": { "type": "string", "format": "date-time" } } } }
                 }
               },
@@ -3162,6 +3207,9 @@
                 "type": "object",
                 "properties": {
                   "count": { "type": "integer" },
+                  "page": { "type": "integer" },
+                  "pages": { "type": "integer" },
+                  "limit": { "type": "integer" },
                   "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "action": { "type": "string" }, "operation_category": { "type": "string", "nullable": true }, "actor_type": { "type": "string" }, "status": { "type": "string" }, "user_id": { "type": "integer", "nullable": true }, "ip_address": { "type": "string", "nullable": true }, "created_at": { "type": "string", "format": "date-time" } } } }
                 }
               },
@@ -3169,6 +3217,9 @@
                 "type": "object",
                 "properties": {
                   "count": { "type": "integer" },
+                  "page": { "type": "integer" },
+                  "pages": { "type": "integer" },
+                  "limit": { "type": "integer" },
                   "items": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "error_type": { "type": "string" }, "error_message": { "type": "string" }, "error_file": { "type": "string", "nullable": true }, "error_line": { "type": "integer", "nullable": true }, "error_time": { "type": "string", "format": "date-time" } } } }
                 }
               }
@@ -3176,7 +3227,21 @@
           }
         }
       },
-      "UpdateAvatarRequest": {
+      "RelatedLogsResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "data": {
+            "type": "object",
+            "properties": {
+              "request_id": { "type": "string" },
+              "audit": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "action": { "type": "string" }, "operation_category": { "type": "string", "nullable": true }, "actor_type": { "type": "string" }, "status": { "type": "string" }, "user_id": { "type": "integer", "nullable": true }, "ip_address": { "type": "string", "nullable": true }, "created_at": { "type": "string", "format": "date-time" } } } },
+              "error": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "integer" }, "error_type": { "type": "string" }, "error_message": { "type": "string" }, "error_file": { "type": "string", "nullable": true }, "error_line": { "type": "integer", "nullable": true }, "error_time": { "type": "string", "format": "date-time" } } } }
+            }
+          }
+        }
+      }
+  ,"UpdateAvatarRequest": {
         "type": "object",
         "properties": {
           "name": { "type": "string" },
