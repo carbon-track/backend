@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\CloudflareR2Service;
 use PDO;
 
 class AdminController
@@ -17,7 +18,8 @@ class AdminController
         private PDO $db,
         private AuthService $authService,
         private AuditLogService $auditLog,
-        private ?ErrorLogService $errorLogService = null
+    private ?ErrorLogService $errorLogService = null,
+    private ?CloudflareR2Service $r2Service = null
     ) {}
 
     /**
@@ -191,6 +193,15 @@ class AdminController
                         $imgs = [(string)$t['img']];
                     }
                 }
+                // 兼容字符串/对象混合，补充预签名直链
+                foreach ($imgs as &$img) {
+                    if (is_string($img)) {
+                        $img = [ 'url' => $this->r2Service?->generatePresignedUrl($img, 600) ?? $img, 'file_path' => $img ];
+                    } elseif (is_array($img) && !empty($img['file_path']) && empty($img['url'])) {
+                        $img['url'] = $this->r2Service?->generatePresignedUrl($img['file_path'], 600) ?? $img['file_path'];
+                    }
+                }
+                unset($img);
                 $t['images'] = $imgs;
                 unset($t['img']);
             }
