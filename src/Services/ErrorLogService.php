@@ -161,7 +161,7 @@ class ErrorLogService
     private function filterServer(array $server, array $extra = []): array
     {
         // Avoid logging sensitive data
-        $hidden = ['HTTP_AUTHORIZATION', 'PHP_AUTH_PW'];
+        $hidden = ['PHP_AUTH_PW'];
         foreach ($hidden as $key) {
             if (isset($server[$key])) {
                 $server[$key] = '***';

@@ -31,9 +31,10 @@ class SystemLogService
             $requestBody = $this->sanitizeBody($data['request_body'] ?? null);
             $responseBody = $this->sanitizeBody($data['response_body'] ?? null);
 
+            // 为兼容 MySQL 与 SQLite：不显式写 created_at，使用表默认 CURRENT_TIMESTAMP 或触发器
             $stmt = $this->db->prepare("INSERT INTO system_logs (
-                request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%d %H:%M:%S','now'))");
+                request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)");
 
             $stmt->execute([
                 $data['request_id'] ?? null,
@@ -53,13 +54,17 @@ class SystemLogService
                 $this->logger->warning('System log insert failed', [
                     'error' => $e->getMessage(),
                 ]);
-            } catch (\Throwable $ignore) {}
+            } catch (\Throwable $ignore) {
+                // swallow secondary logging failure
+            }
         }
     }
 
     private function sanitizeBody($body): ?string
     {
-        if ($body === null) return null;
+        if ($body === null) {
+            return null;
+        }
         if (is_array($body)) {
             // 复制数组并脱敏常见敏感字段
             $clone = $body;
@@ -72,7 +77,9 @@ class SystemLogService
             $body = json_encode($body, JSON_UNESCAPED_UNICODE);
         }
 
-        if ($body === false) return null;
+        if ($body === false) {
+            return null;
+        }
 
         if (mb_strlen($body, 'UTF-8') > $this->maxBodyLength) {
             $body = mb_substr($body, 0, $this->maxBodyLength, 'UTF-8') . '...[TRUNCATED]';

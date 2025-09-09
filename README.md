@@ -32,3 +32,20 @@
   - `POST /api/schools/{id}/classes`
 
 注意：推荐始终使用带版本号的 `/api/v1/*` 接口；`/api/*` 仅用于兼容存量客户端或未配置版本前缀的环境。
+
+## system_logs 表迁移说明
+
+如果你拉取代码后访问 `/api/v1/admin/system-logs` 返回 500，且数据库还没有 `system_logs` 表，请先创建该表：
+
+MySQL / MariaDB:
+  执行 `database/migrations/create_system_logs_table.sql`
+
+SQLite (本地 `test.db` 或测试环境):
+  执行 `database/migrations/create_system_logs_table_sqlite.sql`
+
+创建完成后，新的请求会被 `RequestLoggingMiddleware` 写入 `system_logs`。首次创建后表是空的，需要再访问几个接口再查看列表。
+
+若依然 500：
+1. 确认为最新代码（`SystemLogService` 不再使用 `strftime()` 写入 created_at）。
+2. 确认表结构列名与插入语句匹配：`request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body`。
+3. 查看 PHP error log（或 `error_logs` 表）是否有 SQL 语法错误。
