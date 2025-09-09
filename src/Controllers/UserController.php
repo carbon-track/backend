@@ -222,17 +222,18 @@ class UserController
             }
 
             // 记录审计日志
-            $this->auditLogService->logDataChange(
-                'user_management',
-                'profile_update',
-                $user['id'],
-                'user',
-                'users',
-                $user['id'],
-                $oldValues,
-                $updateData,
-                ['request_data' => $data]
-            );
+            $this->auditLogService->log([
+                'action' => 'profile_update',
+                'operation_category' => 'user_management',
+                'user_id' => $user['id'],
+                'actor_type' => 'user',
+                'affected_table' => 'users',
+                'affected_id' => $user['id'],
+                'old_data' => $oldValues,
+                'new_data' => $updateData,
+                'status' => 'success',
+                'request_data' => $data
+            ]);
 
             $this->logger->info('User profile updated', [
                 'user_id' => $user['id'],

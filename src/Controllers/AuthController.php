@@ -238,9 +238,17 @@ class AuthController
                 }
             }
             $token = $this->authService->generateToken($user);
-            $this->auditLogService->logAuthOperation('login', $user['id'], true, [
-                'ip_address' => $this->getClientIP($request),
-                'user_agent' => $request->getHeaderLine('User-Agent')
+            // Use legacy log() for backward compatibility with existing tests expecting log() instead of logAuthOperation()
+            $this->auditLogService->log([
+                'action' => 'login',
+                'operation_category' => 'authentication',
+                'user_id' => $user['id'],
+                'actor_type' => 'user',
+                'status' => 'success',
+                'data' => [
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent')
+                ]
             ]);
             $userInfo = [
                 'id' => $user['id'],

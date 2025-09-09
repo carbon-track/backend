@@ -34,10 +34,11 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $email = $this->createMock(EmailService::class);
         /** @var TurnstileService&PHPUnit\Framework\MockObject\MockObject $turnstile */
         $turnstile = $this->createMock(TurnstileService::class);
-        $turnstile->method('verify')->willReturn(true);
+    // TurnstileService::verify has return type array; mock must respect signature
+    $turnstile->method('verify')->willReturn(['success' => true]);
         /** @var AuditLogService&PHPUnit\Framework\MockObject\MockObject $audit */
         $audit = $this->createMock(AuditLogService::class);
-        $audit->method('logAuthOperation')->willReturn(null);
+    $audit->method('logAuthOperation')->willReturn(true);
         /** @var MessageService&PHPUnit\Framework\MockObject\MockObject $msg */
         $msg = $this->createMock(MessageService::class);
         $logger = new Logger('test');

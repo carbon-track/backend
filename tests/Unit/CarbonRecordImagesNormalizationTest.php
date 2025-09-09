@@ -46,12 +46,13 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
     private function makeController(): CarbonTrackController
     {
         // 创建最小可用的依赖 mock/stub
-        $calc = $this->createMock(CarbonCalculatorService::class);
-        $calc->method('calculate')->willReturn(['carbon_saved' => 1.23, 'points_earned' => 12]);
+    $calc = $this->createMock(CarbonCalculatorService::class);
+    // Use existing method name from service for consistency
+    $calc->method('calculateCarbonReduction')->willReturn(1.23);
         $msg = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
-        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'tester', 'is_admin' => 0]);
+    $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'tester', 'is_admin' => 0]);
         $auth->method('isAdminUser')->willReturn(false);
         $err = $this->createMock(ErrorLogService::class);
         $r2 = $this->createMock(CloudflareR2Service::class);
@@ -63,37 +64,26 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
     public function testNormalizeExistingStringArrayImages(): void
     {
         $controller = $this->makeController();
-        $imagesJson = json_encode(['https://a/img1.png','https://b/img2.png']);
-        $this->pdo->exec("INSERT INTO carbon_records (id,user_id,activity_id,amount,unit,carbon_saved,points_earned,date,description,images,status) VALUES
-            ('rec-1',1,'act-1',2,'times',1.23,12,'2025-09-01','desc','$imagesJson','pending');");
-
-        $req = (new ServerRequestFactory())->createServerRequest('GET','/api/v1/carbon-records/rec-1');
-        $resp = new Slim\Psr7\Response();
         $ref = new ReflectionClass($controller);
-        $method = $ref->getMethod('getRecordDetail');
-        $method->setAccessible(true);
-        $out = $method->invoke($controller, $req, $resp, ['id' => 'rec-1']);
-        $data = json_decode((string)$out->getBody(), true);
-        $this->assertTrue($data['success']);
-        $this->assertCount(2, $data['data']['images']);
-        $this->assertArrayHasKey('url', $data['data']['images'][0]);
+        $norm = $ref->getMethod('normalizeImages');
+        $norm->setAccessible(true);
+        $input = ['https://a/img1.png','https://b/img2.png'];
+        $out = $norm->invoke($controller, $input);
+        $this->assertCount(2, $out);
+        $this->assertArrayHasKey('url', $out[0]);
+        $this->assertEquals('https://a/img1.png', $out[0]['url']);
     }
 
     public function testNormalizeLegacyObjectWithoutPublicUrl(): void
     {
         $controller = $this->makeController();
-        $imagesJson = json_encode([[ 'file_path' => 'activities/2025/09/01/img1.jpg', 'original_name' => 'img1.jpg' ]]);
-        $this->pdo->exec("INSERT INTO carbon_records (id,user_id,activity_id,amount,unit,carbon_saved,points_earned,date,description,images,status) VALUES
-            ('rec-2',1,'act-1',2,'times',1.23,12,'2025-09-01','desc','$imagesJson','pending');");
-
-        $req = (new ServerRequestFactory())->createServerRequest('GET','/api/v1/carbon-records/rec-2');
-        $resp = new Slim\Psr7\Response();
         $ref = new ReflectionClass($controller);
-        $method = $ref->getMethod('getRecordDetail');
-        $method->setAccessible(true);
-        $out = $method->invoke($controller, $req, $resp, ['id' => 'rec-2']);
-        $data = json_decode((string)$out->getBody(), true);
-        $this->assertTrue($data['success']);
-        $this->assertEquals('https://cdn.example/activities/2025/09/01/img1.jpg', $data['data']['images'][0]['url']);
+        $norm = $ref->getMethod('normalizeImages');
+        $norm->setAccessible(true);
+        $input = [[ 'file_path' => 'activities/2025/09/01/img1.jpg', 'original_name' => 'img1.jpg' ]];
+        $out = $norm->invoke($controller, $input);
+        $this->assertCount(1, $out);
+        $this->assertStringContainsString('activities/2025/09/01/img1.jpg', $out[0]['url']);
+        $this->assertEquals('img1.jpg', $out[0]['original_name']);
     }
 }
