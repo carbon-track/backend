@@ -401,4 +401,53 @@ class AdminController
             if (!$admin || !$this->authService->isAdminUser($admin)) {
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
-            $userId
+            $userId = (int)($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            $payload = $request->getParsedBody() ?? [];
+            $isAdmin  = array_key_exists('is_admin', $payload) ? (int)!!$payload['is_admin'] : null;
+            $status   = array_key_exists('status', $payload) ? trim((string)$payload['status']) : null;
+
+            if ($isAdmin === null && $status === null) {
+                return $this->jsonResponse($response, ['error' => 'No fields to update'], 400);
+            }
+
+            $sets = [];
+            $params = ['id' => $userId];
+            if ($isAdmin !== null) { $sets[] = 'is_admin = :is_admin'; $params['is_admin'] = $isAdmin; }
+            if ($status !== null) { $sets[] = 'status = :status'; $params['status'] = $status; }
+            $sets[] = 'updated_at = :updated_at';
+            $params['updated_at'] = date('Y-m-d H:i:s');
+
+            $sql = 'UPDATE users SET ' . implode(', ', $sets) . ' WHERE id = :id';
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+
+            $this->auditLog->logDataChange(
+                'admin',
+                'user_update',
+                $admin['id'] ?? null,
+                'admin',
+                'users',
+                $userId,
+                null,
+                null,
+                ['fields' => array_keys($params)]
+            );
+
+            return $this->jsonResponse($response, ['success' => true]);
+        } catch (\Exception $e) {
+            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function jsonResponse(Response $response, array $data, int $status = 200): Response
+    {
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $response->getBody()->write($json === false ? '{}' : $json);
+        return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+    }
+}
