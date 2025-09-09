@@ -1111,12 +1111,23 @@ class CarbonTrackController
                     $url = $item['file_path'];
                 }
             }
+            $filePath = $item['file_path'] ?? null;
+            $presigned = null;
+            if ($filePath && $this->r2Service && method_exists($this->r2Service, 'generatePresignedUrl')) {
+                try {
+                    // 默认 15 分钟有效期，前端可根据需要刷新
+                    $presigned = $this->r2Service->generatePresignedUrl($filePath, 900);
+                } catch (\Throwable $e) {
+                    // 忽略预签名失败, 保留基础 url
+                }
+            }
             $result[] = [
                 'url' => $url,
-                'file_path' => $item['file_path'] ?? null,
+                'file_path' => $filePath,
                 'original_name' => $item['original_name'] ?? null,
                 'mime_type' => $item['mime_type'] ?? null,
-                'size' => $item['file_size'] ?? ($item['size'] ?? null)
+                'size' => $item['file_size'] ?? ($item['size'] ?? null),
+                'presigned_url' => $presigned
             ];
         }
         return $result;
