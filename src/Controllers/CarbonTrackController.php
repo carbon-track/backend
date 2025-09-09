@@ -781,10 +781,24 @@ class CarbonTrackController
 
             $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            // 处理图片字段与前端期望的别名
+            // 处理图片字段与前端期望的别名（同时在这里直接返回可用 URL，前端不再单独请求预签名）
             foreach ($records as &$record) {
                 $decoded = $record['images'] ? json_decode($record['images'], true) : [];
                 $record['images'] = $this->normalizeImages($decoded);
+                if ($this->r2Service && is_array($record['images'])) {
+                    foreach ($record['images'] as &$img) {
+                        // 如果已有 public_url/url 则跳过；否则尝试基于 file_path 生成
+                        if (!isset($img['public_url']) && !isset($img['url']) && !empty($img['file_path'])) {
+                            try {
+                                $public = $this->r2Service->getPublicUrl($img['file_path']);
+                                if ($public) { $img['public_url'] = $public; $img['url'] = $public; }
+                            } catch (\Throwable $ignore) { /* ignore individual image failure */ }
+                        } elseif (isset($img['public_url']) && !isset($img['url'])) {
+                            $img['url'] = $img['public_url'];
+                        }
+                    }
+                    unset($img);
+                }
                 // 前端列表兼容字段
                 $record['user_username'] = $record['username'] ?? null;
                 $record['user_email'] = $record['email'] ?? null;
