@@ -2715,7 +2715,7 @@
       },
       "SubmitRecordRequest": {
         "type": "object",
-        "required": ["activity_id", "parameters"],
+        "required": ["activity_id", "parameters", "images"],
         "properties": {
           "activity_id": { "type": "string", "description": "活动ID" },
           "parameters": {
@@ -2725,9 +2725,9 @@
           },
           "images": {
             "type": "array",
-            "description": "可选的图片数组，用于佐证。本字段省略或为空时服务器仍会存储为空数组。支持直接URL或上传后生成的对象。",
+            "description": "必填。至少一张图片，用于佐证。支持直接 URL 或上传后生成的对象。",
             "items": { "$ref": "#/components/schemas/ImageObject" },
-            "default": []
+            "minItems": 1
           }
         }
       },

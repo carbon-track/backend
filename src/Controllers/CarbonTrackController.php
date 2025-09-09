@@ -104,7 +104,7 @@ class CarbonTrackController
                 }
             }
             
-            // 验证必需字段
+            // 验证必需字段（图片现在为必填）
             $requiredFields = ['activity_id', 'amount', 'date'];
             foreach ($requiredFields as $field) {
                 if (!isset($data[$field]) || empty($data[$field])) {
@@ -112,6 +112,25 @@ class CarbonTrackController
                         'error' => "Missing required field: {$field}"
                     ], 400);
                 }
+            }
+
+            // 解析客户端直接传的 images（即便也有 multipart）以便统一校验
+            $clientProvidedImages = [];
+            if (!empty($data['images'])) {
+                if (is_string($data['images'])) {
+                    $decoded = json_decode($data['images'], true);
+                    if (is_array($decoded)) { $clientProvidedImages = $decoded; }
+                } elseif (is_array($data['images'])) {
+                    $clientProvidedImages = $data['images'];
+                }
+            }
+
+            // 如果既没有上传文件也没有有效的客户端图片数组 -> 报错
+            if (empty($imageFiles) && empty($clientProvidedImages)) {
+                return $this->json($response, [
+                    'error' => 'Missing required field: images',
+                    'message' => '请至少上传或提供一张证明图片'
+                ], 400);
             }
 
             // 获取活动信息
@@ -305,6 +324,20 @@ class CarbonTrackController
                 // ignore achievement errors in non-MySQL test environments
             }
 
+            // 规范化返回的 images（public_url -> url）
+            $returnImages = [];
+            foreach ($finalImages as $img) {
+                if (is_array($img)) {
+                    $mapped = $img;
+                    if (isset($mapped['public_url']) && !isset($mapped['url'])) {
+                        $mapped['url'] = $mapped['public_url'];
+                    }
+                    $returnImages[] = $mapped;
+                } elseif (is_string($img)) {
+                    $returnImages[] = ['url' => $img];
+                }
+            }
+
             return $this->json($response, [
                 'success' => true,
                 'message' => 'Record submitted successfully',
@@ -313,6 +346,7 @@ class CarbonTrackController
                     'carbon_saved' => $carbonSaved,
                     'points_earned' => $pointsEarned,
                     'status' => 'pending',
+                    'images' => $returnImages,
                     'monthly_achievements' => $monthlyAchievements
                 ]
             ]);

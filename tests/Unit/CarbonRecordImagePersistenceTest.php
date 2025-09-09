@@ -98,7 +98,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $this->assertEquals('https://cdn.example/activities/1/a.jpg', $decoded[0]['public_url'] ?? $decoded[0]['url']);
     }
 
-    public function testStoresEmptyArrayWhenNoImagesProvided(): void
+    public function testRejectsWhenNoImagesProvided(): void
     {
         $controller = $this->makeController();
         $req = (new ServerRequestFactory())->createServerRequest('POST','/api/v1/carbon-records');
@@ -111,13 +111,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $out = $controller->submitRecord($req, $resp);
         $raw = (string)$out->getBody();
         $data = json_decode($raw, true);
-        $this->assertArrayHasKey('success', $data, 'Response missing success key. Raw: ' . $raw);
-        $this->assertTrue($data['success']);
-        $recId = $data['data']['record_id'];
-        $row = $this->pdo->query("SELECT images FROM carbon_records WHERE id = '$recId'")->fetch(PDO::FETCH_ASSOC);
-        $this->assertNotNull($row['images']);
-        $decoded = json_decode($row['images'], true);
-        $this->assertIsArray($decoded);
-        $this->assertCount(0, $decoded, 'Expected stored images to be an empty array when none submitted');
+        $this->assertArrayNotHasKey('success', $data, 'Should not succeed without images. Raw: ' . $raw);
+        $this->assertEquals('Missing required field: images', $data['error'] ?? null, 'Expected images required error');
     }
 }
