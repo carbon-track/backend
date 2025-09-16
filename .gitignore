@@ -2,3 +2,6 @@
 .env
 /public/gitpull.php
 *.zip
+/.phpunit.cache/
+/.phpunit.result.cache
+/test.db
