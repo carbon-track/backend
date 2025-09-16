@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- 主机： localhost:3306
--- 生成日期： 2025-09-07 14:39:34
+-- 生成日期： 2025-09-16 09:14:07
 -- 服务器版本： 5.6.51-log
 -- PHP 版本： 7.4.33
 
@@ -67,6 +67,7 @@ CREATE TABLE `audit_logs` (
   `response_code` int(11) DEFAULT NULL,
   `session_id` varchar(255) DEFAULT NULL,
   `referrer` varchar(512) DEFAULT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
   `operation_category` varchar(100) DEFAULT NULL COMMENT 'High-level category (e.g., authentication, user_management, carbon_calculation)',
   `operation_subtype` varchar(100) DEFAULT NULL COMMENT 'Specific subtype of operation',
   `change_type` enum('create','update','delete','read','other') DEFAULT 'other' COMMENT 'Type of data change performed',
@@ -209,6 +210,7 @@ CREATE TABLE `error_logs` (
   `error_line` int(11) DEFAULT NULL,
   `error_time` datetime DEFAULT NULL,
   `script_name` varchar(255) DEFAULT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
   `client_get` text,
   `client_post` text,
   `client_files` text,
@@ -216,6 +218,25 @@ CREATE TABLE `error_logs` (
   `client_session` text,
   `client_server` text
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `files`
+--
+
+CREATE TABLE `files` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `sha256` varchar(64) NOT NULL,
+  `file_path` varchar(191) NOT NULL,
+  `mime_type` varchar(128) DEFAULT NULL,
+  `size` bigint(20) UNSIGNED NOT NULL DEFAULT '0',
+  `original_name` varchar(255) DEFAULT NULL,
+  `user_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `reference_count` int(10) UNSIGNED NOT NULL DEFAULT '1',
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
 
 -- --------------------------------------------------------
 
@@ -419,6 +440,28 @@ CREATE TABLE `spec_points_transactions` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `system_logs`
+--
+
+CREATE TABLE `system_logs` (
+  `id` int(11) NOT NULL,
+  `request_id` varchar(32) DEFAULT NULL,
+  `method` varchar(10) DEFAULT NULL,
+  `path` varchar(255) DEFAULT NULL,
+  `status_code` int(11) DEFAULT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(512) DEFAULT NULL,
+  `duration_ms` decimal(10,2) DEFAULT NULL,
+  `request_body` mediumtext,
+  `response_body` mediumtext,
+  `server_meta` mediumtext,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `transactions`
 --
 
@@ -482,61 +525,6 @@ CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW 
 --
 -- 表的索引 `audit_logs`
 --
--- 表的索引前新增 `files` 表结构定义
---
-
--- --------------------------------------------------------
-
---
--- 表的结构 `files`
---
-
-CREATE TABLE `files` (
-  `id` bigint(20) unsigned NOT NULL,
-  `sha256` varchar(64) NOT NULL,
-  `file_path` varchar(191) NOT NULL,
-  `mime_type` varchar(128) DEFAULT NULL,
-  `size` bigint(20) unsigned NOT NULL DEFAULT '0',
-  `original_name` varchar(255) DEFAULT NULL,
-  `user_id` bigint(20) unsigned DEFAULT NULL,
-  `reference_count` int(10) unsigned NOT NULL DEFAULT '1',
-  `created_at` timestamp NULL DEFAULT NULL,
-  `updated_at` timestamp NULL DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
-
--- Migration: create system_logs table
--- Apply in MySQL (or MariaDB) environment. For SQLite dev, adjust AUTO_INCREMENT & indexes accordingly.
--- Run this after ensuring you have a backup.
-
-CREATE TABLE IF NOT EXISTS `system_logs` (
-  `id` INT(11) NOT NULL AUTO_INCREMENT,
-  `request_id` VARCHAR(32) DEFAULT NULL,
-  `method` VARCHAR(10) DEFAULT NULL,
-  `path` VARCHAR(255) DEFAULT NULL,
-  `status_code` INT(11) DEFAULT NULL,
-  `user_id` INT(11) DEFAULT NULL,
-  `ip_address` VARCHAR(45) DEFAULT NULL,
-  `user_agent` VARCHAR(512) DEFAULT NULL,
-  `duration_ms` DECIMAL(10,2) DEFAULT NULL,
-  `request_body` MEDIUMTEXT,
-  `response_body` MEDIUMTEXT,
-  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_system_logs_created_at` (`created_at`),
-  KEY `idx_system_logs_status_code` (`status_code`),
-  KEY `idx_system_logs_method` (`method`),
-  KEY `idx_system_logs_user_id` (`user_id`),
-  KEY `idx_system_logs_path` (`path`(100))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- --------------------------------------------------------
-
---
--- 索引结构 `files`
--- (保持与其它表一致, 在统一索引区集中添加)
---
-
---
 ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
@@ -547,14 +535,8 @@ ALTER TABLE `audit_logs`
   ADD KEY `idx_audit_logs_status` (`status`),
   ADD KEY `idx_audit_logs_user_id_actor` (`user_id`,`actor_type`),
   ADD KEY `idx_audit_logs_operation_category` (`operation_category`),
-  ADD KEY `idx_audit_logs_change_type` (`change_type`);
-
--- 表的索引 `files`
-ALTER TABLE `files`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `files_file_path_unique` (`file_path`),
-  ADD UNIQUE KEY `files_sha256_unique` (`sha256`),
-  ADD KEY `files_sha256_index` (`sha256`);
+  ADD KEY `idx_audit_logs_change_type` (`change_type`),
+  ADD KEY `idx_audit_logs_request_id` (`request_id`);
 
 --
 -- 表的索引 `avatars`
@@ -586,7 +568,17 @@ ALTER TABLE `carbon_records`
 -- 表的索引 `error_logs`
 --
 ALTER TABLE `error_logs`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_error_logs_request_id` (`request_id`);
+
+--
+-- 表的索引 `files`
+--
+ALTER TABLE `files`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `files_file_path_unique` (`file_path`),
+  ADD UNIQUE KEY `uniq_files_sha256` (`sha256`),
+  ADD KEY `files_sha256_index` (`sha256`);
 
 --
 -- 表的索引 `idempotency_records`
@@ -686,6 +678,17 @@ ALTER TABLE `spec_points_transactions`
   ADD KEY `id_7` (`id`);
 
 --
+-- 表的索引 `system_logs`
+--
+ALTER TABLE `system_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_system_logs_created_at` (`created_at`),
+  ADD KEY `idx_system_logs_status_code` (`status_code`),
+  ADD KEY `idx_system_logs_method` (`method`),
+  ADD KEY `idx_system_logs_user_id` (`user_id`),
+  ADD KEY `idx_system_logs_path` (`path`(100));
+
+--
 -- 表的索引 `transactions`
 --
 ALTER TABLE `transactions`
@@ -724,15 +727,17 @@ ALTER TABLE `audit_logs`
 ALTER TABLE `avatars`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
--- 使用表AUTO_INCREMENT `files`
-ALTER TABLE `files`
-  MODIFY `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT;
-
 --
 -- 使用表AUTO_INCREMENT `error_logs`
 --
 ALTER TABLE `error_logs`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `files`
+--
+ALTER TABLE `files`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `idempotency_records`
@@ -780,6 +785,12 @@ ALTER TABLE `school_classes`
 -- 使用表AUTO_INCREMENT `spec_points_transactions`
 --
 ALTER TABLE `spec_points_transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `system_logs`
+--
+ALTER TABLE `system_logs`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
