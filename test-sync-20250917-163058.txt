@@ -1,2 +1,0 @@
-Test sync change created at 09/17/2025 16:30:58
-This file was created to test the repository synchronization setup.
