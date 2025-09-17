@@ -818,6 +818,7 @@ class FileUploadController
             'avatars',
             'activities',
             'products',
+            'badges',
             'temp',
             'documents'
         ];

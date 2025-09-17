@@ -1112,62 +1112,94 @@ class CarbonTrackController
     }
     
     /**
-     * 归一化 images 字段
-     * 支持以下历史格式：
-     * - 空/null -> []
-     * - ["url1","url2"] 简单字符串数组
+     * ��һ�� images �ֶ�
+     * ֧��������ʷ��ʽ��
+     * - ��/null -> []
+     * - ["url1","url2"] ���ַ�������
      * - [{ public_url:..., file_path:..., original_name:... }, ...]
-     * - 单个字符串 "url"
-     * 输出统一为：[{"url": "...", "file_path": "...", "original_name": "...", "mime_type": "...", "size": int|null }]
+     * - �����ַ��� "url"
+     * ���ͳһΪ��[{"url": "...", "file_path": "...", "original_name": "...", "mime_type": "...", "size": int|null }]
      */
     private function normalizeImages($raw): array
     {
         if (empty($raw)) { return []; }
-        // 若传入的是字符串（单个）
         if (is_string($raw)) {
-            return [[ 'url' => $raw ]];
+            $raw = [$raw];
         }
+        if (!is_array($raw)) {
+            return [];
+        }
+
         $result = [];
-        if (!is_array($raw)) { return []; }
         foreach ($raw as $item) {
-            if (is_string($item)) {
-                $result[] = ['url' => $item];
-                continue;
+            $normalized = $this->normalizeImageItem($item);
+            if ($normalized !== null) {
+                $result[] = $normalized;
             }
-            if (!is_array($item)) { continue; }
-            $url = $item['public_url'] ?? $item['url'] ?? null;
-            // 如果没有 public_url 但有 file_path 且配置了 r2Service，可尝试构造（此处假设 CloudflareR2Service 暴露 buildPublicUrl 或类似；若无，则直接使用 file_path）
-            if (!$url && isset($item['file_path'])) {
-                try {
-                    if ($this->r2Service && method_exists($this->r2Service, 'getPublicUrl')) {
-                        $url = $this->r2Service->getPublicUrl($item['file_path']);
-                    } else {
-                        $url = $item['file_path'];
-                    }
-                } catch (\Throwable $e) {
-                    $url = $item['file_path'];
-                }
-            }
-            $filePath = $item['file_path'] ?? null;
-            $presigned = null;
-            if ($filePath && $this->r2Service && method_exists($this->r2Service, 'generatePresignedUrl')) {
-                try {
-                    // 默认 10 分钟有效期 (600s)，前端可根据需要刷新
-                    $presigned = $this->r2Service->generatePresignedUrl($filePath, 600);
-                } catch (\Throwable $e) {
-                    // 忽略预签名失败, 保留基础 url
-                }
-            }
-            $result[] = [
-                'url' => $url,
-                'file_path' => $filePath,
-                'original_name' => $item['original_name'] ?? null,
-                'mime_type' => $item['mime_type'] ?? null,
-                'size' => $item['file_size'] ?? ($item['size'] ?? null),
-                'presigned_url' => $presigned
-            ];
         }
+
         return $result;
+    }
+
+    /**
+     * ��һ����ͼ���¼
+     * @param mixed $item
+     */
+    private function normalizeImageItem($item): ?array
+    {
+        if (is_string($item)) {
+            $item = ['url' => $item];
+        } elseif (!is_array($item)) {
+            return null;
+        }
+
+        $url = $item['url'] ?? $item['public_url'] ?? null;
+        $filePath = $item['file_path'] ?? null;
+
+        if (!$filePath && isset($item['public_url']) && $this->r2Service) {
+            $filePath = $this->r2Service->resolveKeyFromUrl((string)$item['public_url']);
+        }
+
+        if (!$filePath && $url && $this->r2Service) {
+            $filePath = $this->r2Service->resolveKeyFromUrl((string)$url);
+        }
+
+        if (is_string($filePath) && $filePath !== '') {
+            $filePath = ltrim($filePath, '/');
+        } else {
+            $filePath = null;
+        }
+
+        if (!$url && $filePath && $this->r2Service) {
+            try {
+                $url = $this->r2Service->getPublicUrl($filePath);
+            } catch (\Throwable $ignore) {
+                $url = null;
+            }
+        }
+
+        $meta = [
+            'url' => $url,
+            'file_path' => $filePath,
+            'original_name' => $item['original_name'] ?? null,
+            'mime_type' => $item['mime_type'] ?? null,
+            'size' => $item['file_size'] ?? ($item['size'] ?? null),
+            'presigned_url' => $item['presigned_url'] ?? null,
+        ];
+
+        if (isset($item['thumbnail_path'])) {
+            $meta['thumbnail_path'] = $item['thumbnail_path'];
+        }
+
+        if ($filePath && $this->r2Service) {
+            try {
+                $meta['presigned_url'] = $this->r2Service->generatePresignedUrl($filePath, 600);
+            } catch (\Throwable $ignore) {
+                // ignore failure
+            }
+        }
+
+        return $meta;
     }
     private function json(Response $response, array $data, int $status = 200): Response
     {

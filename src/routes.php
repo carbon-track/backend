@@ -14,6 +14,8 @@ use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Controllers\AvatarController;
+use CarbonTrack\Controllers\BadgeController;
+use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Middleware\AuthMiddleware;
@@ -97,6 +99,7 @@ return function (App $app) {
             $users->put('/me', [UserController::class, 'updateCurrentUser']);
             $users->put('/me/profile', [UserController::class, 'updateProfile']);
             $users->put('/me/avatar', [UserController::class, 'selectAvatar']);
+            $users->get('/me/badges', [BadgeController::class, 'myBadges']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);
@@ -110,6 +113,13 @@ return function (App $app) {
     $registerAvatarRoutes = function (RouteCollectorProxy $group) {
         $group->get(PATH_AVATARS, [AvatarController::class, 'getAvatars']);
         $group->get(PATH_AVATARS . '/categories', [AvatarController::class, 'getAvatarCategories']);
+    };
+
+    $registerBadgeRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/badges', function (RouteCollectorProxy $badges) {
+            $badges->get('', [BadgeController::class, 'list']);
+            $badges->post('/auto-trigger', [BadgeController::class, 'triggerAuto']);
+        })->add(AuthMiddleware::class);
     };
 
     $registerCarbonActivitiesRoutes = function (RouteCollectorProxy $group) {
@@ -224,6 +234,13 @@ return function (App $app) {
             $admin->get(PATH_AVATAR_ID, [AvatarController::class, 'getAvatar']);
             $admin->put(PATH_AVATAR_ID, [AvatarController::class, 'updateAvatar']);
             $admin->delete(PATH_AVATAR_ID, [AvatarController::class, 'deleteAvatar']);
+            $admin->get('/badges', [AdminBadgeController::class, 'list']);
+            $admin->get('/badges/{id:[0-9]+}', [AdminBadgeController::class, 'detail']);
+            $admin->post('/badges', [AdminBadgeController::class, 'create']);
+            $admin->put('/badges/{id:[0-9]+}', [AdminBadgeController::class, 'update']);
+            $admin->post('/badges/{id:[0-9]+}/award', [AdminBadgeController::class, 'award']);
+            $admin->post('/badges/{id:[0-9]+}/revoke', [AdminBadgeController::class, 'revoke']);
+            $admin->post('/badges/auto-trigger', [AdminBadgeController::class, 'triggerAuto']);
             $admin->post(PATH_AVATAR_ID . '/restore', [AvatarController::class, 'restoreAvatar']);
             $admin->put(PATH_AVATAR_ID . '/set-default', [AvatarController::class, 'setDefaultAvatar']);
         })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
@@ -257,6 +274,7 @@ return function (App $app) {
         $registerAuthRoutes,
         $registerUserRoutes,
         $registerAvatarRoutes,
+        $registerBadgeRoutes,
         $registerCarbonActivitiesRoutes,
         $registerCarbonTrackRoutes,
         $registerProductRoutes,
@@ -270,6 +288,7 @@ return function (App $app) {
         $registerAuthRoutes($group);
         $registerUserRoutes($group);
         $registerAvatarRoutes($group);
+        $registerBadgeRoutes($group);
         $registerCarbonActivitiesRoutes($group);
         $registerCarbonTrackRoutes($group);
         $registerProductRoutes($group);

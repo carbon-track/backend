@@ -15,6 +15,7 @@ class CloudflareR2Service
     private Logger $logger;
     private string $bucketName;
     private string $publicUrl;
+    private string $endpoint;
     private AuditLogService $auditLogService;
 
     // 允许的图片类型
@@ -46,6 +47,7 @@ class CloudflareR2Service
         $this->bucketName = $bucketName;
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
+        $this->endpoint = rtrim($endpoint, "/");
 
     // 是否禁用 TLS 校验（仅用于开发/诊断）
     $disableVerify = !empty($_ENV['R2_DISABLE_TLS_VERIFY']);
@@ -297,10 +299,18 @@ class CloudflareR2Service
                 ]);
             }
 
+            $presignedUrl = null;
+            try {
+                $presignedUrl = $this->generatePresignedUrl($filePath, 600);
+            } catch (\Throwable $ignore) {
+                // presign failures are non-fatal
+            }
+
             return [
                 'success' => true,
                 'file_path' => $filePath,
                 'public_url' => $publicUrl,
+                'presigned_url' => $presignedUrl,
                 'file_size' => $file->getSize(),
                 'mime_type' => $file->getClientMediaType(),
                 'original_name' => $file->getClientFilename(),
@@ -388,6 +398,13 @@ class CloudflareR2Service
                 'Key' => $filePath
             ]);
 
+            $presignedUrl = null;
+            try {
+                $presignedUrl = $this->generatePresignedUrl($filePath, 600);
+            } catch (\Throwable $ignore) {
+                // ignore presign failures
+            }
+
             return [
                 'file_path' => $filePath,
                 'public_url' => $this->getPublicUrl($filePath),
@@ -395,7 +412,8 @@ class CloudflareR2Service
                 'mime_type' => $result['ContentType'] ?? 'application/octet-stream',
                 'last_modified' => $result['LastModified'] ?? null,
                 'etag' => $result['ETag'] ?? null,
-                'metadata' => $result['Metadata'] ?? []
+                'metadata' => $result['Metadata'] ?? [],
+                'presigned_url' => $presignedUrl
             ];
 
         } catch (AwsException $e) {
@@ -473,6 +491,71 @@ class CloudflareR2Service
     public function getPublicUrl(string $filePath): string
     {
         return $this->publicUrl . '/' . ltrim($filePath, '/');
+    }
+
+    /**
+     * Attempt to resolve an object key from a public-facing URL.
+     */
+    public function resolveKeyFromUrl(string $url): ?string
+    {
+        $trimmed = trim($url);
+        if ($trimmed === '') {
+            return null;
+        }
+        if (!preg_match('#^https?://#i', $trimmed)) {
+            return ltrim($trimmed, '/');
+        }
+
+        $normalized = preg_split('/[?#]/', $trimmed, 2)[0] ?? $trimmed;
+        $normalized = rtrim($normalized, '/');
+
+        $baseCandidates = [];
+        $defaultBase = rtrim($this->publicUrl, '/');
+        if ($defaultBase !== '') {
+            $baseCandidates[] = $defaultBase;
+        }
+
+        $endpointBase = rtrim($this->endpoint, '/');
+        if ($endpointBase !== '') {
+            $baseCandidates[] = $endpointBase;
+            $baseCandidates[] = rtrim($endpointBase . '/' . ltrim($this->bucketName, '/'), '/');
+        }
+
+        $baseCandidates = array_values(array_filter(array_unique($baseCandidates)));
+        $bucketPrefix = ltrim($this->bucketName, '/');
+
+        foreach ($baseCandidates as $base) {
+            if ($base === '') {
+                continue;
+            }
+            if (str_starts_with($normalized, $base . '/')) {
+                $candidate = substr($normalized, strlen($base) + 1);
+            } elseif ($normalized === $base) {
+                $candidate = '';
+            } else {
+                continue;
+            }
+            $candidate = ltrim($candidate, '/');
+            if ($candidate === '') {
+                return null;
+            }
+            if ($bucketPrefix !== '' && str_starts_with($candidate, $bucketPrefix . '/')) {
+                $candidate = substr($candidate, strlen($bucketPrefix) + 1);
+                $candidate = ltrim($candidate, '/');
+            }
+            return $candidate === '' ? null : $candidate;
+        }
+
+        $pathPart = parse_url($normalized, PHP_URL_PATH);
+        if (!is_string($pathPart) || $pathPart === '') {
+            return null;
+        }
+        $pathPart = ltrim($pathPart, '/');
+        if ($bucketPrefix !== '' && str_starts_with($pathPart, $bucketPrefix . '/')) {
+            $pathPart = substr($pathPart, strlen($bucketPrefix) + 1);
+            $pathPart = ltrim($pathPart, '/');
+        }
+        return $pathPart === '' ? null : $pathPart;
     }
 
     /**

@@ -34,6 +34,9 @@ use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
+use CarbonTrack\Services\BadgeService;
+use CarbonTrack\Controllers\BadgeController;
+use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
 
 $__deps_initializer = function (Container $container) {
@@ -179,6 +182,16 @@ $__deps_initializer = function (Container $container) {
             $_ENV['R2_PUBLIC_URL'],
             $c->get(Logger::class),
             $c->get(AuditLogService::class)
+        );
+    });
+
+    // Badge Service
+    $container->set(BadgeService::class, function (ContainerInterface $c) {
+        return new BadgeService(
+            $c->get(DatabaseService::class)->getConnection(),
+            $c->get(MessageService::class),
+            $c->get(AuditLogService::class),
+            $c->get(Logger::class)
         );
     });
 
@@ -395,6 +408,28 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(BadgeController::class, function (ContainerInterface $c) {
+        return new BadgeController(
+            $c->get(AuthService::class),
+            $c->get(BadgeService::class),
+            $c->get(AuditLogService::class),
+            $c->get(CloudflareR2Service::class),
+            $c->get(ErrorLogService::class),
+            $c->get(Logger::class)
+        );
+    });
+
+    $container->set(AdminBadgeController::class, function (ContainerInterface $c) {
+        return new AdminBadgeController(
+            $c->get(AuthService::class),
+            $c->get(BadgeService::class),
+            $c->get(AuditLogService::class),
+            $c->get(CloudflareR2Service::class),
+            $c->get(ErrorLogService::class),
+            $c->get(Logger::class)
+        );
+    });
+
     // Request Logging Middleware
     $container->set(RequestLoggingMiddleware::class, function (ContainerInterface $c) {
         return new RequestLoggingMiddleware(
@@ -412,4 +447,6 @@ if (isset($container) && $container instanceof Container) {
 }
 
 return $__deps_initializer;
+
+
 
