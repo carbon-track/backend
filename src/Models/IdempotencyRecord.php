@@ -51,7 +51,7 @@ class IdempotencyRecord extends Model
      */
     public function scopeRecent($query, int $hours = 24)
     {
-        return $query->where('created_at', '>', now()->subHours($hours));
+        return $query->where('created_at', '>', \Illuminate\Support\Carbon::now()->subHours($hours));
     }
 
     /**
@@ -59,7 +59,7 @@ class IdempotencyRecord extends Model
      */
     public static function cleanup(int $daysToKeep = 7): int
     {
-        return static::where('created_at', '<', now()->subDays($daysToKeep))->delete();
+        return static::where('created_at', '<', \Illuminate\Support\Carbon::now()->subDays($daysToKeep))->delete();
     }
 }
 

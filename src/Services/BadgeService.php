@@ -100,8 +100,8 @@ class BadgeService
                 'admin',
                 'achievement_badges',
                 $badge->id,
-                json_encode($original, JSON_UNESCAPED_UNICODE),
-                json_encode($badge->toArray(), JSON_UNESCAPED_UNICODE)
+                $original,
+                $badge->toArray()
             );
 
             return $badge;
@@ -304,9 +304,8 @@ class BadgeService
                 SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END) AS points_earned
             FROM carbon_records
             WHERE user_id = :user_id AND deleted_at IS NULL";
-            $stmt = $this->connection->getPdo()->prepare($sql);
-            $stmt->execute(['user_id' => $userId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $rows = $this->connection->select($sql, ['user_id' => $userId]);
+            $row = isset($rows[0]) ? (array) $rows[0] : [];
             $metrics['total_records'] = (int) ($row['total_records'] ?? 0);
             $metrics['total_approved_records'] = (int) ($row['approved_records'] ?? 0);
             $metrics['total_carbon_saved'] = (float) ($row['carbon_saved'] ?? 0);
