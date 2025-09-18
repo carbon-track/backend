@@ -38,10 +38,16 @@ class AdminControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => 1]);
         $auth->method('isAdminUser')->willReturn(true);
-        // audit->log is a concrete method; don't mock expectations to avoid final/static issues
+
+        $capturedParams = [];
 
         $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
+        $listStmt->expects($this->atLeastOnce())
+            ->method('bindValue')
+            ->willReturnCallback(function ($param, $value) use (&$capturedParams) {
+                $capturedParams[$param] = $value;
+                return true;
+            });
         $listStmt->method('execute')->willReturn(true);
         $listStmt->method('fetchAll')->willReturn([
             ['id'=>1,'username'=>'u1','email'=>'u1@x.com','points'=>100]
@@ -52,19 +58,37 @@ class AdminControllerTest extends TestCase
         $countStmt->method('execute')->willReturn(true);
         $countStmt->method('fetchColumn')->willReturn(1);
 
-        // First prepare for list, then for count
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($listStmt, $countStmt);
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->withConsecutive(
+                [
+                    $this->callback(function ($sql) {
+                        $this->assertStringContainsString('u.is_admin = :is_admin', $sql);
+                        $this->assertStringContainsString('(u.username LIKE :search OR u.email LIKE :search)', $sql);
+                        return true;
+                    })
+                ],
+                [
+                    $this->stringContains('COUNT(DISTINCT u.id)')
+                ]
+            )
+            ->willReturnOnConsecutiveCalls($listStmt, $countStmt);
 
         $controller = new AdminController($pdo, $auth, $audit);
         $request = makeRequest('GET', '/admin/users', null, ['search' => 'u', 'status' => 'active', 'role' => 'user', 'sort' => 'points_desc']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUsers($request, $response);
+
         $this->assertEquals(200, $resp->getStatusCode());
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['data']['pagination']['total_items']);
         $this->assertEquals('u1', $json['data']['users'][0]['username']);
+        $this->assertEquals('%u%', $capturedParams[':search'] ?? null);
+        $this->assertEquals('active', $capturedParams[':status'] ?? null);
+        $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
     }
+
 }
 
 

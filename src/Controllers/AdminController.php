@@ -38,10 +38,28 @@ class AdminController
             $limit  = min(100, max(10, (int)($params['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
 
-            $search   = trim((string)($params['q'] ?? ''));
+            $rawSearch = $params['q'] ?? $params['search'] ?? $params['keyword'] ?? $params['query'] ?? null;
+            $search   = $rawSearch !== null ? trim((string)$rawSearch) : '';
             $status   = trim((string)($params['status'] ?? ''));
             $schoolId = (int)($params['school_id'] ?? 0);
-            $isAdmin  = $params['is_admin'] ?? null; // '0' or '1'
+            $isAdminParam = $params['is_admin'] ?? null;
+            if ($isAdminParam === null && isset($params['role'])) {
+                $role = strtolower(trim((string)$params['role']));
+                if ($role === 'admin') {
+                    $isAdminParam = '1';
+                } elseif ($role === 'user') {
+                    $isAdminParam = '0';
+                }
+            }
+            $isAdmin  = $isAdminParam;
+            if ($isAdmin !== null) {
+                $normalizedIsAdmin = (string)$isAdmin;
+                if (in_array($normalizedIsAdmin, ['0', '1'], true)) {
+                    $isAdmin = (int)$normalizedIsAdmin;
+                } else {
+                    $isAdmin = null;
+                }
+            }
             $sort     = (string)($params['sort'] ?? 'created_at_desc');
 
             $where = ['u.deleted_at IS NULL'];
@@ -58,7 +76,7 @@ class AdminController
                 $where[] = 'u.school_id = :school_id';
                 $queryParams['school_id'] = $schoolId;
             }
-            if ($isAdmin !== null && ($isAdmin === '0' || $isAdmin === '1')) {
+            if ($isAdmin !== null) {
                 $where[] = 'u.is_admin = :is_admin';
                 $queryParams['is_admin'] = (int)$isAdmin;
             }

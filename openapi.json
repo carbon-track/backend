@@ -6617,8 +6617,8 @@
           "Admin",
           "User"
         ],
-        "summary": "获取用户列表 (管理员)",
-        "description": "管理员获取用户列表，支持分页筛选。",
+        "summary": "��ȡ�û��б� (����Ա)",
+        "description": "����Ա��ȡ�û��б���֧�ַ�ҳɸѡ��",
         "security": [
           {
             "bearerAuth": []
@@ -6644,14 +6644,77 @@
           {
             "name": "search",
             "in": "query",
+            "description": "Fuzzy match on username or email. Alias: q.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by account status",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "inactive"
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "description": "Convenience filter. When set to admin/user it maps to is_admin=1/0.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "user"
+              ]
+            }
+          },
+          {
+            "name": "is_admin",
+            "in": "query",
+            "description": "Explicit admin filter (0 or 1).",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1
+              ]
+            }
+          },
+          {
+            "name": "school_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "username_asc",
+                "username_desc",
+                "email_asc",
+                "email_desc",
+                "points_asc",
+                "points_desc",
+                "created_at_asc",
+                "created_at_desc"
+              ],
+              "default": "created_at_desc"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功",
+            "description": "�ɹ�",
             "content": {
               "application/json": {
                 "schema": {
@@ -6661,9 +6724,31 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/UserResponse"
+                      "type": "object",
+                      "properties": {
+                        "users": {
+                          "type": "array",
+                          "items": {
+                            "": "#/components/schemas/UserResponse"
+                          }
+                        },
+                        "pagination": {
+                          "type": "object",
+                          "properties": {
+                            "current_page": {
+                              "type": "integer"
+                            },
+                            "per_page": {
+                              "type": "integer"
+                            },
+                            "total_items": {
+                              "type": "integer"
+                            },
+                            "total_pages": {
+                              "type": "integer"
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -11402,8 +11487,8 @@
           "Admin",
           "User"
         ],
-        "summary": "获取用户列表 (管理员)",
-        "description": "管理员获取用户列表，支持分页筛选。",
+        "summary": "��ȡ�û��б� (����Ա)",
+        "description": "����Ա��ȡ�û��б���֧�ַ�ҳɸѡ��",
         "security": [
           {
             "bearerAuth": []
@@ -11429,14 +11514,77 @@
           {
             "name": "search",
             "in": "query",
+            "description": "Fuzzy match on username or email. Alias: q.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by account status",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "inactive"
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "description": "Convenience filter. When set to admin/user it maps to is_admin=1/0.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "admin",
+                "user"
+              ]
+            }
+          },
+          {
+            "name": "is_admin",
+            "in": "query",
+            "description": "Explicit admin filter (0 or 1).",
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0,
+                1
+              ]
+            }
+          },
+          {
+            "name": "school_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort field",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "username_asc",
+                "username_desc",
+                "email_asc",
+                "email_desc",
+                "points_asc",
+                "points_desc",
+                "created_at_asc",
+                "created_at_desc"
+              ],
+              "default": "created_at_desc"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "成功",
+            "description": "�ɹ�",
             "content": {
               "application/json": {
                 "schema": {
@@ -11446,9 +11594,31 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/UserResponse"
+                      "type": "object",
+                      "properties": {
+                        "users": {
+                          "type": "array",
+                          "items": {
+                            "": "#/components/schemas/UserResponse"
+                          }
+                        },
+                        "pagination": {
+                          "type": "object",
+                          "properties": {
+                            "current_page": {
+                              "type": "integer"
+                            },
+                            "per_page": {
+                              "type": "integer"
+                            },
+                            "total_items": {
+                              "type": "integer"
+                            },
+                            "total_pages": {
+                              "type": "integer"
+                            }
+                          }
+                        }
                       }
                     }
                   }
