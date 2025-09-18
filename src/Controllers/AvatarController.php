@@ -72,13 +72,14 @@ class AvatarController
             }
 
             $avatars = $this->avatarModel->getAvailableAvatars($category);
+            $avatars = array_map([$this, 'formatAvatar'], array_values($avatars));
 
             // The database query already filters for active avatars
             // Additional filtering is only needed if admin is requesting inactive avatars
 
             return $this->jsonResponse($response, [
                 'success' => true,
-                'data' => array_values($avatars)
+                'data' => $avatars
             ]);
 
         } catch (\Exception $e) {
@@ -152,6 +153,8 @@ class AvatarController
                     'code' => 'AVATAR_NOT_FOUND'
                 ], 404);
             }
+
+            $avatar = $this->formatAvatar($avatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -246,6 +249,8 @@ class AvatarController
 
             // 获取创建的头像信息
             $createdAvatar = $this->avatarModel->getAvatarById($avatarId);
+
+            $createdAvatar = $this->formatAvatar($createdAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -364,6 +369,8 @@ class AvatarController
 
             // 获取更新后的头像信息
             $updatedAvatar = $this->avatarModel->getAvatarById($avatarId);
+
+            $updatedAvatar = $this->formatAvatar($updatedAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -513,6 +520,8 @@ class AvatarController
 
             // 获取恢复后的头像信息
             $restoredAvatar = $this->avatarModel->getAvatarById($avatarId);
+
+            $restoredAvatar = $this->formatAvatar($restoredAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -809,6 +818,65 @@ class AvatarController
                 'message' => 'Failed to upload avatar file'
             ], 500);
         }
+    }
+
+    /**
+     * Enrich avatar payload with derived URLs for frontend consumption.
+     */
+    private function formatAvatar(array $avatar): array
+    {
+        $filePath = $avatar['file_path'] ?? null;
+        if ($filePath) {
+            $normalizedPath = ltrim((string)$filePath, '/');
+            $avatar['icon_path'] = $normalizedPath;
+            if ($this->r2Service) {
+                try {
+                    $avatar['icon_url'] = $this->r2Service->getPublicUrl($normalizedPath);
+                } catch (\Throwable $e) {
+                    if ($this->logger) {
+                        $this->logger->warning('Failed to build avatar icon public URL', [
+                            'error' => $e->getMessage(),
+                            'file_path' => $normalizedPath
+                        ]);
+                    }
+                }
+                try {
+                    $avatar['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($normalizedPath, 600);
+                } catch (\Throwable $e) {
+                    if ($this->logger) {
+                        $this->logger->warning('Failed to build avatar icon presigned URL', [
+                            'error' => $e->getMessage(),
+                            'file_path' => $normalizedPath
+                        ]);
+                    }
+                }
+            }
+            if (!isset($avatar['image_url']) || !$avatar['image_url']) {
+                $avatar['image_url'] = $avatar['icon_url'] ?? $filePath;
+            }
+            if (!isset($avatar['url']) || !$avatar['url']) {
+                $avatar['url'] = $avatar['icon_url'] ?? ($avatar['image_url'] ?? $filePath);
+            }
+        }
+
+        $thumbnailPath = $avatar['thumbnail_path'] ?? null;
+        if ($thumbnailPath) {
+            $normalizedThumb = ltrim((string)$thumbnailPath, '/');
+            if ($this->r2Service) {
+                try {
+                    $avatar['thumbnail_url'] = $this->r2Service->getPublicUrl($normalizedThumb);
+                } catch (\Throwable $e) {
+                    if ($this->logger) {
+                        $this->logger->warning('Failed to build avatar thumbnail URL', [
+                            'error' => $e->getMessage(),
+                            'file_path' => $normalizedThumb
+                        ]);
+                    }
+                }
+            }
+        }
+
+        return $avatar;
     }
 
     /**
