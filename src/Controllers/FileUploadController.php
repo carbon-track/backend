@@ -810,10 +810,11 @@ class FileUploadController
     /**
      * 验证目录名是否有效
      */
+
     private function isValidDirectory(string $directory): bool
     {
-        // 允许的目录名
-        $allowedDirectories = [
+        // 允许的根目录名称（可附带子目录段）
+        $allowedRoots = [
             'uploads',
             'avatars',
             'activities',
@@ -823,7 +824,30 @@ class FileUploadController
             'documents'
         ];
 
-        return in_array($directory, $allowedDirectories);
+        $normalized = trim($directory);
+        if ($normalized === '') {
+            return false;
+        }
+
+        $normalized = trim($normalized, " /\t\n\r\0\x0B");
+        if ($normalized === '') {
+            return false;
+        }
+
+        $segments = explode('/', $normalized);
+        $root = array_shift($segments);
+
+        if (!in_array($root, $allowedRoots, true)) {
+            return false;
+        }
+
+        foreach ($segments as $segment) {
+            if ($segment === '' || !preg_match('/^[A-Za-z0-9_-]+$/', $segment)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

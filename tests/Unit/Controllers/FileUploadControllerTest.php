@@ -115,6 +115,60 @@ class FileUploadControllerTest extends TestCase
         $this->assertArrayNotHasKey('url',$payload['data']);
     }
 
+    public function testPresignAllowsNestedAvatarDirectory(): void
+    {
+        $c = $this->controller(['id'=>21], function($r2){
+            $r2->method('getAllowedMimeTypes')->willReturn(['image/png']);
+            $r2->method('getAllowedExtensions')->willReturn(['png']);
+            $r2->method('getMaxFileSize')->willReturn(5*1024*1024);
+            $r2->expects($this->once())
+                ->method('generateDirectUploadKey')
+                ->with('face.png', 'avatars/custom-set')
+                ->willReturn([
+                    'file_name'=>'uuid.png',
+                    'file_path'=>'avatars/custom-set/2024/12/uuid.png',
+                    'public_url'=>'https://cdn/uuid.png'
+                ]);
+            $r2->expects($this->once())
+                ->method('generateUploadPresignedUrl')
+                ->with('avatars/custom-set/2024/12/uuid.png', 'image/png', 600)
+                ->willReturn([
+                    'url'=>'https://r2/presigned',
+                    'method'=>'PUT',
+                    'headers'=>['Content-Type'=>'image/png'],
+                    'expires_in'=>600,
+                    'expires_at'=>'2025-01-01 00:00:00'
+                ]);
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST','/files/presign',[
+            'original_name'=>'face.png',
+            'mime_type'=>'image/png',
+            'file_size'=>512,
+            'directory'=>'avatars/custom-set'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testPresignRejectsInvalidDirectory(): void
+    {
+        $c = $this->controller(['id'=>22], function($r2){
+            $r2->method('getAllowedMimeTypes')->willReturn(['image/png']);
+            $r2->method('getAllowedExtensions')->willReturn(['png']);
+            $r2->method('getMaxFileSize')->willReturn(5*1024*1024);
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST','/files/presign',[
+            'original_name'=>'bad.png',
+            'mime_type'=>'image/png',
+            'file_size'=>256,
+            'directory'=>'avatars/../../etc/passwd'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+    }
+
     public function testConfirmCreatesRecord(): void
     {
     $fileMeta = $this->createMock(FileMetadataService::class);
