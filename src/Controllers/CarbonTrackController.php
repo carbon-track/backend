@@ -141,17 +141,21 @@ class CarbonTrackController
                 return $this->json($response, ['error' => 'Activity not found'], 404);
             }
 
+            $amountValue = floatval($data['amount']);
+
             // 计算碳减排量和积分（仅使用 calculateCarbonSavings，旧 calculate 已移除兼容）
             try {
-                $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], floatval($data['amount']));
+                $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], $amountValue, $activity);
             } catch (\Throwable $e) {
                 return $this->json($response, ['error' => 'calc_failed', 'message' => $e->getMessage()], 500);
             }
             $carbonSaved = $calc['carbon_savings'] ?? 0;
-            $pointsEarned = (int)round($carbonSaved * 10);
+            $pointsEarned = $calc['points_earned'] ?? (int)round($carbonSaved * 10);
             $calculation = [
                 'carbon_saved' => $carbonSaved,
-                'points_earned' => $pointsEarned
+                'points_earned' => $pointsEarned,
+                'carbon_factor' => isset($calc['carbon_factor']) ? (float) $calc['carbon_factor'] : null,
+                'unit' => $calc['unit'] ?? ($data['unit'] ?? $activity['unit'] ?? null),
             ];
 
             // 先处理附件上传（如有），上传到 R2 并备好 images 数组
@@ -252,7 +256,7 @@ class CarbonTrackController
             $recordId = $this->createCarbonRecord([
                 'user_id' => $user['id'],
                 'activity_id' => $data['activity_id'],
-                'amount' => $data['amount'],
+                'amount' => $amountValue,
                 'unit' => $data['unit'] ?? $activity['unit'],
                 'carbon_saved' => $carbonSaved,
                 'points_earned' => $pointsEarned,
@@ -391,6 +395,10 @@ class CarbonTrackController
                 return $this->json($response, ['error' => 'Activity not found'], 404);
             }
 
+            $amountValue = floatval($data['data']);
+            $carbonFactor = $activity['carbon_factor'] ?? null;
+            $calculationUnit = $data['unit'] ?? $activity['unit'] ?? null;
+
             // Support both new and old service APIs
             if (method_exists($this->carbonCalculator, 'calculate')) {
                 $calculation = call_user_func([
@@ -398,15 +406,19 @@ class CarbonTrackController
                     'calculate'
                 ],
                     $data['activity_id'],
-                    floatval($data['data']),
+                    $amountValue,
                     $data['unit'] ?? $activity['unit']
                 );
                 $carbonSaved = $calculation['carbon_saved'] ?? 0;
                 $pointsEarned = $calculation['points_earned'] ?? 0;
+                $carbonFactor = $calculation['carbon_factor'] ?? $carbonFactor;
+                $calculationUnit = $calculation['unit'] ?? $calculationUnit;
             } else {
-                $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], floatval($data['data']));
+                $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], $amountValue, $activity);
                 $carbonSaved = $calc['carbon_savings'] ?? 0;
-                $pointsEarned = (int)round($carbonSaved * 10);
+                $pointsEarned = $calc['points_earned'] ?? (int)round($carbonSaved * 10);
+                $carbonFactor = $calc['carbon_factor'] ?? ($activity['carbon_factor'] ?? null);
+                $calculationUnit = $calc['unit'] ?? $calculationUnit;
             }
 
             return $this->json($response, [
@@ -414,6 +426,8 @@ class CarbonTrackController
                 'data' => [
                     'carbon_saved' => $carbonSaved,
                     'points_earned' => $pointsEarned,
+                    'carbon_factor' => $carbonFactor !== null ? (float) $carbonFactor : null,
+                    'unit' => $calculationUnit,
                 ]
             ]);
         } catch (\Exception $e) {

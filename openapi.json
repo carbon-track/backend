@@ -1587,7 +1587,7 @@
           "User"
         ],
         "summary": "更新当前用户资料",
-        "description": "更新当前认证用户的个人资料信息。支持更新真实姓名、班级名称、学校ID和头像ID。",
+        "description": "更新当前认证用户的个人资料信息。支持更新学校ID和头像ID。",
         "security": [
           {
             "bearerAuth": []
@@ -8753,6 +8753,12 @@
             "type": "integer",
             "description": "用户ID"
           },
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "用户UUID"
+          },
           "username": {
             "type": "string",
             "description": "用户名"
@@ -8761,35 +8767,44 @@
             "type": "string",
             "description": "邮箱地址"
           },
+          "school_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "所属学校ID"
+          },
+          "school_name": {
+            "type": "string",
+            "nullable": true,
+            "description": "所属学校名称"
+          },
+          "points": {
+            "type": "number",
+            "description": "当前积分余额"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "description": "是否为管理员"
+          },
+          "avatar_id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "头像ID"
+          },
           "avatar_url": {
             "type": "string",
+            "nullable": true,
             "description": "头像URL"
           },
-          "role": {
-            "type": "string",
-            "enum": [
-              "user",
-              "admin"
-            ],
-            "description": "用户角色"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "inactive",
-              "suspended"
-            ],
-            "description": "用户状态"
-          },
-          "created_at": {
+          "last_login_at": {
             "type": "string",
             "format": "date-time",
-            "description": "账户创建时间"
+            "nullable": true,
+            "description": "最近登录时间"
           },
           "updated_at": {
             "type": "string",
             "format": "date-time",
+            "nullable": true,
             "description": "账户更新时间"
           }
         }
@@ -8810,16 +8825,28 @@
       },
       "CalculateRequest": {
         "type": "object",
+        "required": [
+          "activity_id",
+          "amount"
+        ],
         "properties": {
           "activity_id": {
             "type": "string",
-            "description": "活动ID"
+            "description": "活动ID (UUID)"
           },
-          "parameters": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
+          "amount": {
+            "type": "number",
+            "minimum": 0,
+            "description": "本次计算使用的数值。旧客户端可能发送字段 data，服务端会自动兼容。"
+          },
+          "data": {
+            "type": "number",
+            "minimum": 0,
+            "description": "旧字段，等同于 amount。发送时任一字段即可。"
+          },
+          "unit": {
+            "type": "string",
+            "description": "可选，覆盖活动默认单位"
           }
         }
       },
@@ -8828,11 +8855,19 @@
         "properties": {
           "carbon_saved": {
             "type": "number",
-            "description": "计算的碳减排量"
+            "description": "计算得到的碳减排量（kg CO₂）"
           },
-          "points_awarded": {
+          "points_earned": {
             "type": "integer",
-            "description": "计算的积分"
+            "description": "根据碳减排量换算得到的积分"
+          },
+          "carbon_factor": {
+            "type": "number",
+            "description": "活动对应的碳减排因子"
+          },
+          "unit": {
+            "type": "string",
+            "description": "计算使用的单位"
           }
         }
       },
@@ -8840,19 +8875,33 @@
         "type": "object",
         "required": [
           "activity_id",
-          "parameters"
+          "amount",
+          "date"
         ],
         "properties": {
           "activity_id": {
             "type": "string",
-            "description": "活动ID"
+            "description": "活动ID (UUID)"
           },
-          "parameters": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "与活动相关的参数键值对，例如 { 'distance_km': '5' }"
+          "amount": {
+            "type": "number",
+            "minimum": 0,
+            "description": "本次记录的实际数值"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "活动发生日期"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "备注信息"
+          },
+          "unit": {
+            "type": "string",
+            "nullable": true,
+            "description": "可选，覆盖活动默认单位"
           },
           "images": {
             "type": "array",

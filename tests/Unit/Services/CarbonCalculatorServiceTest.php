@@ -209,5 +209,36 @@ class CarbonCalculatorServiceTest extends TestCase
         $this->assertEquals(0, $stats['total_activities']);
         $this->assertEquals(0.0, $stats['average_carbon_per_activity']);
     }
+
+    public function testCalculateCarbonSavingsWithProvidedActivity(): void
+    {
+        $activity = [
+            'id' => 'activity-123',
+            'name_zh' => '骑行',
+            'name_en' => 'Cycling',
+            'category' => 'transport',
+            'carbon_factor' => 1.5,
+            'unit' => 'km',
+        ];
+
+        $result = $this->carbonCalculator->calculateCarbonSavings($activity['id'], 4.0, $activity);
+
+        $this->assertEqualsWithDelta(6.0, $result['carbon_savings'], 0.0001);
+        $this->assertSame(60, $result['points_earned']);
+        $this->assertSame(1.5, $result['carbon_factor']);
+        $this->assertSame('km', $result['unit']);
+        $this->assertSame('activity-123', $result['activity_id']);
+        $this->assertSame('骑行', $result['activity_name_zh']);
+        $this->assertSame('Cycling', $result['activity_name_en']);
+    }
+
+    public function testCalculateCarbonSavingsRejectsNegativeInput(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->carbonCalculator->calculateCarbonSavings('activity-negative', -1, [
+            'carbon_factor' => 2,
+        ]);
+    }
 }
 

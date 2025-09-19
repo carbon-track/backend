@@ -160,24 +160,80 @@ class CarbonCalculatorService
      * @return array Result with carbon savings and activity details
      * @throws \InvalidArgumentException If activity not found or invalid
      */
-    public function calculateCarbonSavings(string $activityId, float $dataInput): array
+    public function calculateCarbonSavings(string $activityId, float $dataInput, ?array $activity = null): array
     {
         if ($dataInput < 0) {
             throw new \InvalidArgumentException('Data input cannot be negative');
         }
 
-        // For testing purposes, return mock data
+        $resolvedActivity = $activity ?? $this->resolveActivity($activityId);
+
+        if (!$resolvedActivity) {
+            throw new \InvalidArgumentException('Activity not found');
+        }
+
+        $carbonFactor = $this->extractCarbonFactor($resolvedActivity);
+        $unit = $resolvedActivity['unit'] ?? null;
+        $nameZh = $resolvedActivity['name_zh'] ?? null;
+        $nameEn = $resolvedActivity['name_en'] ?? null;
+        $combinedName = trim(($nameZh ?? '') . ' ' . ($nameEn ?? ''));
+        if ($combinedName === '') {
+            $combinedName = $nameZh ?? $nameEn ?? '';
+        }
+
+        $carbonSavings = $carbonFactor * $dataInput;
+        $pointsEarned = (int) round($carbonSavings * 10);
+
         return [
             'activity_id' => $activityId,
-            'activity_name_zh' => '步行',
-            'activity_name_en' => 'Walking',
-            'activity_combined_name' => '步行 Walking',
-            'category' => 'transport',
-            'carbon_factor' => 2.5,
-            'unit' => 'km',
+            'activity_name_zh' => $nameZh,
+            'activity_name_en' => $nameEn,
+            'activity_combined_name' => $combinedName,
+            'category' => $resolvedActivity['category'] ?? null,
+            'carbon_factor' => $carbonFactor,
+            'unit' => $unit,
             'data_input' => $dataInput,
-            'carbon_savings' => 2.5 * $dataInput
+            'carbon_savings' => $carbonSavings,
+            'points_earned' => $pointsEarned,
         ];
+    }
+
+    private function resolveActivity(string $activityId): ?array
+    {
+        try {
+            $model = CarbonActivity::find($activityId);
+        } catch (\Throwable $e) {
+            if ($this->logger) {
+                $this->logger->warning('Failed to resolve carbon activity', [
+                    'activity_id' => $activityId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+            $model = null;
+        }
+
+        if (!$model) {
+            return null;
+        }
+
+        return [
+            'id' => $model->id,
+            'name_zh' => $model->name_zh,
+            'name_en' => $model->name_en,
+            'category' => $model->category,
+            'carbon_factor' => (float) $model->carbon_factor,
+            'unit' => $model->unit,
+        ];
+    }
+
+    private function extractCarbonFactor(array $activity): float
+    {
+        $factor = $activity['carbon_factor'] ?? $activity['factor'] ?? 0;
+        if (!is_numeric($factor)) {
+            return 0.0;
+        }
+
+        return (float) $factor;
     }
 
     /**
