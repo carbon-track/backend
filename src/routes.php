@@ -186,6 +186,8 @@ return function (App $app) {
     $registerAdminRoutes = function (RouteCollectorProxy $group) {
         $group->group('/admin', function (RouteCollectorProxy $admin) {
             $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
+            $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/badges', [AdminController::class, 'getUserBadges']);
+            $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/overview', [AdminController::class, 'getUserOverview']);
             // 用户管理
             $admin->put(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
             $admin->delete(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
@@ -240,6 +242,7 @@ return function (App $app) {
             $admin->put('/badges/{id:[0-9]+}', [AdminBadgeController::class, 'update']);
             $admin->post('/badges/{id:[0-9]+}/award', [AdminBadgeController::class, 'award']);
             $admin->post('/badges/{id:[0-9]+}/revoke', [AdminBadgeController::class, 'revoke']);
+            $admin->get('/badges/{id:[0-9]+}/recipients', [AdminBadgeController::class, 'recipients']);
             $admin->post('/badges/auto-trigger', [AdminBadgeController::class, 'triggerAuto']);
             $admin->post(PATH_AVATAR_ID . '/restore', [AvatarController::class, 'restoreAvatar']);
             $admin->put(PATH_AVATAR_ID . '/set-default', [AvatarController::class, 'setDefaultAvatar']);

@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AdminController;
+use CarbonTrack\Services\BadgeService;
 
 class AdminControllerTest extends TestCase
 {
@@ -19,11 +20,12 @@ class AdminControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
 
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 0]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = new AdminController($pdo, $auth, $audit);
+        $controller = new AdminController($pdo, $auth, $audit, $badgeService);
         $request = makeRequest('GET', '/admin/users');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUsers($request, $response);
@@ -35,6 +37,7 @@ class AdminControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
 
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => 1]);
         $auth->method('isAdminUser')->willReturn(true);
@@ -74,7 +77,7 @@ class AdminControllerTest extends TestCase
             )
             ->willReturnOnConsecutiveCalls($listStmt, $countStmt);
 
-        $controller = new AdminController($pdo, $auth, $audit);
+        $controller = new AdminController($pdo, $auth, $audit, $badgeService);
         $request = makeRequest('GET', '/admin/users', null, ['search' => 'u', 'status' => 'active', 'role' => 'user', 'sort' => 'points_desc']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUsers($request, $response);

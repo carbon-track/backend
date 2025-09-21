@@ -375,7 +375,9 @@ $__deps_initializer = function (Container $container) {
             $db,
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
-            $c->get(ErrorLogService::class)
+            $c->get(BadgeService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(CloudflareR2Service::class)
         );
     });
 

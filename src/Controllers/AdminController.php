@@ -215,6 +215,78 @@ class AdminController
         }
     }
 
+    public function getUserBadges(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $userId = (int) ($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            $userRow = $this->loadUserRow($userId);
+            if (!$userRow) {
+                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+            }
+
+            $query = $request->getQueryParams();
+            $includeRevoked = !empty($query['include_revoked']) && filter_var($query['include_revoked'], FILTER_VALIDATE_BOOLEAN);
+
+            $badgePayload = $this->buildUserBadgePayload($userId, $includeRevoked);
+            $badgePayload['metrics'] = $this->badgeService->compileUserMetrics($userId);
+            $badgePayload['user'] = $userRow;
+
+            return $this->jsonResponse($response, ['success' => true, 'data' => $badgePayload]);
+        } catch (\Throwable $e) {
+            if (($_ENV['APP_ENV'] ?? '') === 'testing') {
+                throw $e;
+            }
+            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    public function getUserOverview(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $userId = (int) ($args['id'] ?? 0);
+            if ($userId <= 0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            }
+
+            $userRow = $this->loadUserRow($userId);
+            if (!$userRow) {
+                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+            }
+
+            $metrics = $this->badgeService->compileUserMetrics($userId);
+            $badgePayload = $this->buildUserBadgePayload($userId, true);
+            $payload = [
+                'user' => $userRow,
+                'metrics' => $metrics,
+                'badge_summary' => $badgePayload['summary'],
+                'recent_badges' => array_slice($badgePayload['items'], 0, 5),
+            ];
+
+            return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);
+        } catch (\Throwable $e) {
+            if (($_ENV['APP_ENV'] ?? '') === 'testing') {
+                throw $e;
+            }
+            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
     /**
      * 获取待审核交易列表
      */
@@ -516,6 +588,91 @@ class AdminController
         } catch (\Exception $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function buildUserBadgePayload(int $userId, bool $includeRevoked = false): array
+    {
+        $records = $this->badgeService->getUserBadges($userId, $includeRevoked);
+        $items = [];
+        $awarded = 0;
+        $revoked = 0;
+        foreach ($records as $entry) {
+            $badge = $entry['badge'] ?? null;
+            if (is_array($badge)) {
+                $badge = $this->formatBadgeForAdmin($badge);
+            }
+            $userBadge = $entry['user_badge'] ?? [];
+            $status = $userBadge['status'] ?? null;
+            if ($status === 'awarded') {
+                $awarded++;
+            } elseif ($status === 'revoked') {
+                $revoked++;
+            }
+            $items[] = [
+                'badge' => $badge,
+                'user_badge' => $userBadge,
+            ];
+        }
+
+        return [
+            'items' => $items,
+            'summary' => [
+                'awarded' => $awarded,
+                'revoked' => $revoked,
+                'total' => $awarded + $revoked,
+            ],
+        ];
+    }
+
+    private function formatBadgeForAdmin(array $badge): array
+    {
+        if ($this->r2Service && !empty($badge['icon_path'])) {
+            try {
+                $badge['icon_url'] = $this->r2Service->getPublicUrl($badge['icon_path']);
+                $badge['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($badge['icon_path'], 600);
+            } catch (\Throwable $e) {
+                // ignore formatting failures for optional assets
+            }
+        }
+        if ($this->r2Service && !empty($badge['icon_thumbnail_path'])) {
+            try {
+                $badge['icon_thumbnail_url'] = $this->r2Service->getPublicUrl($badge['icon_thumbnail_path']);
+            } catch (\Throwable $ignore) {}
+        }
+        return $badge;
+    }
+
+    private function loadUserRow(int $userId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, s.name as school_name, u.last_login_at FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1');
+        $stmt->execute(['id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+        $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
+        $row['points'] = (float) ($row['points'] ?? 0);
+        $row['days_since_registration'] = $this->computeDaysSince($row['created_at'] ?? null);
+        return $row;
+    }
+
+    private function computeDaysSince(?string $timestamp): int
+    {
+        if (!$timestamp) {
+            return 0;
+        }
+        try {
+            $timezoneName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+            if (!$timezoneName) {
+                $timezoneName = 'UTC';
+            }
+            $timezone = new DateTimeZone($timezoneName);
+            $created = new DateTimeImmutable((string) $timestamp, $timezone);
+            $now = new DateTimeImmutable('now', $timezone);
+            return max(0, (int) $created->diff($now)->format('%a'));
+        } catch (\Throwable $e) {
+            return 0;
         }
     }
 

@@ -478,7 +478,14 @@ class BadgeService
         }
 
         $rules = $criteria['rules'] ?? $criteria;
-        $allRequired = (bool) ($criteria['all'] ?? $criteria['all_required'] ?? true);
+        $mode = $criteria['all'] ?? $criteria['all_required'] ?? true;
+        if (is_string($mode)) {
+            $filtered = filter_var($mode, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            if ($filtered !== null) {
+                $mode = $filtered;
+            }
+        }
+        $allRequired = (bool) $mode;
 
         $passedAny = false;
         foreach ((array) $rules as $rule) {
