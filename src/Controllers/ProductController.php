@@ -7,6 +7,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\ErrorLogService;
 use PDO;
 
@@ -17,6 +18,7 @@ class ProductController
     private AuditLogService $auditLog;
     private AuthService $authService;
     private ?ErrorLogService $errorLogService;
+    private ?CloudflareR2Service $r2Service;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERR_ADMIN_REQUIRED = 'Admin access required';
@@ -27,13 +29,15 @@ class ProductController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService = null
+        ErrorLogService $errorLogService = null,
+        CloudflareR2Service $r2Service = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
         $this->errorLogService = $errorLogService;
+        $this->r2Service = $r2Service;
     }
 
     /**

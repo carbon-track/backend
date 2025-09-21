@@ -122,6 +122,15 @@ class CarbonCalculatorServiceTest extends TestCase
         ];
 
         $this->assertFalse($this->carbonCalculator->validateActivityData($invalidActivity2));
+
+        // Update payload: allow partial fields as long as recognised field present
+        $updatePayload = ['is_active' => false];
+        $this->assertTrue($this->carbonCalculator->validateActivityData($updatePayload, true));
+
+        $invalidUpdate = ['name_en' => ''];
+        $this->assertFalse($this->carbonCalculator->validateActivityData($invalidUpdate, true));
+
+        $this->assertFalse($this->carbonCalculator->validateActivityData([], true));
     }
 
     public function testValidateAmount(): void

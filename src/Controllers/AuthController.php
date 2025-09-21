@@ -12,6 +12,7 @@ use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\CloudflareR2Service;
 use Monolog\Logger;
 use PDO;
 
@@ -23,6 +24,7 @@ class AuthController
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
+    private ?CloudflareR2Service $r2Service;
     private Logger $logger;
     private PDO $db;
 
@@ -32,6 +34,7 @@ class AuthController
         TurnstileService $turnstileService,
         AuditLogService $auditLogService,
         MessageService $messageService,
+        CloudflareR2Service $r2Service = null,
         Logger $logger,
         PDO $db,
         ErrorLogService $errorLogService = null
@@ -41,6 +44,7 @@ class AuthController
         $this->turnstileService = $turnstileService;
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
+        $this->r2Service = $r2Service;
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
@@ -203,7 +207,7 @@ class AuthController
             }
             $isEmail = filter_var($identifier, FILTER_VALIDATE_EMAIL) !== false;
             $field = $isEmail ? 'u.email' : 'u.username';
-            $stmt = $this->db->prepare("SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE {$field} = ? AND u.deleted_at IS NULL");
+            $stmt = $this->db->prepare("SELECT u.*, s.name as school_name, a.file_path as avatar_path FROM users u LEFT JOIN schools s ON u.school_id = s.id LEFT JOIN avatars a ON u.avatar_id = a.id WHERE {$field} = ? AND u.deleted_at IS NULL");
             $stmt->execute([$identifier]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             $passwordField = null;
@@ -250,6 +254,8 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent')
                 ]
             ]);
+            $avatar = $this->resolveAvatar($user['avatar_path'] ?? $user['avatar_url'] ?? null);
+
             $userInfo = [
                 'id' => $user['id'],
                 'uuid' => $user['uuid'] ?? null,
@@ -259,7 +265,8 @@ class AuthController
                 'school_name' => $user['school_name'] ?? null,
                 'points' => (int)($user['points'] ?? 0),
                 'is_admin' => (bool)($user['is_admin'] ?? 0),
-                'avatar_url' => $user['avatar_url'] ?? null,
+                'avatar_path' => $avatar['avatar_path'],
+                'avatar_url' => $avatar['avatar_url'],
                 'last_login_at' => $user['last_login_at'] ?? ($user['lastlgn'] ?? null)
             ];
             return $this->jsonResponse($response, [
@@ -316,7 +323,7 @@ class AuthController
                     'code' => 'UNAUTHORIZED'
                 ], 401);
             }
-            $stmt = $this->db->prepare('SELECT u.*, s.name as school_name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = ? AND u.deleted_at IS NULL');
+            $stmt = $this->db->prepare('SELECT u.*, s.name as school_name, a.file_path as avatar_path FROM users u LEFT JOIN schools s ON u.school_id = s.id LEFT JOIN avatars a ON u.avatar_id = a.id WHERE u.id = ? AND u.deleted_at IS NULL');
             $stmt->execute([$user['id']]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$row) {
@@ -330,6 +337,8 @@ class AuthController
             $stmt = $this->db->prepare('SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0 AND deleted_at IS NULL');
             $stmt->execute([$user['id']]);
             $unread = (int)$stmt->fetchColumn();
+            $avatarRow = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
+
             $userData = [
                 'id' => $row['id'],
                 'uuid' => $row['uuid'] ?? null,
@@ -339,7 +348,8 @@ class AuthController
                 'school_name' => $row['school_name'] ?? null,
                 'points' => (int)($row['points'] ?? 0),
                 'is_admin' => (bool)($row['is_admin'] ?? 0),
-                'avatar_url' => $row['avatar_url'] ?? null,
+                'avatar_path' => $avatarRow['avatar_path'],
+                'avatar_url' => $avatarRow['avatar_url'],
                 'last_login_at' => $row['last_login_at'] ?? null,
                 'created_at' => $row['created_at'] ?? null,
                 'unread_messages' => $unread
@@ -548,6 +558,41 @@ class AuthController
                 'message' => 'Failed to change password'
             ], 500);
         }
+    }
+
+    private function resolveAvatar(?string $filePath, int $ttlSeconds = 600): array
+    {
+        $originalPath = $filePath !== null ? trim($filePath) : null;
+        if ($originalPath === '') {
+            $originalPath = null;
+        }
+
+        $normalized = $originalPath ? ltrim($originalPath, '/') : null;
+
+        $url = null;
+        if ($normalized && $this->r2Service) {
+            try {
+                $url = $this->r2Service->generatePresignedUrl($normalized, $ttlSeconds);
+            } catch (\Throwable $e) {
+                try {
+                    $url = $this->r2Service->getPublicUrl($normalized);
+                } catch (\Throwable $inner) {
+                    try {
+                        $this->logger->debug('Failed to build avatar URL', [
+                            'path' => $normalized,
+                            'error' => $inner->getMessage()
+                        ]);
+                    } catch (\Throwable $logError) {
+                        // ignore logging failures
+                    }
+                }
+            }
+        }
+
+        return [
+            'avatar_path' => $originalPath,
+            'avatar_url' => $url,
+        ];
     }
 
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

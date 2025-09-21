@@ -42,16 +42,26 @@ class CarbonActivityController
 
             if ($grouped) {
                 $activities = $this->carbonCalculatorService->getActivitiesGroupedByCategory();
+                $total = array_reduce($activities, static function (int $carry, array $group): int {
+                    if (isset($group['count']) && is_numeric($group['count'])) {
+                        return $carry + (int) $group['count'];
+                    }
+
+                    $items = $group['activities'] ?? [];
+                    return $carry + (is_array($items) ? count($items) : 0);
+                }, 0);
             } else {
                 $activities = $this->carbonCalculatorService->getAvailableActivities($category, $search);
+                $total = count($activities);
             }
 
             $responseData = [
                 'success' => true,
                 'data' => [
+                    'grouped' => $grouped,
                     'activities' => $activities,
                     'categories' => $this->carbonCalculatorService->getCategories(),
-                    'total' => count($activities)
+                    'total' => $total
                 ]
             ];
 
@@ -79,23 +89,7 @@ class CarbonActivityController
 
             $responseData = [
                 'success' => true,
-                'data' => [
-                    'id' => $activity->id,
-                    'name_zh' => $activity->name_zh,
-                    'name_en' => $activity->name_en,
-                    'combined_name' => $activity->getCombinedName(),
-                    'category' => $activity->category,
-                    'carbon_factor' => $activity->carbon_factor,
-                    'unit' => $activity->unit,
-                    'description_zh' => $activity->description_zh,
-                    'description_en' => $activity->description_en,
-                    'icon' => $activity->icon,
-                    'is_active' => $activity->is_active,
-                    'sort_order' => $activity->sort_order,
-                    'created_at' => $activity->created_at,
-                    'updated_at' => $activity->updated_at,
-                    'statistics' => $activity->getStatistics()
-                ]
+                'data' => $this->presentActivity($activity)
             ];
 
             $response->getBody()->write(json_encode($responseData));
@@ -119,23 +113,48 @@ class CarbonActivityController
             $category = $queryParams['category'] ?? null;
             $search = $queryParams['search'] ?? null;
             $includeInactive = isset($queryParams['include_inactive']) && $queryParams['include_inactive'] === 'true';
+            $includeDeleted = isset($queryParams['include_deleted']) && $queryParams['include_deleted'] === 'true';
+            $status = $queryParams['status'] ?? null;
 
-            $query = CarbonActivity::query();
+            if ($status === 'inactive') {
+                $includeInactive = true;
+            }
 
-            if (!$includeInactive) {
-                $query->active();
+            if ($status === 'deleted') {
+                $includeDeleted = true;
+            }
+
+            $filteredQuery = $includeDeleted ? CarbonActivity::withTrashed() : CarbonActivity::query();
+
+            if ($status === 'deleted') {
+                $filteredQuery->onlyTrashed();
+            } else {
+                if (!$includeDeleted) {
+                    $filteredQuery->whereNull('deleted_at');
+                }
+
+                if (!$includeInactive) {
+                    $filteredQuery->where('is_active', true);
+                }
+
+                if ($status === 'active') {
+                    $filteredQuery->where('is_active', true);
+                } elseif ($status === 'inactive') {
+                    $filteredQuery->where('is_active', false);
+                }
             }
 
             if ($category) {
-                $query->byCategory($category);
+                $filteredQuery->byCategory($category);
             }
 
             if ($search) {
-                $query->search($search);
+                $filteredQuery->search($search);
             }
 
-            $total = $query->count();
-            $activities = $query->ordered()
+            $total = (clone $filteredQuery)->count();
+            $activities = (clone $filteredQuery)
+                ->ordered()
                 ->skip(($page - 1) * $limit)
                 ->take($limit)
                 ->get();
@@ -143,32 +162,14 @@ class CarbonActivityController
             $responseData = [
                 'success' => true,
                 'data' => [
-                    'activities' => $activities->map(function ($activity) {
-                        return [
-                            'id' => $activity->id,
-                            'name_zh' => $activity->name_zh,
-                            'name_en' => $activity->name_en,
-                            'combined_name' => $activity->getCombinedName(),
-                            'category' => $activity->category,
-                            'carbon_factor' => $activity->carbon_factor,
-                            'unit' => $activity->unit,
-                            'description_zh' => $activity->description_zh,
-                            'description_en' => $activity->description_en,
-                            'icon' => $activity->icon,
-                            'is_active' => $activity->is_active,
-                            'sort_order' => $activity->sort_order,
-                            'created_at' => $activity->created_at,
-                            'updated_at' => $activity->updated_at,
-                            'statistics' => $activity->getStatistics()
-                        ];
-                    })->toArray(),
+                    'activities' => $activities->map(fn (CarbonActivity $activity) => $this->presentActivity($activity))->toArray(),
                     'pagination' => [
                         'page' => $page,
                         'limit' => $limit,
                         'total' => $total,
-                        'pages' => ceil($total / $limit)
+                        'pages' => (int) ceil($total / $limit)
                     ],
-                    'categories' => $this->carbonCalculatorService->getCategories()
+                    'categories' => $this->carbonCalculatorService->getCategories($includeInactive, $includeDeleted)
                 ]
             ];
 
@@ -190,30 +191,33 @@ class CarbonActivityController
             $data = $request->getParsedBody();
             $userId = $request->getAttribute('user_id');
 
-            // Validate input data
-            $isValid = $this->carbonCalculatorService->validateActivityData($data, false);
-            if (!$isValid) {
+            if (!is_array($data)) {
+                $data = [];
+            }
+
+            $payload = $this->sanitizeActivityInput($data);
+
+            if (!$this->carbonCalculatorService->validateActivityData($payload, false)) {
                 return $this->errorResponse($response, 'Validation failed', 400);
             }
 
-            // Create activity
-            $activityData = [
+            $activityAttributes = array_merge([
                 'id' => (string) Str::uuid(),
-                'name_zh' => $data['name_zh'],
-                'name_en' => $data['name_en'],
-                'category' => $data['category'],
-                'carbon_factor' => (float) $data['carbon_factor'],
-                'unit' => $data['unit'],
-                'description_zh' => $data['description_zh'] ?? null,
-                'description_en' => $data['description_en'] ?? null,
-                'icon' => $data['icon'] ?? null,
-                'is_active' => $data['is_active'] ?? true,
-                'sort_order' => $data['sort_order'] ?? 0
-            ];
+                'is_active' => true,
+                'sort_order' => 0,
+            ], $payload);
 
-            $activity = CarbonActivity::create($activityData);
+            if (!array_key_exists('is_active', $payload)) {
+                $activityAttributes['is_active'] = true;
+            }
 
-            // Log the creation
+            if (!array_key_exists('sort_order', $payload)) {
+                $activityAttributes['sort_order'] = 0;
+            }
+
+            $activity = CarbonActivity::create($activityAttributes);
+            $activity->refresh();
+
             $this->auditLogService->logAdminOperation(
                 'carbon_activity_created',
                 $userId,
@@ -221,29 +225,14 @@ class CarbonActivityController
                 [
                     'table' => 'carbon_activities',
                     'record_id' => $activity->id,
-                    'new_data' => $activityData
+                    'new_data' => $activityAttributes
                 ]
             );
 
             $responseData = [
                 'success' => true,
                 'message' => 'Carbon activity created successfully',
-                'data' => [
-                    'id' => $activity->id,
-                    'name_zh' => $activity->name_zh,
-                    'name_en' => $activity->name_en,
-                    'combined_name' => $activity->getCombinedName(),
-                    'category' => $activity->category,
-                    'carbon_factor' => $activity->carbon_factor,
-                    'unit' => $activity->unit,
-                    'description_zh' => $activity->description_zh,
-                    'description_en' => $activity->description_en,
-                    'icon' => $activity->icon,
-                    'is_active' => $activity->is_active,
-                    'sort_order' => $activity->sort_order,
-                    'created_at' => $activity->created_at,
-                    'updated_at' => $activity->updated_at
-                ]
+                'data' => $this->presentActivity($activity)
             ];
 
             $response->getBody()->write(json_encode($responseData));
@@ -265,36 +254,43 @@ class CarbonActivityController
             $data = $request->getParsedBody();
             $userId = $request->getAttribute('user_id');
 
+            if (!is_array($data)) {
+                $data = [];
+            }
+
             $activity = CarbonActivity::find($activityId);
             if (!$activity) {
                 return $this->errorResponse($response, 'Activity not found', 404);
             }
 
-            // Store old values for audit log
-            $oldValues = $activity->toArray();
+            $payload = $this->sanitizeActivityInput($data, true);
 
-            // Validate input data
-            $isValid = $this->carbonCalculatorService->validateActivityData($data, true);
-            if (!$isValid) {
+            if (!$this->carbonCalculatorService->validateActivityData($payload, true)) {
                 return $this->errorResponse($response, 'Validation failed', 400);
             }
 
-            // Update activity
-            $updateData = [];
-            $allowedFields = [
-                'name_zh', 'name_en', 'category', 'carbon_factor', 'unit',
-                'description_zh', 'description_en', 'icon', 'is_active', 'sort_order'
-            ];
-
-            foreach ($allowedFields as $field) {
-                if (array_key_exists($field, $data)) {
-                    $updateData[$field] = $data[$field];
-                }
+            if (empty($payload)) {
+                return $this->errorResponse($response, 'No fields to update', 400);
             }
 
-            $activity->update($updateData);
+            $oldValues = $activity->toArray();
 
-            // Log the update
+            $activity->fill($payload);
+
+            if (!$activity->isDirty()) {
+                $noChange = [
+                    'success' => true,
+                    'message' => 'No changes detected',
+                    'data' => $this->presentActivity($activity)
+                ];
+
+                $response->getBody()->write(json_encode($noChange));
+                return $response->withHeader('Content-Type', 'application/json');
+            }
+
+            $activity->save();
+            $activity->refresh();
+
             $this->auditLogService->logAdminOperation(
                 'carbon_activity_updated',
                 $userId,
@@ -303,29 +299,14 @@ class CarbonActivityController
                     'table' => 'carbon_activities',
                     'record_id' => $activity->id,
                     'old_data' => $oldValues,
-                    'new_data' => $updateData
+                    'new_data' => $payload
                 ]
             );
 
             $responseData = [
                 'success' => true,
                 'message' => 'Carbon activity updated successfully',
-                'data' => [
-                    'id' => $activity->id,
-                    'name_zh' => $activity->name_zh,
-                    'name_en' => $activity->name_en,
-                    'combined_name' => $activity->getCombinedName(),
-                    'category' => $activity->category,
-                    'carbon_factor' => $activity->carbon_factor,
-                    'unit' => $activity->unit,
-                    'description_zh' => $activity->description_zh,
-                    'description_en' => $activity->description_en,
-                    'icon' => $activity->icon,
-                    'is_active' => $activity->is_active,
-                    'sort_order' => $activity->sort_order,
-                    'created_at' => $activity->created_at,
-                    'updated_at' => $activity->updated_at
-                ]
+                'data' => $this->presentActivity($activity)
             ];
 
             $response->getBody()->write(json_encode($responseData));
@@ -353,14 +334,22 @@ class CarbonActivityController
 
             // Check if activity has associated transactions
             $transactionCount = $activity->pointsTransactions()->count();
+            $oldValues = $activity->toArray();
+            $deletedAt = null;
+
             if ($transactionCount > 0) {
                 // Soft delete instead of hard delete if there are associated transactions
                 $activity->delete();
                 $action = 'soft_deleted';
                 $message = 'Carbon activity soft deleted successfully (has associated transactions)';
+                try {
+                    $activity->refresh();
+                    $deletedAt = $this->formatDate($activity->deleted_at);
+                } catch (\Throwable $ignore) {
+                    $deletedAt = null;
+                }
             } else {
                 // Hard delete if no associated transactions
-                $oldValues = $activity->toArray();
                 $activity->forceDelete();
                 $action = 'hard_deleted';
                 $message = 'Carbon activity deleted successfully';
@@ -375,7 +364,8 @@ class CarbonActivityController
                     'table' => 'carbon_activities',
                     'record_id' => $activityId,
                     'old_data' => $oldValues,
-                    'transaction_count' => $transactionCount
+                    'transaction_count' => $transactionCount,
+                    'deleted_at' => $deletedAt
                 ]
             );
 
@@ -385,7 +375,8 @@ class CarbonActivityController
                 'data' => [
                     'id' => $activityId,
                     'action' => $action,
-                    'transaction_count' => $transactionCount
+                    'transaction_count' => $transactionCount,
+                    'deleted_at' => $deletedAt
                 ]
             ];
 
@@ -417,6 +408,7 @@ class CarbonActivityController
             }
 
             $activity->restore();
+            $activity->refresh();
 
             // Log the restoration
             $this->auditLogService->logAdminOperation(
@@ -433,19 +425,7 @@ class CarbonActivityController
             $responseData = [
                 'success' => true,
                 'message' => 'Carbon activity restored successfully',
-                'data' => [
-                    'id' => $activity->id,
-                    'name_zh' => $activity->name_zh,
-                    'name_en' => $activity->name_en,
-                    'combined_name' => $activity->getCombinedName(),
-                    'category' => $activity->category,
-                    'carbon_factor' => $activity->carbon_factor,
-                    'unit' => $activity->unit,
-                    'is_active' => $activity->is_active,
-                    'sort_order' => $activity->sort_order,
-                    'created_at' => $activity->created_at,
-                    'updated_at' => $activity->updated_at
-                ]
+                'data' => $this->presentActivity($activity)
             ];
 
             $response->getBody()->write(json_encode($responseData));
@@ -546,6 +526,126 @@ class CarbonActivityController
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->errorResponse($response, 'Failed to update sort orders: ' . $e->getMessage(), 500);
         }
+    }
+
+    private function sanitizeActivityInput(array $input, bool $isUpdate = false): array
+    {
+        $clean = [];
+
+        if (array_key_exists('name_zh', $input)) {
+            $clean['name_zh'] = is_string($input['name_zh']) ? trim($input['name_zh']) : (string) $input['name_zh'];
+        }
+
+        if (array_key_exists('name_en', $input)) {
+            $clean['name_en'] = is_string($input['name_en']) ? trim($input['name_en']) : (string) $input['name_en'];
+        }
+
+        if (array_key_exists('category', $input)) {
+            $clean['category'] = is_string($input['category']) ? trim($input['category']) : (string) $input['category'];
+        }
+
+        if (array_key_exists('unit', $input)) {
+            $clean['unit'] = is_string($input['unit']) ? trim($input['unit']) : (string) $input['unit'];
+        }
+
+        if (array_key_exists('description_zh', $input)) {
+            $clean['description_zh'] = $this->nullIfBlank($input['description_zh']);
+        }
+
+        if (array_key_exists('description_en', $input)) {
+            $clean['description_en'] = $this->nullIfBlank($input['description_en']);
+        }
+
+        if (array_key_exists('icon', $input)) {
+            $clean['icon'] = $this->nullIfBlank($input['icon']);
+        }
+
+        if (array_key_exists('carbon_factor', $input)) {
+            $clean['carbon_factor'] = round((float) $input['carbon_factor'], 4);
+        }
+
+        if (array_key_exists('sort_order', $input)) {
+            $clean['sort_order'] = (int) $input['sort_order'];
+        }
+
+        if (array_key_exists('is_active', $input)) {
+            $clean['is_active'] = $this->normalizeBoolean($input['is_active']);
+        }
+
+        return $clean;
+    }
+
+    private function normalizeBoolean($value, bool $default = true): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if ($value === null) {
+            return $default;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+            if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
+
+        return $default;
+    }
+
+    private function nullIfBlank($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $string = is_string($value) ? trim($value) : trim((string) $value);
+
+        return $string === '' ? null : $string;
+    }
+
+    private function presentActivity(CarbonActivity $activity): array
+    {
+        return [
+            'id' => $activity->id,
+            'name_zh' => $activity->name_zh,
+            'name_en' => $activity->name_en,
+            'combined_name' => $activity->getCombinedName(),
+            'category' => $activity->category,
+            'carbon_factor' => (float) $activity->carbon_factor,
+            'unit' => $activity->unit,
+            'description_zh' => $activity->description_zh,
+            'description_en' => $activity->description_en,
+            'icon' => $activity->icon,
+            'is_active' => (bool) $activity->is_active,
+            'sort_order' => (int) $activity->sort_order,
+            'statistics' => $activity->getStatistics(),
+            'created_at' => $this->formatDate($activity->created_at),
+            'updated_at' => $this->formatDate($activity->updated_at),
+            'deleted_at' => $this->formatDate($activity->deleted_at),
+        ];
+    }
+
+    private function formatDate($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format(DATE_ATOM);
+        }
+
+        return (string) $value;
     }
 
     private function errorResponse(ResponseInterface $response, string $message, int $status = 400, array $errors = null): ResponseInterface

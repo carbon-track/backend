@@ -289,7 +289,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(Avatar::class),
             $c->get(Logger::class),
             $db,
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
         );
     });
 
@@ -301,6 +302,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(TurnstileService::class),
             $c->get(AuditLogService::class),
             $c->get(MessageService::class),
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
             $c->get(Logger::class),
             $db,
             $c->get(ErrorLogService::class)

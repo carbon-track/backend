@@ -9383,54 +9383,31 @@
       "CarbonActivitiesResponse": {
         "type": "object",
         "properties": {
+          "grouped": {
+            "type": "boolean",
+            "description": "是否按类别分组"
+          },
+          "total": {
+            "type": "integer",
+            "description": "活动总数"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "activities": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "description": "活动ID"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CarbonActivityResponse"
                 },
-                "name": {
-                  "type": "string",
-                  "description": "活动名称"
-                },
-                "description": {
-                  "type": "string",
-                  "description": "活动描述"
-                },
-                "category": {
-                  "type": "string",
-                  "description": "活动类别"
-                },
-                "carbon_saved": {
-                  "type": "number",
-                  "description": "碳减排量"
-                },
-                "points_awarded": {
-                  "type": "integer",
-                  "description": "奖励积分"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "active",
-                    "inactive"
-                  ],
-                  "description": "活动状态"
-                },
-                "created_at": {
-                  "type": "string",
-                  "format": "date-time",
-                  "description": "活动创建时间"
-                },
-                "updated_at": {
-                  "type": "string",
-                  "format": "date-time",
-                  "description": "活动更新时间"
+                {
+                  "$ref": "#/components/schemas/CarbonActivityGroup"
                 }
-              }
+              ]
             }
           }
         }
@@ -9442,43 +9419,86 @@
             "type": "string",
             "description": "活动ID"
           },
-          "name": {
+          "name_zh": {
             "type": "string",
-            "description": "活动名称"
+            "description": "中文名称"
           },
-          "description": {
+          "name_en": {
             "type": "string",
-            "description": "活动描述"
+            "description": "英文名称"
+          },
+          "combined_name": {
+            "type": "string",
+            "description": "组合名称"
           },
           "category": {
             "type": "string",
             "description": "活动类别"
           },
-          "carbon_saved": {
+          "carbon_factor": {
             "type": "number",
-            "description": "碳减排量"
+            "format": "float",
+            "description": "碳减排系数"
           },
-          "points_awarded": {
-            "type": "integer",
-            "description": "奖励积分"
-          },
-          "status": {
+          "unit": {
             "type": "string",
-            "enum": [
-              "active",
-              "inactive"
+            "description": "单位"
+          },
+          "description_zh": {
+            "type": [
+              "string",
+              "null"
             ],
-            "description": "活动状态"
+            "description": "中文描述"
+          },
+          "description_en": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "英文描述"
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "图标"
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "是否启用"
+          },
+          "sort_order": {
+            "type": "integer",
+            "description": "排序值"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/CarbonActivityStatistics"
           },
           "created_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "description": "活动创建时间"
+            "description": "创建时间"
           },
           "updated_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "description": "活动更新时间"
+            "description": "更新时间"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "删除时间"
           }
         }
       },
@@ -9803,13 +9823,22 @@
             "type": "string"
           },
           "description_zh": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "description_en": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "icon": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "is_active": {
             "type": "boolean"
@@ -9838,13 +9867,22 @@
             "type": "string"
           },
           "description_zh": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "description_en": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "icon": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "is_active": {
             "type": "boolean"
@@ -10664,6 +10702,30 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CarbonActivityStatistics": {
+        "type": "object",
+        "description": "Aggregated metrics for a carbon activity",
+        "additionalProperties": true
+      },
+      "CarbonActivityGroup": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "活动类别"
+          },
+          "count": {
+            "type": "integer",
+            "description": "该分类下活动数量"
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CarbonActivityResponse"
+            }
           }
         }
       }

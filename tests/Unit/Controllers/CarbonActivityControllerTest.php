@@ -20,7 +20,13 @@ class CarbonActivityControllerTest extends TestCase
     {
         $calc = $this->createMock(CarbonCalculatorService::class);
         $audit = $this->createMock(AuditLogService::class);
-        $calc->method('getActivitiesGroupedByCategory')->willReturn(['daily'=>[['id'=>'a']]]);
+        $calc->method('getActivitiesGroupedByCategory')->willReturn([
+            [
+                'category' => 'daily',
+                'count' => 1,
+                'activities' => [['id' => 'a']]
+            ]
+        ]);
         $calc->method('getCategories')->willReturn(['daily']);
     $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
     $controller = new CarbonActivityController($calc, $audit, $errorLog);
@@ -33,6 +39,10 @@ class CarbonActivityControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(['daily'], $json['data']['categories']);
+        $this->assertTrue($json['data']['grouped']);
+        $this->assertSame(1, $json['data']['total']);
+        $this->assertSame('daily', $json['data']['activities'][0]['category']);
+        $this->assertCount(1, $json['data']['activities'][0]['activities']);
     }
 
     public function testCreateActivityValidationFails(): void

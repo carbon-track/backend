@@ -38,31 +38,50 @@ class CarbonCalculatorService
     }
 
     /**
-     * Validate activity data (simplified version for testing)
+     * Validate activity data for create/update flows.
      */
-    public function validateActivityData(array $activity, bool $requireId = false): bool
+    public function validateActivityData(array $activity, bool $isUpdate = false): bool
     {
-        // For create we don't require id (it will be generated). For update we do.
         $required = ['name_zh', 'name_en', 'carbon_factor', 'unit', 'category'];
-        if ($requireId) {
-            $required[] = 'id';
-        }
+        $allowed = array_merge($required, ['description_zh', 'description_en', 'icon', 'is_active', 'sort_order']);
 
-        foreach ($required as $field) {
-            if (!isset($activity[$field]) || $activity[$field] === '' || $activity[$field] === null) {
+        // Ensure at least one recognised field is present for updates
+        if ($isUpdate) {
+            $presentKeys = array_intersect(array_keys($activity), $allowed);
+            if (empty($presentKeys)) {
                 return false;
             }
         }
 
-        if (!is_numeric($activity['carbon_factor']) || (float)$activity['carbon_factor'] < 0) {
+        foreach ($required as $field) {
+            if ($isUpdate && !array_key_exists($field, $activity)) {
+                continue;
+            }
+
+            if ($this->isBlank($activity[$field] ?? null)) {
+                return false;
+            }
+        }
+
+        if (array_key_exists('carbon_factor', $activity)) {
+            if (!is_numeric($activity['carbon_factor'])) {
+                return false;
+            }
+
+            if ((float) $activity['carbon_factor'] < 0) {
+                return false;
+            }
+        }
+
+        if (array_key_exists('sort_order', $activity) && !is_numeric($activity['sort_order'])) {
             return false;
         }
 
-        // Optional: validate unit & category against simple allow-lists (fallback tolerant)
-        $allowedUnits = $this->getSupportedUnits();
-        if (!in_array($activity['unit'], $allowedUnits, true)) {
-            // Allow unknown units in tests but not block entirely
-            // return false; (relaxed)
+        if (array_key_exists('is_active', $activity)) {
+            $value = $activity['is_active'];
+            if (!is_bool($value) && !in_array($value, [0, 1, '0', '1', 'true', 'false', 'on', 'off', 'yes', 'no'], true)) {
+                return false;
+            }
         }
 
         return true;
@@ -243,49 +262,63 @@ class CarbonCalculatorService
      * @param string|null $search Search term
      * @return array List of activities
      */
-    public function getAvailableActivities(?string $category = null, ?string $search = null): array
-    {
+    public function getAvailableActivities(
+        ?string $category = null,
+        ?string $search = null,
+        bool $includeInactive = false,
+        bool $includeDeleted = false
+    ): array {
         try {
-            $query = CarbonActivity::where('is_active', true);
-            
+            $query = $includeDeleted ? CarbonActivity::withTrashed() : CarbonActivity::query();
+
+            if (!$includeInactive) {
+                $query->where('is_active', true);
+            }
+
             if ($category) {
                 $query->where('category', $category);
             }
-            
+
             if ($search) {
-                $query->where(function($q) use ($search) {
-                    $q->where('name_zh', 'LIKE', '%' . $search . '%')
-                      ->orWhere('name_en', 'LIKE', '%' . $search . '%');
+                $query->where(function ($q) use ($search) {
+                    $like = '%' . $search . '%';
+                    $q->where('name_zh', 'LIKE', $like)
+                        ->orWhere('name_en', 'LIKE', $like)
+                        ->orWhere('description_zh', 'LIKE', $like)
+                        ->orWhere('description_en', 'LIKE', $like);
                 });
             }
-            
-            $activities = $query->orderBy('sort_order')
-                              ->orderBy('created_at')
-                              ->get()
-                              ->map(function ($activity) {
-                                  return [
-                                      'id' => $activity->id,
-                                      'name_zh' => $activity->name_zh,
-                                      'name_en' => $activity->name_en,
-                                      'combined_name' => $activity->name_zh . ' ' . $activity->name_en,
-                                      'category' => $activity->category,
-                                      'carbon_factor' => (float) $activity->carbon_factor,
-                                      'unit' => $activity->unit,
-                                      'description_zh' => $activity->description_zh,
-                                      'description_en' => $activity->description_en,
-                                      'icon' => $activity->icon,
-                                      'sort_order' => $activity->sort_order
-                                  ];
-                              })
-                              ->toArray();
-            
-            return $activities;
+
+            return $query->orderBy('category')
+                ->orderBy('sort_order')
+                ->orderBy('created_at')
+                ->get()
+                ->map(function (CarbonActivity $activity) use ($includeDeleted) {
+                    return [
+                        'id' => $activity->id,
+                        'name_zh' => $activity->name_zh,
+                        'name_en' => $activity->name_en,
+                        'combined_name' => $activity->getCombinedName(),
+                        'category' => $activity->category,
+                        'carbon_factor' => (float) $activity->carbon_factor,
+                        'unit' => $activity->unit,
+                        'description_zh' => $activity->description_zh,
+                        'description_en' => $activity->description_en,
+                        'icon' => $activity->icon,
+                        'is_active' => (bool) $activity->is_active,
+                        'sort_order' => (int) $activity->sort_order,
+                        'created_at' => $activity->created_at,
+                        'updated_at' => $activity->updated_at,
+                        'statistics' => null,
+                        'deleted_at' => $includeDeleted ? $activity->deleted_at : null,
+                    ];
+                })
+                ->toArray();
         } catch (\Exception $e) {
             if ($this->logger) {
-                $this->logger->error('Failed to get activities from database: ' . $e->getMessage());
+                $this->logger->error('Failed to get activities from database', ['error' => $e->getMessage()]);
             }
-            
-            // Return empty array if database query fails
+
             return [];
         }
     }
@@ -295,14 +328,27 @@ class CarbonCalculatorService
      *
      * @return array Activities grouped by category
      */
-    public function getActivitiesGroupedByCategory(): array
+    public function getActivitiesGroupedByCategory(bool $includeInactive = false, bool $includeDeleted = false): array
     {
-        return [
-            'transport' => [
-                'category' => 'transport',
-                'activities' => $this->getAvailableActivities('transport')
-            ]
-        ];
+        $activities = $this->getAvailableActivities(null, null, $includeInactive, $includeDeleted);
+
+        $grouped = [];
+        foreach ($activities as $activity) {
+            $category = $activity['category'] ?? 'uncategorized';
+
+            if (!isset($grouped[$category])) {
+                $grouped[$category] = [
+                    'category' => $category,
+                    'count' => 0,
+                    'activities' => [],
+                ];
+            }
+
+            $grouped[$category]['activities'][] = $activity;
+            $grouped[$category]['count']++;
+        }
+
+        return array_values($grouped);
     }
 
     /**
@@ -310,25 +356,42 @@ class CarbonCalculatorService
      *
      * @return array List of categories
      */
-    public function getCategories(): array
+    public function getCategories(bool $includeInactive = false, bool $includeDeleted = false): array
     {
         try {
-            $categories = CarbonActivity::where('is_active', true)
-                                      ->distinct()
-                                      ->pluck('category')
-                                      ->filter()
-                                      ->values()
-                                      ->toArray();
-            
-            return $categories ?: ['transport', 'energy', 'lifestyle', 'consumption'];
+            $query = $includeDeleted ? CarbonActivity::withTrashed() : CarbonActivity::query();
+
+            if (!$includeInactive) {
+                $query->where('is_active', true);
+            }
+
+            return $query->whereNotNull('category')
+                ->distinct()
+                ->orderBy('category')
+                ->pluck('category')
+                ->filter()
+                ->values()
+                ->toArray();
         } catch (\Exception $e) {
             if ($this->logger) {
-                $this->logger->error('Failed to get categories from database: ' . $e->getMessage());
+                $this->logger->error('Failed to get categories from database', ['error' => $e->getMessage()]);
             }
-            
-            // Return default categories if database query fails
-            return ['transport', 'energy', 'lifestyle', 'consumption'];
+
+            return [];
         }
+    }
+
+    private function isBlank($value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_string($value) && trim($value) === '') {
+            return true;
+        }
+
+        return false;
     }
 
     /**

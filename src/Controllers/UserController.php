@@ -11,6 +11,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\CloudflareR2Service;
 use Monolog\Logger;
 use PDO;
 
@@ -21,6 +22,7 @@ class UserController
     private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
     private Avatar $avatarModel;
+    private ?CloudflareR2Service $r2Service;
     private Logger $logger;
     private PDO $db;
 
@@ -31,7 +33,8 @@ class UserController
         Avatar $avatarModel,
         Logger $logger,
         PDO $db,
-        ErrorLogService $errorLogService = null
+        ErrorLogService $errorLogService = null,
+        CloudflareR2Service $r2Service = null
     ) {
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
@@ -40,6 +43,7 @@ class UserController
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
+        $this->r2Service = $r2Service;
     }
 
     /**
@@ -58,7 +62,7 @@ class UserController
             }
 
             $stmt = $this->db->prepare("
-                SELECT u.*, s.name as school_name, a.file_path as avatar_url
+                SELECT u.*, s.name as school_name, a.file_path as avatar_path
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
                 LEFT JOIN avatars a ON u.avatar_id = a.id
@@ -74,6 +78,8 @@ class UserController
                 ], 404);
             }
 
+            $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
+
             $userInfo = [
                 'id' => $row['id'],
                 'uuid' => $row['uuid'] ?? null,
@@ -84,7 +90,8 @@ class UserController
                 'points' => (int)$row['points'],
                 'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
                 'avatar_id' => $row['avatar_id'],
-                'avatar_url' => $row['avatar_url'],
+                'avatar_path' => $avatar['avatar_path'],
+                'avatar_url' => $avatar['avatar_url'],
                 'last_login_at' => $row['last_login_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null
             ];
@@ -242,7 +249,7 @@ class UserController
 
             // 获取更新后的用户信息
             $stmt = $this->db->prepare("
-                SELECT u.*, s.name as school_name, a.file_path as avatar_url
+                SELECT u.*, s.name as school_name, a.file_path as avatar_path
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
                 LEFT JOIN avatars a ON u.avatar_id = a.id
@@ -250,6 +257,7 @@ class UserController
             ");
             $stmt->execute([$user['id']]);
             $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
+            $updatedAvatar = $this->resolveAvatar($updatedUser['avatar_path'] ?? null);
 
             // 准备返回的用户信息
             $userInfo = [
@@ -262,7 +270,8 @@ class UserController
                 'points' => $updatedUser['points'],
                 'is_admin' => (bool)$updatedUser['is_admin'],
                 'avatar_id' => $updatedUser['avatar_id'],
-                'avatar_url' => $updatedUser['avatar_url'],
+                'avatar_path' => $updatedAvatar['avatar_path'],
+                'avatar_url' => $updatedAvatar['avatar_url'],
                 'last_login_at' => $updatedUser['last_login_at'],
                 'updated_at' => $updatedUser['updated_at']
             ];
@@ -342,6 +351,7 @@ class UserController
 
             // 获取新头像信息
             $newAvatar = $this->avatarModel->getAvatarById($avatarId);
+            $newAvatarData = $this->resolveAvatar($newAvatar['file_path'] ?? null);
 
             // 记录审计日志
             $this->auditLogService->logDataChange(
@@ -367,7 +377,8 @@ class UserController
                 'message' => 'Avatar updated successfully',
                 'data' => [
                     'avatar_id' => $avatarId,
-                    'avatar_url' => $newAvatar['file_path'],
+                    'avatar_path' => $newAvatarData['avatar_path'],
+                    'avatar_url' => $newAvatarData['avatar_url'],
                     'avatar_name' => $newAvatar['name']
                 ]
             ]);
@@ -564,9 +575,26 @@ class UserController
             // 简单的排行榜（前5名）
             $leaderboard = [];
             try {
-                $leaderStmt = $this->db->query("SELECT id, username, points as total_points FROM users WHERE deleted_at IS NULL ORDER BY points DESC LIMIT 5");
+                $leaderStmt = $this->db->query("SELECT u.id, u.username, u.points AS total_points, u.avatar_id, a.file_path AS avatar_path
+                    FROM users u
+                    LEFT JOIN avatars a ON u.avatar_id = a.id
+                    WHERE u.deleted_at IS NULL
+                    ORDER BY u.points DESC
+                    LIMIT 5");
                 if ($leaderStmt instanceof \PDOStatement) {
-                    $leaderboard = $leaderStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    $leaderRows = $leaderStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                    $leaderboard = array_map(function (array $row): array {
+                        $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
+
+                        return [
+                            'id' => isset($row['id']) ? (int)$row['id'] : null,
+                            'username' => $row['username'] ?? null,
+                            'total_points' => isset($row['total_points']) ? (int)$row['total_points'] : 0,
+                            'avatar_id' => isset($row['avatar_id']) ? (int)$row['avatar_id'] : null,
+                            'avatar_path' => $avatar['avatar_path'],
+                            'avatar_url' => $avatar['avatar_url'],
+                        ];
+                    }, $leaderRows);
                 }
             } catch (\Throwable $e) { /* ignore */ }
 
@@ -779,6 +807,41 @@ class UserController
     /**
      * 返回JSON响应
      */
+    private function resolveAvatar(?string $filePath, int $ttlSeconds = 600): array
+    {
+        $originalPath = $filePath !== null ? trim($filePath) : null;
+        if ($originalPath === '') {
+            $originalPath = null;
+        }
+
+        $normalized = $originalPath ? ltrim($originalPath, '/') : null;
+
+        $url = null;
+        if ($normalized && $this->r2Service) {
+            try {
+                $url = $this->r2Service->generatePresignedUrl($normalized, $ttlSeconds);
+            } catch (\Throwable $e) {
+                try {
+                    $url = $this->r2Service->getPublicUrl($normalized);
+                } catch (\Throwable $inner) {
+                    try {
+                        $this->logger->debug('Failed to build avatar URL', [
+                            'path' => $normalized,
+                            'error' => $inner->getMessage()
+                        ]);
+                    } catch (\Throwable $logError) {
+                        // ignore logging failures
+                    }
+                }
+            }
+        }
+
+        return [
+            'avatar_path' => $originalPath,
+            'avatar_url' => $url,
+        ];
+    }
+
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
     {
         $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
