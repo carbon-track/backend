@@ -10,6 +10,7 @@ use CarbonTrack\Models\User;
 use Illuminate\Database\ConnectionInterface;
 use PDO;
 use DateTimeImmutable;
+use DateTimeZone;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Models\Message;
@@ -314,13 +315,46 @@ class BadgeService
             $this->logger->warning('Failed to compile carbon metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
 
+        $daysFromSql = null;
+        try {
+            $diffRows = $this->connection->select("SELECT TIMESTAMPDIFF(DAY, created_at, NOW()) AS diff_days FROM users WHERE id = :user_id LIMIT 1", ['user_id' => $userId]);
+            if (!empty($diffRows)) {
+                $diffRow = (array) $diffRows[0];
+                $rawDays = $diffRow['diff_days'] ?? ($diffRow['days'] ?? ($diffRow['DIFF_DAYS'] ?? null));
+                if ($rawDays !== null) {
+                    $daysFromSql = max(0, (int) $rawDays);
+                    $metrics['days_since_registration'] = $daysFromSql;
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to compute registration days via SQL', ['user_id' => $userId, 'error' => $e->getMessage()]);
+        }
+
         try {
             $user = User::query()->find($userId);
             if ($user) {
                 $metrics['total_points_balance'] = (float) $user->points;
                 if ($user->created_at) {
-                    $created = new DateTimeImmutable($user->created_at);
-                    $metrics['days_since_registration'] = (int) $created->diff(new DateTimeImmutable('now'))->format('%a');
+                    try {
+                        if ($user->created_at instanceof \DateTimeInterface) {
+                            $created = DateTimeImmutable::createFromInterface($user->created_at);
+                            $now = new DateTimeImmutable('now', $created->getTimezone());
+                        } else {
+                            $timezoneName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+                            if (!$timezoneName) {
+                                $timezoneName = 'UTC';
+                            }
+                            $timezone = new DateTimeZone($timezoneName);
+                            $created = new DateTimeImmutable((string) $user->created_at, $timezone);
+                            $now = new DateTimeImmutable('now', $timezone);
+                        }
+                        $phpDays = max(0, (int) $created->diff($now)->format('%a'));
+                        if ($daysFromSql === null) {
+                            $metrics['days_since_registration'] = $phpDays;
+                        }
+                    } catch (\Throwable $dtEx) {
+                        $this->logger->debug('Failed to compute registration days via PHP fallback', ['user_id' => $userId, 'error' => $dtEx->getMessage()]);
+                    }
                 }
             }
         } catch (\Throwable $e) {
@@ -329,6 +363,113 @@ class BadgeService
 
         return $metrics;
     }
+    /**
+     * @param array<int> $badgeIds
+     * @return array<int,array<string,mixed>>
+     */
+    public function getBadgeAwardStats(array $badgeIds): array
+    {
+        if (empty($badgeIds)) {
+            return [];
+        }
+
+        $rows = UserBadge::query()
+            ->selectRaw("badge_id, COUNT(*) AS total_records, COUNT(DISTINCT user_id) AS unique_users, SUM(CASE WHEN status = 'awarded' THEN 1 ELSE 0 END) AS awarded_records, SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END) AS revoked_records, COUNT(DISTINCT CASE WHEN status = 'awarded' THEN user_id ELSE NULL END) AS awarded_users, MAX(awarded_at) AS last_awarded_at")
+            ->whereIn('badge_id', $badgeIds)
+            ->groupBy('badge_id')
+            ->get()
+            ->keyBy('badge_id');
+
+        $stats = [];
+        foreach ($badgeIds as $badgeId) {
+            $row = $rows->get($badgeId);
+            if ($row) {
+                $stats[$badgeId] = [
+                    'total_records' => (int) ($row->total_records ?? 0),
+                    'unique_users' => (int) ($row->unique_users ?? 0),
+                    'awarded_records' => (int) ($row->awarded_records ?? 0),
+                    'revoked_records' => (int) ($row->revoked_records ?? 0),
+                    'awarded_users' => (int) ($row->awarded_users ?? 0),
+                    'last_awarded_at' => $row->last_awarded_at ?? null,
+                ];
+            } else {
+                $stats[$badgeId] = [
+                    'total_records' => 0,
+                    'unique_users' => 0,
+                    'awarded_records' => 0,
+                    'revoked_records' => 0,
+                    'awarded_users' => 0,
+                    'last_awarded_at' => null,
+                ];
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * @param array{status?:string,search?:string,page?:int,per_page?:int,include_revoked?:bool} $options
+     * @return array{items:array<int,array<string,mixed>>,pagination:array<string,int>}
+     */
+    public function getBadgeRecipients(int $badgeId, array $options = []): array
+    {
+        $page = max(1, (int) ($options['page'] ?? 1));
+        $perPage = min(100, max(1, (int) ($options['per_page'] ?? 20)));
+        $status = $options['status'] ?? null;
+        $search = trim((string) ($options['search'] ?? ''));
+        $includeRevoked = (bool) ($options['include_revoked'] ?? false);
+
+        $query = UserBadge::query()
+            ->with('user')
+            ->where('badge_id', $badgeId);
+
+        if ($status && in_array($status, ['awarded', 'revoked'], true)) {
+            $query->where('status', $status);
+        } elseif (!$includeRevoked) {
+            $query->where('status', 'awarded');
+        }
+
+        if ($search !== '') {
+            $query->whereHas('user', function ($q) use ($search) {
+                $q->where('username', 'LIKE', '%' . $search . '%')
+                  ->orWhere('email', 'LIKE', '%' . $search . '%');
+            });
+        }
+
+        $total = (clone $query)->count();
+        $items = $query
+            ->orderBy('awarded_at', 'desc')
+            ->orderBy('id', 'desc')
+            ->forPage($page, $perPage)
+            ->get();
+
+        $data = $items->map(function (UserBadge $userBadge) {
+            $user = $userBadge->user;
+            return [
+                'user' => $user ? [
+                    'id' => (int) $user->id,
+                    'username' => $user->username,
+                    'email' => $user->email,
+                    'is_admin' => (bool) ($user->is_admin ?? false),
+                    'status' => $user->status ?? null,
+                    'avatar_id' => $user->avatar_id ?? null,
+                ] : null,
+                'user_badge' => $userBadge->toArray(),
+            ];
+        })->all();
+
+        return [
+            'items' => $data,
+            'pagination' => [
+                'current_page' => $page,
+                'per_page' => $perPage,
+                'total_items' => $total,
+                'total_pages' => $total > 0 ? (int) ceil($total / $perPage) : 0,
+            ],
+        ];
+    }
+
+
 
     private function passesCriteria($criteria, array $metrics): bool
     {

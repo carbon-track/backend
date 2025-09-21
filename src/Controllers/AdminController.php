@@ -10,7 +10,10 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\BadgeService;
 use PDO;
+use DateTimeImmutable;
+use DateTimeZone;
 
 class AdminController
 {
@@ -18,8 +21,9 @@ class AdminController
         private PDO $db,
         private AuthService $authService,
         private AuditLogService $auditLog,
-    private ?ErrorLogService $errorLogService = null,
-    private ?CloudflareR2Service $r2Service = null
+        private BadgeService $badgeService,
+        private ?ErrorLogService $errorLogService = null,
+        private ?CloudflareR2Service $r2Service = null
     ) {}
 
     /**
@@ -98,11 +102,16 @@ class AdminController
                 SELECT
                     u.id, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
+                    u.last_login_at,
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,
                     COUNT(pt.id) as total_transactions,
                     COALESCE(SUM(CASE WHEN pt.status = 'approved' THEN pt.points ELSE 0 END), 0) as earned_points,
-                    COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved
+                    COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved,
+                    COALESCE(ub.badges_awarded, 0) as badges_awarded,
+                    COALESCE(ub.badges_revoked, 0) as badges_revoked,
+                    COALESCE(ub.active_badges, 0) as active_badges,
+                    ub.last_badge_awarded_at
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
                 LEFT JOIN avatars a ON u.avatar_id = a.id
@@ -113,6 +122,16 @@ class AdminController
                     WHERE status = 'approved' AND deleted_at IS NULL
                     GROUP BY user_id
                 ) cr ON u.id = cr.user_id
+                LEFT JOIN (
+                    SELECT user_id,
+                        COUNT(*) AS badge_records,
+                        SUM(CASE WHEN status = 'awarded' THEN 1 ELSE 0 END) AS badges_awarded,
+                        SUM(CASE WHEN status = 'revoked' THEN 1 ELSE 0 END) AS badges_revoked,
+                        COUNT(DISTINCT CASE WHEN status = 'awarded' THEN badge_id ELSE NULL END) AS active_badges,
+                        MAX(awarded_at) AS last_badge_awarded_at
+                    FROM user_badges
+                    GROUP BY user_id
+                ) ub ON u.id = ub.user_id
                 WHERE {$whereClause}
                 GROUP BY u.id
                 ORDER BY {$orderBy}
@@ -126,6 +145,33 @@ class AdminController
             $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
             $stmt->execute();
             $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $timezoneName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+            if (!$timezoneName) {
+                $timezoneName = 'UTC';
+            }
+            $timezone = new DateTimeZone($timezoneName);
+            foreach ($users as &$row) {
+                $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
+                $row['points'] = (float) ($row['points'] ?? 0);
+                $row['total_transactions'] = (int) ($row['total_transactions'] ?? 0);
+                $row['earned_points'] = (float) ($row['earned_points'] ?? 0);
+                $row['total_carbon_saved'] = (float) ($row['total_carbon_saved'] ?? 0);
+                $row['badges_awarded'] = (int) ($row['badges_awarded'] ?? 0);
+                $row['badges_revoked'] = (int) ($row['badges_revoked'] ?? 0);
+                $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
+                $row['days_since_registration'] = 0;
+                if (!empty($row['created_at'])) {
+                    try {
+                        $created = new DateTimeImmutable((string) $row['created_at'], $timezone);
+                        $now = new DateTimeImmutable('now', $timezone);
+                        $row['days_since_registration'] = max(0, (int) $created->diff($now)->format('%a'));
+                    } catch (\Throwable $ignored) {
+                        $row['days_since_registration'] = 0;
+                    }
+                }
+            }
+            unset($row);
 
             $countSql = "SELECT COUNT(DISTINCT u.id) FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE {$whereClause}";
             $countStmt = $this->db->prepare($countSql);

@@ -35,9 +35,17 @@ class AdminBadgeController
             $query = $request->getQueryParams();
             $includeInactive = !empty($query['include_inactive']) && filter_var($query['include_inactive'], FILTER_VALIDATE_BOOLEAN);
             $badges = $this->badgeService->listBadges($includeInactive);
-            $data = array_map(function ($badge) {
-                return $this->formatBadge($badge->toArray());
+            $badgeIds = array_map(function ($badge) {
+                return (int) $badge->id;
             }, $badges);
+            $statsByBadge = $this->badgeService->getBadgeAwardStats($badgeIds);
+            $defaultStats = $this->defaultBadgeStats();
+            $data = [];
+            foreach ($badges as $badge) {
+                $payload = $this->formatBadge($badge->toArray());
+                $payload['stats'] = $statsByBadge[$badge->id] ?? $defaultStats;
+                $data[] = $payload;
+            }
 
             return $this->json($response, ['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {
@@ -54,12 +62,23 @@ class AdminBadgeController
                 return $this->json($response, ['success' => false, 'message' => 'Access denied'], 403);
             }
 
-            $badge = $this->badgeService->findBadge((int) ($args['id'] ?? 0));
+            $badgeId = (int) ($args['id'] ?? 0);
+            $badge = $this->badgeService->findBadge($badgeId);
             if (!$badge) {
                 return $this->json($response, ['success' => false, 'message' => 'Badge not found'], 404);
             }
 
-            return $this->json($response, ['success' => true, 'data' => $this->formatBadge($badge->toArray())]);
+            $payload = $this->formatBadge($badge->toArray());
+            $stats = $this->badgeService->getBadgeAwardStats([$badgeId]);
+            $payload['stats'] = $stats[$badgeId] ?? $this->defaultBadgeStats();
+            $recent = $this->badgeService->getBadgeRecipients($badgeId, [
+                'per_page' => 5,
+                'include_revoked' => true,
+            ]);
+            $payload['recent_awards'] = $recent['items'];
+            $payload['recent_awards_pagination'] = $recent['pagination'];
+
+            return $this->json($response, ['success' => true, 'data' => $payload]);
         } catch (\Throwable $e) {
             $this->logError($e, $request, 'admin_badge_detail_failed');
             return $this->json($response, ['success' => false, 'message' => 'Failed to load badge'], 500);
@@ -193,7 +212,52 @@ class AdminBadgeController
             $this->logError($e, $request, 'admin_badge_auto_failed');
             return $this->json($response, ['success' => false, 'message' => 'Failed to run auto grant'], 500);
         }
+    }    public function recipients(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->requireAdmin($request);
+            if (!$admin) {
+                return $this->json($response, ['success' => false, 'message' => 'Access denied'], 403);
+            }
+
+            $badgeId = (int) ($args['id'] ?? 0);
+            if ($badgeId <= 0) {
+                return $this->json($response, ['success' => false, 'message' => 'Invalid badge id'], 400);
+            }
+
+            $badge = $this->badgeService->findBadge($badgeId);
+            if (!$badge) {
+                return $this->json($response, ['success' => false, 'message' => 'Badge not found'], 404);
+            }
+
+            $query = $request->getQueryParams();
+            $options = [
+                'page' => isset($query['page']) ? (int) $query['page'] : 1,
+                'per_page' => isset($query['per_page']) ? (int) $query['per_page'] : 20,
+                'include_revoked' => !empty($query['include_revoked']) && filter_var($query['include_revoked'], FILTER_VALIDATE_BOOLEAN),
+            ];
+            if (!empty($query['status']) && in_array($query['status'], ['awarded', 'revoked'], true)) {
+                $options['status'] = $query['status'];
+            }
+            $searchTerm = $query['q'] ?? ($query['search'] ?? null);
+            if (is_string($searchTerm) && trim($searchTerm) !== '') {
+                $options['search'] = trim($searchTerm);
+            }
+            $options['page'] = max(1, (int) $options['page']);
+            $options['per_page'] = min(100, max(1, (int) $options['per_page']));
+
+            $result = $this->badgeService->getBadgeRecipients($badgeId, $options);
+            $payload = $result;
+            $payload['badge'] = $this->formatBadge($badge->toArray());
+
+            return $this->json($response, ['success' => true, 'data' => $payload]);
+        } catch (\Throwable $e) {
+            $this->logError($e, $request, 'admin_badge_recipients_failed');
+            return $this->json($response, ['success' => false, 'message' => 'Failed to load badge recipients'], 500);
+        }
     }
+
+
 
     private function requireAdmin(Request $request): ?array
     {
@@ -202,7 +266,19 @@ class AdminBadgeController
             return null;
         }
         return $user;
+    }    private function defaultBadgeStats(): array
+    {
+        return [
+            'total_records' => 0,
+            'unique_users' => 0,
+            'awarded_records' => 0,
+            'revoked_records' => 0,
+            'awarded_users' => 0,
+            'last_awarded_at' => null,
+        ];
     }
+
+
 
     private function formatBadge(array $badge): array
     {
