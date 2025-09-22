@@ -26,6 +26,9 @@ class AdminControllerTest extends TestCase
         $auth->method('isAdminUser')->willReturn(false);
 
         $controller = new AdminController($pdo, $auth, $audit, $badgeService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'last_login_at');
         $request = makeRequest('GET', '/admin/users');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUsers($request, $response);
@@ -78,6 +81,9 @@ class AdminControllerTest extends TestCase
             ->willReturnOnConsecutiveCalls($listStmt, $countStmt);
 
         $controller = new AdminController($pdo, $auth, $audit, $badgeService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'last_login_at');
         $request = makeRequest('GET', '/admin/users', null, ['search' => 'u', 'status' => 'active', 'role' => 'user', 'sort' => 'points_desc']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUsers($request, $response);

@@ -7077,6 +7077,26 @@
           },
           "400": {
             "description": "参数缺失"
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -11215,6 +11235,85 @@
             }
           }
         }
+      },
+      "BroadcastMessageRequest": {
+        "type": "object",
+        "required": [
+          "title",
+          "content"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Message title displayed to recipients"
+          },
+          "content": {
+            "type": "string",
+            "description": "Message body text"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ],
+            "default": "normal"
+          },
+          "target_users": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Optional user id whitelist; omit to broadcast to all users"
+          }
+        }
+      },
+      "BroadcastMessageResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "sent_count": {
+            "type": "integer"
+          },
+          "total_targets": {
+            "type": "integer"
+          },
+          "failed_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "invalid_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "sent_count",
+          "total_targets"
+        ]
       }
     },
     "/messages": {

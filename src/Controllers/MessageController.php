@@ -8,6 +8,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Models\Message;
 use PDO;
 
 class MessageController
@@ -405,75 +406,135 @@ class MessageController
             }
 
             $data = $request->getParsedBody();
-            
-            // 验证必需字段
-            $requiredFields = ['title', 'content'];
-            foreach ($requiredFields as $field) {
-                if (!isset($data[$field]) || empty($data[$field])) {
-                    return $this->json($response, [
-                        'error' => "Missing required field: {$field}"
-                    ], 400);
+            if (!is_array($data)) {
+                return $this->json($response, ['error' => 'Invalid payload'], 400);
+            }
+
+            $title = trim((string)($data['title'] ?? ''));
+            if ($title === '') {
+                return $this->json($response, ['error' => 'Missing required field: title'], 400);
+            }
+            if (mb_strlen($title, 'UTF-8') > 255) {
+                return $this->json($response, ['error' => 'Title must be 255 characters or less'], 422);
+            }
+
+            $content = trim((string)($data['content'] ?? ''));
+            if ($content === '') {
+                return $this->json($response, ['error' => 'Missing required field: content'], 400);
+            }
+
+            $priorityRaw = $data['priority'] ?? Message::PRIORITY_NORMAL;
+            $priority = strtolower(trim((string)$priorityRaw));
+            if ($priority === '') {
+                $priority = Message::PRIORITY_NORMAL;
+            }
+            $validPriorities = Message::getValidPriorities();
+            if (!in_array($priority, $validPriorities, true)) {
+                return $this->json($response, ['error' => 'Invalid priority value'], 422);
+            }
+
+            $targetUsersRaw = $data['target_users'] ?? null;
+            $targetUserIds = [];
+            $invalidTargetIds = [];
+
+            if ($targetUsersRaw !== null) {
+                if (!is_array($targetUsersRaw)) {
+                    return $this->json($response, ['error' => 'target_users must be an array of positive integers'], 400);
+                }
+
+                $sanitizedIds = [];
+                foreach ($targetUsersRaw as $value) {
+                    if (is_int($value) || (is_numeric($value) && (string)(int)$value === (string)$value)) {
+                        $intVal = (int)$value;
+                        if ($intVal > 0) {
+                            $sanitizedIds[$intVal] = $intVal;
+                        }
+                    }
+                }
+
+                if (empty($sanitizedIds)) {
+                    return $this->json($response, ['error' => 'target_users must contain at least one valid id'], 400);
+                }
+
+                $targetUserIds = array_values($sanitizedIds);
+                $placeholders = implode(',', array_fill(0, count($targetUserIds), '?'));
+                $stmt = $this->db->prepare('SELECT id FROM users WHERE deleted_at IS NULL AND id IN (' . $placeholders . ')');
+
+                $existingIds = [];
+                if ($stmt && $stmt->execute($targetUserIds)) {
+                    $existingIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+                }
+
+                $invalidTargetIds = array_values(array_diff($targetUserIds, $existingIds));
+                $targetUserIds = $existingIds;
+            } else {
+                $stmt = $this->db->query('SELECT id FROM users WHERE deleted_at IS NULL');
+                if ($stmt) {
+                    $targetUserIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
                 }
             }
 
-            $title = $data['title'];
-            $content = $data['content'];
-            $priority = $data['priority'] ?? 'normal';
-            $targetUsers = $data['target_users'] ?? []; // 空数组表示发送给所有用户
-
-            // 获取目标用户列表
-            if (empty($targetUsers)) {
-                // 发送给所有活跃用户
-                $sql = "SELECT id FROM users WHERE deleted_at IS NULL";
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute();
-                $users = $stmt->fetchAll(PDO::FETCH_COLUMN);
-            } else {
-                $users = $targetUsers;
+            if (empty($targetUserIds)) {
+                return $this->json($response, ['error' => 'No target users found for broadcast'], 404);
             }
 
             $sentCount = 0;
-            foreach ($users as $userId) {
+            $failedUserIds = [];
+
+            foreach ($targetUserIds as $targetUserId) {
                 try {
-                    $this->messageService->sendMessage(
-                        $userId,
-                        'system_announcement',
+                    $this->messageService->sendSystemMessage(
+                        (int)$targetUserId,
                         $title,
                         $content,
+                        Message::TYPE_SYSTEM,
                         $priority
                     );
                     $sentCount++;
-                } catch (\Exception $e) {
-                    error_log("Failed to send message to user {$userId}: " . $e->getMessage());
+                } catch (\Throwable $e) {
+                    $failedUserIds[] = (int)$targetUserId;
+                    if ($this->errorLogService) {
+                        try {
+                            $this->errorLogService->logException($e, $request);
+                        } catch (\Throwable $ignore) {}
+                    }
                 }
             }
 
-            // 记录审计日志
             $this->auditLog->log(
                 $user['id'],
-                'system_message_sent',
+                'system_message_broadcast',
                 'messages',
                 null,
                 [
                     'title' => $title,
-                    'target_count' => count($users),
+                    'priority' => $priority,
+                    'target_count' => count($targetUserIds),
                     'sent_count' => $sentCount,
-                    'priority' => $priority
+                    'invalid_user_ids' => $invalidTargetIds,
+                    'failed_user_ids' => $failedUserIds
                 ]
             );
 
             return $this->json($response, [
                 'success' => true,
                 'sent_count' => $sentCount,
-                'total_targets' => count($users),
-                'message' => 'System message sent successfully'
+                'total_targets' => count($targetUserIds),
+                'failed_user_ids' => $failedUserIds,
+                'invalid_user_ids' => $invalidTargetIds,
+                'message' => 'System message sent successfully',
+                'priority' => $priority
             ]);
-
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            try {
+                if ($this->errorLogService) {
+                    $this->errorLogService->logException($e, $request);
+                }
+            } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
+
 
     /**
      * 获取消息类型统计

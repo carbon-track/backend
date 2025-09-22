@@ -9,6 +9,7 @@ use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Models\Message;
 
 class MessageControllerTest extends TestCase
 {
@@ -268,6 +269,108 @@ class MessageControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(5, $json['data']['by_type']['system']['total'] + $json['data']['by_type']['notification']['total']);
     }
+
+    public function testBroadcastRequiresAdmin(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 5, 'is_admin' => false]);
+        $auth->method('isAdminUser')->willReturn(false);
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcast', ['title' => 'Hello', 'content' => 'World']);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+        $this->assertEquals(403, $resp->getStatusCode());
+    }
+
+    public function testBroadcastValidatesPriority(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 6, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcast', [
+            'title' => 'Test',
+            'content' => 'Payload',
+            'priority' => 'unknown-level'
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+        $this->assertEquals(422, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('Invalid priority value', $json['error']);
+    }
+
+    public function testBroadcastSendsMessagesAndReportsInvalidIds(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 42, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $statement = $this->createMock(\PDOStatement::class);
+        $statement->method('execute')->willReturn(true);
+        $statement->method('fetchAll')->willReturn(['1', '3']);
+
+        $pdo->expects($this->once())
+            ->method('prepare')
+            ->with($this->stringContains('WHERE deleted_at IS NULL AND id IN'))
+            ->willReturn($statement);
+
+        $svc->expects($this->exactly(2))
+            ->method('sendSystemMessage')
+            ->withConsecutive(
+                [1, 'Announcement', 'Broadcast body', Message::TYPE_SYSTEM, 'high'],
+                [3, 'Announcement', 'Broadcast body', Message::TYPE_SYSTEM, 'high']
+            )
+            ->willReturnOnConsecutiveCalls(
+                $this->createMock(Message::class),
+                $this->createMock(Message::class)
+            );
+
+        $audit->expects($this->once())
+            ->method('log')
+            ->with(
+                42,
+                'system_message_broadcast',
+                'messages',
+                null,
+                $this->callback(function (array $payload): bool {
+                    $this->assertSame(2, $payload['sent_count']);
+                    $this->assertSame(2, $payload['target_count']);
+                    $this->assertSame([2], $payload['invalid_user_ids']);
+                    $this->assertSame([], $payload['failed_user_ids']);
+                    return true;
+                })
+            );
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcast', [
+            'title' => 'Announcement',
+            'content' => 'Broadcast body',
+            'priority' => 'high',
+            'target_users' => [1, 2, 3]
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame(2, $json['sent_count']);
+        $this->assertSame(2, $json['total_targets']);
+        $this->assertSame([2], $json['invalid_user_ids']);
+        $this->assertSame('high', $json['priority']);
+    }
+
 }
 
 
