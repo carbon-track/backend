@@ -26,6 +26,8 @@ class AdminController
         private ?CloudflareR2Service $r2Service = null
     ) {}
 
+
+    private ?string $lastLoginColumn = null;
     /**
      * 用户列表（带简单过滤与分页）
      */
@@ -98,11 +100,13 @@ class AdminController
             ];
             $orderBy = $sortMap[$sort] ?? 'u.created_at DESC';
 
-            $sql = "
+                        $lastLoginSelect = $this->buildLastLoginSelect('u');
+
+$sql = "
                 SELECT
                     u.id, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
-                    u.last_login_at,
+                    {$lastLoginSelect},
                     s.name as school_name,
                     a.name as avatar_name, a.file_path as avatar_path,
                     COUNT(pt.id) as total_transactions,
@@ -646,7 +650,8 @@ class AdminController
 
     private function loadUserRow(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, s.name as school_name, u.last_login_at FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1');
+        $lastLoginSelect = $this->buildLastLoginSelect('u');
+        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, s.name as school_name, ' . $lastLoginSelect . " FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1");
         $stmt->execute(['id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
@@ -676,6 +681,65 @@ class AdminController
             return 0;
         }
     }
+
+    private function buildLastLoginSelect(string $alias = 'u'): string
+    {
+        $column = $this->resolveLastLoginColumn();
+        if ($column === null) {
+            return 'NULL AS last_login_at';
+        }
+        return $alias . '.' . $column . ' AS last_login_at';
+    }
+
+    private function resolveLastLoginColumn(): ?string
+    {
+        if ($this->lastLoginColumn !== null) {
+            return $this->lastLoginColumn !== '' ? $this->lastLoginColumn : null;
+        }
+
+        foreach (['last_login_at', 'lastlgn'] as $candidate) {
+            if ($this->columnExists('users', $candidate)) {
+                $this->lastLoginColumn = $candidate;
+                return $candidate;
+            }
+        }
+
+        $this->lastLoginColumn = '';
+        return null;
+    }
+
+    private function columnExists(string $table, string $column): bool
+    {
+        try {
+            $driver = (string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+        } catch (\Throwable $e) {
+            $driver = null;
+        }
+
+        try {
+            if ($driver === 'sqlite') {
+                $stmt = $this->db->query('PRAGMA table_info(' . $table . ')');
+                if ($stmt) {
+                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                        if (isset($row['name']) && strcasecmp((string) $row['name'], $column) === 0) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            $stmt = $this->db->prepare(sprintf('SHOW COLUMNS FROM `%s` LIKE ?', $table));
+            if ($stmt && $stmt->execute([$column])) {
+                return (bool) $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+        } catch (\Throwable $e) {
+            // ignore detection errors
+        }
+
+        return false;
+    }
+
 
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
     {
