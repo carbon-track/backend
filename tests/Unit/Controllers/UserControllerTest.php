@@ -60,7 +60,7 @@ class UserControllerTest extends TestCase
             'points' => 0,
             'is_admin' => 0,
             'avatar_id' => 10,
-            'avatar_url' => '/avatars/default/avatar_01.png',
+            'avatar_path' => '/avatars/default/avatar_01.png',
             'last_login_at' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);
@@ -85,7 +85,8 @@ class UserControllerTest extends TestCase
             $json = json_decode((string) $resp->getBody(), true);
             $this->assertTrue($json['success']);
             $this->assertEquals(10, $json['data']['avatar_id']);
-            $this->assertEquals('/avatars/default/avatar_01.png', $json['data']['avatar_url']);
+            $this->assertEquals('/avatars/default/avatar_01.png', $json['data']['avatar_path']);
+            $this->assertNull($json['data']['avatar_url']);
         } catch (\Exception $e) {
             $this->fail('Exception occurred: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
         }
@@ -223,7 +224,7 @@ class UserControllerTest extends TestCase
             'points' => 200,
             'is_admin' => 0,
             'avatar_id' => 10,
-            'avatar_url' => '/a.png',
+            'avatar_path' => '/a.png',
             'last_login_at' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);
@@ -283,7 +284,7 @@ class UserControllerTest extends TestCase
             'points' => 0,
             'is_admin' => 0,
             'avatar_id' => 10,
-            'avatar_url' => '/avatars/default/avatar_01.png',
+            'avatar_path' => '/avatars/default/avatar_01.png',
             'last_login_at' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);

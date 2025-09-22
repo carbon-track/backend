@@ -46,6 +46,7 @@ class AuthService
                 'uuid' => $user['uuid'] ?? null,
                 'username' => $user['username'],
                 'email' => $user['email'] ?? null,
+                'points' => (int)($user['points'] ?? 0),
                 'is_admin' => (bool)($user['is_admin'] ?? 0)
             ]
         ];

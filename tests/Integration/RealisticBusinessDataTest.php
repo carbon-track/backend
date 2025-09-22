@@ -78,7 +78,7 @@ class RealisticBusinessDataTest extends TestCase
             $this->app->addRoutingMiddleware();
 
             // Add routes
-            $routes = require_once __DIR__ . '/../../src/routes.php';
+            $routes = require __DIR__ . '/../../src/routes.php';
             $routes($this->app);
 
             // Previously inline creation of carbon_activities & avatars now handled by TestSchemaBuilder
@@ -260,7 +260,7 @@ class RealisticBusinessDataTest extends TestCase
         $response = $this->app->handle($request);
 
         // Should either succeed or fail gracefully (not crash)
-    $this->assertContains($response->getStatusCode(), [200, 400, 422, 429],
+    $this->assertContains($response->getStatusCode(), [200, 201, 400, 422, 429],
             'Registration should handle realistic data gracefully');
         
         if ($response->getStatusCode() === 200) {

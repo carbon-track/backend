@@ -51,6 +51,11 @@ class ComprehensiveBusinessDataTest extends TestCase
         $_ENV['JWT_ALGORITHM'] = 'HS256';
         $_ENV['JWT_EXPIRATION'] = '86400';
         $_ENV['TURNSTILE_SECRET_KEY'] = 'test_turnstile_secret';
+        $_ENV['R2_ACCESS_KEY_ID'] = 'test_access_key';
+        $_ENV['R2_SECRET_ACCESS_KEY'] = 'test_secret_key';
+        $_ENV['R2_ENDPOINT'] = 'https://example.com';
+        $_ENV['R2_BUCKET_NAME'] = 'test-bucket';
+        $_ENV['R2_PUBLIC_URL'] = 'https://example.com/test-bucket';
 
         try {
             // Create container and set up dependencies
@@ -73,7 +78,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             // Store config in container for dependencies.php
             $container->set('config', $config);
 
-            require_once __DIR__ . '/../../src/dependencies.php';
+            require __DIR__ . '/../../src/dependencies.php';
             // After dependencies loaded and before routes, ensure schema exists
             // Initialize minimal test schema
             $dbServiceTmp = $container->get(DatabaseService::class);
@@ -86,7 +91,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             $this->app->addRoutingMiddleware();
 
             // Add routes
-            $routes = require_once __DIR__ . '/../../src/routes.php';
+            $routes = require __DIR__ . '/../../src/routes.php';
             $routes($this->app);
 
             // Get services
@@ -374,7 +379,11 @@ class ComprehensiveBusinessDataTest extends TestCase
         $request = $this->createRequest('POST', '/api/v1/auth/login', $requestData);
         $response = $this->app->handle($request);
 
-        $this->assertEquals(200, $response->getStatusCode());
+        if ($response->getStatusCode() !== 200) {
+            throw new \RuntimeException('Admin workflow step failed: ' . (string)$response->getBody());
+        }
+
+        $this->assertEquals(200, $response->getStatusCode(), 'Calculate response: ' . (string)$response->getBody());
         
         $body = (string) $response->getBody();
         $data = json_decode($body, true);
@@ -393,7 +402,9 @@ class ComprehensiveBusinessDataTest extends TestCase
             'Authorization' => 'Bearer ' . $token
         ]);
         $response = $this->app->handle($request);
-
+        if ($response->getStatusCode() !== 200) {
+            throw new \RuntimeException('Admin pending records response: ' . (string)$response->getBody());
+        }
         $this->assertEquals(200, $response->getStatusCode());
         
         $body = (string) $response->getBody();
@@ -439,6 +450,7 @@ class ComprehensiveBusinessDataTest extends TestCase
         $recordData = [
             'activity_id' => $activity['id'],
             'amount' => 2.5,
+            'date' => date('Y-m-d'),
             'description' => '今天上班自带水杯，减少了塑料瓶的使用',
             'proof_images' => ['/uploads/proof/water_bottle_20241201.jpg'],
             'request_id' => 'test-' . uniqid()
@@ -450,15 +462,15 @@ class ComprehensiveBusinessDataTest extends TestCase
         ]);
         $response = $this->app->handle($request);
 
-        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals(200, $response->getStatusCode(), 'Record response: ' . (string)$response->getBody());
         
         $body = (string) $response->getBody();
         $data = json_decode($body, true);
         
         $this->assertTrue($data['success']);
-        $this->assertArrayHasKey('transaction_id', $data['data']);
+        $this->assertArrayHasKey('record_id', $data['data']);
         
-        $transactionId = $data['data']['transaction_id'];
+        $transactionId = $data['data']['record_id'];
         
         // Step 3: Get user's transactions
         $request = $this->createRequest('GET', '/api/v1/carbon-track/transactions', [], [
@@ -524,12 +536,8 @@ class ComprehensiveBusinessDataTest extends TestCase
         $exchangeData = [
             'product_id' => $affordableProduct['id'],
             'quantity' => 1,
-            'shipping_address' => [
-                'recipient_name' => '李明',
-                // phone 字段已移除
-                'address' => '北京市海淀区清华大学东门',
-                'postal_code' => '100084'
-            ],
+            'shipping_address' => '北京市海淀区清华大学东门',
+            'contact_phone' => '13800138000',
             'request_id' => 'test-exchange-' . uniqid()
         ];
         
@@ -544,52 +552,49 @@ class ComprehensiveBusinessDataTest extends TestCase
         $body = (string) $response->getBody();
         $data = json_decode($body, true);
         
-        $this->assertTrue($data['success']);
-        $this->assertArrayHasKey('exchange_id', $data['data']);
-        $this->assertArrayHasKey('remaining_points', $data['data']);
-        
+            $this->assertTrue($data['success']);
+        $this->assertArrayHasKey('exchange_id', $data);
+        $this->assertArrayHasKey('remaining_points', $data);
+
         $expectedRemainingPoints = 300 - $affordableProduct['points_required'];
-        $this->assertEquals($expectedRemainingPoints, $data['data']['remaining_points']);
+        $this->assertEquals($expectedRemainingPoints, $data['remaining_points']);
     }
 
     public function testAdminWorkflow(): void
     {
         $adminToken = $this->getAuthToken('wang.fang@testdomain.com');
-        
+
         // Step 1: Get pending carbon tracking records
         $request = $this->createRequest('GET', '/api/v1/admin/carbon-activities/pending', [], [
             'Authorization' => 'Bearer ' . $adminToken
         ]);
         $response = $this->app->handle($request);
+        $pendingBody = (string)$response->getBody();
+        $this->assertEquals(200, $response->getStatusCode(), 'Admin pending records response: ' . $pendingBody);
 
-        $this->assertEquals(200, $response->getStatusCode());
-        
         // Step 2: Get user list for management
         $request = $this->createRequest('GET', '/api/v1/admin/users?page=1&limit=10', [], [
             'Authorization' => 'Bearer ' . $adminToken
         ]);
         $response = $this->app->handle($request);
+        $usersBody = (string)$response->getBody();
+        $this->assertEquals(200, $response->getStatusCode(), 'Admin users list response: ' . $usersBody);
 
-        $this->assertEquals(200, $response->getStatusCode());
-        
-        $body = (string) $response->getBody();
-        $data = json_decode($body, true);
-        
+        $data = json_decode($usersBody, true);
         $this->assertTrue($data['success']);
         $this->assertArrayHasKey('data', $data);
-        $this->assertArrayHasKey('pagination', $data);
-        
+        $this->assertArrayHasKey('users', $data['data']);
+        $this->assertArrayHasKey('pagination', $data['data']);
+
         // Step 3: Get exchange records for admin review
         $request = $this->createRequest('GET', '/api/v1/admin/exchanges', [], [
             'Authorization' => 'Bearer ' . $adminToken
         ]);
         $response = $this->app->handle($request);
+        $exchangeBody = (string)$response->getBody();
+        $this->assertEquals(200, $response->getStatusCode(), 'Admin exchanges response: ' . $exchangeBody);
 
-        $this->assertEquals(200, $response->getStatusCode());
-        
-        $body = (string) $response->getBody();
-        $data = json_decode($body, true);
-        
+        $data = json_decode($exchangeBody, true);
         $this->assertTrue($data['success']);
     }
 

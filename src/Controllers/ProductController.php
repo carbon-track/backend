@@ -276,7 +276,15 @@ class ProductController
 
             try {
                 // 获取商品信息并锁定
-                $sql = "SELECT * FROM products WHERE id = :id AND deleted_at IS NULL FOR UPDATE";
+                $sql = "SELECT * FROM products WHERE id = :id AND deleted_at IS NULL";
+                try {
+                    $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                } catch (\Throwable $driverError) {
+                    $driver = null;
+                }
+                if ($driver !== 'sqlite') {
+                    $sql .= ' FOR UPDATE';
+                }
                 $stmt = $this->db->prepare($sql);
                 $stmt->execute(['id' => $productId]);
                 $product = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -378,7 +386,12 @@ class ProductController
 
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
-            return $this->json($response, ['error' => $e->getMessage()], 400);
+            return $this->json($response, [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'error' => $e->getMessage(),
+                'code' => 'EXCHANGE_FAILED'
+            ], 400);
         }
     }
 

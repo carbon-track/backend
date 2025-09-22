@@ -184,7 +184,7 @@ class AdminController
             $this->auditLog->logDataChange(
                 'admin',
                 'users_list',
-                $user['id'],
+                (int)($user['id'] ?? 0),
                 'admin',
                 'users',
                 null,
@@ -617,6 +617,7 @@ class AdminController
 
         return [
             'items' => $items,
+            'badges' => $items,
             'summary' => [
                 'awarded' => $awarded,
                 'revoked' => $revoked,

@@ -56,7 +56,6 @@ class AuthMiddleware implements MiddlewareInterface
             return $handler->handle($request);
             
         } catch (\Exception $e) {
-            // Log authentication failure
             $this->auditLogService->log([
                 'action' => 'auth_failure',
                 'entity_type' => 'auth',
@@ -64,7 +63,7 @@ class AuthMiddleware implements MiddlewareInterface
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'notes' => 'Token authentication failed: ' . $e->getMessage()
             ]);
-            
+
             return $this->unauthorizedResponse('Invalid or expired token');
         }
     }

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AuthController;
-use CarbonTrack\Services\{AuthService, EmailService, TurnstileService, AuditLogService, ErrorLogService, MessageService};
+use CarbonTrack\Services\{AuthService, EmailService, TurnstileService, AuditLogService, ErrorLogService, MessageService, CloudflareR2Service};
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 use Slim\Psr7\Response;
@@ -41,12 +41,14 @@ final class AuthRegistrationNewSchoolTest extends TestCase
     $audit->method('logAuthOperation')->willReturn(true);
         /** @var MessageService&PHPUnit\Framework\MockObject\MockObject $msg */
         $msg = $this->createMock(MessageService::class);
+        /** @var CloudflareR2Service&PHPUnit\Framework\MockObject\MockObject $r2 */
+        $r2 = $this->createMock(CloudflareR2Service::class);
         $logger = new Logger('test');
         $logger->pushHandler(new StreamHandler('php://stdout', Logger::WARNING));
         /** @var ErrorLogService&PHPUnit\Framework\MockObject\MockObject $err */
         $err = $this->createMock(ErrorLogService::class);
 
-        return new AuthController($auth, $email, $turnstile, $audit, $msg, $logger, $this->pdo, $err);
+        return new AuthController($auth, $email, $turnstile, $audit, $msg, $r2, $logger, $this->pdo, $err);
     }
 
     private function makeRequest(array $body): Request

@@ -13,6 +13,27 @@ if (file_exists(__DIR__ . '/../.env.testing')) {
     $dotenv->load();
 }
 
+// Ensure tests run with safe mail defaults
+$allowLiveEmailsValue = $_ENV['PHPUNIT_ALLOW_LIVE_EMAILS']
+    ?? $_SERVER['PHPUNIT_ALLOW_LIVE_EMAILS']
+    ?? getenv('PHPUNIT_ALLOW_LIVE_EMAILS');
+$allowLiveEmails = filter_var($allowLiveEmailsValue, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+if ($allowLiveEmails === null) {
+    $allowLiveEmails = false;
+}
+
+if (!$allowLiveEmails) {
+    $_ENV['MAIL_SIMULATE'] = 'true';
+    $_SERVER['MAIL_SIMULATE'] = 'true';
+    putenv('MAIL_SIMULATE=true');
+}
+
+if (!isset($_ENV['MAIL_SMTP_DEBUG'])) {
+    $_ENV['MAIL_SMTP_DEBUG'] = '0';
+}
+$_SERVER['MAIL_SMTP_DEBUG'] = $_ENV['MAIL_SMTP_DEBUG'];
+putenv('MAIL_SMTP_DEBUG=' . $_ENV['MAIL_SMTP_DEBUG']);
+
 // Set test environment variables if not already set
 $_ENV['APP_ENV'] = $_ENV['APP_ENV'] ?? 'testing';
 $_ENV['DB_DATABASE'] = $_ENV['DB_DATABASE'] ?? 'carbontrack_test';

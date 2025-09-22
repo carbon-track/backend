@@ -10,6 +10,7 @@ use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\CloudflareR2Service;
 use PHPUnit\Framework\TestCase;
 
 class AuthControllerTest extends TestCase
@@ -22,6 +23,7 @@ class AuthControllerTest extends TestCase
         $mockTurnstileService = $this->createMock(TurnstileService::class);
         $mockAuditLogService = $this->createMock(AuditLogService::class);
         $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
         $mockPdo = $this->createMock(\PDO::class);
 
@@ -31,6 +33,7 @@ class AuthControllerTest extends TestCase
             $mockTurnstileService,
             $mockAuditLogService,
             $mockMessageService,
+            $mockR2Service,
             $mockLogger,
             $mockPdo,
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
@@ -73,25 +76,33 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-    $this->assertCount(8, $parameters);
-        
+        $this->assertCount(9, $parameters);
+
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
             'CarbonTrack\Services\EmailService',
             'CarbonTrack\Services\TurnstileService',
             'CarbonTrack\Services\AuditLogService',
             'CarbonTrack\Services\MessageService',
+            'CarbonTrack\Services\CloudflareR2Service',
             'Monolog\Logger',
             'PDO',
             'CarbonTrack\Services\ErrorLogService'
         ];
+        $nullableIndexes = [5, 8];
 
         foreach ($parameters as $index => $parameter) {
             $type = $parameter->getType();
             if ($type instanceof \ReflectionNamedType) {
                 $this->assertEquals($expectedTypes[$index], $type->getName());
+                if (in_array($index, $nullableIndexes, true)) {
+                    $this->assertTrue($type->allowsNull());
+                } else {
+                    $this->assertFalse($type->allowsNull());
+                }
             }
         }
+
     }
 
     public function testLoginCallsAuthAndWritesAudit(): void
@@ -101,6 +112,7 @@ class AuthControllerTest extends TestCase
         $mockTurnstileService = $this->createMock(TurnstileService::class);
         $mockAuditLogService = $this->createMock(AuditLogService::class);
         $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
 
         // mock PDO for selecting user and updating last login
@@ -133,6 +145,7 @@ class AuthControllerTest extends TestCase
             $mockTurnstileService,
             $mockAuditLogService,
             $mockMessageService,
+            $mockR2Service,
             $mockLogger,
             $mockPdo,
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class)

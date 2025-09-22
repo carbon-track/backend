@@ -8569,6 +8569,182 @@
           }
         ]
       }
+    },
+    "/admin/badges/{id}/recipients": {
+      "get": {
+        "summary": "List badge recipients",
+        "tags": [
+          "Admin - Badges"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "awarded",
+                "revoked",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Badge recipients returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/BadgeRecipientsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/overview": {
+      "get": {
+        "summary": "Get user overview with metrics",
+        "tags": [
+          "Admin - Users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User overview returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/AdminUserOverviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/badges": {
+      "get": {
+        "summary": "List badges for a specific user (admin)",
+        "tags": [
+          "Admin - Users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User badge list returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/AdminUserBadgesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8806,6 +8982,42 @@
             "format": "date-time",
             "nullable": true,
             "description": "账户更新时间"
+          },
+          "badges_awarded": {
+            "type": "integer",
+            "description": "已授予徽章记录数"
+          },
+          "badges_revoked": {
+            "type": "integer",
+            "description": "已收回徽章记录数"
+          },
+          "active_badges": {
+            "type": "integer",
+            "description": "当前激活徽章数量"
+          },
+          "total_carbon_saved": {
+            "type": "number",
+            "description": "累计碳减排量"
+          },
+          "total_transactions": {
+            "type": "integer",
+            "description": "累计积分记录数"
+          },
+          "earned_points": {
+            "type": "number",
+            "description": "累计获取积分"
+          },
+          "last_badge_awarded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "最近授予徽章时间"
+          },
+          "days_since_registration": {
+            "type": "integer",
+            "description": "注册天数"
           }
         }
       },
@@ -10473,7 +10685,7 @@
           "data": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/AchievementBadge"
+              "": "#/components/schemas/AdminBadgeSummary"
             }
           }
         }
@@ -10485,7 +10697,7 @@
             "type": "boolean"
           },
           "data": {
-            "$ref": "#/components/schemas/AchievementBadge"
+            "": "#/components/schemas/AdminBadgeDetail"
           }
         }
       },
@@ -10725,6 +10937,281 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CarbonActivityResponse"
+            }
+          }
+        }
+      },
+      "BadgeStats": {
+        "type": "object",
+        "properties": {
+          "total_records": {
+            "type": "integer"
+          },
+          "unique_users": {
+            "type": "integer"
+          },
+          "awarded_records": {
+            "type": "integer"
+          },
+          "revoked_records": {
+            "type": "integer"
+          },
+          "awarded_users": {
+            "type": "integer"
+          },
+          "last_awarded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "BadgeRecipientUser": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_admin": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "BadgeRecipientItem": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "": "#/components/schemas/BadgeRecipientUser"
+              }
+            ]
+          },
+          "user_badge": {
+            "": "#/components/schemas/UserBadgeRecord"
+          }
+        }
+      },
+      "BadgeSummary": {
+        "type": "object",
+        "properties": {
+          "awarded": {
+            "type": "integer"
+          },
+          "revoked": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "UserMetricsSnapshot": {
+        "type": "object",
+        "properties": {
+          "total_carbon_saved": {
+            "type": "number"
+          },
+          "total_points_earned": {
+            "type": "number"
+          },
+          "total_approved_records": {
+            "type": "integer"
+          },
+          "total_records": {
+            "type": "integer"
+          },
+          "total_points_balance": {
+            "type": "number"
+          },
+          "days_since_registration": {
+            "type": "integer"
+          }
+        }
+      },
+      "AdminBadgeSummary": {
+        "allOf": [
+          {
+            "": "#/components/schemas/AchievementBadge"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "stats": {
+                "": "#/components/schemas/BadgeStats"
+              }
+            }
+          }
+        ]
+      },
+      "AdminBadgeDetail": {
+        "allOf": [
+          {
+            "": "#/components/schemas/AdminBadgeSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "recent_awards": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/BadgeRecipientItem"
+                }
+              },
+              "recent_awards_pagination": {
+                "type": "object",
+                "properties": {
+                  "current_page": {
+                    "type": "integer"
+                  },
+                  "per_page": {
+                    "type": "integer"
+                  },
+                  "total_items": {
+                    "type": "integer"
+                  },
+                  "total_pages": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "BadgeRecipientsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/BadgeRecipientItem"
+                }
+              },
+              "pagination": {
+                "type": "object",
+                "properties": {
+                  "current_page": {
+                    "type": "integer"
+                  },
+                  "per_page": {
+                    "type": "integer"
+                  },
+                  "total_items": {
+                    "type": "integer"
+                  },
+                  "total_pages": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "badge": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "": "#/components/schemas/AdminBadgeSummary"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "AdminUserBadgesResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "badges": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/BadgeRecipientItem"
+                }
+              },
+              "summary": {
+                "": "#/components/schemas/BadgeSummary"
+              },
+              "metrics": {
+                "": "#/components/schemas/UserMetricsSnapshot"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/BadgeRecipientItem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AdminUserOverviewResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "": "#/components/schemas/UserResponse"
+              },
+              "metrics": {
+                "": "#/components/schemas/UserMetricsSnapshot"
+              },
+              "badge_summary": {
+                "": "#/components/schemas/BadgeSummary"
+              },
+              "recent_badges": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/BadgeRecipientItem"
+                }
+              }
             }
           }
         }

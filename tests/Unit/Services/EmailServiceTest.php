@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
-use PHPUnit\Framework\TestCase;
 use CarbonTrack\Services\EmailService;
+use Monolog\Handler\TestHandler;
+use Monolog\Logger;
+use PHPUnit\Framework\TestCase;
 
 class EmailServiceTest extends TestCase
 {
@@ -14,7 +16,7 @@ class EmailServiceTest extends TestCase
         $this->assertTrue(class_exists(EmailService::class));
     }
 
-    public function testSendEmailWithoutMailerReturnsFalseAndLogsError(): void
+    public function testSendEmailWithoutMailerSimulatesDelivery(): void
     {
         $config = [
             'debug' => false,
@@ -24,21 +26,38 @@ class EmailServiceTest extends TestCase
             'port' => 465,
             'from_email' => 'noreply@example.com',
             'from_name' => 'No Reply',
-            'templates_path' => __DIR__ . '/'
+            'templates_path' => __DIR__ . '/',
+            'force_simulation' => true,
         ];
-        $logger = $this->createMock(\Monolog\Logger::class);
-        $logger->expects($this->atLeastOnce())->method('error');
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-test');
+        $logger->pushHandler($handler);
+
         $service = new EmailService($config, $logger);
-        $ok = $service->sendEmail('to@example.com', 'To', 'Subj', '<b>body</b>', 'body');
-        $this->assertFalse($ok);
+
+        $result = $service->sendEmail('to@example.com', 'To', 'Subj', '<b>body</b>', 'body');
+
+        $this->assertTrue($result);
+        $this->assertTrue(
+            $handler->hasInfoThatContains('Simulated email send'),
+            'Expected simulated email log when EmailService runs in simulation mode.'
+        );
+
+        $simulationRecords = array_values(array_filter(
+            $handler->getRecords(),
+            static fn(array $record): bool => $record['message'] === 'Simulated email send'
+        ));
+        $this->assertNotEmpty($simulationRecords, 'Expected simulation log record to be captured.');
+        $record = $simulationRecords[0];
+        $this->assertSame('force_simulation', $record['context']['reason'] ?? null);
     }
 
-    public function testTemplateWrappersReturnBoolAndReadTemplates(): void
+    public function testTemplateWrappersReturnSuccess(): void
     {
-        // Create temp templates
         $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ct_email_tpl_' . uniqid();
         mkdir($dir);
-        $make = function(string $name, string $contentHtml, string $contentTxt) use ($dir) {
+        $make = function (string $name, string $contentHtml, string $contentTxt) use ($dir): void {
             file_put_contents($dir . DIRECTORY_SEPARATOR . $name . '.html', $contentHtml);
             file_put_contents($dir . DIRECTORY_SEPARATOR . $name . '.txt', $contentTxt);
         };
@@ -65,23 +84,35 @@ class EmailServiceTest extends TestCase
                 'activity_rejected' => 'AR',
                 'exchange_confirmation' => 'EC',
                 'exchange_status_update' => 'ESU',
-            ]
+            ],
+            'force_simulation' => true,
         ];
-        $logger = $this->createMock(\Monolog\Logger::class);
-        $logger->expects($this->atLeastOnce())->method('error');
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-test');
+        $logger->pushHandler($handler);
+
         $svc = new EmailService($config, $logger);
 
-        $this->assertIsBool($svc->sendVerificationCode('to@example.com','User','123456'));
-        $this->assertIsBool($svc->sendPasswordResetLink('to@example.com','User','https://reset'));
-        $this->assertIsBool($svc->sendActivityApprovedNotification('to@example.com','User','Act', 10));
-        $this->assertIsBool($svc->sendActivityRejectedNotification('to@example.com','User','Act','Bad'));
-        $this->assertIsBool($svc->sendExchangeConfirmation('to@example.com','User','Prod', 2, 100));
-        $this->assertIsBool($svc->sendExchangeStatusUpdate('to@example.com','User','Prod','shipped','soon'));
+        $this->assertTrue($svc->sendVerificationCode('to@example.com', 'User', '123456'));
+        $this->assertTrue($svc->sendPasswordResetLink('to@example.com', 'User', 'https://reset'));
+        $this->assertTrue($svc->sendActivityApprovedNotification('to@example.com', 'User', 'Act', 10));
+        $this->assertTrue($svc->sendActivityRejectedNotification('to@example.com', 'User', 'Act', 'Bad'));
+        $this->assertTrue($svc->sendExchangeConfirmation('to@example.com', 'User', 'Prod', 2, 100));
+        $this->assertTrue($svc->sendExchangeStatusUpdate('to@example.com', 'User', 'Prod', 'shipped', 'soon'));
 
-        // Cleanup
-        foreach (glob($dir . DIRECTORY_SEPARATOR . '*') as $f) { @unlink($f); }
+        $this->assertTrue($handler->hasInfoThatContains('Simulated email send'), 'Expected info logs for simulated email sends.');
+
+        foreach (array_filter(
+            $handler->getRecords(),
+            static fn(array $record): bool => $record['message'] === 'Simulated email send'
+        ) as $record) {
+            $this->assertSame('force_simulation', $record['context']['reason'] ?? null);
+        }
+
+        foreach (glob($dir . DIRECTORY_SEPARATOR . '*') as $f) {
+            @unlink($f);
+        }
         @rmdir($dir);
     }
 }
-
-
