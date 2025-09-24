@@ -149,6 +149,7 @@ return function (App $app) {
     $registerProductRoutes = function (RouteCollectorProxy $group) {
         $group->group(PATH_PRODUCTS, function (RouteCollectorProxy $products) {
             $products->get('', [ProductController::class, 'getProducts']);
+            $products->get('/tags', [ProductController::class, 'searchProductTags']);
             $products->get(PATTERN_ID_NUMERIC, [ProductController::class, 'getProductDetail']);
             $products->get('/categories', [ProductController::class, 'getCategories']);
             $products->post('', [ProductController::class, 'createProduct']);
@@ -224,7 +225,9 @@ return function (App $app) {
             $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
             // 站内信广播
             $admin->post('/messages/broadcast', [MessageController::class, 'sendSystemMessage']);
+            $admin->get('/messages/broadcasts', [MessageController::class, 'getBroadcastHistory']);
             $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
+            $admin->get(PATH_PRODUCTS . '/tags', [ProductController::class, 'searchProductTags']);
             $admin->post(PATH_PRODUCTS, [ProductController::class, 'createProduct']);
             $admin->put(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'updateProduct']);
             $admin->delete(PATH_PRODUCTS . PATTERN_ID_NUMERIC, [ProductController::class, 'deleteProduct']);

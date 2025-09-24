@@ -474,6 +474,8 @@ class MessageController
                 }
             }
 
+            $scope = $targetUsersRaw !== null ? 'custom' : 'all';
+
             if (empty($targetUserIds)) {
                 return $this->json($response, ['error' => 'No target users found for broadcast'], 404);
             }
@@ -508,7 +510,9 @@ class MessageController
                 null,
                 [
                     'title' => $title,
+                    'content' => $content,
                     'priority' => $priority,
+                    'scope' => $scope,
                     'target_count' => count($targetUserIds),
                     'sent_count' => $sentCount,
                     'invalid_user_ids' => $invalidTargetIds,
@@ -522,6 +526,7 @@ class MessageController
                 'total_targets' => count($targetUserIds),
                 'failed_user_ids' => $failedUserIds,
                 'invalid_user_ids' => $invalidTargetIds,
+                'scope' => $scope,
                 'message' => 'System message sent successfully',
                 'priority' => $priority
             ]);
@@ -619,11 +624,240 @@ class MessageController
     }
 
     /**
+     * 获取广播历史（管理员）
+     */
+    public function getBroadcastHistory(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => 'Admin access required'], 403);
+            }
+
+            $params = $request->getQueryParams();
+            $page = max(1, (int)($params['page'] ?? 1));
+            $limit = min(50, max(5, (int)($params['limit'] ?? 10)));
+            $offset = ($page - 1) * $limit;
+
+            $countStmt = $this->db->prepare('SELECT COUNT(*) FROM audit_logs WHERE action = :action');
+            if ($countStmt && $countStmt->execute(['action' => 'system_message_broadcast'])) {
+                $total = (int) $countStmt->fetchColumn();
+            } else {
+                $total = 0;
+            }
+
+            $listStmt = $this->db->prepare('SELECT id, user_id, data, created_at FROM audit_logs WHERE action = :action ORDER BY id DESC LIMIT :limit OFFSET :offset');
+            if ($listStmt) {
+                $listStmt->bindValue(':action', 'system_message_broadcast');
+                $listStmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+                $listStmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+                $listStmt->execute();
+                $logs = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } else {
+                $logs = [];
+            }
+
+            $actorMap = [];
+            if (!empty($logs)) {
+                $actorIds = [];
+                foreach ($logs as $logRow) {
+                    if (isset($logRow['user_id']) && $logRow['user_id'] !== null) {
+                        $actorIds[] = (int)$logRow['user_id'];
+                    }
+                }
+                if (!empty($actorIds)) {
+                    $actorMap = $this->loadUsernames($actorIds);
+                }
+            }
+
+            $items = [];
+            foreach ($logs as $logRow) {
+                $meta = $this->decodeAuditData($logRow['data'] ?? null);
+                $title = (string)($meta['title'] ?? '');
+                $content = (string)($meta['content'] ?? '');
+                if ($title === '' || $content === '') {
+                    continue;
+                }
+                $actorId = isset($logRow['user_id']) ? (int)$logRow['user_id'] : null;
+                $priority = (string)($meta['priority'] ?? Message::PRIORITY_NORMAL);
+                if (!in_array($priority, Message::getValidPriorities(), true)) {
+                    $priority = Message::PRIORITY_NORMAL;
+                }
+                $scope = (string)($meta['scope'] ?? 'all');
+                $targetCount = (int)($meta['target_count'] ?? 0);
+                $sentCount = (int)($meta['sent_count'] ?? 0);
+                $invalidIds = $this->decodeIdList($meta['invalid_user_ids'] ?? []);
+                $failedIds = $this->decodeIdList($meta['failed_user_ids'] ?? []);
+
+                $startTime = (string)($logRow['created_at'] ?? date('Y-m-d H:i:s'));
+                $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
+                $recipients = $this->loadBroadcastRecipients($title, $content, $startTime, $endTime);
+
+                $readUsers = [];
+                $unreadUsers = [];
+                foreach ($recipients as $recipient) {
+                    $entry = [
+                        'user_id' => isset($recipient['receiver_id']) ? (int)$recipient['receiver_id'] : null,
+                        'username' => $recipient['username'] ?? null,
+                        'message_id' => isset($recipient['id']) ? (int)$recipient['id'] : null,
+                        'read' => (bool)($recipient['is_read'] ?? false),
+                    ];
+                    if ($entry['read']) {
+                        $readUsers[] = $entry;
+                    } else {
+                        $unreadUsers[] = $entry;
+                    }
+                }
+
+                $items[] = [
+                    'id' => (int)($logRow['id'] ?? 0),
+                    'actor_user_id' => $actorId,
+                    'actor_username' => ($actorId !== null && isset($actorMap[$actorId])) ? $actorMap[$actorId] : null,
+                    'title' => $title,
+                    'content' => $content,
+                    'priority' => $priority,
+                    'scope' => $scope,
+                    'target_count' => $targetCount,
+                    'sent_count' => $sentCount,
+                    'read_count' => count($readUsers),
+                    'unread_count' => count($unreadUsers),
+                    'invalid_user_ids' => $invalidIds,
+                    'failed_user_ids' => $failedIds,
+                    'read_users' => $readUsers,
+                    'unread_users' => $unreadUsers,
+                    'created_at' => $startTime,
+                ];
+            }
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $items,
+                'pagination' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'total' => $total,
+                    'pages' => (int)max(1, ceil($total / max(1, $limit))),
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            try {
+                if ($this->errorLogService) {
+                    $this->errorLogService->logException($e, $request);
+                }
+            } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function decodeAuditData(?string $raw): array
+    {
+        if ($raw === null || $raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function decodeIdList($value): array
+    {
+        if (is_array($value)) {
+            return array_values(array_map('intval', $value));
+        }
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                return array_values(array_map('intval', $decoded));
+            }
+            $parts = preg_split('/[\s,]+/', $value);
+            if ($parts) {
+                $clean = [];
+                foreach ($parts as $part) {
+                    $num = (int)$part;
+                    if ($num > 0) {
+                        $clean[] = $num;
+                    }
+                }
+                if ($clean) {
+                    return $clean;
+                }
+            }
+        }
+        return [];
+    }
+
+    private function loadBroadcastRecipients(string $title, string $content, string $start, string $end): array
+    {
+        try {
+            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.content = :content AND m.created_at >= :start AND m.created_at <= :end';
+            $stmt = $this->db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+            $stmt->bindValue(':title', $title);
+            $stmt->bindValue(':content', $content);
+            $stmt->bindValue(':start', $start);
+            $stmt->bindValue(':end', $end);
+            $stmt->execute();
+            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    private function loadUsernames(array $ids): array
+    {
+        $cleanIds = [];
+        foreach ($ids as $id) {
+            $intId = (int)$id;
+            if ($intId > 0) {
+                $cleanIds[$intId] = $intId;
+            }
+        }
+        if (empty($cleanIds)) {
+            return [];
+        }
+
+        try {
+            $placeholders = implode(',', array_fill(0, count($cleanIds), '?'));
+            $sql = 'SELECT id, username, email FROM users WHERE id IN (' . $placeholders . ')';
+            $stmt = $this->db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+            $index = 1;
+            foreach ($cleanIds as $userId) {
+                $stmt->bindValue($index, $userId, PDO::PARAM_INT);
+                $index++;
+            }
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $result = [];
+            foreach ($rows as $row) {
+                $uid = isset($row['id']) ? (int)$row['id'] : null;
+                if ($uid === null) {
+                    continue;
+                }
+                $username = null;
+                if (!empty($row['username'])) {
+                    $username = (string)$row['username'];
+                } elseif (!empty($row['email'])) {
+                    $username = (string)$row['email'];
+                }
+                $result[$uid] = $username;
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
      * 标记消息为已读的私有方法
      */
     private function markMessageAsRead(string $messageId): void
     {
-    $sql = "UPDATE messages SET is_read = 1, updated_at = NOW() WHERE id = :id AND is_read = 0";
+        $sql = "UPDATE messages SET is_read = 1, updated_at = NOW() WHERE id = :id AND is_read = 0";
         $stmt = $this->db->prepare($sql);
         $stmt->execute(['id' => $messageId]);
     }
@@ -633,4 +867,7 @@ class MessageController
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
 }
+
+
+
 

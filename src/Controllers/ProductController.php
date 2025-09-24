@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\ErrorLogService;
 use PDO;
+use PDOException;
 
 class ProductController
 {
@@ -59,6 +60,25 @@ class ProductController
             $where = ['p.deleted_at IS NULL'];
             $bindings = [];
 
+            $tagSlugs = [];
+            if (isset($params['tag'])) {
+                if (is_array($params['tag'])) {
+                    $tagSlugs = array_merge($tagSlugs, $params['tag']);
+                } else {
+                    $tagSlugs[] = (string)$params['tag'];
+                }
+            }
+            if (isset($params['tags'])) {
+                if (is_array($params['tags'])) {
+                    $tagSlugs = array_merge($tagSlugs, $params['tags']);
+                } else {
+                    $tagSlugs = array_merge($tagSlugs, explode(',', (string)$params['tags']));
+                }
+            }
+            $tagSlugs = array_values(array_unique(array_filter(array_map('trim', $tagSlugs), static function ($slug) {
+                return $slug !== '';
+            })));
+
             // 前台商品列表默认仅展示 active；管理员列表可查看所有或按 status 过滤
             if (!$isAdminCall) {
                 $where[] = 'p.status = "active"';
@@ -85,6 +105,22 @@ class ProductController
             if (isset($params['max_points'])) {
                 $where[] = 'p.points_required <= :max_points';
                 $bindings['max_points'] = intval($params['max_points']);
+            }
+
+            if (!empty($tagSlugs)) {
+                $tagPlaceholders = [];
+                foreach ($tagSlugs as $index => $slug) {
+                    $paramKey = 'tag_slug_' . $index;
+                    $tagPlaceholders[] = ':' . $paramKey;
+                    $bindings[$paramKey] = $slug;
+                }
+                $where[] = 'EXISTS (
+                    SELECT 1
+                    FROM product_tag_map ptm
+                    INNER JOIN product_tags pt ON ptm.tag_id = pt.id
+                    WHERE ptm.product_id = p.id
+                    AND pt.slug IN (' . implode(', ', $tagPlaceholders) . ')
+                )';
             }
 
             $whereClause = implode(' AND ', $where);
@@ -122,6 +158,12 @@ class ProductController
 
             $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            $productIds = array_map(static function ($item) {
+                return isset($item['id']) ? (int)$item['id'] : null;
+            }, $products);
+            $productIds = array_values(array_filter($productIds, static fn($v) => $v !== null));
+            $tagsMap = $productIds ? $this->loadTagsForProducts($productIds) : [];
+
             // 处理图片字段
             foreach ($products as &$product) {
                 $product['images'] = $product['images'] ? json_decode($product['images'], true) : [];
@@ -142,6 +184,7 @@ class ProductController
                     $product['image_url'] = $imagePath ?: ($firstImage ?: null);
                 }
                 $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
+                $product['tags'] = $tagsMap[$product['id']] ?? [];
             }
 
             $pages = (int)ceil($total / $limit);
@@ -219,6 +262,8 @@ class ProductController
                 $product['image_url'] = $imagePath ?: ($firstImage ?: null);
             }
             $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
+            $tagMap = $this->loadTagsForProducts([(int)$product['id']]);
+            $product['tags'] = $tagMap[$product['id']] ?? [];
 
             return $this->json($response, [
                 'success' => true,
@@ -811,38 +856,54 @@ class ProductController
             if (empty($data['name']) || !isset($data['points_required']) || !isset($data['stock'])) {
                 return $this->json($response, ['error' => 'Missing required fields: name, points_required, stock'], 400);
             }
+            $tagPayload = $data['tags'] ?? [];
+            $imagePath = $this->extractPrimaryImagePath($data);
+            $imagesPayload = isset($data['images']) ? (is_string($data['images']) ? $data['images'] : json_encode($data['images'])) : null;
+            $status = in_array(($data['status'] ?? 'active'), ['active', 'inactive'], true) ? $data['status'] : 'active';
 
-            $sql = "
-                INSERT INTO products (
-                    name, category, points_required, description, image_path, images,
-                    stock, status, sort_order, created_at
-                ) VALUES (
-                    :name, :category, :points_required, :description, :image_path, :images,
-                    :stock, :status, :sort_order, NOW()
-                )
-            ";
+            $this->db->beginTransaction();
+            try {
+                $sql = "
+                    INSERT INTO products (
+                        name, category, points_required, description, image_path, images,
+                        stock, status, sort_order, created_at
+                    ) VALUES (
+                        :name, :category, :points_required, :description, :image_path, :images,
+                        :stock, :status, :sort_order, NOW()
+                    )
+                ";
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
-                'name' => $data['name'],
-                'category' => $data['category'] ?? null,
-                'points_required' => (int)$data['points_required'],
-                'description' => $data['description'] ?? '',
-                'image_path' => $data['image_path'] ?? ($data['image_url'] ?? null),
-                'images' => isset($data['images']) ? (is_string($data['images']) ? $data['images'] : json_encode($data['images'])) : null,
-                'stock' => (int)$data['stock'],
-                'status' => in_array(($data['status'] ?? 'active'), ['active', 'inactive'], true) ? $data['status'] : 'active',
-                'sort_order' => (int)($data['sort_order'] ?? 0),
-            ]);
+                $stmt = $this->db->prepare($sql);
+                $stmt->execute([
+                    'name' => $data['name'],
+                    'category' => $data['category'] ?? null,
+                    'points_required' => (int)$data['points_required'],
+                    'description' => $data['description'] ?? '',
+                    'image_path' => $imagePath,
+                    'images' => $imagesPayload,
+                    'stock' => (int)$data['stock'],
+                    'status' => $status,
+                    'sort_order' => (int)($data['sort_order'] ?? 0),
+                ]);
 
-            $newId = (int)$this->db->lastInsertId();
+                $newId = (int)$this->db->lastInsertId();
 
-            // 审计日志
-            $this->auditLog->log($user['id'], 'product_created', 'products', (string)$newId, [
-                'name' => $data['name']
-            ]);
+                $normalizedTags = $this->resolveTagsFromPayload($tagPayload);
+                $this->syncProductTags($newId, $normalizedTags);
 
-            return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully']);
+                $this->db->commit();
+
+                // 审计日志
+                $this->auditLog->log($user['id'], 'product_created', 'products', (string)$newId, [
+                    'name' => $data['name'],
+                    'tags' => array_map(static fn($tag) => $tag['name'], $normalizedTags),
+                ]);
+
+                return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully']);
+            } catch (\Throwable $txError) {
+                try { $this->db->rollBack(); } catch (\Throwable $ignore) {}
+                throw $txError;
+            }
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
@@ -885,29 +946,447 @@ class ProductController
                 $assign('status', $status);
             }
             if (array_key_exists('sort_order', $data)) { $assign('sort_order', (int)$data['sort_order']); }
-            if (array_key_exists('image_path', $data) || array_key_exists('image_url', $data)) {
-                $assign('image_path', $data['image_path'] ?? $data['image_url']);
+            $imagePath = null;
+            $hasImagePayload = array_key_exists('image_path', $data) || array_key_exists('image_url', $data) || array_key_exists('image', $data);
+            if ($hasImagePayload) {
+                $imagePath = $this->extractPrimaryImagePath($data);
+                $assign('image_path', $imagePath);
             }
             if (array_key_exists('images', $data)) {
                 $images = is_string($data['images']) ? $data['images'] : json_encode($data['images']);
                 $assign('images', $images);
             }
 
-            if (empty($fields)) {
+            $shouldUpdateTags = array_key_exists('tags', $data);
+            if (empty($fields) && !$shouldUpdateTags) {
                 return $this->json($response, ['error' => 'No fields to update'], 400);
             }
 
-            $sql = 'UPDATE products SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
+            $normalizedTags = $shouldUpdateTags ? $this->resolveTagsFromPayload($data['tags']) : [];
 
-            $this->auditLog->log($user['id'], 'product_updated', 'products', (string)$id, ['updated_fields' => array_keys($data)]);
+            $this->db->beginTransaction();
+            try {
+                if (!empty($fields)) {
+                    $sql = 'UPDATE products SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
+                    $stmt = $this->db->prepare($sql);
+                    $stmt->execute($params);
+                }
 
-            return $this->json($response, ['success' => true, 'message' => 'Product updated successfully']);
+                if ($shouldUpdateTags) {
+                    $this->syncProductTags($id, $normalizedTags);
+                }
+
+                $this->db->commit();
+
+                $this->auditLog->log($user['id'], 'product_updated', 'products', (string)$id, [
+                    'updated_fields' => array_keys($data),
+                    'tags' => $shouldUpdateTags ? array_map(static fn($tag) => $tag['name'], $normalizedTags) : null,
+                ]);
+
+                return $this->json($response, ['success' => true, 'message' => 'Product updated successfully']);
+            } catch (\Throwable $txError) {
+                try { $this->db->rollBack(); } catch (\Throwable $ignore) {}
+                throw $txError;
+            }
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
+    }
+
+    /**
+     * 获取商品标签（用于自动补全）
+     */
+    public function searchProductTags(Request $request, Response $response): Response
+    {
+        try {
+            $params = $request->getQueryParams();
+            $search = trim((string)($params['search'] ?? ''));
+            $limit = min(50, max(5, (int)($params['limit'] ?? 20)));
+
+            $sql = 'SELECT id, name, slug FROM product_tags';
+            $bindings = [];
+            if ($search !== '') {
+                $sql .= ' WHERE name LIKE :search OR slug LIKE :search';
+                $bindings['search'] = '%' . $search . '%';
+            }
+            $sql .= ' ORDER BY name ASC LIMIT :limit';
+
+            $stmt = $this->db->prepare($sql);
+            foreach ($bindings as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => [
+                    'tags' => array_map(static function ($row) {
+                        return [
+                            'id' => isset($row['id']) ? (int)$row['id'] : null,
+                            'name' => $row['name'] ?? '',
+                            'slug' => $row['slug'] ?? '',
+                        ];
+                    }, $rows)
+                ]
+            ]);
+        } catch (\Exception $e) {
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
+    private function extractPrimaryImagePath(array $payload): ?string
+    {
+        $candidates = [];
+        if (array_key_exists('image_path', $payload)) {
+            $candidates[] = $payload['image_path'];
+        }
+        if (array_key_exists('image_url', $payload)) {
+            $candidates[] = $payload['image_url'];
+        }
+        if (array_key_exists('image', $payload)) {
+            $candidates[] = $payload['image'];
+        }
+        if (array_key_exists('main_image', $payload)) {
+            $candidates[] = $payload['main_image'];
+        }
+
+        foreach ($candidates as $candidate) {
+            if (is_array($candidate)) {
+                $filePath = $candidate['file_path'] ?? ($candidate['path'] ?? ($candidate['value'] ?? null));
+                if (is_string($filePath) && trim($filePath) !== '') {
+                    return trim($filePath);
+                }
+            } elseif (is_string($candidate)) {
+                $candidate = trim($candidate);
+                if ($candidate !== '') {
+                    return $candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveTagsFromPayload($rawTags): array
+    {
+        if (!is_array($rawTags)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($rawTags as $tag) {
+            $candidate = $this->normalizeTagCandidate($tag);
+            if (!$candidate) {
+                continue;
+            }
+            $key = $candidate['id'] !== null
+                ? 'id-' . $candidate['id']
+                : 'slug-' . $candidate['slug'];
+            $normalized[$key] = $candidate;
+        }
+
+        if (empty($normalized)) {
+            return [];
+        }
+
+        $byId = [];
+        $bySlug = [];
+        $idList = [];
+        $slugList = [];
+        foreach ($normalized as $candidate) {
+            if ($candidate['id'] !== null) {
+                $idList[$candidate['id']] = true;
+            }
+            $slugList[$candidate['slug']] = true;
+        }
+
+        if (!empty($idList)) {
+            $byId = $this->fetchTagsByIds(array_keys($idList));
+        }
+        if (!empty($slugList)) {
+            $bySlug = $this->fetchTagsBySlugs(array_keys($slugList));
+        }
+
+        $resolved = [];
+        foreach (array_values($normalized) as $candidate) {
+            if ($candidate['id'] !== null && isset($byId[$candidate['id']])) {
+                $record = $byId[$candidate['id']];
+                $resolved[$record['id']] = $record;
+                continue;
+            }
+
+            if (isset($bySlug[$candidate['slug']])) {
+                $record = $bySlug[$candidate['slug']];
+                $resolved[$record['id']] = $record;
+                continue;
+            }
+
+            $record = $this->createProductTag($candidate['name'], $candidate['slug']);
+            $resolved[$record['id']] = $record;
+            $bySlug[$record['slug']] = $record;
+        }
+
+        return array_values($resolved);
+    }
+
+    private function normalizeTagCandidate($tag): ?array
+    {
+        if (is_string($tag)) {
+            $name = trim($tag);
+            if ($name === '') {
+                return null;
+            }
+            return [
+                'id' => null,
+                'name' => $name,
+                'slug' => $this->slugifyTagName($name),
+            ];
+        }
+
+        if (!is_array($tag)) {
+            return null;
+        }
+
+        $id = null;
+        if (isset($tag['id']) && $tag['id'] !== '') {
+            $id = (int)$tag['id'];
+        }
+
+        $name = '';
+        if (isset($tag['name']) && is_string($tag['name'])) {
+            $name = trim($tag['name']);
+        } elseif (isset($tag['label']) && is_string($tag['label'])) {
+            $name = trim($tag['label']);
+        } elseif (isset($tag['value']) && is_string($tag['value'])) {
+            $name = trim($tag['value']);
+        }
+
+        $slug = null;
+        if (isset($tag['slug']) && is_string($tag['slug'])) {
+            $slug = $this->normalizeSlug($tag['slug']);
+        }
+
+        if ($id !== null && $slug === null) {
+            $slug = $name !== '' ? $this->slugifyTagName($name) : 'tag-' . $id;
+        }
+
+        if ($slug === null && $name !== '') {
+            $slug = $this->slugifyTagName($name);
+        }
+
+        if ($id === null && $name === '') {
+            return null;
+        }
+
+        if ($slug === null) {
+            $slug = $this->slugifyTagName($name ?: ('tag-' . md5(json_encode($tag))));
+        }
+
+        return [
+            'id' => $id,
+            'name' => $name,
+            'slug' => $slug,
+        ];
+    }
+
+    private function syncProductTags(int $productId, array $tags): void
+    {
+        $desiredIds = array_map(static fn($tag) => (int)$tag['id'], $tags);
+        $desiredIds = array_values(array_unique(array_filter($desiredIds, static fn($id) => $id > 0)));
+
+        $stmt = $this->db->prepare('SELECT tag_id FROM product_tag_map WHERE product_id = :product_id');
+        $stmt->execute(['product_id' => $productId]);
+        $existingIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+
+        $toDelete = array_diff($existingIds, $desiredIds);
+        $toInsert = array_diff($desiredIds, $existingIds);
+
+        if (!empty($toDelete)) {
+            $placeholders = implode(',', array_fill(0, count($toDelete), '?'));
+            $sql = 'DELETE FROM product_tag_map WHERE product_id = ? AND tag_id IN (' . $placeholders . ')';
+            $delStmt = $this->db->prepare($sql);
+            $delStmt->execute(array_merge([$productId], array_values($toDelete)));
+        }
+
+        if (!empty($toInsert)) {
+            $insertSql = 'INSERT INTO product_tag_map (product_id, tag_id, created_at) VALUES (:product_id, :tag_id, NOW())';
+            $insStmt = $this->db->prepare($insertSql);
+            foreach ($toInsert as $tagId) {
+                $insStmt->execute([
+                    'product_id' => $productId,
+                    'tag_id' => $tagId,
+                ]);
+            }
+        }
+    }
+
+    private function loadTagsForProducts(array $productIds): array
+    {
+        $productIds = array_values(array_unique(array_filter($productIds, static fn($id) => $id > 0)));
+        if (empty($productIds)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+        $sql = 'SELECT ptm.product_id, pt.id, pt.name, pt.slug
+                FROM product_tag_map ptm
+                INNER JOIN product_tags pt ON pt.id = ptm.tag_id
+                WHERE ptm.product_id IN (' . $placeholders . ')
+                ORDER BY pt.name ASC';
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($productIds);
+
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $map = [];
+        foreach ($rows as $row) {
+            $productId = isset($row['product_id']) ? (int)$row['product_id'] : null;
+            if ($productId === null) {
+                continue;
+            }
+            $map[$productId] ??= [];
+            $map[$productId][] = [
+                'id' => isset($row['id']) ? (int)$row['id'] : null,
+                'name' => $row['name'] ?? '',
+                'slug' => $row['slug'] ?? '',
+            ];
+        }
+
+        return $map;
+    }
+
+    private function fetchTagsByIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter($ids, static fn($id) => $id > 0)));
+        if (empty($ids)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = 'SELECT id, name, slug FROM product_tags WHERE id IN (' . $placeholders . ')';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($ids);
+
+        $result = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $id = isset($row['id']) ? (int)$row['id'] : null;
+            if ($id === null) {
+                continue;
+            }
+            $result[$id] = [
+                'id' => $id,
+                'name' => $row['name'] ?? '',
+                'slug' => $row['slug'] ?? '',
+            ];
+        }
+
+        return $result;
+    }
+
+    private function fetchTagsBySlugs(array $slugs): array
+    {
+        $slugs = array_values(array_unique(array_filter($slugs, static fn($slug) => is_string($slug) && $slug !== '')));
+        if (empty($slugs)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($slugs), '?'));
+        $sql = 'SELECT id, name, slug FROM product_tags WHERE slug IN (' . $placeholders . ')';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($slugs);
+
+        $result = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!isset($row['slug'])) {
+                continue;
+            }
+            $slug = $row['slug'];
+            $result[$slug] = [
+                'id' => isset($row['id']) ? (int)$row['id'] : null,
+                'name' => $row['name'] ?? '',
+                'slug' => $slug,
+            ];
+        }
+
+        return $result;
+    }
+
+    private function createProductTag(string $name, string $slug): array
+    {
+        $name = trim($name) !== '' ? trim($name) : $slug;
+        $slug = $this->normalizeSlug($slug);
+        $baseSlug = $slug;
+        $attempts = 0;
+
+        while ($attempts < 5) {
+            try {
+                $stmt = $this->db->prepare('INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, NOW(), NOW())');
+                $stmt->execute([
+                    'name' => $name,
+                    'slug' => $slug,
+                ]);
+                $id = (int)$this->db->lastInsertId();
+
+                return [
+                    'id' => $id,
+                    'name' => $name,
+                    'slug' => $slug,
+                ];
+            } catch (PDOException $e) {
+                if ($e->getCode() !== '23000') {
+                    throw $e;
+                }
+
+                $existing = $this->fetchTagsBySlugs([$slug]);
+                if (isset($existing[$slug])) {
+                    return $existing[$slug];
+                }
+
+                ++$attempts;
+                $slug = $baseSlug . '-' . $attempts;
+            }
+        }
+
+        $slug = $baseSlug . '-' . substr(md5((string)microtime(true)), 0, 6);
+        $stmt = $this->db->prepare('INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, NOW(), NOW())');
+        $stmt->execute([
+            'name' => $name,
+            'slug' => $slug,
+        ]);
+        $id = (int)$this->db->lastInsertId();
+
+        return [
+            'id' => $id,
+            'name' => $name,
+            'slug' => $slug,
+        ];
+    }
+
+    private function normalizeSlug(string $slug): string
+    {
+        $slug = trim($slug);
+        if ($slug === '') {
+            return '';
+        }
+        $slug = preg_replace('/[^\p{L}\p{N}\-]+/u', '-', $slug);
+        $slug = strtolower(trim($slug, '-'));
+        return $slug;
+    }
+
+    private function slugifyTagName(string $name): string
+    {
+        $trimmed = trim($name);
+        $slug = function_exists('mb_strtolower') ? mb_strtolower($trimmed) : strtolower($trimmed);
+        $slug = preg_replace('/[^\p{L}\p{N}\-]+/u', '-', $slug);
+        $slug = trim($slug, '-');
+        if ($slug === '') {
+            $slug = 'tag-' . substr(md5($name), 0, 8);
+        }
+        return $slug;
     }
 
     /**

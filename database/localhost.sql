@@ -434,6 +434,39 @@ CREATE TABLE `products` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `product_tags`
+--
+
+CREATE TABLE `product_tags` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(120) NOT NULL,
+  `slug` varchar(160) NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_product_tags_slug` (`slug`),
+  KEY `idx_product_tags_name` (`name`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `product_tag_map`
+--
+
+CREATE TABLE `product_tag_map` (
+  `product_id` int(11) NOT NULL,
+  `tag_id` int(11) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_product_tag` (`product_id`,`tag_id`),
+  KEY `idx_product_tag_tag_id` (`tag_id`),
+  KEY `idx_product_tag_product_id` (`product_id`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 替换视图以便查看 `recent_audit_activities`
 -- （参见下面的实际视图）
 --

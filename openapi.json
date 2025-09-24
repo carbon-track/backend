@@ -3532,6 +3532,25 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "inactive"
+              ]
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按标签 slug 筛选，可传入逗号分隔的多个标签"
           }
         ],
         "responses": {
@@ -6263,6 +6282,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "inactive"
+              ]
+            },
+            "description": "仅管理员可用，筛选指定状态的商品"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按标签筛选，接受以逗号分隔的标签 slug 列表"
           }
         ],
         "responses": {
@@ -6306,6 +6345,113 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/products/tags": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Product"
+        ],
+        "summary": "搜索产品标签 (管理员)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "关键字，模糊匹配标签名称或 slug"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取标签列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductTagListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "禁止访问，需要管理员权限",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/products/tags": {
+      "get": {
+        "tags": [
+          "Product"
+        ],
+        "summary": "搜索产品标签",
+        "description": "根据名称或别名搜索现有的产品标签，未传 search 时返回热门标签。",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "关键字，模糊匹配标签名称或 slug"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功获取标签列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductTagListResponse"
                 }
               }
             }
@@ -7090,6 +7236,62 @@
           },
           "422": {
             "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/messages/broadcasts": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Message"
+        ],
+        "summary": "获取广播历史 (管理员)",
+        "description": "返回最近发送的广播记录及其投递情况",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "查询成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastHistoryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
             "content": {
               "application/json": {
                 "schema": {
@@ -9793,19 +9995,57 @@
           "description": {
             "type": "string"
           },
-          "points_cost": {
+          "points_required": {
             "type": "integer"
+          },
+          "price": {
+            "type": "integer",
+            "description": "向后兼容字段，等同于 points_required"
           },
           "stock": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": -1
           },
           "category": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "image_path": {
             "type": "string"
           },
           "image_url": {
             "type": "string"
           },
-          "is_active": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "public_url": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductTag"
+            }
+          },
+          "is_available": {
             "type": "boolean"
           },
           "created_at": {
@@ -9822,10 +10062,8 @@
         "type": "object",
         "required": [
           "name",
-          "description",
-          "points_cost",
-          "stock",
-          "category"
+          "points_required",
+          "stock"
         ],
         "properties": {
           "name": {
@@ -9834,19 +10072,54 @@
           "description": {
             "type": "string"
           },
-          "points_cost": {
+          "points_required": {
             "type": "integer",
             "minimum": 0
           },
           "stock": {
             "type": "integer",
-            "minimum": 0
+            "minimum": -1
           },
           "category": {
             "type": "string"
           },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "default": "active"
+          },
+          "sort_order": {
+            "type": "integer",
+            "default": 0
+          },
+          "image_path": {
+            "type": "string"
+          },
           "image_url": {
             "type": "string"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductTagInput"
+            }
           }
         }
       },
@@ -9859,22 +10132,101 @@
           "description": {
             "type": "string"
           },
-          "points_cost": {
+          "points_required": {
             "type": "integer",
             "minimum": 0
           },
           "stock": {
             "type": "integer",
-            "minimum": 0
+            "minimum": -1
           },
           "category": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "image_path": {
             "type": "string"
           },
           "image_url": {
             "type": "string"
           },
-          "is_active": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_path": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductTagInput"
+            }
+          }
+        }
+      },
+      "ProductTag": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "ProductTagInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "ProductTagListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
             "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProductTag"
+                }
+              }
+            }
           }
         }
       },
@@ -11307,6 +11659,13 @@
               "high",
               "urgent"
             ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "all",
+              "custom"
+            ]
           }
         },
         "required": [
@@ -11314,6 +11673,127 @@
           "sent_count",
           "total_targets"
         ]
+      },
+      "BroadcastUserEntry": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": ["integer", "null"]
+          },
+          "username": {
+            "type": ["string", "null"]
+          },
+          "message_id": {
+            "type": ["integer", "null"]
+          },
+          "read": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BroadcastHistoryItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "actor_user_id": {
+            "type": ["integer", "null"]
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "all",
+              "custom"
+            ]
+          },
+          "target_count": {
+            "type": "integer"
+          },
+          "sent_count": {
+            "type": "integer"
+          },
+          "read_count": {
+            "type": "integer"
+          },
+          "unread_count": {
+            "type": "integer"
+          },
+          "invalid_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "failed_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "read_users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BroadcastUserEntry"
+            }
+          },
+          "unread_users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BroadcastUserEntry"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BroadcastHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BroadcastHistoryItem"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "pages": {
+                "type": "integer"
+              }
+            }
+          }
+        }
       }
     },
     "/messages": {

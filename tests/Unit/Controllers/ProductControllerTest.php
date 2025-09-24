@@ -43,8 +43,14 @@ class ProductControllerTest extends TestCase
             ]
         ]);
 
-        // prepare returns count then list
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $tagStmt = $this->createMock(\PDOStatement::class);
+        $tagStmt->method('execute')->willReturn(true);
+        $tagStmt->method('fetchAll')->willReturn([
+            ['product_id' => 1, 'id' => 7, 'name' => 'Popular', 'slug' => 'popular']
+        ]);
+
+        // prepare returns count then list then tags
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt, $tagStmt);
 
         $controller = new ProductController($pdo, $messageService, $audit, $auth);
 
@@ -59,6 +65,7 @@ class ProductControllerTest extends TestCase
         $this->assertEquals('Eco Bottle', $json['data']['products'][0]['name']);
         $this->assertEquals(['/a.png'], $json['data']['products'][0]['images']);
         $this->assertTrue($json['data']['products'][0]['is_available']);
+        $this->assertEquals('Popular', $json['data']['products'][0]['tags'][0]['name']);
     }
 
     public function testGetProductDetail(): void
@@ -73,7 +80,13 @@ class ProductControllerTest extends TestCase
         $stmt->method('fetch')->willReturn([
             'id'=>1,'name'=>'Eco Bottle','images'=>json_encode(['/a.png']),'stock'=>5,'points_required'=>100
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $tagStmt = $this->createMock(\PDOStatement::class);
+        $tagStmt->method('execute')->willReturn(true);
+        $tagStmt->method('fetchAll')->willReturn([
+            ['product_id' => 1, 'id' => 3, 'name' => 'Eco', 'slug' => 'eco']
+        ]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmt, $tagStmt);
 
         $controller = new ProductController($pdo, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products/1');
@@ -83,6 +96,35 @@ class ProductControllerTest extends TestCase
         $data = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($data['success']);
         $this->assertEquals('Eco Bottle', $data['data']['name']);
+        $this->assertEquals('Eco', $data['data']['tags'][0]['name']);
+    }
+
+    public function testSearchProductTags(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('bindValue')->willReturn(true);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetchAll')->willReturn([
+            ['id' => 1, 'name' => 'Eco', 'slug' => 'eco'],
+            ['id' => 2, 'name' => 'Campus', 'slug' => 'campus'],
+        ]);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/products/tags', null, ['search' => 'eco']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->searchProductTags($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertCount(2, $json['data']['tags']);
+        $this->assertEquals('eco', $json['data']['tags'][0]['slug']);
     }
 
     public function testExchangeProductInsufficientStock(): void

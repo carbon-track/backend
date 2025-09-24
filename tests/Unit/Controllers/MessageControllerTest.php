@@ -345,6 +345,10 @@ class MessageControllerTest extends TestCase
                 'messages',
                 null,
                 $this->callback(function (array $payload): bool {
+                    $this->assertSame('Announcement', $payload['title']);
+                    $this->assertSame('Broadcast body', $payload['content']);
+                    $this->assertSame('high', $payload['priority']);
+                    $this->assertSame('custom', $payload['scope']);
                     $this->assertSame(2, $payload['sent_count']);
                     $this->assertSame(2, $payload['target_count']);
                     $this->assertSame([2], $payload['invalid_user_ids']);
@@ -368,9 +372,78 @@ class MessageControllerTest extends TestCase
         $this->assertSame(2, $json['sent_count']);
         $this->assertSame(2, $json['total_targets']);
         $this->assertSame([2], $json['invalid_user_ids']);
+        $this->assertSame('custom', $json['scope']);
         $this->assertSame('high', $json['priority']);
     }
 
+    public function testGetBroadcastHistoryReturnsAggregatedData(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 99, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->method('execute')->willReturn(true);
+        $countStmt->method('fetchColumn')->willReturn(1);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->method('bindValue')->willReturn(true);
+        $listStmt->method('execute')->willReturn(true);
+        $listStmt->method('fetchAll')->willReturn([
+            [
+                'id' => 501,
+                'user_id' => 42,
+                'data' => json_encode([
+                    'title' => 'Hello world',
+                    'content' => 'Broadcast content',
+                    'priority' => 'high',
+                    'scope' => 'custom',
+                    'target_count' => 2,
+                    'sent_count' => 2,
+                    'invalid_user_ids' => json_encode([7]),
+                    'failed_user_ids' => json_encode([]),
+                ], JSON_UNESCAPED_UNICODE),
+                'created_at' => '2025-09-22 10:00:00',
+            ]
+        ]);
+
+        $actorStmt = $this->createMock(\PDOStatement::class);
+        $actorStmt->method('bindValue')->willReturn(true);
+        $actorStmt->method('execute')->willReturn(true);
+        $actorStmt->method('fetchAll')->willReturn([
+            ['id' => 42, 'username' => 'AdminUser', 'email' => 'admin@example.com']
+        ]);
+
+        $recipientsStmt = $this->createMock(\PDOStatement::class);
+        $recipientsStmt->method('bindValue')->willReturn(true);
+        $recipientsStmt->method('execute')->willReturn(true);
+        $recipientsStmt->method('fetchAll')->willReturn([
+            ['id' => 900, 'receiver_id' => 1, 'is_read' => 1, 'username' => 'Alice'],
+            ['id' => 901, 'receiver_id' => 2, 'is_read' => 0, 'username' => 'Bob'],
+        ]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt, $actorStmt, $recipientsStmt);
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('GET', '/admin/messages/broadcasts');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getBroadcastHistory($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertCount(1, $json['data']);
+        $item = $json['data'][0];
+        $this->assertSame('Hello world', $item['title']);
+        $this->assertSame(1, $item['read_count']);
+        $this->assertSame(1, $item['unread_count']);
+        $this->assertSame([7], $item['invalid_user_ids']);
+        $this->assertSame('AdminUser', $item['actor_username']);
+    }
 }
+
 
 
