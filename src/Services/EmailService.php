@@ -11,6 +11,8 @@ class EmailService
     protected $config;
     protected $logger;
     protected bool $forceSimulation = false;
+    private string $fromAddress = 'noreply@example.com';
+    private string $fromName = 'CarbonTrack';
 
     private const TAG_ACTIVITY_NAME = '{{activity_name}}';
     private const TAG_POINTS_EARNED = '{{points_earned}}';
@@ -95,7 +97,10 @@ class EmailService
 
             $fromAddress = $this->config['from_address'] ?? ($this->config['from_email'] ?? 'noreply@example.com');
             $fromName = $this->config['from_name'] ?? 'CarbonTrack';
-            $this->mailer->setFrom($fromAddress, $fromName);
+            $this->fromAddress = $fromAddress ?: 'noreply@example.com';
+            $this->fromName = $fromName ?: 'CarbonTrack';
+
+            $this->mailer->setFrom($this->fromAddress, $this->fromName);
             $this->mailer->isHTML(true);
             $this->mailer->CharSet = 'UTF-8';
         } catch (\Throwable $e) {
@@ -114,6 +119,9 @@ class EmailService
                 if (method_exists($mailer, 'clearAttachments')) {
                     $mailer->clearAttachments();
                 }
+                if (method_exists($mailer, 'clearBCCs')) {
+                    $mailer->clearBCCs();
+                }
                 $mailer->addAddress($toEmail, $toName);
 
                 $mailer->Subject = $subject;
@@ -130,6 +138,73 @@ class EmailService
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Message could not be sent.', ['to' => $toEmail, 'subject' => $subject, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * Send a broadcast email using BCC to protect recipient privacy
+     * @param array<int, array{email:string, name: string|null}> $recipients
+     */
+    public function sendBroadcastEmail(array $recipients, string $subject, string $bodyHtml, string $bodyText = ""): bool
+    {
+        $cleaned = [];
+        foreach ($recipients as $recipient) {
+            $email = trim((string)($recipient['email'] ?? ''));
+            if ($email === '') {
+                continue;
+            }
+            $name = $recipient['name'] ?? null;
+            $cleaned[] = ['email' => $email, 'name' => $name];
+        }
+
+        if (empty($cleaned)) {
+            return false;
+        }
+
+        try {
+            $mailer = $this->mailer;
+
+            if (!$this->forceSimulation && $mailer instanceof PHPMailer) {
+                if (method_exists($mailer, 'clearAddresses')) {
+                    $mailer->clearAddresses();
+                }
+                if (method_exists($mailer, 'clearBCCs')) {
+                    $mailer->clearBCCs();
+                }
+                if (method_exists($mailer, 'clearAttachments')) {
+                    $mailer->clearAttachments();
+                }
+
+                $mailer->addAddress($this->fromAddress, $this->fromName);
+                foreach ($cleaned as $recipient) {
+                    $mailer->addBCC($recipient['email'], (string)($recipient['name'] ?? ''));
+                }
+
+                $mailer->Subject = $subject;
+                $mailer->Body = $bodyHtml;
+                $mailer->AltBody = $bodyText ?: strip_tags($bodyHtml);
+
+                $mailer->send();
+                $this->logger->info('Broadcast email sent successfully', [
+                    'recipient_count' => count($cleaned),
+                    'subject' => $subject
+                ]);
+                return true;
+            }
+
+            $reason = $this->forceSimulation ? 'force_simulation' : 'mailer_unavailable';
+            $this->logger->info('Simulated broadcast email send', [
+                'recipient_count' => count($cleaned),
+                'subject' => $subject,
+                'reason' => $reason
+            ]);
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->error('Broadcast email could not be sent.', [
+                'subject' => $subject,
+                'error' => $e->getMessage()
+            ]);
             return false;
         }
     }

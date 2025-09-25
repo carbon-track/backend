@@ -418,6 +418,7 @@ CREATE TABLE `point_exchanges` (
 CREATE TABLE `products` (
   `name` text NOT NULL,
   `category` varchar(100) DEFAULT NULL,
+  `category_slug` varchar(160) DEFAULT NULL,
   `id` int(11) NOT NULL,
   `points_required` int(10) NOT NULL,
   `description` text NOT NULL,
@@ -462,6 +463,24 @@ CREATE TABLE `product_tag_map` (
   UNIQUE KEY `uniq_product_tag` (`product_id`,`tag_id`),
   KEY `idx_product_tag_tag_id` (`tag_id`),
   KEY `idx_product_tag_product_id` (`product_id`)
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `product_categories`
+--
+
+CREATE TABLE `product_categories` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(120) NOT NULL,
+  `slug` varchar(160) NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `idx_product_categories_slug` (`slug`),
+  KEY `idx_product_categories_name` (`name`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -864,6 +883,18 @@ ALTER TABLE `points_transactions`
 -- 使用表AUTO_INCREMENT `products`
 --
 ALTER TABLE `products`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `product_tags`
+--
+ALTER TABLE `product_tags`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `product_categories`
+--
+ALTER TABLE `product_categories`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --

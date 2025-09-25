@@ -399,6 +399,108 @@ class UserController
     }
 
     /**
+     * Normalize stored image metadata into a consistent shape and attach presigned URLs when possible.
+     *
+     * @param mixed $raw
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalizeImages($raw): array
+    {
+        if (empty($raw)) {
+            return [];
+        }
+
+        if (is_string($raw)) {
+            $raw = [$raw];
+        }
+
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($raw as $item) {
+            $normalizedItem = $this->normalizeImageItem($item);
+            if ($normalizedItem !== null) {
+                $normalized[] = $normalizedItem;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Normalize a single image entry and populate URLs.
+     *
+     * @param mixed $item
+     */
+    private function normalizeImageItem($item): ?array
+    {
+        if (is_string($item)) {
+            $item = ['url' => $item];
+        } elseif (!is_array($item)) {
+            return null;
+        }
+
+        $url = $item['url'] ?? $item['public_url'] ?? null;
+        $filePath = $item['file_path'] ?? null;
+
+        if (!$filePath && isset($item['public_url']) && $this->r2Service) {
+            try {
+                $filePath = $this->r2Service->resolveKeyFromUrl((string) $item['public_url']);
+            } catch (\Throwable $ignore) {
+                $filePath = null;
+            }
+        }
+
+        if (!$filePath && $url && $this->r2Service) {
+            try {
+                $filePath = $this->r2Service->resolveKeyFromUrl((string) $url);
+            } catch (\Throwable $ignore) {
+                $filePath = null;
+            }
+        }
+
+        if (is_string($filePath) && $filePath !== '') {
+            $filePath = ltrim($filePath, '/');
+        } else {
+            $filePath = null;
+        }
+
+        if (!$url && $filePath && $this->r2Service) {
+            try {
+                $url = $this->r2Service->getPublicUrl($filePath);
+            } catch (\Throwable $ignore) {
+                $url = null;
+            }
+        }
+
+        $meta = [
+            'url' => $url,
+            'file_path' => $filePath,
+            'original_name' => $item['original_name'] ?? null,
+            'mime_type' => $item['mime_type'] ?? null,
+            'size' => $item['file_size'] ?? ($item['size'] ?? null),
+            'presigned_url' => $item['presigned_url'] ?? null,
+        ];
+
+        if (isset($item['thumbnail_path'])) {
+            $meta['thumbnail_path'] = $item['thumbnail_path'];
+        }
+
+        if ($filePath && $this->r2Service) {
+            try {
+                $meta['presigned_url'] = $this->r2Service->generatePresignedUrl($filePath, 600);
+            } catch (\Throwable $ignore) {
+                // ignore failure
+            }
+        }
+
+        return $meta;
+    }
+
+    /**
      * 获取用户积分历史
      */
     public function getPointsHistory(Request $request, Response $response): Response
@@ -555,12 +657,62 @@ class UserController
                 'approved_activities' => 0,
                 'pending_activities' => 0,
                 'rejected_activities' => 0,
-                'total_carbon_saved' => 0,
-                'total_points_earned' => $pointsRow['total_earned'] ?? 0,
+                'total_carbon_saved' => 0.0,
+                'total_points_earned' => (float)($pointsRow['total_earned'] ?? 0),
             ];
+            try {
+                $recordStmt = $this->db->prepare("SELECT 
+                        COUNT(*) AS total_activities,
+                        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
+                        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
+                        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities,
+                        COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
+                        COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
+                    FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
+                $recordStmt->execute(['uid' => $user['id']]);
+                $recordRow = $recordStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $recStats = [
+                    'total_activities' => (int)($recordRow['total_activities'] ?? 0),
+                    'approved_activities' => (int)($recordRow['approved_activities'] ?? 0),
+                    'pending_activities' => (int)($recordRow['pending_activities'] ?? 0),
+                    'rejected_activities' => (int)($recordRow['rejected_activities'] ?? 0),
+                    'total_carbon_saved' => (float)($recordRow['total_carbon_saved'] ?? 0),
+                    'total_points_earned' => (float)($recordRow['total_points_earned'] ?? ($pointsRow['total_earned'] ?? 0)),
+                ];
+            } catch (\Throwable $e) {
+                // 部分测试或迁移环境可能缺少 carbon_saved / points_earned 列，此时仅统计数量以保证接口可用
+                try {
+                    $basicStmt = $this->db->prepare("SELECT 
+                            COUNT(*) AS total_activities,
+                            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
+                            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
+                            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities
+                        FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
+                    $basicStmt->execute(['uid' => $user['id']]);
+                    $basicRow = $basicStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                    $recStats['total_activities'] = (int)($basicRow['total_activities'] ?? 0);
+                    $recStats['approved_activities'] = (int)($basicRow['approved_activities'] ?? 0);
+                    $recStats['pending_activities'] = (int)($basicRow['pending_activities'] ?? 0);
+                    $recStats['rejected_activities'] = (int)($basicRow['rejected_activities'] ?? 0);
+                    $recStats['total_carbon_saved'] = 0.0;
+                    $recStats['total_points_earned'] = (float)($pointsRow['total_earned'] ?? 0);
+                } catch (\Throwable $ignore) {
+                    $recStats['total_points_earned'] = (float)($pointsRow['total_earned'] ?? 0);
+                }
+            }
 
             // 排名（按用户积分 points 降序）；这里避免额外 prepare 调用，直接置为 null 以兼容单元测试
             $rankRow = ['rank' => null];
+            try {
+                $rankStmt = $this->db->prepare("SELECT COUNT(*) + 1 AS rank FROM users WHERE deleted_at IS NULL AND points > :points");
+                $rankStmt->execute(['points' => (float)($userRow['points'] ?? 0)]);
+                $fetchedRank = $rankStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+                if (is_array($fetchedRank) && array_key_exists('rank', $fetchedRank)) {
+                    $rankRow['rank'] = (int)$fetchedRank['rank'];
+                }
+            } catch (\Throwable $ignore) {
+                // ignore rank calculation failures to avoid breaking dashboard
+            }
 
             $totalUsers = 0;
             $totalUsersStmt = $this->db->query("SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL");
@@ -607,7 +759,7 @@ class UserController
                 'approved_activities' => (int)($recStats['approved_activities'] ?? 0),
                 'pending_activities' => (int)($recStats['pending_activities'] ?? 0),
                 'rejected_activities' => (int)($recStats['rejected_activities'] ?? 0),
-                'total_earned' => (float)($recStats['total_points_earned'] ?? 0),
+                'total_earned' => (float)($pointsRow['total_earned'] ?? ($recStats['total_points_earned'] ?? 0)),
                 'rank' => isset($rankRow['rank']) ? (int)$rankRow['rank'] : null,
                 'total_users' => (int)$totalUsers,
                 // 趋势（占位，后续可计算）
@@ -715,14 +867,17 @@ class UserController
             $stmt = $this->db->prepare("
                 SELECT 
                     r.id,
+                    r.activity_id,
                     a.name_zh as activity_name_zh,
                     a.name_en as activity_name_en,
+                    a.category,
                     r.unit,
                     r.amount as data,
                     r.carbon_saved,
                     r.points_earned,
                     r.status,
-                    r.created_at
+                    r.created_at,
+                    r.images
                 FROM carbon_records r
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
                 WHERE r.user_id = :user_id AND r.deleted_at IS NULL
@@ -733,6 +888,16 @@ class UserController
             $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
             $stmt->execute();
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($rows as &$row) {
+                $rawImages = [];
+                if (!empty($row['images'])) {
+                    $decoded = json_decode((string) $row['images'], true);
+                    $rawImages = is_array($decoded) ? $decoded : [];
+                }
+                $row['images'] = $this->normalizeImages($rawImages);
+            }
+            unset($row);
 
             return $this->jsonResponse($response, [
                 'success' => true,

@@ -225,6 +225,7 @@ return function (App $app) {
             $admin->put('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'updateExchangeStatus']);
             // 站内信广播
             $admin->post('/messages/broadcast', [MessageController::class, 'sendSystemMessage']);
+            $admin->get('/messages/broadcast/recipients', [MessageController::class, 'searchBroadcastRecipients']);
             $admin->get('/messages/broadcasts', [MessageController::class, 'getBroadcastHistory']);
             $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
             $admin->get(PATH_PRODUCTS . '/tags', [ProductController::class, 'searchProductTags']);

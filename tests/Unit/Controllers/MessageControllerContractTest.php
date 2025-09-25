@@ -20,6 +20,7 @@ class MessageControllerContractTest extends TestCase
         $this->assertTrue(method_exists(MessageController::class, 'deleteMessages'));
         $this->assertTrue(method_exists(MessageController::class, 'getMessageStats'));
         $this->assertTrue(method_exists(MessageController::class, 'getBroadcastHistory'));
+        $this->assertTrue(method_exists(MessageController::class, 'searchBroadcastRecipients'));
     }
 }
 

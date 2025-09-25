@@ -1954,7 +1954,21 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of recent activities to return (1-50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            }
+          }
+        ]
       }
     },
     "/avatars": {
@@ -7193,8 +7207,8 @@
           "Admin",
           "Message"
         ],
-        "summary": "广播系统消息",
-        "description": "向所有用户或指定用户ID列表发送系统公告。target_users 为空数组或缺失表示全部用户。",
+        "summary": "广播系统消息（带邮件通知）",
+        "description": "向所有或筛选后的用户发送系统公告。支持SMTP高优先级邮件抄送。",
         "security": [
           {
             "bearerAuth": []
@@ -7244,7 +7258,8 @@
               }
             }
           }
-        }
+        },
+        "parameters": []
       }
     },
     "/admin/messages/broadcasts": {
@@ -8967,6 +8982,116 @@
           }
         }
       }
+    },
+    "/admin/messages/broadcast/recipients": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Message"
+        ],
+        "summary": "搜索广播收件人",
+        "description": "提供按关键字、学校、邮箱后缀等条件筛选广播目标用户的接口。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "逗号分隔的搜索字段"
+          },
+          {
+            "name": "school",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "school_id",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "email_suffix",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "is_admin",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "查询成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/BroadcastRecipientSearchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9530,22 +9655,181 @@
       },
       "UserStatsResponse": {
         "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
         "properties": {
-          "total_carbon_saved": {
-            "type": "number",
-            "description": "总碳减排量"
+          "success": {
+            "type": "boolean",
+            "description": "请求是否成功"
           },
-          "total_points_awarded": {
-            "type": "integer",
-            "description": "总奖励积分"
-          },
-          "activity_count": {
-            "type": "integer",
-            "description": "参与活动总数"
-          },
-          "transaction_count": {
-            "type": "integer",
-            "description": "碳记录总数"
+          "data": {
+            "type": "object",
+            "required": [
+              "current_points",
+              "total_points",
+              "total_carbon_saved",
+              "total_activities",
+              "total_earned"
+            ],
+            "properties": {
+              "current_points": {
+                "type": "integer",
+                "description": "当前账户积分"
+              },
+              "total_points": {
+                "type": "number",
+                "description": "当前账户积分（浮点表示）"
+              },
+              "total_carbon_saved": {
+                "type": "number",
+                "description": "累计减排量（kg CO2e）"
+              },
+              "total_activities": {
+                "type": "integer",
+                "description": "累计提交的活动次数"
+              },
+              "approved_activities": {
+                "type": "integer",
+                "description": "已审批通过的活动次数",
+                "nullable": true
+              },
+              "pending_activities": {
+                "type": "integer",
+                "description": "待审核的活动次数",
+                "nullable": true
+              },
+              "rejected_activities": {
+                "type": "integer",
+                "description": "已驳回的活动次数",
+                "nullable": true
+              },
+              "total_earned": {
+                "type": "number",
+                "description": "累计获得的积分总和"
+              },
+              "rank": {
+                "type": "integer",
+                "description": "积分排行榜中的当前名次，若无法计算则为 null",
+                "nullable": true
+              },
+              "total_users": {
+                "type": "integer",
+                "description": "系统中参与排行的总用户数",
+                "nullable": true
+              },
+              "points_change": {
+                "type": "number",
+                "description": "积分环比变化（百分比）",
+                "nullable": true
+              },
+              "carbon_change": {
+                "type": "number",
+                "description": "减排量环比变化（百分比）",
+                "nullable": true
+              },
+              "activities_change": {
+                "type": "number",
+                "description": "活动次数环比变化（百分比）",
+                "nullable": true
+              },
+              "rank_change": {
+                "type": "number",
+                "description": "排名变化（正数表示下降）",
+                "nullable": true
+              },
+              "unread_messages": {
+                "type": "integer",
+                "description": "未读消息数量",
+                "nullable": true
+              },
+              "pending_reviews": {
+                "type": "integer",
+                "description": "待审核记录数量（占位字段）",
+                "nullable": true
+              },
+              "available_products": {
+                "type": "integer",
+                "description": "可兑换商品数量（占位字段）",
+                "nullable": true
+              },
+              "new_achievements": {
+                "type": "integer",
+                "description": "新增成就数量（占位字段）",
+                "nullable": true
+              },
+              "monthly_achievements": {
+                "type": "array",
+                "description": "按月份统计的积分与减排成就",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string",
+                      "description": "月份标识，格式 YYYY-MM"
+                    },
+                    "label": {
+                      "type": "string",
+                      "description": "根据语言环境格式化后的月份名称",
+                      "nullable": true
+                    },
+                    "points": {
+                      "type": "number",
+                      "description": "当月获取的积分"
+                    },
+                    "carbon": {
+                      "type": "number",
+                      "description": "当月减排量"
+                    },
+                    "records": {
+                      "type": "integer",
+                      "description": "当月记录数量"
+                    }
+                  }
+                }
+              },
+              "leaderboard": {
+                "type": "array",
+                "description": "积分排行榜前几名",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "username": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "total_points": {
+                      "type": "number",
+                      "description": "排行榜用户的累计积分"
+                    },
+                    "avatar_id": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "avatar_path": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "avatar_url": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "头像访问 URL（若可用）"
+                    }
+                  }
+                }
+              },
+              "member_since": {
+                "type": "string",
+                "format": "date-time",
+                "description": "用户注册时间",
+                "nullable": true
+              }
+            }
           }
         }
       },
@@ -9594,41 +9878,86 @@
       },
       "RecentActivitiesResponse": {
         "type": "object",
+        "description": "Recent activities summary used on the dashboard.",
         "properties": {
-          "activities": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
                 "id": {
-                  "type": "string",
-                  "description": "活动ID"
+                  "type": "integer",
+                  "description": "Activity record ID"
                 },
-                "type": {
-                  "type": "string",
-                  "description": "活动类型"
+                "activity_id": {
+                  "type": "integer",
+                  "nullable": true
                 },
-                "description": {
+                "activity_name_zh": {
                   "type": "string",
-                  "description": "活动描述"
+                  "nullable": true
+                },
+                "activity_name_en": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "category": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "unit": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "data": {
+                  "type": "number",
+                  "description": "Submitted activity amount"
                 },
                 "carbon_saved": {
                   "type": "number",
-                  "description": "碳减排量"
+                  "nullable": true
                 },
-                "points_awarded": {
-                  "type": "integer",
-                  "description": "奖励积分"
+                "points_earned": {
+                  "type": "number",
+                  "nullable": true
                 },
-                "date": {
+                "status": {
                   "type": "string",
-                  "format": "date-time",
-                  "description": "活动日期"
+                  "enum": [
+                    "pending",
+                    "approved",
+                    "rejected"
+                  ]
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "images": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecentActivityImage"
+                  }
                 }
-              }
+              },
+              "required": [
+                "id",
+                "data",
+                "status",
+                "created_at",
+                "images"
+              ]
             }
           }
-        }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
       },
       "AdminCarbonRecordsResponse": {
         "type": "object",
@@ -11621,6 +11950,13 @@
               "minimum": 1
             },
             "description": "Optional user id whitelist; omit to broadcast to all users"
+          },
+          "target_filters": {
+            "type": "array",
+            "description": "Advanced recipient filter groups. Each entry is merged with explicit target_users.",
+            "items": {
+              "": "#/components/schemas/BroadcastRecipientFilter"
+            }
           }
         }
       },
@@ -11666,25 +12002,39 @@
               "all",
               "custom"
             ]
+          },
+          "email_delivery": {
+            "": "#/components/schemas/BroadcastEmailDelivery",
+            "description": "高优先级广播的邮件发送统计信息。"
           }
         },
         "required": [
           "success",
           "sent_count",
           "total_targets"
-        ]
+        ],
+        "description": "广播发送结果。包含站内信与邮件发送状态。"
       },
       "BroadcastUserEntry": {
         "type": "object",
         "properties": {
           "user_id": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "username": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "message_id": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "read": {
             "type": "boolean"
@@ -11698,7 +12048,10 @@
             "type": "integer"
           },
           "actor_user_id": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "title": {
             "type": "string"
@@ -11761,8 +12114,20 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "actor_username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "执行广播的管理员用户名。"
+          },
+          "email_delivery": {
+            "": "#/components/schemas/BroadcastEmailDelivery",
+            "description": "邮件投递统计信息。"
           }
-        }
+        },
+        "description": "历史广播记录条目。包含收件统计与邮件投递信息。"
       },
       "BroadcastHistoryResponse": {
         "type": "object",
@@ -11790,6 +12155,232 @@
               },
               "pages": {
                 "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "RecentActivityImage": {
+        "type": "object",
+        "description": "Proof image metadata including optional presigned download URL.",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "file_path": {
+            "type": "string",
+            "nullable": true
+          },
+          "original_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "mime_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "size": {
+            "type": "integer",
+            "nullable": true
+          },
+          "presigned_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "thumbnail_path": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "BroadcastRecipientFilter": {
+        "type": "object",
+        "description": "Advanced filter options for selecting broadcast recipients.",
+        "properties": {
+          "search": {
+            "type": "string",
+            "description": "Free text search applied to selected fields."
+          },
+          "fields": {
+            "description": "Fields to search against (username, email, school, location, school_name).",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "school": {
+            "type": "string"
+          },
+          "school_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "email_suffix": {
+            "type": "string",
+            "description": "Email suffix to match (e.g. example.com)."
+          },
+          "email_domain": {
+            "type": "string",
+            "description": "Alias for email_suffix."
+          },
+          "status": {
+            "type": "string"
+          },
+          "is_admin": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer",
+                "enum": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "0",
+                  "1",
+                  "true",
+                  "false"
+                ]
+              }
+            ]
+          },
+          "exclude_ids": {
+            "type": "array",
+            "description": "User ids to exclude from the filter result.",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 500
+          }
+        }
+      },
+      "BroadcastEmailDelivery": {
+        "type": "object",
+        "properties": {
+          "triggered": {
+            "type": "boolean",
+            "description": "Whether SMTP sending was attempted."
+          },
+          "attempted_recipients": {
+            "type": "integer",
+            "description": "Total recipients with valid email addresses."
+          },
+          "successful_chunks": {
+            "type": "integer",
+            "description": "Number of BCC batches successfully sent."
+          },
+          "failed_chunks": {
+            "type": "integer",
+            "description": "Number of BCC batches that failed."
+          },
+          "failed_recipient_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "missing_email_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Recipients that could not be emailed due to missing email addresses."
+          }
+        }
+      },
+      "BroadcastRecipient": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_admin": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "BroadcastRecipientSearchResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "": "#/components/schemas/BroadcastRecipient"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "has_more": {
+                "type": "boolean"
               }
             }
           }

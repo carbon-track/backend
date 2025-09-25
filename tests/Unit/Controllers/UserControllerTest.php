@@ -173,6 +173,17 @@ class UserControllerTest extends TestCase
             'pending_count' => 0
         ]);
 
+        $stmtRecords = $this->createMock(\PDOStatement::class);
+        $stmtRecords->method('execute')->willReturn(true);
+        $stmtRecords->method('fetch')->willReturn([
+            'total_activities' => 5,
+            'approved_activities' => 4,
+            'pending_activities' => 1,
+            'rejected_activities' => 0,
+            'total_carbon_saved' => 42.3,
+            'total_points_earned' => 280
+        ]);
+
         $stmtMonthly = $this->createMock(\PDOStatement::class);
         $stmtMonthly->method('execute')->willReturn(true);
         $stmtMonthly->method('fetchAll')->willReturn([
@@ -185,12 +196,47 @@ class UserControllerTest extends TestCase
 
         $stmtUserInfo = $this->createMock(\PDOStatement::class);
         $stmtUserInfo->method('execute')->willReturn(true);
-        $stmtUserInfo->method('fetch')->willReturn(['points' => 200, 'created_at' => '2024-01-01']);
+        $stmtUserInfo->expects($this->once())->method('fetch')->willReturn(['points' => 200, 'created_at' => '2024-01-01']);
+
+        $stmtRank = $this->createMock(\PDOStatement::class);
+        $stmtRank->method('execute')->willReturn(true);
+        $stmtRank->method('fetch')->willReturn(['rank' => 7]);
+
+        $stmtShowColumns = $this->createMock(\PDOStatement::class);
+        $stmtShowColumns->method('fetch')->willReturn(false);
+
+        $stmtTotalUsers = $this->createMock(\PDOStatement::class);
+        $stmtTotalUsers->expects($this->once())->method('fetch')->willReturn(['total' => 200]);
+
+        $stmtLeaderboard = $this->createMock(\PDOStatement::class);
+        $stmtLeaderboard->method('fetchAll')->willReturn([
+            ['id' => 99, 'username' => 'alice', 'total_points' => 520, 'avatar_id' => null, 'avatar_path' => null],
+        ]);
 
         $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtPoints, $stmtMonthly, $stmtRecent, $stmtUserInfo);
+        $pdo->method('getAttribute')->willReturn('mysql');
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+            $stmtPoints,
+            $stmtMonthly,
+            $stmtRecent,
+            $stmtUserInfo,
+            $stmtRecords,
+            $stmtRank
+        );
+        $pdo->method('query')->willReturnCallback(function ($sql) use ($stmtShowColumns, $stmtTotalUsers, $stmtLeaderboard) {
+            if (stripos($sql, 'SHOW COLUMNS FROM points_transactions') !== false) {
+                return $stmtShowColumns;
+            }
+            if (stripos($sql, 'COUNT(*) AS total') !== false && stripos($sql, 'FROM users') !== false) {
+                return $stmtTotalUsers;
+            }
+            if (stripos($sql, 'ORDER BY u.points DESC') !== false) {
+                return $stmtLeaderboard;
+            }
+            return false;
+        });
 
-    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -198,8 +244,79 @@ class UserControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(200, $json['data']['current_points']);
+        $this->assertEquals(42.3, $json['data']['total_carbon_saved']);
+        $this->assertEquals(5, $json['data']['total_activities']);
         $this->assertEquals(300, $json['data']['total_earned']);
+        $this->assertEquals(7, $json['data']['rank']);
+        $this->assertEquals(200, $json['data']['total_users']);
         $this->assertEquals('2024-01-01', $json['data']['member_since']);
+        $this->assertCount(1, $json['data']['leaderboard']);
+    }
+
+
+    public function testGetRecentActivitiesReturnsPresignedImages(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 7]);
+
+        $statement = $this->getMockBuilder(\PDOStatement::class)
+            ->onlyMethods(['bindValue', 'execute', 'fetchAll'])
+            ->getMock();
+        $statement->method('bindValue')->willReturn(true);
+        $statement->expects($this->once())->method('execute')->willReturn(true);
+        $statement->expects($this->once())->method('fetchAll')->willReturn([
+            [
+                'id' => 42,
+                'activity_id' => 5,
+                'activity_name_zh' => '节能',
+                'activity_name_en' => 'Energy Saving',
+                'category' => 'energy',
+                'unit' => 'times',
+                'data' => 3.0,
+                'carbon_saved' => 1.23,
+                'points_earned' => 15,
+                'status' => 'approved',
+                'created_at' => '2025-09-24 12:00:00',
+                'images' => json_encode([[
+                    'file_path' => 'proofs/a.jpg',
+                    'original_name' => 'evidence.jpg',
+                ]]),
+            ],
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturn($statement);
+
+        $r2->method('resolveKeyFromUrl')->willReturnCallback(static function ($value) {
+            return trim((string)$value, '/');
+        });
+        $r2->method('generatePresignedUrl')->willReturn('https://cdn.example.com/proofs/a.jpg?token=abc');
+        $r2->method('getPublicUrl')->willReturn('https://cdn.example.com/proofs/a.jpg');
+
+        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $errorLog, $r2);
+
+        $request = makeRequest('GET', '/users/me/activities');
+        $response = new \Slim\Psr7\Response();
+        $result = $controller->getRecentActivities($request, $response);
+
+        $this->assertEquals(200, $result->getStatusCode());
+        $payload = json_decode((string) $result->getBody(), true);
+
+        $this->assertTrue($payload['success']);
+        $this->assertCount(1, $payload['data']);
+        $activity = $payload['data'][0];
+        $this->assertSame('approved', $activity['status']);
+        $this->assertArrayHasKey('images', $activity);
+        $this->assertCount(1, $activity['images']);
+        $this->assertSame('proofs/a.jpg', $activity['images'][0]['file_path']);
+        $this->assertNotEmpty($activity['images'][0]['presigned_url']);
     }
 
     public function testGetCurrentUserSuccess(): void

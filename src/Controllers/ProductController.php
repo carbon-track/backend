@@ -88,8 +88,27 @@ class ProductController
             }
 
             if (!empty($params['category'])) {
-                $where[] = 'p.category = :category';
-                $bindings['category'] = $params['category'];
+                $rawCategory = trim((string)$params['category']);
+                if ($rawCategory !== '') {
+                    $categorySlug = $this->normalizeSlug($rawCategory);
+                    $categoryNames = [];
+                    if ($categorySlug !== '') {
+                        $resolvedCategories = $this->fetchCategoriesBySlugs([$categorySlug]);
+                        if (isset($resolvedCategories[$categorySlug])) {
+                            $categoryNames[] = $resolvedCategories[$categorySlug]['name'];
+                        }
+                    }
+                    $categoryNames[] = $rawCategory;
+
+                    $where[] = '(
+                        p.category_slug = :filter_category_slug
+                        OR p.category = :filter_category_name
+                        OR p.category = :filter_category_raw
+                    )';
+                    $bindings['filter_category_slug'] = $categorySlug ?: $this->slugifyCategoryName($rawCategory);
+                    $bindings['filter_category_name'] = $categoryNames[0];
+                    $bindings['filter_category_raw'] = $rawCategory;
+                }
             }
 
             if (!empty($params['search'])) {
@@ -1315,6 +1334,51 @@ class ProductController
         return $result;
     }
 
+    private function fetchCategoriesBySlugs(array $slugs): array
+    {
+        $slugs = array_values(array_unique(array_filter($slugs, static fn($slug) => is_string($slug) && $slug !== '')));
+        if (empty($slugs)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($slugs), '?'));
+        $sql = 'SELECT id, name, slug FROM product_categories WHERE slug IN (' . $placeholders . ')';
+
+        try {
+            $stmt = $this->db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+
+            $stmt->execute($slugs);
+
+            $result = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                if (!isset($row['slug'])) {
+                    continue;
+                }
+                $slug = $row['slug'];
+                $result[$slug] = [
+                    'id' => isset($row['id']) ? (int)$row['id'] : null,
+                    'name' => $row['name'] ?? '',
+                    'slug' => $slug,
+                ];
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    private function slugifyCategoryName(string $name): string
+    {
+        $slug = $this->normalizeSlug($name);
+        if ($slug === '') {
+            $slug = 'category-' . substr(md5($name), 0, 8);
+        }
+        return $slug;
+    }
     private function createProductTag(string $name, string $slug): array
     {
         $name = trim($name) !== '' ? trim($name) : $slug;

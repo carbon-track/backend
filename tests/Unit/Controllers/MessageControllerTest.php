@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Models\Message;
+use CarbonTrack\Services\EmailService;
 
 class MessageControllerTest extends TestCase
 {
@@ -353,6 +354,8 @@ class MessageControllerTest extends TestCase
                     $this->assertSame(2, $payload['target_count']);
                     $this->assertSame([2], $payload['invalid_user_ids']);
                     $this->assertSame([], $payload['failed_user_ids']);
+                    $this->assertArrayHasKey('email_delivery', $payload);
+                    $this->assertFalse($payload['email_delivery']['triggered']);
                     return true;
                 })
             );
@@ -374,6 +377,99 @@ class MessageControllerTest extends TestCase
         $this->assertSame([2], $json['invalid_user_ids']);
         $this->assertSame('custom', $json['scope']);
         $this->assertSame('high', $json['priority']);
+        $this->assertArrayHasKey('email_delivery', $json);
+        $this->assertFalse($json['email_delivery']['triggered']);
+    }
+
+    public function testHighPriorityBroadcastTriggersEmailBcc(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $email = $this->createMock(EmailService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 7, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetchAll')->willReturn([
+            ['id' => 5, 'email' => 'user@example.com', 'username' => 'User One', 'school' => null, 'school_id' => null, 'location' => null, 'is_admin' => 0, 'status' => 'active']
+        ]);
+
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $svc->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with(5, 'Alert', 'System high priority', Message::TYPE_SYSTEM, 'urgent')
+            ->willReturn($this->createMock(Message::class));
+
+        $email->expects($this->once())
+            ->method('sendBroadcastEmail')
+            ->with(
+                $this->callback(function (array $bcc): bool {
+                    $this->assertCount(1, $bcc);
+                    $this->assertSame('user@example.com', $bcc[0]['email']);
+                    return true;
+                }),
+                $this->stringContains('Alert'),
+                $this->stringContains('System high priority'),
+                $this->stringContains('System high priority')
+            )
+            ->willReturn(true);
+
+        $audit->expects($this->once())->method('log');
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth, $email);
+        $request = makeRequest('POST', '/admin/messages/broadcast', [
+            'title' => 'Alert',
+            'content' => 'System high priority',
+            'priority' => 'urgent',
+            'target_users' => [5]
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['email_delivery']['triggered']);
+        $this->assertSame(1, $json['email_delivery']['attempted_recipients']);
+        $this->assertSame(1, $json['email_delivery']['successful_chunks']);
+        $this->assertSame([], $json['email_delivery']['failed_recipient_ids']);
+    }
+
+    public function testSearchBroadcastRecipientsReturnsData(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('bindValue')->willReturn(true);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetchAll')->willReturn([
+            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => 'Green', 'school_id' => 1, 'location' => 'City', 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school' => 'Green', 'school_id' => 1, 'location' => 'City', 'is_admin' => 0, 'status' => 'active'],
+        ]);
+
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, ['search' => 'example', 'limit' => 1]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->searchBroadcastRecipients($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertCount(1, $json['data']);
+        $this->assertTrue($json['pagination']['has_more']);
+        $this->assertSame(1, $json['pagination']['page']);
     }
 
     public function testGetBroadcastHistoryReturnsAggregatedData(): void
@@ -405,6 +501,14 @@ class MessageControllerTest extends TestCase
                     'sent_count' => 2,
                     'invalid_user_ids' => json_encode([7]),
                     'failed_user_ids' => json_encode([]),
+                    'email_delivery' => [
+                        'triggered' => true,
+                        'attempted_recipients' => 2,
+                        'successful_chunks' => 1,
+                        'failed_chunks' => 0,
+                        'failed_recipient_ids' => [],
+                        'missing_email_user_ids' => [7],
+                    ],
                 ], JSON_UNESCAPED_UNICODE),
                 'created_at' => '2025-09-22 10:00:00',
             ]
@@ -442,6 +546,9 @@ class MessageControllerTest extends TestCase
         $this->assertSame(1, $item['unread_count']);
         $this->assertSame([7], $item['invalid_user_ids']);
         $this->assertSame('AdminUser', $item['actor_username']);
+        $this->assertTrue($item['email_delivery']['triggered']);
+        $this->assertSame(2, $item['email_delivery']['attempted_recipients']);
+        $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
     }
 }
 

@@ -8,6 +8,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\EmailService;
 use CarbonTrack\Models\Message;
 use PDO;
 
@@ -17,6 +18,7 @@ class MessageController
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
+    private ?EmailService $emailService;
     private ?ErrorLogService $errorLogService;
 
     public function __construct(
@@ -24,12 +26,14 @@ class MessageController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
-        ErrorLogService $errorLogService = null
+        ?EmailService $emailService = null,
+        ?ErrorLogService $errorLogService = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->emailService = $emailService;
         $this->errorLogService = $errorLogService;
     }
 
@@ -434,6 +438,9 @@ class MessageController
             }
 
             $targetUsersRaw = $data['target_users'] ?? null;
+            $filterGroupsRaw = $data['target_filters'] ?? null;
+
+            $targetUserRecords = [];
             $targetUserIds = [];
             $invalidTargetIds = [];
 
@@ -441,40 +448,38 @@ class MessageController
                 if (!is_array($targetUsersRaw)) {
                     return $this->json($response, ['error' => 'target_users must be an array of positive integers'], 400);
                 }
+                $resolved = $this->resolveExplicitRecipients($targetUsersRaw);
+                if ($resolved['error']) {
+                    return $this->json($response, ['error' => $resolved['error']], $resolved['status']);
+                }
+                $targetUserIds = $resolved['user_ids'];
+                $targetUserRecords = $resolved['records'];
+                $invalidTargetIds = $resolved['invalid_ids'];
+            }
 
-                $sanitizedIds = [];
-                foreach ($targetUsersRaw as $value) {
-                    if (is_int($value) || (is_numeric($value) && (string)(int)$value === (string)$value)) {
-                        $intVal = (int)$value;
-                        if ($intVal > 0) {
-                            $sanitizedIds[$intVal] = $intVal;
-                        }
+            if ($filterGroupsRaw !== null) {
+                if (!is_array($filterGroupsRaw)) {
+                    return $this->json($response, ['error' => 'target_filters must be an array'], 400);
+                }
+                $filterResult = $this->resolveFilteredRecipients($filterGroupsRaw);
+                $targetUserIds = array_values(array_unique(array_merge($targetUserIds, $filterResult['user_ids'])));
+                foreach ($filterResult['records'] as $id => $record) {
+                    if (!isset($targetUserRecords[$id])) {
+                        $targetUserRecords[$id] = $record;
                     }
-                }
-
-                if (empty($sanitizedIds)) {
-                    return $this->json($response, ['error' => 'target_users must contain at least one valid id'], 400);
-                }
-
-                $targetUserIds = array_values($sanitizedIds);
-                $placeholders = implode(',', array_fill(0, count($targetUserIds), '?'));
-                $stmt = $this->db->prepare('SELECT id FROM users WHERE deleted_at IS NULL AND id IN (' . $placeholders . ')');
-
-                $existingIds = [];
-                if ($stmt && $stmt->execute($targetUserIds)) {
-                    $existingIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
-                }
-
-                $invalidTargetIds = array_values(array_diff($targetUserIds, $existingIds));
-                $targetUserIds = $existingIds;
-            } else {
-                $stmt = $this->db->query('SELECT id FROM users WHERE deleted_at IS NULL');
-                if ($stmt) {
-                    $targetUserIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
                 }
             }
 
-            $scope = $targetUsersRaw !== null ? 'custom' : 'all';
+            $scope = 'all';
+            if ($targetUsersRaw !== null || $filterGroupsRaw !== null) {
+                $scope = 'custom';
+            }
+
+            if ($scope === 'all' && empty($targetUserIds)) {
+                $allResult = $this->resolveAllRecipients();
+                $targetUserIds = $allResult['user_ids'];
+                $targetUserRecords = $allResult['records'];
+            }
 
             if (empty($targetUserIds)) {
                 return $this->json($response, ['error' => 'No target users found for broadcast'], 404);
@@ -503,6 +508,62 @@ class MessageController
                 }
             }
 
+            $emailDelivery = [
+                'triggered' => false,
+                'attempted_recipients' => 0,
+                'successful_chunks' => 0,
+                'failed_chunks' => 0,
+                'failed_recipient_ids' => [],
+                'missing_email_user_ids' => [],
+            ];
+
+            if ($this->shouldSendPriorityEmail($priority) && $this->emailService) {
+                $emailDelivery['triggered'] = true;
+                $emailSubject = $this->buildBroadcastEmailSubject($title, $priority);
+                $emailBodyHtml = $this->renderBroadcastEmailHtml($title, $content);
+                $emailBodyText = $this->renderBroadcastEmailText($title, $content);
+
+                $recipientRows = [];
+                foreach ($targetUserIds as $recipientId) {
+                    $record = $targetUserRecords[$recipientId] ?? null;
+                    if ($record === null) {
+                        continue;
+                    }
+                    $email = trim((string)($record['email'] ?? ''));
+                    if ($email === '') {
+                        $emailDelivery['missing_email_user_ids'][] = $recipientId;
+                        continue;
+                    }
+                    $recipientRows[] = [
+                        'id' => $recipientId,
+                        'email' => $email,
+                        'name' => $record['username'] ?? $record['email'],
+                    ];
+                }
+
+                $emailDelivery['attempted_recipients'] = count($recipientRows);
+                if (!empty($recipientRows)) {
+                    $chunks = array_chunk($recipientRows, 40);
+                    foreach ($chunks as $chunk) {
+                        $bccList = [];
+                        foreach ($chunk as $entry) {
+                            $bccList[] = ['email' => $entry['email'], 'name' => $entry['name']];
+                        }
+
+                        $success = $this->emailService->sendBroadcastEmail($bccList, $emailSubject, $emailBodyHtml, $emailBodyText);
+                        if ($success) {
+                            $emailDelivery['successful_chunks']++;
+                        } else {
+                            $emailDelivery['failed_chunks']++;
+                            $emailDelivery['failed_recipient_ids'] = array_merge(
+                                $emailDelivery['failed_recipient_ids'],
+                                array_map(static fn(array $entry): int => (int)$entry['id'], $chunk)
+                            );
+                        }
+                    }
+                }
+            }
+
             $this->auditLog->log(
                 $user['id'],
                 'system_message_broadcast',
@@ -516,7 +577,8 @@ class MessageController
                     'target_count' => count($targetUserIds),
                     'sent_count' => $sentCount,
                     'invalid_user_ids' => $invalidTargetIds,
-                    'failed_user_ids' => $failedUserIds
+                    'failed_user_ids' => $failedUserIds,
+                    'email_delivery' => $emailDelivery,
                 ]
             );
 
@@ -528,7 +590,8 @@ class MessageController
                 'invalid_user_ids' => $invalidTargetIds,
                 'scope' => $scope,
                 'message' => 'System message sent successfully',
-                'priority' => $priority
+                'priority' => $priority,
+                'email_delivery' => $emailDelivery,
             ]);
         } catch (\Exception $e) {
             try {
@@ -688,6 +751,7 @@ class MessageController
                 $sentCount = (int)($meta['sent_count'] ?? 0);
                 $invalidIds = $this->decodeIdList($meta['invalid_user_ids'] ?? []);
                 $failedIds = $this->decodeIdList($meta['failed_user_ids'] ?? []);
+                $emailDelivery = $this->normalizeEmailDeliveryMeta($meta['email_delivery'] ?? []);
 
                 $startTime = (string)($logRow['created_at'] ?? date('Y-m-d H:i:s'));
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
@@ -726,6 +790,7 @@ class MessageController
                     'read_users' => $readUsers,
                     'unread_users' => $unreadUsers,
                     'created_at' => $startTime,
+                    'email_delivery' => $emailDelivery,
                 ];
             }
 
@@ -803,6 +868,441 @@ class MessageController
             return [];
         }
     }
+
+    /**
+     * 搜索广播收件人（管理员）
+     */
+    public function searchBroadcastRecipients(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => 'Admin access required'], 403);
+            }
+
+            $params = $request->getQueryParams();
+            $page = max(1, (int)($params['page'] ?? 1));
+            $limit = min(200, max(1, (int)($params['limit'] ?? 50)));
+            $offset = ($page - 1) * $limit;
+
+            $criteria = $params;
+            if (isset($params['ids'])) {
+                $criteria['include_ids'] = $this->sanitizeIdList(is_array($params['ids']) ? $params['ids'] : explode(',', (string)$params['ids']));
+            }
+            if (isset($params['exclude_ids'])) {
+                $criteria['exclude_ids'] = $this->sanitizeIdList(is_array($params['exclude_ids']) ? $params['exclude_ids'] : explode(',', (string)$params['exclude_ids']));
+            }
+
+            $rows = $this->performUserSearch($criteria, $limit + 1, $offset);
+            $hasMore = count($rows) > $limit;
+            if ($hasMore) {
+                $rows = array_slice($rows, 0, $limit);
+            }
+
+            $data = [];
+            foreach ($rows as $row) {
+                $normalized = $this->normalizeUserRow($row);
+                if ($normalized['id'] === null) {
+                    continue;
+                }
+                $data[] = $normalized;
+            }
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $data,
+                'pagination' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'has_more' => $hasMore,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            try {
+                if ($this->errorLogService) {
+                    $this->errorLogService->logException($e, $request);
+                }
+            } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function resolveExplicitRecipients(array $ids): array
+    {
+        $result = [
+            'error' => null,
+            'status' => 200,
+            'user_ids' => [],
+            'records' => [],
+            'invalid_ids' => [],
+        ];
+
+        $sanitized = [];
+        foreach ($ids as $value) {
+            if (is_int($value) || (is_numeric($value) && (string)(int)$value === (string)$value)) {
+                $intVal = (int)$value;
+                if ($intVal > 0) {
+                    $sanitized[$intVal] = $intVal;
+                }
+            }
+        }
+
+        if (empty($sanitized)) {
+            $result['error'] = 'target_users must contain at least one valid id';
+            $result['status'] = 400;
+            return $result;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($sanitized), '?'));
+        $sql = 'SELECT id, username, email, school, school_id, location, is_admin, status FROM users WHERE deleted_at IS NULL AND id IN (' . $placeholders . ')';
+
+        try {
+            $stmt = $this->db->prepare($sql);
+            if (!$stmt) {
+                $result['error'] = 'Failed to resolve target users';
+                $result['status'] = 500;
+                return $result;
+            }
+
+            $stmt->execute(array_values($sanitized));
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $collectedIds = [];
+            foreach ($rows as $row) {
+                if (is_array($row)) {
+                    $id = isset($row['id']) ? (int)$row['id'] : 0;
+                    if ($id <= 0) {
+                        continue;
+                    }
+                    $collectedIds[$id] = $id;
+                    $result['records'][$id] = $this->normalizeUserRow($row);
+                } elseif (is_scalar($row)) {
+                    $id = (int)$row;
+                    if ($id <= 0) {
+                        continue;
+                    }
+                    $collectedIds[$id] = $id;
+                    if (!isset($result['records'][$id])) {
+                        $result['records'][$id] = $this->normalizeUserRow(['id' => $id]);
+                    }
+                }
+            }
+
+            $result['user_ids'] = array_values($collectedIds);
+            $result['invalid_ids'] = array_values(array_diff($sanitized, $result['user_ids']));
+        } catch (\Throwable $e) {
+            $result['error'] = 'Failed to resolve target users';
+            $result['status'] = 500;
+        }
+
+        return $result;
+    }
+
+    private function resolveFilteredRecipients(array $filterGroups): array
+    {
+        $aggregated = [
+            'user_ids' => [],
+            'records' => [],
+        ];
+
+        foreach ($filterGroups as $filterGroup) {
+            if (!is_array($filterGroup)) {
+                continue;
+            }
+            $limit = (int)($filterGroup['limit'] ?? 250);
+            $limit = max(10, min(500, $limit));
+            $offset = max(0, (int)($filterGroup['offset'] ?? 0));
+
+            $searchResult = $this->performUserSearch($filterGroup, $limit, $offset);
+            foreach ($searchResult as $row) {
+                $id = isset($row['id']) ? (int)$row['id'] : 0;
+                if ($id <= 0) {
+                    continue;
+                }
+                $aggregated['user_ids'][$id] = $id;
+                $aggregated['records'][$id] = $this->normalizeUserRow($row);
+            }
+        }
+
+        $aggregated['user_ids'] = array_values($aggregated['user_ids']);
+
+        return $aggregated;
+    }
+
+    private function resolveAllRecipients(): array
+    {
+        $result = [
+            'user_ids' => [],
+            'records' => [],
+        ];
+
+        try {
+            $sql = 'SELECT id, username, email, school, school_id, location, is_admin, status FROM users WHERE deleted_at IS NULL';
+            $stmt = $this->db->query($sql);
+            if (!$stmt) {
+                return $result;
+            }
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            foreach ($rows as $row) {
+                $id = isset($row['id']) ? (int)$row['id'] : 0;
+                if ($id <= 0) {
+                    continue;
+                }
+                $result['user_ids'][] = $id;
+                $result['records'][$id] = $this->normalizeUserRow($row);
+            }
+        } catch (\Throwable $e) {
+            // Swallow exception and return what we have
+        }
+
+        return $result;
+    }
+
+    private function performUserSearch(array $criteria, int $limit, int $offset = 0): array
+    {
+        $where = ['u.deleted_at IS NULL'];
+        $params = [];
+
+        $search = trim((string)($criteria['search'] ?? $criteria['q'] ?? ''));
+        $fieldsRaw = $criteria['fields'] ?? null;
+        $fields = [];
+        if (is_string($fieldsRaw)) {
+            $fields = array_filter(array_map('trim', explode(',', $fieldsRaw)));
+        } elseif (is_array($fieldsRaw)) {
+            foreach ($fieldsRaw as $candidate) {
+                if (is_string($candidate) && $candidate !== '') {
+                    $fields[] = trim($candidate);
+                }
+            }
+        }
+        if (empty($fields)) {
+            $fields = ['username', 'email', 'school', 'location', 'school_name'];
+        }
+
+        $fieldMap = [
+            'username' => 'u.username',
+            'email' => 'u.email',
+            'school' => 'u.school',
+            'location' => 'u.location',
+            'school_name' => 's.name',
+            'status' => 'u.status',
+            'role' => 'u.role',
+        ];
+
+        if ($search !== '') {
+            $searchParts = [];
+            foreach ($fields as $field) {
+                if ($field === 'id') {
+                    $searchParts[] = 'CAST(u.id AS CHAR) LIKE :search';
+                    continue;
+                }
+                if (!isset($fieldMap[$field])) {
+                    continue;
+                }
+                $searchParts[] = $fieldMap[$field] . ' LIKE :search';
+            }
+            if (!empty($searchParts)) {
+                $where[] = '(' . implode(' OR ', $searchParts) . ')';
+                $params['search'] = '%' . $search . '%';
+            }
+        }
+
+        if (!empty($criteria['school_id'])) {
+            $where[] = 'u.school_id = :school_id';
+            $params['school_id'] = (int)$criteria['school_id'];
+        }
+
+        if (!empty($criteria['school'])) {
+            $where[] = 'u.school LIKE :school_exact';
+            $params['school_exact'] = '%' . trim((string)$criteria['school']) . '%';
+        }
+
+        if (!empty($criteria['email_suffix'])) {
+            $suffix = ltrim(trim((string)$criteria['email_suffix']), '@');
+            $where[] = 'u.email LIKE :email_suffix';
+            $params['email_suffix'] = '%@' . $suffix;
+        } elseif (!empty($criteria['email_domain'])) {
+            $suffix = ltrim(trim((string)$criteria['email_domain']), '@');
+            $where[] = 'u.email LIKE :email_suffix';
+            $params['email_suffix'] = '%@' . $suffix;
+        }
+
+        if (array_key_exists('status', $criteria) && $criteria['status'] !== null && $criteria['status'] !== '') {
+            $where[] = 'u.status = :status';
+            $params['status'] = trim((string)$criteria['status']);
+        }
+
+        if (array_key_exists('is_admin', $criteria)) {
+            $value = $criteria['is_admin'];
+            if ($value === '1' || $value === 1 || $value === true || $value === 'true') {
+                $where[] = 'u.is_admin = 1';
+            } elseif ($value === '0' || $value === 0 || $value === false || $value === 'false') {
+                $where[] = 'u.is_admin = 0';
+            }
+        }
+
+        if (!empty($criteria['include_ids']) && is_array($criteria['include_ids'])) {
+            $clean = $this->sanitizeIdList($criteria['include_ids']);
+            if (!empty($clean)) {
+                $placeholders = implode(',', array_fill(0, count($clean), '?'));
+                $where[] = 'u.id IN (' . $placeholders . ')';
+                foreach ($clean as $id) {
+                    $params[] = $id;
+                }
+            }
+        }
+
+        if (!empty($criteria['exclude_ids']) && is_array($criteria['exclude_ids'])) {
+            $clean = $this->sanitizeIdList($criteria['exclude_ids']);
+            if (!empty($clean)) {
+                $placeholders = implode(',', array_fill(0, count($clean), '?'));
+                $where[] = 'u.id NOT IN (' . $placeholders . ')';
+                foreach ($clean as $id) {
+                    $params[] = $id;
+                }
+            }
+        }
+
+        $conditions = implode(' AND ', $where);
+
+        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.is_admin, u.status, s.name AS school_name '
+            . 'FROM users u '
+            . 'LEFT JOIN schools s ON s.id = u.school_id '
+            . 'WHERE ' . $conditions . ' '
+            . 'ORDER BY u.id DESC '
+            . 'LIMIT :limit OFFSET :offset';
+
+        try {
+            $stmt = $this->db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+
+            $paramIndex = 1;
+            foreach ($params as $key => $value) {
+                if (is_int($key)) {
+                    $stmt->bindValue($paramIndex, $value, PDO::PARAM_INT);
+                    $paramIndex++;
+                }
+            }
+
+            foreach ($params as $key => $value) {
+                if (!is_int($key)) {
+                    $type = PDO::PARAM_STR;
+                    if (in_array($key, ['school_id'], true)) {
+                        $type = PDO::PARAM_INT;
+                        $value = (int)$value;
+                    }
+                    $stmt->bindValue(':' . $key, $value, $type);
+                }
+            }
+
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+            $stmt->execute();
+            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    private function sanitizeIdList(array $values): array
+    {
+        $clean = [];
+        foreach ($values as $value) {
+            if (is_int($value) || (is_numeric($value) && (string)(int)$value === (string)$value)) {
+                $intVal = (int)$value;
+                if ($intVal > 0) {
+                    $clean[$intVal] = $intVal;
+                }
+            }
+        }
+        return array_values($clean);
+    }
+
+    private function normalizeUserRow(array $row): array
+    {
+        return [
+            'id' => isset($row['id']) ? (int)$row['id'] : null,
+            'username' => $row['username'] ?? null,
+            'email' => $row['email'] ?? null,
+            'school' => $row['school'] ?? ($row['school_name'] ?? null),
+            'school_id' => isset($row['school_id']) ? (int)$row['school_id'] : null,
+            'location' => $row['location'] ?? null,
+            'is_admin' => isset($row['is_admin']) ? (bool)$row['is_admin'] : null,
+            'status' => $row['status'] ?? null,
+        ];
+    }
+
+    private function normalizeEmailDeliveryMeta($value): array
+    {
+        $defaults = [
+            'triggered' => false,
+            'attempted_recipients' => 0,
+            'successful_chunks' => 0,
+            'failed_chunks' => 0,
+            'failed_recipient_ids' => [],
+            'missing_email_user_ids' => [],
+        ];
+
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                $value = $decoded;
+            }
+        }
+
+        if (!is_array($value)) {
+            return $defaults;
+        }
+
+        $result = $defaults;
+        $result['triggered'] = (bool)($value['triggered'] ?? false);
+        $result['attempted_recipients'] = (int)($value['attempted_recipients'] ?? 0);
+        $result['successful_chunks'] = (int)($value['successful_chunks'] ?? 0);
+        $result['failed_chunks'] = (int)($value['failed_chunks'] ?? 0);
+        $result['failed_recipient_ids'] = $this->decodeIdList($value['failed_recipient_ids'] ?? []);
+        $result['missing_email_user_ids'] = $this->decodeIdList($value['missing_email_user_ids'] ?? []);
+
+        return $result;
+    }
+
+    private function shouldSendPriorityEmail(string $priority): bool
+    {
+        return in_array($priority, [Message::PRIORITY_HIGH, Message::PRIORITY_URGENT], true);
+    }
+
+    private function buildBroadcastEmailSubject(string $title, string $priority): string
+    {
+        $prefix = '';
+        if ($priority === Message::PRIORITY_URGENT) {
+            $prefix = '[URGENT] ';
+        } elseif ($priority === Message::PRIORITY_HIGH) {
+            $prefix = '[HIGH] ';
+        }
+        return $prefix . $title;
+    }
+
+    private function renderBroadcastEmailHtml(string $title, string $content): string
+    {
+        $safeTitle = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $safeContent = nl2br(htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+
+        return '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333;">'
+            . '<h2 style="color:#0d9488;">' . $safeTitle . '</h2>'
+            . '<div>' . $safeContent . '</div>'
+            . '<p style="margin-top:24px; color:#555;">'
+            . 'This is an automated notification from CarbonTrack. Please do not reply directly to this email.'
+            . '</p>'
+            . '</div>';
+    }
+
+    private function renderBroadcastEmailText(string $title, string $content): string
+    {
+        $normalizedContent = preg_replace("/\r\n|\r|\n/", '\n', $content);
+
+        return $title . "\n\n" . $normalizedContent . "\n\n" . 'This is an automated notification from CarbonTrack. Please do not reply.';
+  }
 
     private function loadUsernames(array $ids): array
     {

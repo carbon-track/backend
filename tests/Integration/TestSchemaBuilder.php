@@ -27,7 +27,10 @@ class TestSchemaBuilder
             // Users
             "CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                avatar_id INTEGER,\n                image_path TEXT,\n                last_login_at TEXT,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Products
-            "CREATE TABLE IF NOT EXISTS products (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                description TEXT,\n                category TEXT,\n                images TEXT,\n                image_path TEXT,\n                stock INTEGER DEFAULT 0,\n                points_required INTEGER DEFAULT 0,\n                status TEXT DEFAULT 'active',\n                sort_order INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS products (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                description TEXT,\n                category TEXT,\n                category_slug TEXT,\n                images TEXT,\n                image_path TEXT,\n                stock INTEGER DEFAULT 0,\n                points_required INTEGER DEFAULT 0,\n                status TEXT DEFAULT 'active',\n                sort_order INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS product_categories (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL,\n                slug TEXT NOT NULL,\n                description TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(slug)\n            )",
+            "CREATE TABLE IF NOT EXISTS product_tags (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL,\n                slug TEXT NOT NULL,\n                description TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(slug)\n            )",
+            "CREATE TABLE IF NOT EXISTS product_tag_map (\n                product_id INTEGER NOT NULL,\n                tag_id INTEGER NOT NULL,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(product_id, tag_id)\n            )",
             // Carbon activities (align with production columns subset used by model & controllers)
             "CREATE TABLE IF NOT EXISTS carbon_activities (\n                id TEXT PRIMARY KEY,\n                name_zh TEXT,\n                name_en TEXT,\n                category TEXT,\n                carbon_factor REAL,\n                unit TEXT,\n                description_zh TEXT,\n                description_en TEXT,\n                icon TEXT,\n                is_active INTEGER DEFAULT 1,\n                sort_order INTEGER DEFAULT 0,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                deleted_at TEXT\n            )",
             // Carbon records
@@ -75,6 +78,7 @@ class TestSchemaBuilder
 
         // Perform lightweight schema upgrades for existing SQLite file (idempotent)
         self::ensureColumns($pdo, 'users', ['avatar_id INTEGER']);
+        self::ensureColumns($pdo, 'products', ['category_slug TEXT']);
         self::ensureColumns($pdo, 'audit_logs', [
             'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
@@ -128,10 +132,16 @@ class TestSchemaBuilder
         if ($sc === 0) {
             $pdo->exec("INSERT INTO schools (id,name,status) VALUES (1,'示例学校', 'active')");
         }
+        // Product categories
+        $cat = (int)$pdo->query("SELECT COUNT(*) FROM product_categories")->fetchColumn();
+        if ($cat === 0) {
+            $pdo->exec("INSERT INTO product_categories (name, slug) VALUES \n                ('每日用品','daily'),\n                ('绿色出行','transport')");
+        }
+
         // Products
         $pc = (int)$pdo->query("SELECT COUNT(*) FROM products")->fetchColumn();
         if ($pc === 0) {
-            $pdo->exec("INSERT INTO products (name,description,category,images,image_path,stock,points_required,status,sort_order) VALUES \n                ('可重复使用水杯','环保材质500ml水杯','daily','[\"/images/products/eco_bottle_1.jpg\"]','/images/products/eco_bottle_1.jpg',100,100,'active',1),\n                ('竹制餐具套装','可降解竹制餐具三件套','daily','[\"/images/products/bamboo_utensils.jpg\"]','/images/products/bamboo_utensils.jpg',50,150,'active',2)");
+            $pdo->exec("INSERT INTO products (name,description,category,category_slug,images,image_path,stock,points_required,status,sort_order) VALUES \n                ('可重复使用水杯','环保材质500ml水杯','daily','daily','[\"/images/products/eco_bottle_1.jpg\"]','/images/products/eco_bottle_1.jpg',100,100,'active',1),\n                ('竹制餐具套装','可降解竹制餐具三件套','daily','daily','[\"/images/products/bamboo_utensils.jpg\"]','/images/products/bamboo_utensils.jpg',50,150,'active',2)");
         }
         // Admin user (optional convenience)
         $uc = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
@@ -141,3 +151,6 @@ class TestSchemaBuilder
         }
     }
 }
+
+
+
