@@ -833,23 +833,130 @@ class ProductController
     public function getCategories(Request $request, Response $response): Response
     {
         try {
+            $params = $request->getQueryParams();
+            $search = trim((string)($params['search'] ?? ''));
+            $limitParam = isset($params['limit']) ? (int)$params['limit'] : 50;
+            $limit = max(5, min(100, $limitParam));
+
             $sql = "
-                SELECT 
-                    category,
-                    COUNT(*) as product_count
-                FROM products 
-                WHERE deleted_at IS NULL
-                GROUP BY category
-                ORDER BY category
+                SELECT
+                    pc.id,
+                    pc.name,
+                    pc.slug,
+                    COALESCE(stats.product_count, 0) AS product_count
+                FROM product_categories pc
+                LEFT JOIN (
+                    SELECT category_slug, COUNT(*) AS product_count
+                    FROM products
+                    WHERE deleted_at IS NULL
+                    GROUP BY category_slug
+                ) AS stats ON stats.category_slug = pc.slug
             ";
 
+            $bindings = [];
+            if ($search !== '') {
+                $sql .= ' WHERE pc.name LIKE :search OR pc.slug LIKE :search';
+                $bindings['search'] = '%' . $search . '%';
+            }
+
+            $sql .= ' ORDER BY pc.name ASC LIMIT :limit';
+
             $stmt = $this->db->prepare($sql);
+            foreach ($bindings as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
             $stmt->execute();
-            $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $categoryRows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $map = [];
+            foreach ($categoryRows as $row) {
+                $name = $row['name'] ?? '';
+                $slug = $row['slug'] ?? '';
+                $key = strtolower($slug !== '' ? $slug : $name);
+                $map[$key] = [
+                    'id' => isset($row['id']) ? (int)$row['id'] : null,
+                    'name' => $name !== '' ? $name : ($slug ?: ''),
+                    'slug' => $slug,
+                    'product_count' => (int)($row['product_count'] ?? 0),
+                ];
+            }
+
+            $fallbackLimit = $limit * 2;
+            $fallbackSql = "
+                SELECT
+                    COALESCE(NULLIF(category_slug, ''), NULL) AS slug,
+                    category AS name,
+                    COUNT(*) AS product_count
+                FROM products
+                WHERE deleted_at IS NULL
+                  AND category IS NOT NULL
+                  AND category <> ''
+                GROUP BY category, category_slug
+                ORDER BY category ASC
+                LIMIT :fallback_limit
+            ";
+
+            $fallbackStmt = $this->db->prepare($fallbackSql);
+            $fallbackStmt->bindValue('fallback_limit', $fallbackLimit, PDO::PARAM_INT);
+            $fallbackStmt->execute();
+            $fallbackRows = $fallbackStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $searchLower = strtolower($search);
+            foreach ($fallbackRows as $row) {
+                $name = isset($row['name']) ? trim((string)$row['name']) : '';
+                $slug = isset($row['slug']) ? (string)$row['slug'] : '';
+                $slug = $slug !== '' ? $this->normalizeSlug($slug) : '';
+                if ($slug === '' && $name !== '') {
+                    $slug = $this->slugifyCategoryName($name);
+                }
+                if ($name === '' && $slug === '') {
+                    continue;
+                }
+                $key = strtolower($slug !== '' ? $slug : $name);
+
+                if ($searchLower !== '') {
+                    $matchesSearch = (strpos(strtolower($name), $searchLower) !== false)
+                        || ($slug !== '' && strpos($slug, $searchLower) !== false);
+                    if (!$matchesSearch) {
+                        continue;
+                    }
+                }
+
+                $count = (int)($row['product_count'] ?? 0);
+
+                if (isset($map[$key])) {
+                    $map[$key]['product_count'] += $count;
+                    if ($map[$key]['name'] === '' && $name !== '') {
+                        $map[$key]['name'] = $name;
+                    }
+                    if ($map[$key]['slug'] === '' && $slug !== '') {
+                        $map[$key]['slug'] = $slug;
+                    }
+                    continue;
+                }
+
+                $map[$key] = [
+                    'id' => null,
+                    'name' => $name !== '' ? $name : $slug,
+                    'slug' => $slug,
+                    'product_count' => $count,
+                ];
+            }
+
+            $categories = array_values($map);
+            usort($categories, static function ($a, $b) {
+                return strcmp($a['name'], $b['name']);
+            });
+            if (count($categories) > $limit) {
+                $categories = array_slice($categories, 0, $limit);
+            }
 
             return $this->json($response, [
                 'success' => true,
-                'data' => $categories
+                'data' => [
+                    'categories' => $categories,
+                ],
             ]);
 
         } catch (\Exception $e) {
@@ -857,6 +964,7 @@ class ProductController
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
+
 
     /**
      * 管理员创建商品
@@ -871,23 +979,35 @@ class ProductController
 
             $data = $request->getParsedBody() ?: [];
 
-            // 必填校验
+            // 输入校验
             if (empty($data['name']) || !isset($data['points_required']) || !isset($data['stock'])) {
                 return $this->json($response, ['error' => 'Missing required fields: name, points_required, stock'], 400);
             }
             $tagPayload = $data['tags'] ?? [];
+            $rawCategory = $data['category'] ?? null;
+            $categoryRecord = $this->resolveCategoryFromPayload($rawCategory);
             $imagePath = $this->extractPrimaryImagePath($data);
             $imagesPayload = isset($data['images']) ? (is_string($data['images']) ? $data['images'] : json_encode($data['images'])) : null;
-            $status = in_array(($data['status'] ?? 'active'), ['active', 'inactive'], true) ? $data['status'] : 'active';
+            $statusInput = $data['status'] ?? 'active';
+            $status = in_array($statusInput, ['active', 'inactive'], true) ? $statusInput : 'active';
+
+            $categoryName = $categoryRecord['name'] ?? (is_string($rawCategory) ? trim($rawCategory) : null);
+            if ($categoryName === '') {
+                $categoryName = null;
+            }
+            $categorySlug = $categoryRecord['slug'] ?? null;
+            if (!$categorySlug && $categoryName) {
+                $categorySlug = $this->slugifyCategoryName($categoryName);
+            }
 
             $this->db->beginTransaction();
             try {
                 $sql = "
                     INSERT INTO products (
-                        name, category, points_required, description, image_path, images,
+                        name, category, category_slug, points_required, description, image_path, images,
                         stock, status, sort_order, created_at
                     ) VALUES (
-                        :name, :category, :points_required, :description, :image_path, :images,
+                        :name, :category, :category_slug, :points_required, :description, :image_path, :images,
                         :stock, :status, :sort_order, NOW()
                     )
                 ";
@@ -895,7 +1015,8 @@ class ProductController
                 $stmt = $this->db->prepare($sql);
                 $stmt->execute([
                     'name' => $data['name'],
-                    'category' => $data['category'] ?? null,
+                    'category' => $categoryName,
+                    'category_slug' => $categorySlug,
                     'points_required' => (int)$data['points_required'],
                     'description' => $data['description'] ?? '',
                     'image_path' => $imagePath,
@@ -912,13 +1033,15 @@ class ProductController
 
                 $this->db->commit();
 
-                // 审计日志
+                // 写入审计日志
                 $this->auditLog->log($user['id'], 'product_created', 'products', (string)$newId, [
                     'name' => $data['name'],
+                    'category' => $categoryName,
+                    'category_slug' => $categorySlug,
                     'tags' => array_map(static fn($tag) => $tag['name'], $normalizedTags),
                 ]);
 
-                return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully']);
+                return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully'], 201);
             } catch (\Throwable $txError) {
                 try { $this->db->rollBack(); } catch (\Throwable $ignore) {}
                 throw $txError;
@@ -928,6 +1051,7 @@ class ProductController
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
+
 
     /**
      * 管理员更新商品
@@ -955,9 +1079,27 @@ class ProductController
                 $params[$column] = $value;
             };
 
-            foreach (['name','category','description'] as $col) {
+            foreach (['name','description'] as $col) {
                 if (array_key_exists($col, $data)) { $assign($col, $data[$col]); }
             }
+
+            $categoryName = null;
+            $categorySlug = null;
+            $hasCategoryPayload = array_key_exists('category', $data);
+            if ($hasCategoryPayload) {
+                $categoryRecord = $this->resolveCategoryFromPayload($data['category']);
+                $categoryName = $categoryRecord['name'] ?? (is_string($data['category']) ? trim((string)$data['category']) : null);
+                if ($categoryName === '') {
+                    $categoryName = null;
+                }
+                $categorySlug = $categoryRecord['slug'] ?? null;
+                if (!$categorySlug && $categoryName) {
+                    $categorySlug = $this->slugifyCategoryName($categoryName);
+                }
+                $assign('category', $categoryName);
+                $assign('category_slug', $categorySlug);
+            }
+
             if (array_key_exists('points_required', $data)) { $assign('points_required', (int)$data['points_required']); }
             if (array_key_exists('stock', $data)) { $assign('stock', (int)$data['stock']); }
             if (array_key_exists('status', $data)) {
@@ -999,6 +1141,8 @@ class ProductController
 
                 $this->auditLog->log($user['id'], 'product_updated', 'products', (string)$id, [
                     'updated_fields' => array_keys($data),
+                    'category' => $hasCategoryPayload ? $categoryName : null,
+                    'category_slug' => $hasCategoryPayload ? $categorySlug : null,
                     'tags' => $shouldUpdateTags ? array_map(static fn($tag) => $tag['name'], $normalizedTags) : null,
                 ]);
 
@@ -1012,6 +1156,7 @@ class ProductController
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
+
 
     /**
      * 获取商品标签（用于自动补全）
@@ -1088,6 +1233,186 @@ class ProductController
         }
 
         return null;
+    }
+
+    private function resolveCategoryFromPayload($rawCategory): ?array
+    {
+        if ($rawCategory === null || $rawCategory === '') {
+            return null;
+        }
+
+        $candidate = $this->normalizeCategoryCandidate($rawCategory);
+        if (!$candidate) {
+            return null;
+        }
+
+        if ($candidate['id'] !== null) {
+            $byId = $this->fetchCategoriesByIds([$candidate['id']]);
+            if (isset($byId[$candidate['id']])) {
+                return $byId[$candidate['id']];
+            }
+        }
+
+        if ($candidate['slug'] !== '') {
+            $bySlug = $this->fetchCategoriesBySlugs([$candidate['slug']]);
+            if (isset($bySlug[$candidate['slug']])) {
+                return $bySlug[$candidate['slug']];
+            }
+        }
+
+        $name = $candidate['name'] !== '' ? $candidate['name'] : null;
+        if ($name === null && $candidate['slug'] !== '') {
+            $name = $candidate['slug'];
+        }
+        if ($name === null) {
+            return null;
+        }
+
+        $slug = $candidate['slug'] !== '' ? $candidate['slug'] : $this->slugifyCategoryName($name);
+
+        return $this->createProductCategory($name, $slug);
+    }
+
+    private function normalizeCategoryCandidate($category): ?array
+    {
+        if (is_string($category)) {
+            $name = trim($category);
+            if ($name === '') {
+                return null;
+            }
+            return [
+                'id' => null,
+                'name' => $name,
+                'slug' => $this->slugifyCategoryName($name),
+            ];
+        }
+
+        if (!is_array($category)) {
+            return null;
+        }
+
+        $id = null;
+        foreach (['id', 'category_id'] as $idKey) {
+            if (isset($category[$idKey]) && $category[$idKey] !== '') {
+                $id = (int)$category[$idKey];
+                break;
+            }
+        }
+
+        $name = '';
+        foreach (['name', 'category', 'label', 'value'] as $nameKey) {
+            if (isset($category[$nameKey]) && is_string($category[$nameKey])) {
+                $candidate = trim($category[$nameKey]);
+                if ($candidate !== '') {
+                    $name = $candidate;
+                    break;
+                }
+            }
+        }
+
+        $slug = '';
+        foreach (['slug', 'category_slug', 'value'] as $slugKey) {
+            if (isset($category[$slugKey]) && is_string($category[$slugKey])) {
+                $candidate = $this->normalizeSlug($category[$slugKey]);
+                if ($candidate !== '') {
+                    $slug = $candidate;
+                    break;
+                }
+            }
+        }
+
+        if ($slug === '' && $name !== '') {
+            $slug = $this->slugifyCategoryName($name);
+        }
+
+        if ($id === null && $slug === '' && $name === '') {
+            return null;
+        }
+
+        return [
+            'id' => $id,
+            'name' => $name,
+            'slug' => $slug,
+        ];
+    }
+
+    private function fetchCategoriesByIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn($id) => $id > 0)));
+        if (empty($ids)) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $sql = 'SELECT id, name, slug FROM product_categories WHERE id IN (' . $placeholders . ')';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($ids);
+
+        $result = [];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!isset($row['id'])) {
+                continue;
+            }
+            $identifier = (int)$row['id'];
+            $result[$identifier] = [
+                'id' => $identifier,
+                'name' => $row['name'] ?? '',
+                'slug' => $row['slug'] ?? '',
+            ];
+        }
+
+        return $result;
+    }
+
+    private function createProductCategory(string $name, string $slug): array
+    {
+        $name = trim($name) !== '' ? trim($name) : $slug;
+        $normalizedSlug = $this->slugifyCategoryName($slug ?: $name);
+        $baseSlug = $normalizedSlug;
+        $attempts = 0;
+
+        while ($attempts < 5) {
+            try {
+                $stmt = $this->db->prepare('INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, NOW())');
+                $stmt->execute([
+                    'name' => $name,
+                    'slug' => $normalizedSlug,
+                ]);
+                $id = (int)$this->db->lastInsertId();
+
+                return [
+                    'id' => $id,
+                    'name' => $name,
+                    'slug' => $normalizedSlug,
+                ];
+            } catch (PDOException $e) {
+                if ($e->getCode() !== '23000') {
+                    throw $e;
+                }
+
+                $existing = $this->fetchCategoriesBySlugs([$normalizedSlug]);
+                if (isset($existing[$normalizedSlug])) {
+                    return $existing[$normalizedSlug];
+                }
+
+                ++$attempts;
+                $normalizedSlug = $baseSlug . '-' . $attempts;
+            }
+        }
+
+        $normalizedSlug = $baseSlug . '-' . substr(md5((string)microtime(true)), 0, 6);
+        $stmt = $this->db->prepare('INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, NOW())');
+        $stmt->execute([
+            'name' => $name,
+            'slug' => $normalizedSlug,
+        ]);
+        $id = (int)$this->db->lastInsertId();
+
+        return [
+            'id' => $id,
+            'name' => $name,
+            'slug' => $normalizedSlug,
+        ];
     }
 
     private function resolveTagsFromPayload($rawTags): array

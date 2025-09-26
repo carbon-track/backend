@@ -3531,7 +3531,8 @@
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Category slug or name filter (slug recommended)"
           },
           {
             "name": "min_points",
@@ -6295,7 +6296,8 @@
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Category slug or name filter (slug recommended)"
           },
           {
             "name": "status",
@@ -6607,7 +6609,7 @@
         "description": "获取所有可用产品分类。",
         "responses": {
           "200": {
-            "description": "成功",
+            "description": "分类加载成功",
             "content": {
               "application/json": {
                 "schema": {
@@ -6617,17 +6619,53 @@
                       "type": "boolean"
                     },
                     "data": {
-                      "type": "array",
-                      "items": {
-                        "type": "string"
+                      "type": "object",
+                      "properties": {
+                        "categories": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ProductCategorySummary"
+                          }
+                        }
                       }
                     }
                   }
                 }
               }
             }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Fuzzy match category name or slug"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": "Maximum number of categories to return"
+          }
+        ]
       }
     },
     "/schools": {
@@ -10336,7 +10374,9 @@
             "minimum": -1
           },
           "category": {
-            "type": "string"
+            "type": "string",
+            "nullable": true,
+            "description": "Category display name"
           },
           "status": {
             "type": "string",
@@ -10384,6 +10424,11 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "category_slug": {
+            "type": "string",
+            "description": "Canonical category slug",
+            "nullable": true
           }
         }
       },
@@ -10410,7 +10455,18 @@
             "minimum": -1
           },
           "category": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Existing category name or slug",
+                "nullable": true
+              },
+              {
+                "$ref": "#/components/schemas/ProductCategoryInput"
+              }
+            ],
+            "description": "Category reference; pass a string slug/name or structured object",
+            "nullable": true
           },
           "status": {
             "type": "string",
@@ -10470,7 +10526,18 @@
             "minimum": -1
           },
           "category": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Existing category name or slug",
+                "nullable": true
+              },
+              {
+                "$ref": "#/components/schemas/ProductCategoryInput"
+              }
+            ],
+            "description": "Category reference; pass a string slug/name or structured object",
+            "nullable": true
           },
           "status": {
             "type": "string",
@@ -12385,6 +12452,50 @@
             }
           }
         }
+      },
+      "ProductCategoryInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Existing category identifier"
+          },
+          "name": {
+            "type": "string",
+            "description": "Category display name"
+          },
+          "slug": {
+            "type": "string",
+            "description": "URL-friendly category slug"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProductCategorySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "product_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "slug",
+          "product_count"
+        ],
+        "additionalProperties": false
       }
     },
     "/messages": {

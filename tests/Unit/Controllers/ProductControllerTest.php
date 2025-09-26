@@ -233,23 +233,36 @@ class ProductControllerTest extends TestCase
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
-        
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
-            ['category' => '生活', 'product_count' => 5],
-            ['category' => '出行', 'product_count' => 3]
+
+        $categoryStmt = $this->createMock(\PDOStatement::class);
+        $categoryStmt->method('execute')->willReturn(true);
+        $categoryStmt->method('bindValue')->willReturn(true);
+        $categoryStmt->method('fetchAll')->willReturn([
+            ['id' => 1, 'name' => 'Eco Living', 'slug' => 'eco-living', 'product_count' => 5]
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+
+        $fallbackStmt = $this->createMock(\PDOStatement::class);
+        $fallbackStmt->method('execute')->willReturn(true);
+        $fallbackStmt->method('bindValue')->willReturn(true);
+        $fallbackStmt->method('fetchAll')->willReturn([
+            ['name' => '社区种子', 'slug' => null, 'product_count' => 3]
+        ]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($categoryStmt, $fallbackStmt);
 
         $controller = new ProductController($pdo, $messageService, $audit, $auth);
-        $request = makeRequest('GET', '/products/categories');
+        $request = makeRequest('GET', '/products/categories', null, ['limit' => 10]);
         $response = new \Slim\Psr7\Response();
+
         $resp = $controller->getCategories($request, $response);
         $this->assertEquals(200, $resp->getStatusCode());
-        $data = json_decode((string)$resp->getBody(), true);
+        $data = json_decode((string) $resp->getBody(), true);
         $this->assertTrue($data['success']);
-        $this->assertCount(2, $data['data']);
+        $this->assertArrayHasKey('categories', $data['data']);
+        $this->assertCount(2, $data['data']['categories']);
+        $names = array_column($data['data']['categories'], 'name');
+        $this->assertContains('Eco Living', $names);
+        $this->assertContains('社区种子', $names);
     }
 
     public function testGetExchangeRecordsRequiresAdmin(): void
@@ -451,6 +464,139 @@ class ProductControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals('e1', $json['data']['id']);
     }
-}
 
+    public function testCreateProductCreatesCategoryAndPersistsSlug(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        if (method_exists($pdo, 'sqliteCreateFunction')) {
+            $pdo->sqliteCreateFunction('NOW', function () {
+                return date('Y-m-d H:i:s');
+            });
+        }
+
+        $pdo->exec('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
+        $pdo->exec('CREATE TABLE product_tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, slug TEXT, description TEXT)');
+        $pdo->exec('CREATE TABLE product_tag_map (product_id INTEGER, tag_id INTEGER, created_at TEXT)');
+        $pdo->exec('CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            category_slug TEXT,
+            points_required INTEGER NOT NULL,
+            description TEXT,
+            image_path TEXT,
+            images TEXT,
+            stock INTEGER NOT NULL,
+            status TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            deleted_at TEXT
+        )');
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())->method('log');
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 99]);
+        $auth->method('isAdminUser')->willReturn(true);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $capturedException = null;
+        $errorLog->expects($this->any())
+            ->method('logException')
+            ->willReturnCallback(function ($exception) use (&$capturedException) {
+                $capturedException = $exception;
+            });
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+
+        $request = makeRequest('POST', '/admin/products', [
+            'name' => 'Reusable Cup',
+            'description' => 'Great for the office',
+            'points_required' => 120,
+            'stock' => 25,
+            'category' => [
+                'name' => 'Office Supplies',
+                'slug' => 'office-supplies'
+            ],
+            'tags' => []
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $result = $controller->createProduct($request, $response);
+        if ($result->getStatusCode() !== 201) {
+            $details = $capturedException instanceof \Throwable ? $capturedException->getMessage() : 'no exception captured';
+            $this->fail('Unexpected response: ' . (string) $result->getBody() . ' (reason: ' . $details . ')');
+        }
+        $payload = json_decode((string) $result->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertNotEmpty($payload['id']);
+
+        $categoryRow = $pdo->query('SELECT name, slug FROM product_categories LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame('Office Supplies', $categoryRow['name']);
+        $this->assertSame('office-supplies', $categoryRow['slug']);
+
+        $productRow = $pdo->query('SELECT category, category_slug FROM products LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame('Office Supplies', $productRow['category']);
+        $this->assertSame('office-supplies', $productRow['category_slug']);
+    }
+
+    public function testGetCategoriesReturnsStructuredResponse(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        if (method_exists($pdo, 'sqliteCreateFunction')) {
+            $pdo->sqliteCreateFunction('NOW', function () {
+                return date('Y-m-d H:i:s');
+            });
+        }
+
+        $pdo->exec('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
+        $pdo->exec('CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT,
+            category_slug TEXT,
+            points_required INTEGER NOT NULL,
+            description TEXT,
+            image_path TEXT,
+            images TEXT,
+            stock INTEGER NOT NULL,
+            status TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            deleted_at TEXT
+        )');
+        $pdo->exec("INSERT INTO product_categories (name, slug, created_at) VALUES ('Eco Living', 'eco-living', NOW())");
+        $pdo->exec("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('Bottle', 'Eco Living', 'eco-living', 100, '', '', '[]', 10, 'active', 0, NOW())");
+        $pdo->exec("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('DIY Kit', '手工材料', '', 200, '', '', '[]', 5, 'active', 0, NOW())");
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $errorLog->expects($this->any())->method('logException');
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+
+        $request = makeRequest('GET', '/products/categories', null, ['limit' => 10]);
+        $response = new \Slim\Psr7\Response();
+
+        $result = $controller->getCategories($request, $response);
+        $this->assertEquals(200, $result->getStatusCode(), 'Unexpected response: ' . (string) $result->getBody());
+        $payload = json_decode((string) $result->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertArrayHasKey('categories', $payload['data']);
+
+        $categories = $payload['data']['categories'];
+        $this->assertNotEmpty($categories);
+
+        $names = array_column($categories, 'name');
+        $this->assertContains('Eco Living', $names);
+        $this->assertContains('手工材料', $names);
+    }
+
+}
 
