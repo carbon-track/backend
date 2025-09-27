@@ -1189,9 +1189,13 @@ class ProductController
             }
         }
 
-        $presignedUrl = null;
+        $existingPresigned = $product['image_presigned_url'] ?? null;
+        $presignedUrl = $existingPresigned && is_string($existingPresigned) ? $existingPresigned : null;
         if ($withProtectedUrls && $normalizedImagePath) {
-            $presignedUrl = $this->buildPresignedUrl($normalizedImagePath, 600, $request);
+            $freshPresigned = $this->buildPresignedUrl($normalizedImagePath, 600, $request);
+            if ($freshPresigned) {
+                $presignedUrl = $freshPresigned;
+            }
         }
 
         if (!is_string($imageUrl) || $imageUrl === '') {
@@ -1311,14 +1315,17 @@ class ProductController
             $url = $this->buildPublicUrl($filePath, $request) ?? $url;
         }
 
+        $existingPresigned = $item['presigned_url'] ?? null;
         $presignedUrl = null;
-        if ($withProtectedUrls) {
-            $candidate = $item['presigned_url'] ?? null;
-            if (is_string($candidate) && $candidate !== '') {
-                $presignedUrl = $candidate;
-            } elseif ($filePath) {
-                $presignedUrl = $this->buildPresignedUrl($filePath, 600, $request);
+        if ($withProtectedUrls && $filePath) {
+            $freshPresigned = $this->buildPresignedUrl($filePath, 600, $request);
+            if ($freshPresigned) {
+                $presignedUrl = $freshPresigned;
+            } elseif (is_string($existingPresigned) && $existingPresigned !== '') {
+                $presignedUrl = $existingPresigned;
             }
+        } elseif ($withProtectedUrls && is_string($existingPresigned) && $existingPresigned !== '') {
+            $presignedUrl = $existingPresigned;
         }
 
         $normalized = [
