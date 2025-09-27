@@ -5,14 +5,19 @@ declare(strict_types=1);
 namespace CarbonTrack\Models;
 
 use PDO;
+use CarbonTrack\Services\ErrorLogService;
+use Slim\Psr7\Factory\ServerRequestFactory;
 
 class Avatar
 {
     private PDO $db;
 
-    public function __construct(PDO $db)
+    private ?ErrorLogService $errorLogService;
+
+    public function __construct(PDO $db, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -43,7 +48,7 @@ class Avatar
             
             return $result;
         } catch (\Exception $e) {
-            error_log("Avatar query failed: " . $e->getMessage());
+            $this->logErrorWithService($e, 'Avatar query failed:');
             return [];
         }
     }
@@ -345,5 +350,21 @@ class Avatar
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
     }
-}
 
+
+    private function logErrorWithService(\Throwable $exception, string $contextMessage): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $factory = new ServerRequestFactory();
+                $request = $factory->createServerRequest('GET', '/internal/avatar');
+                $this->errorLogService->logException($exception, $request, ['context_message' => $contextMessage]);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+            }
+        }
+        error_log($contextMessage . ' ' . $exception->getMessage());
+    }
+
+}

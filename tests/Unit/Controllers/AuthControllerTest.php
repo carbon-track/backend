@@ -128,7 +128,7 @@ class AuthControllerTest extends TestCase
             'points' => 0,
             'is_admin' => 0,
             'avatar_url' => null,
-            'last_login_at' => null,
+            'lastlgn' => null,
             'password_hash' => password_hash('secret', PASSWORD_DEFAULT)
         ]);
         $updateStmt = $this->createMock(\PDOStatement::class);

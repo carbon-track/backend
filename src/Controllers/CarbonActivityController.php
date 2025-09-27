@@ -69,7 +69,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getActivities error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to fetch activities: ' . $e->getMessage(), 500);
         }
     }
@@ -96,7 +96,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getActivity error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to fetch activity: ' . $e->getMessage(), 500);
         }
     }
@@ -177,7 +177,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::createActivity error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to fetch activities: ' . $e->getMessage(), 500);
         }
     }
@@ -239,7 +239,7 @@ class CarbonActivityController
             return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::updateActivity error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to create activity: ' . $e->getMessage(), 500);
         }
     }
@@ -313,7 +313,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::deleteActivity error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to update activity: ' . $e->getMessage(), 500);
         }
     }
@@ -384,7 +384,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::restoreActivity error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to delete activity: ' . $e->getMessage(), 500);
         }
     }
@@ -432,7 +432,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getActivityStatistics error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to restore activity: ' . $e->getMessage(), 500);
         }
     }
@@ -455,7 +455,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getActivitiesForAdmin error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to fetch statistics: ' . $e->getMessage(), 500);
         }
     }
@@ -523,7 +523,7 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::updateSortOrders error: ' . $e->getMessage());
             return $this->errorResponse($response, 'Failed to update sort orders: ' . $e->getMessage(), 500);
         }
     }
@@ -662,4 +662,25 @@ class CarbonActivityController
         $response->getBody()->write(json_encode($data));
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
+
+
+    private function logExceptionWithFallback(\Throwable $exception, ServerRequestInterface $request, string $contextMessage = ''): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
+                $this->errorLogService->logException($exception, $request, $extra);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService failed: ' . $loggingError->getMessage());
+            }
+        }
+        if ($contextMessage !== '') {
+            error_log($contextMessage);
+        } else {
+            error_log($exception->getMessage());
+        }
+    }
+
 }
+

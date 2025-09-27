@@ -231,11 +231,11 @@ class AuthController
                 ], 401);
             }
             try {
-                $upd = $this->db->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
+                $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
                 $upd->execute([$user['id']]);
             } catch (\Throwable $e) {
                 try {
-                    $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
+                    $upd = $this->db->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
                     $upd->execute([$user['id']]);
                 } catch (\Throwable $e2) {
                     // ignore
@@ -267,7 +267,7 @@ class AuthController
                 'is_admin' => (bool)($user['is_admin'] ?? 0),
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
-                'last_login_at' => $user['last_login_at'] ?? ($user['lastlgn'] ?? null)
+                'lastlgn' => $user['lastlgn'] ?? ($user['last_login_at'] ?? null),
             ];
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -350,7 +350,7 @@ class AuthController
                 'is_admin' => (bool)($row['is_admin'] ?? 0),
                 'avatar_path' => $avatarRow['avatar_path'],
                 'avatar_url' => $avatarRow['avatar_url'],
-                'last_login_at' => $row['last_login_at'] ?? null,
+                'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
                 'created_at' => $row['created_at'] ?? null,
                 'unread_messages' => $unread
             ];

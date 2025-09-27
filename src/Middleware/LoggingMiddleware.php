@@ -9,14 +9,17 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Psr\Log\LoggerInterface;
+use CarbonTrack\Services\ErrorLogService;
 
 class LoggingMiddleware implements MiddlewareInterface
 {
     private LoggerInterface $logger;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(LoggerInterface $logger)
+    public function __construct(LoggerInterface $logger, ?ErrorLogService $errorLogService = null)
     {
         $this->logger = $logger;
+        $this->errorLogService = $errorLogService;
     }
 
     public function process(Request $request, RequestHandler $handler): Response
@@ -33,7 +36,7 @@ class LoggingMiddleware implements MiddlewareInterface
             ]);
         } catch (\Exception $e) {
             // 如果日志记录失败，不要中断请求处理
-            error_log('Logging failed: ' . $e->getMessage());
+            $this->logExceptionWithFallback($e, $request, 'LoggingMiddleware request logging failed: ' . $e->getMessage());
         }
 
         try {
@@ -51,7 +54,7 @@ class LoggingMiddleware implements MiddlewareInterface
                 ]);
             } catch (\Exception $e) {
                 // 如果日志记录失败，不要中断响应
-                error_log('Logging failed: ' . $e->getMessage());
+                $this->logExceptionWithFallback($e, $request, 'LoggingMiddleware request logging failed: ' . $e->getMessage());
             }
             
             return $response;
@@ -69,7 +72,7 @@ class LoggingMiddleware implements MiddlewareInterface
                 ]);
             } catch (\Exception $logError) {
                 // 如果日志记录失败，至少记录到error_log
-                error_log('Request failed and logging failed: ' . $e->getMessage() . ' | Log error: ' . $logError->getMessage());
+                $this->logExceptionWithFallback($logError, $request, 'LoggingMiddleware error logging failed: ' . $logError->getMessage() . ' | Original error: ' . $e->getMessage());
             }
             
             throw $e;
@@ -94,5 +97,19 @@ class LoggingMiddleware implements MiddlewareInterface
         
         return $serverParams['REMOTE_ADDR'] ?? 'unknown';
     }
-}
 
+
+    private function logExceptionWithFallback(\Throwable $exception, Request $request, string $contextMessage): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $this->errorLogService->logException($exception, $request, ['context_message' => $contextMessage]);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+            }
+        }
+        error_log($contextMessage);
+    }
+
+}

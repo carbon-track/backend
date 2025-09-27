@@ -9,14 +9,17 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 
 class AdminMiddleware implements MiddlewareInterface
 {
     private AuthService $authService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(AuthService $authService)
+    public function __construct(AuthService $authService, ?ErrorLogService $errorLogService = null)
     {
         $this->authService = $authService;
+        $this->errorLogService = $errorLogService;
     }
 
     public function process(Request $request, RequestHandler $handler): Response
@@ -56,7 +59,7 @@ class AdminMiddleware implements MiddlewareInterface
             return $handler->handle($request);
             
         } catch (\Exception $e) {
-            error_log("AdminMiddleware error: " . $e->getMessage());
+            $this->logExceptionWithFallback($e, $request, 'AdminMiddleware error: ' . $e->getMessage());
             
             $response = new \Slim\Psr7\Response();
             $response->getBody()->write(json_encode([
@@ -69,5 +72,19 @@ class AdminMiddleware implements MiddlewareInterface
                 ->withHeader('Content-Type', 'application/json');
         }
     }
-}
 
+
+    private function logExceptionWithFallback(\Throwable $exception, Request $request, string $contextMessage): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $this->errorLogService->logException($exception, $request, ['context_message' => $contextMessage]);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+            }
+        }
+        error_log($contextMessage);
+    }
+
+}

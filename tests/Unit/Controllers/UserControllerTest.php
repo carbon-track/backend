@@ -61,7 +61,7 @@ class UserControllerTest extends TestCase
             'is_admin' => 0,
             'avatar_id' => 10,
             'avatar_path' => '/avatars/default/avatar_01.png',
-            'last_login_at' => null,
+            'lastlgn' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
@@ -342,7 +342,7 @@ class UserControllerTest extends TestCase
             'is_admin' => 0,
             'avatar_id' => 10,
             'avatar_path' => '/a.png',
-            'last_login_at' => null,
+            'lastlgn' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
@@ -402,7 +402,7 @@ class UserControllerTest extends TestCase
             'is_admin' => 0,
             'avatar_id' => 10,
             'avatar_path' => '/avatars/default/avatar_01.png',
-            'last_login_at' => null,
+            'lastlgn' => null,
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 

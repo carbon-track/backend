@@ -9356,7 +9356,7 @@
             "nullable": true,
             "description": "头像URL"
           },
-          "last_login_at": {
+          "lastlgn": {
             "type": "string",
             "format": "date-time",
             "nullable": true,

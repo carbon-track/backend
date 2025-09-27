@@ -92,7 +92,7 @@ class UserController
                 'avatar_id' => $row['avatar_id'],
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
-                'last_login_at' => $row['last_login_at'] ?? null,
+                'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
                 'updated_at' => $row['updated_at'] ?? null
             ];
 
@@ -272,7 +272,7 @@ class UserController
                 'avatar_id' => $updatedUser['avatar_id'],
                 'avatar_path' => $updatedAvatar['avatar_path'],
                 'avatar_url' => $updatedAvatar['avatar_url'],
-                'last_login_at' => $updatedUser['last_login_at'],
+                'lastlgn' => $updatedUser['lastlgn'] ?? ($updatedUser['last_login_at'] ?? null),
                 'updated_at' => $updatedUser['updated_at']
             ];
 

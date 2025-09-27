@@ -213,8 +213,7 @@ $sql = "
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
                 throw $e;
             }
-            error_log('getUsers exception: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request, 'getUsers exception: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -249,7 +248,7 @@ $sql = "
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
                 throw $e;
             }
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -286,7 +285,7 @@ $sql = "
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
                 throw $e;
             }
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -361,7 +360,7 @@ $sql = "
                 ]
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -467,7 +466,7 @@ $sql = "
             ]);
         } catch (\Exception $e) {
             if (($_ENV['APP_ENV'] ?? '') === 'testing') { throw $e; }
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -537,7 +536,7 @@ $sql = "
                 ]
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { error_log('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -590,7 +589,7 @@ $sql = "
 
             return $this->jsonResponse($response, ['success' => true]);
         } catch (\Exception $e) {
-            try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -686,9 +685,9 @@ $sql = "
     {
         $column = $this->resolveLastLoginColumn();
         if ($column === null) {
-            return 'NULL AS last_login_at';
+            return 'NULL AS lastlgn';
         }
-        return $alias . '.' . $column . ' AS last_login_at';
+        return $alias . '.' . $column . ' AS lastlgn';
     }
 
     private function resolveLastLoginColumn(): ?string
@@ -697,7 +696,7 @@ $sql = "
             return $this->lastLoginColumn !== '' ? $this->lastLoginColumn : null;
         }
 
-        foreach (['last_login_at', 'lastlgn'] as $candidate) {
+        foreach (['lastlgn', 'last_login_at'] as $candidate) {
             if ($this->columnExists('users', $candidate)) {
                 $this->lastLoginColumn = $candidate;
                 return $candidate;
@@ -747,4 +746,25 @@ $sql = "
         $response->getBody()->write($json === false ? '{}' : $json);
         return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
     }
+
+
+    private function logExceptionWithFallback(\Throwable $exception, Request $request, string $contextMessage = ''): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
+                $this->errorLogService->logException($exception, $request, $extra);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService failed: ' . $loggingError->getMessage());
+            }
+        }
+        if ($contextMessage !== '') {
+            error_log($contextMessage);
+        } else {
+            error_log($exception->getMessage());
+        }
+    }
+
 }
+

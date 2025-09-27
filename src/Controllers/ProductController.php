@@ -183,28 +183,11 @@ class ProductController
             $productIds = array_values(array_filter($productIds, static fn($v) => $v !== null));
             $tagsMap = $productIds ? $this->loadTagsForProducts($productIds) : [];
 
-            // 处理图片字段
             foreach ($products as &$product) {
-                $product['images'] = $product['images'] ? json_decode($product['images'], true) : [];
-                $product['is_available'] = $product['stock'] > 0 || $product['stock'] === -1; // -1表示无限库存
-                // 兼容前端显示字段：提供 image_url 与 price 的别名
-                if (empty($product['image_url'])) {
-                    // 优先使用 image_path，其次 images[0].public_url
-                    $firstImage = null;
-                    if (is_array($product['images']) && count($product['images']) > 0) {
-                        $first = $product['images'][0];
-                        if (is_array($first)) {
-                            $firstImage = $first['public_url'] ?? ($first['url'] ?? null);
-                        } elseif (is_string($first)) {
-                            $firstImage = $first;
-                        }
-                    }
-                    $imagePath = $product['image_path'] ?? null;
-                    $product['image_url'] = $imagePath ?: ($firstImage ?: null);
-                }
-                $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
+                $product = $this->prepareProductPayload($product, $isAdminCall, $request);
                 $product['tags'] = $tagsMap[$product['id']] ?? [];
             }
+            unset($product);
 
             $pages = (int)ceil($total / $limit);
             return $this->json($response, [
@@ -226,9 +209,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            // Log original error for debugging in tests
-            error_log('ProductController::getProducts error: ' . $e->getMessage());
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getProducts error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -239,6 +220,10 @@ class ProductController
     public function getProductDetail(Request $request, Response $response, array $args): Response
     {
         try {
+            $currentUser = null;
+            try { $currentUser = $this->authService->getCurrentUser($request); } catch (\Throwable $ignore) {}
+            $isAdminCall = $currentUser && $this->authService->isAdminUser($currentUser);
+
             $productId = $args['id'];
 
             $sql = "
@@ -263,24 +248,8 @@ class ProductController
                 return $this->json($response, ['error' => 'Product not found'], 404);
             }
 
-            // 处理图片字段
-            $product['images'] = $product['images'] ? json_decode($product['images'], true) : [];
-            $product['is_available'] = $product['stock'] > 0 || $product['stock'] === -1;
-            // 别名字段，兼容前端
-            if (empty($product['image_url'])) {
-                $firstImage = null;
-                if (is_array($product['images']) && count($product['images']) > 0) {
-                    $first = $product['images'][0];
-                    if (is_array($first)) {
-                        $firstImage = $first['public_url'] ?? ($first['url'] ?? null);
-                    } elseif (is_string($first)) {
-                        $firstImage = $first;
-                    }
-                }
-                $imagePath = $product['image_path'] ?? null;
-                $product['image_url'] = $imagePath ?: ($firstImage ?: null);
-            }
-            $product['price'] = isset($product['points_required']) ? (int)$product['points_required'] : null;
+            $product = $this->prepareProductPayload($product, $isAdminCall, $request);
+
             $tagMap = $this->loadTagsForProducts([(int)$product['id']]);
             $product['tags'] = $tagMap[$product['id']] ?? [];
 
@@ -290,8 +259,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            error_log('ProductController::getProductDetail error: ' . $e->getMessage());
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getProductDetail error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -449,7 +417,7 @@ class ProductController
             }
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::exchangeProduct error: ' . $e->getMessage());
             return $this->json($response, [
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -487,7 +455,7 @@ class ProductController
             }
             return $this->json($response, ['success' => true, 'data' => $row]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getExchangeTransaction error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -558,7 +526,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getUserExchanges error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -682,7 +650,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getExchangeRecords error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -755,7 +723,7 @@ class ProductController
                 'data' => $exchange
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { error_log(self::ERRLOG_PREFIX . $ignore->getMessage()); }
+            $this->logControllerException($e, $request, 'ProductController::getExchangeRecordDetail error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -822,7 +790,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::updateExchangeStatus error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -960,7 +928,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::getCategories error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1047,7 +1015,7 @@ class ProductController
                 throw $txError;
             }
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::createProduct error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1152,7 +1120,7 @@ class ProductController
                 throw $txError;
             }
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::updateProduct error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1197,8 +1165,226 @@ class ProductController
                 ]
             ]);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::searchProductTags error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
+    private function prepareProductPayload(array $product, bool $withProtectedUrls = false, ?Request $request = null): array
+    {
+        $product['images'] = $this->normalizeProductImagesList($product['images'] ?? null, $withProtectedUrls, $request);
+
+        $imagePathRaw = $product['image_path'] ?? null;
+        $normalizedImagePath = null;
+        if (is_string($imagePathRaw) && $imagePathRaw !== '') {
+            $normalizedImagePath = ltrim(trim($imagePathRaw), '/');
+            $product['image_path'] = $normalizedImagePath;
+        }
+
+        $imageUrl = $product['image_url'] ?? null;
+        if ((!is_string($imageUrl) || $imageUrl === '') && $normalizedImagePath) {
+            $publicUrl = $this->buildPublicUrl($normalizedImagePath, $request);
+            if ($publicUrl) {
+                $imageUrl = $publicUrl;
+            }
+        }
+
+        $presignedUrl = null;
+        if ($withProtectedUrls && $normalizedImagePath) {
+            $presignedUrl = $this->buildPresignedUrl($normalizedImagePath, 600, $request);
+        }
+
+        if (!is_string($imageUrl) || $imageUrl === '') {
+            if (!empty($product['images'])) {
+                $firstImage = $product['images'][0];
+                if (is_array($firstImage)) {
+                    if (!empty($firstImage['url'])) {
+                        $imageUrl = $firstImage['url'];
+                    } elseif (!empty($firstImage['file_path'])) {
+                        $fallbackUrl = $this->buildPublicUrl($firstImage['file_path'], $request);
+                        if ($fallbackUrl) {
+                            $imageUrl = $fallbackUrl;
+                        }
+                    }
+                    if ($withProtectedUrls && !$presignedUrl && !empty($firstImage['file_path'])) {
+                        $presignedUrl = $this->buildPresignedUrl($firstImage['file_path'], 600, $request);
+                    }
+                } elseif (is_string($firstImage) && $firstImage !== '') {
+                    $imageUrl = $firstImage;
+                }
+            }
+        } else {
+            if ($withProtectedUrls && !$presignedUrl && $normalizedImagePath) {
+                $presignedUrl = $this->buildPresignedUrl($normalizedImagePath, 600, $request);
+            }
+        }
+
+        if ($withProtectedUrls && !$presignedUrl && !empty($product['images'])) {
+            foreach ($product['images'] as $imageMeta) {
+                if (!empty($imageMeta['presigned_url'])) {
+                    $presignedUrl = $imageMeta['presigned_url'];
+                    break;
+                }
+            }
+        }
+
+        if (!is_string($imageUrl) || $imageUrl === '') {
+            if ($normalizedImagePath) {
+                $imageUrl = $normalizedImagePath;
+            }
+        }
+
+        if (is_string($imageUrl) && $imageUrl !== '') {
+            $product['image_url'] = $imageUrl;
+        }
+
+        if ($withProtectedUrls) {
+            $product['image_presigned_url'] = $presignedUrl ?: '';
+        } else {
+            unset($product['image_presigned_url']);
+        }
+
+        if (isset($product['stock'])) {
+            $product['stock'] = (int)$product['stock'];
+        }
+        if (isset($product['points_required'])) {
+            $product['points_required'] = (int)$product['points_required'];
+        }
+
+        $stockValue = $product['stock'] ?? null;
+        $product['is_available'] = $stockValue === -1 || ($stockValue > 0);
+
+        if (!isset($product['price']) && isset($product['points_required'])) {
+            $product['price'] = (int)$product['points_required'];
+        }
+
+        return $product;
+    }
+
+    private function normalizeProductImagesList($rawImages, bool $withProtectedUrls = false, ?Request $request = null): array
+    {
+        if (empty($rawImages)) {
+            return [];
+        }
+
+        if (is_string($rawImages)) {
+            $decoded = json_decode($rawImages, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $rawImages = $decoded;
+            } else {
+                $rawImages = [$rawImages];
+            }
+        }
+
+        if (!is_array($rawImages)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($rawImages as $item) {
+            $image = $this->normalizeProductImageItem($item, $withProtectedUrls, $request);
+            if ($image !== null) {
+                $normalized[] = $image;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeProductImageItem($item, bool $withProtectedUrls = false, ?Request $request = null): ?array
+    {
+        if (is_string($item)) {
+            $item = ['file_path' => $item];
+        } elseif (!is_array($item)) {
+            return null;
+        }
+
+        $filePath = $item['file_path'] ?? ($item['path'] ?? null);
+        if (is_string($filePath) && $filePath !== '') {
+            $filePath = ltrim(trim($filePath), '/');
+        } else {
+            $filePath = null;
+        }
+
+        $url = $item['url'] ?? ($item['public_url'] ?? null);
+        if ((!is_string($url) || $url === '') && $filePath) {
+            $url = $this->buildPublicUrl($filePath, $request) ?? $url;
+        }
+
+        $presignedUrl = null;
+        if ($withProtectedUrls) {
+            $candidate = $item['presigned_url'] ?? null;
+            if (is_string($candidate) && $candidate !== '') {
+                $presignedUrl = $candidate;
+            } elseif ($filePath) {
+                $presignedUrl = $this->buildPresignedUrl($filePath, 600, $request);
+            }
+        }
+
+        $normalized = [
+            'file_path' => $filePath,
+            'url' => $url,
+        ];
+
+        if ($withProtectedUrls) {
+            $normalized['presigned_url'] = $presignedUrl ?: null;
+        }
+        if (isset($item['thumbnail_path'])) {
+            $normalized['thumbnail_path'] = $item['thumbnail_path'];
+        }
+        if (isset($item['original_name'])) {
+            $normalized['original_name'] = $item['original_name'];
+        }
+        if (isset($item['mime_type'])) {
+            $normalized['mime_type'] = $item['mime_type'];
+        }
+        $size = $item['size'] ?? ($item['file_size'] ?? null);
+        if ($size !== null) {
+            $normalized['size'] = $size;
+        }
+        if (isset($item['duplicate'])) {
+            $normalized['duplicate'] = $item['duplicate'];
+        }
+
+        return $normalized;
+    }
+
+    private function logControllerException(\Throwable $exception, Request $request, string $contextMessage = ''): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
+                $this->errorLogService->logException($exception, $request, $extra);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log(self::ERRLOG_PREFIX . $loggingError->getMessage());
+            }
+        }
+        $fallbackMessage = $contextMessage !== '' ? $contextMessage : $exception->getMessage();
+        error_log($fallbackMessage);
+    }
+
+    private function buildPresignedUrl(?string $filePath, int $ttlSeconds = 600, ?Request $request = null): ?string
+    {
+        if (!$filePath || !$this->r2Service) {
+            return null;
+        }
+        try {
+            return $this->r2Service->generatePresignedUrl($filePath, $ttlSeconds);
+        } catch (\Throwable $ignore) {
+            return null;
+        }
+    }
+
+    private function buildPublicUrl(?string $filePath, ?Request $request = null): ?string
+    {
+        if (!$filePath || !$this->r2Service) {
+            return null;
+        }
+        try {
+            return $this->r2Service->getPublicUrl($filePath);
+        } catch (\Throwable $ignore) {
+            return null;
         }
     }
 
@@ -1801,7 +1987,7 @@ class ProductController
 
             return $this->json($response, ['success' => true, 'message' => 'Product deleted successfully']);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            $this->logControllerException($e, $request, 'ProductController::deleteProduct error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1958,4 +2144,5 @@ class ProductController
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
 }
+
 

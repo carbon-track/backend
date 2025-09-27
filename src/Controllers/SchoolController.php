@@ -187,11 +187,7 @@ class SchoolController extends BaseController
                         'data' => ['school' => $school]
                     ];
                 } catch (\Throwable $e) {
-                    try {
-                        $this->errorLogService->logException($e, $request);
-                    } catch (\Throwable $ignore) {
-                        error_log('ErrorLogService logging failed: ' . $ignore->getMessage());
-                    }
+                    $this->logExceptionWithFallback($e, $request, 'SchoolController::create error: ' . $e->getMessage());
                     $httpStatus = 500;
                     $payload = [
                         'success' => false,
@@ -481,6 +477,24 @@ class SchoolController extends BaseController
 
         return $this->response($response, $body ?? [ 'success' => false, 'message' => 'Unexpected state' ], $httpStatus);
     }
+
+
+    private function logExceptionWithFallback(\Throwable $exception, Request $request, string $contextMessage = ''): void
+    {
+        if ($this->errorLogService) {
+            try {
+                $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
+                $this->errorLogService->logException($exception, $request, $extra);
+                return;
+            } catch (\Throwable $loggingError) {
+                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+            }
+        }
+        if ($contextMessage !== '') {
+            error_log($contextMessage);
+        } else {
+            error_log($exception->getMessage());
+        }
+    }
+
 }
-
-
