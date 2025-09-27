@@ -10641,6 +10641,26 @@
             "type": "integer",
             "minimum": 1,
             "description": "兑换数量"
+          },
+          "delivery_address": {
+            "type": "string",
+            "description": "收货地址；虚拟商品请填写邮箱（默认使用账号邮箱）",
+            "example": "user@example.com"
+          },
+          "contact_area_code": {
+            "type": "string",
+            "description": "联系电话区号（与联系电话配套填写）",
+            "example": "+86"
+          },
+          "contact_phone": {
+            "type": "string",
+            "description": "联系电话，可选。如为虚拟商品可留空",
+            "example": "13800138000"
+          },
+          "notes": {
+            "type": "string",
+            "description": "备注信息，可选",
+            "example": "请在周末派送"
           }
         }
       },
@@ -10653,19 +10673,15 @@
           "message": {
             "type": "string"
           },
-          "data": {
-            "type": "object",
-            "properties": {
-              "exchange_id": {
-                "type": "integer"
-              },
-              "product_name": {
-                "type": "string"
-              },
-              "points_deducted": {
-                "type": "integer"
-              }
-            }
+          "exchange_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "points_used": {
+            "type": "integer"
+          },
+          "remaining_points": {
+            "type": "integer"
           }
         }
       },

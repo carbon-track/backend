@@ -25,6 +25,9 @@ class ProductController
     private const ERR_ADMIN_REQUIRED = 'Admin access required';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
 
+    private ?string $pointExchangeUserIdColumn = null;
+    private ?string $pointsTransactionUserIdColumn = null;
+
     public function __construct(
         PDO $db,
         MessageService $messageService,
@@ -362,6 +365,7 @@ class ProductController
                     'product_name' => $product['name'],
                     'product_price' => $product['points_required'],
                     'delivery_address' => $data['delivery_address'] ?? null,
+                    'contact_area_code' => $data['contact_area_code'] ?? null,
                     'contact_phone' => $data['contact_phone'] ?? null,
                     'notes' => $data['notes'] ?? null
                 ]);
@@ -446,7 +450,8 @@ class ProductController
                 return $this->json($response, ['error' => 'Unauthorized'], 401);
             }
             $exchangeId = $args['id'];
-            $sql = "SELECT * FROM point_exchanges WHERE id = :id AND user_id = :uid AND deleted_at IS NULL";
+            $userColumn = $this->pointExchangeUserColumn();
+            $sql = "SELECT * FROM point_exchanges WHERE id = :id AND {$userColumn} = :uid AND deleted_at IS NULL";
             $stmt = $this->db->prepare($sql);
             $stmt->execute(['id' => $exchangeId, 'uid' => $user['id']]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -477,10 +482,11 @@ class ProductController
             $offset = ($page - 1) * $limit;
 
             // 获取总数
+            $userColumn = $this->pointExchangeUserColumn();
             $countSql = "
                 SELECT COUNT(*) as total
                 FROM point_exchanges 
-                WHERE user_id = :user_id AND deleted_at IS NULL
+                WHERE {$userColumn} = :user_id AND deleted_at IS NULL
             ";
             $countStmt = $this->db->prepare($countSql);
             $countStmt->execute(['user_id' => $user['id']]);
@@ -494,7 +500,7 @@ class ProductController
                     p.images as current_product_images
                 FROM point_exchanges e
                 LEFT JOIN products p ON e.product_id = p.id
-                WHERE e.user_id = :user_id AND e.deleted_at IS NULL
+                WHERE " . $this->pointExchangeUserColumn('e') . " = :user_id AND e.deleted_at IS NULL
                 ORDER BY e.created_at DESC
                 LIMIT :limit OFFSET :offset
             ";
@@ -557,7 +563,7 @@ class ProductController
             }
 
             if (!empty($params['user_id'])) {
-                $where[] = 'e.user_id = :user_id';
+                $where[] = $this->pointExchangeUserColumn('e') . ' = :user_id';
                 $bindings['user_id'] = $params['user_id'];
             }
 
@@ -579,7 +585,7 @@ class ProductController
                     p.image_path as current_product_image_path,
                     p.images as current_product_images
                 FROM point_exchanges e
-                LEFT JOIN users u ON e.user_id = u.id
+                LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE {$whereClause}
                 ORDER BY e.created_at DESC
@@ -676,7 +682,7 @@ class ProductController
                     p.image_path as current_product_image_path,
                     p.images as current_product_images
                 FROM point_exchanges e
-                LEFT JOIN users u ON e.user_id = u.id
+                LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE e.id = :id AND e.deleted_at IS NULL
             ";
@@ -2004,15 +2010,16 @@ class ProductController
      */
     private function createExchangeRecord(array $data): string
     {
+        $userColumn = $this->resolvePointExchangeUserIdColumn();
         $sql = "
             INSERT INTO point_exchanges (
-                id, user_id, product_id, quantity, points_used, 
+                id, {$userColumn}, product_id, quantity, points_used, 
                 product_name, product_price, delivery_address, 
-                contact_phone, notes, status, created_at
+                contact_area_code, contact_phone, notes, status, created_at
             ) VALUES (
-                :id, :user_id, :product_id, :quantity, :points_used,
+                :id, :exchange_user_id, :product_id, :quantity, :points_used,
                 :product_name, :product_price, :delivery_address,
-                :contact_phone, :notes, 'pending', NOW()
+                :contact_area_code, :contact_phone, :notes, 'pending', NOW()
             )
         ";
 
@@ -2020,13 +2027,14 @@ class ProductController
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             'id' => $exchangeId,
-            'user_id' => $data['user_id'],
+            'exchange_user_id' => $data['user_id'],
             'product_id' => $data['product_id'],
             'quantity' => $data['quantity'],
             'points_used' => $data['points_used'],
             'product_name' => $data['product_name'],
             'product_price' => $data['product_price'],
             'delivery_address' => $data['delivery_address'],
+            'contact_area_code' => $data['contact_area_code'] ?? null,
             'contact_phone' => $data['contact_phone'],
             'notes' => $data['notes']
         ]);
@@ -2039,12 +2047,13 @@ class ProductController
      */
     private function recordPointTransaction(int $userId, float $points, string $type, string $description, ?string $relatedTable = null, ?string $relatedId = null): void
     {
+        $userColumn = $this->resolvePointsTransactionUserIdColumn();
         $sql = "
             INSERT INTO points_transactions (
-                id, user_id, points, type, description, 
+                id, {$userColumn}, points, type, description, 
                 related_table, related_id, created_at
             ) VALUES (
-                :id, :user_id, :points, :type, :description,
+                :id, :points_user_id, :points, :type, :description,
                 :related_table, :related_id, NOW()
             )
         ";
@@ -2052,13 +2061,125 @@ class ProductController
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             'id' => $this->generateUuid(),
-            'user_id' => $userId,
+            'points_user_id' => $userId,
             'points' => $points,
             'type' => $type,
             'description' => $description,
             'related_table' => $relatedTable,
             'related_id' => $relatedId
         ]);
+    }
+
+    private function pointExchangeUserColumn(?string $alias = null): string
+    {
+        $column = $this->resolvePointExchangeUserIdColumn();
+        if ($alias !== null && $alias !== '') {
+            return $alias . '.' . $column;
+        }
+
+        return $column;
+    }
+
+    private function resolvePointExchangeUserIdColumn(): string
+    {
+        if ($this->pointExchangeUserIdColumn !== null) {
+            return $this->pointExchangeUserIdColumn;
+        }
+
+        $detected = 'user_id';
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+
+            if ($driver === 'mysql') {
+                $stmt = $this->db->query("SHOW COLUMNS FROM point_exchanges LIKE 'user_id'");
+                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$hasUserId) {
+                    $stmtUid = $this->db->query("SHOW COLUMNS FROM point_exchanges LIKE 'uid'");
+                    if ($stmtUid && $stmtUid->fetch(PDO::FETCH_ASSOC)) {
+                        $detected = 'uid';
+                    }
+                }
+            } elseif ($driver === 'sqlite') {
+                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
+                $columns = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $names = array_map(static fn($col) => $col['name'] ?? '', $columns);
+                if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
+                    $detected = 'uid';
+                }
+            } else {
+                $stmt = $this->db->query("SELECT * FROM point_exchanges LIMIT 0");
+                if ($stmt) {
+                    $count = $stmt->columnCount();
+                    for ($i = 0; $i < $count; $i++) {
+                        $meta = $stmt->getColumnMeta($i);
+                        $name = $meta['name'] ?? '';
+                        if ($name === 'user_id') {
+                            $detected = 'user_id';
+                            break;
+                        }
+                        if ($name === 'uid') {
+                            $detected = 'uid';
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore and fall back to default detected value
+        }
+
+        return $this->pointExchangeUserIdColumn = $detected;
+    }
+
+    private function resolvePointsTransactionUserIdColumn(): string
+    {
+        if ($this->pointsTransactionUserIdColumn !== null) {
+            return $this->pointsTransactionUserIdColumn;
+        }
+
+        $detected = 'user_id';
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+
+            if ($driver === 'mysql') {
+                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
+                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$hasUserId) {
+                    $stmtUid = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'uid'");
+                    if ($stmtUid && $stmtUid->fetch(PDO::FETCH_ASSOC)) {
+                        $detected = 'uid';
+                    }
+                }
+            } elseif ($driver === 'sqlite') {
+                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
+                $columns = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $names = array_map(static fn($col) => $col['name'] ?? '', $columns);
+                if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
+                    $detected = 'uid';
+                }
+            } else {
+                $stmt = $this->db->query("SELECT * FROM points_transactions LIMIT 0");
+                if ($stmt) {
+                    $count = $stmt->columnCount();
+                    for ($i = 0; $i < $count; $i++) {
+                        $meta = $stmt->getColumnMeta($i);
+                        $name = $meta['name'] ?? '';
+                        if ($name === 'user_id') {
+                            $detected = 'user_id';
+                            break;
+                        }
+                        if ($name === 'uid') {
+                            $detected = 'uid';
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // ignore and fall back to detected value
+        }
+
+        return $this->pointsTransactionUserIdColumn = $detected;
     }
 
     /**
@@ -2069,7 +2190,7 @@ class ProductController
         $sql = "
             SELECT e.*, u.username, u.email
             FROM point_exchanges e
-            LEFT JOIN users u ON e.user_id = u.id
+            LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
             WHERE e.id = :id AND e.deleted_at IS NULL
         ";
         $stmt = $this->db->prepare($sql);

@@ -19,7 +19,11 @@ class ExchangeTransaction extends Model
         'status',
         'meta',
         'created_at',
-        'updated_at'
+        'updated_at',
+        'delivery_address',
+        'contact_area_code',
+        'contact_phone',
+        'notes',
     ];
 
     protected $casts = [

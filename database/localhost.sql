@@ -400,6 +400,7 @@ CREATE TABLE `point_exchanges` (
   `product_name` varchar(255) NOT NULL,
   `product_price` int(11) NOT NULL,
   `delivery_address` varchar(255) DEFAULT NULL,
+  `contact_area_code` varchar(20) DEFAULT NULL,
   `contact_phone` varchar(50) DEFAULT NULL,
   `notes` text,
   `status` enum('pending','processing','shipped','completed','cancelled') NOT NULL DEFAULT 'pending',
