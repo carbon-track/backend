@@ -71,8 +71,9 @@ class AdminController
             $where = ['u.deleted_at IS NULL'];
             $queryParams = [];
             if ($search !== '') {
-                $where[] = '(u.username LIKE :search OR u.email LIKE :search)';
-                $queryParams['search'] = "%{$search}%";
+                $where[] = '(u.username LIKE :search_username OR u.email LIKE :search_email)';
+                $queryParams['search_username'] = "%{$search}%";
+                $queryParams['search_email'] = "%{$search}%";
             }
             if ($status !== '') {
                 $where[] = 'u.status = :status';
