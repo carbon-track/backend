@@ -27,6 +27,7 @@ class ProductController
 
     private ?string $pointExchangeUserIdColumn = null;
     private ?string $pointsTransactionUserIdColumn = null;
+    private ?bool $pointExchangeHasAreaCode = null;
 
     public function __construct(
         PDO $db,
@@ -2011,21 +2012,58 @@ class ProductController
     private function createExchangeRecord(array $data): string
     {
         $userColumn = $this->resolvePointExchangeUserIdColumn();
-        $sql = "
-            INSERT INTO point_exchanges (
-                id, {$userColumn}, product_id, quantity, points_used, 
-                product_name, product_price, delivery_address, 
-                contact_area_code, contact_phone, notes, status, created_at
-            ) VALUES (
-                :id, :exchange_user_id, :product_id, :quantity, :points_used,
-                :product_name, :product_price, :delivery_address,
-                :contact_area_code, :contact_phone, :notes, 'pending', NOW()
-            )
-        ";
+        $supportsAreaCode = $this->pointExchangeSupportsAreaCode();
+
+        $columns = [
+            'id',
+            $userColumn,
+            'product_id',
+            'quantity',
+            'points_used',
+            'product_name',
+            'product_price',
+            'delivery_address',
+        ];
+
+        $placeholders = [
+            ':id',
+            ':exchange_user_id',
+            ':product_id',
+            ':quantity',
+            ':points_used',
+            ':product_name',
+            ':product_price',
+            ':delivery_address',
+        ];
+
+        if ($supportsAreaCode) {
+            $columns[] = 'contact_area_code';
+            $placeholders[] = ':contact_area_code';
+        }
+
+        $columns = array_merge($columns, [
+            'contact_phone',
+            'notes',
+            'status',
+            'created_at',
+        ]);
+        $placeholders = array_merge($placeholders, [
+            ':contact_phone',
+            ':notes',
+            "'pending'",
+            'NOW()',
+        ]);
+
+        $sql = sprintf(
+            'INSERT INTO point_exchanges (%s) VALUES (%s)',
+            implode(', ', $columns),
+            implode(', ', $placeholders)
+        );
 
         $exchangeId = $this->generateUuid();
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([
+
+        $params = [
             'id' => $exchangeId,
             'exchange_user_id' => $data['user_id'],
             'product_id' => $data['product_id'],
@@ -2034,14 +2072,58 @@ class ProductController
             'product_name' => $data['product_name'],
             'product_price' => $data['product_price'],
             'delivery_address' => $data['delivery_address'],
-            'contact_area_code' => $data['contact_area_code'] ?? null,
             'contact_phone' => $data['contact_phone'],
-            'notes' => $data['notes']
-        ]);
+            'notes' => $data['notes'],
+        ];
+
+        if ($supportsAreaCode) {
+            $params['contact_area_code'] = $data['contact_area_code'] ?? null;
+        }
+
+        $stmt->execute($params);
 
         return $exchangeId;
     }
 
+    private function pointExchangeSupportsAreaCode(): bool
+    {
+        if ($this->pointExchangeHasAreaCode !== null) {
+            return $this->pointExchangeHasAreaCode;
+        }
+
+        $hasColumn = false;
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: null;
+
+            if ($driver === 'sqlite') {
+                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
+                if ($stmt) {
+                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                        if (isset($row['name']) && strcasecmp((string) $row['name'], 'contact_area_code') === 0) {
+                            $hasColumn = true;
+                            break;
+                        }
+                    }
+                }
+            } elseif ($driver === 'mysql') {
+                $stmt = $this->db->prepare('SHOW COLUMNS FROM point_exchanges LIKE ?');
+                if ($stmt && $stmt->execute(['contact_area_code'])) {
+                    $hasColumn = (bool) $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+            } elseif ($driver === 'pgsql') {
+                $stmt = $this->db->prepare('SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?');
+                if ($stmt && $stmt->execute(['point_exchanges', 'contact_area_code'])) {
+                    $hasColumn = (bool) $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+            }
+        } catch (\Throwable $exception) {
+            $hasColumn = false;
+        }
+
+        $this->pointExchangeHasAreaCode = $hasColumn;
+        return $hasColumn;
+    }
     /**
      * 记录积分交易
      */

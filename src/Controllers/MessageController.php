@@ -57,19 +57,85 @@ class MessageController
             $where = ['m.receiver_id = :user_id', 'm.deleted_at IS NULL'];
             $bindings = ['user_id' => $user['id']];
 
-            // Optional filter by read status using is_read column (1/0)
-            if (isset($params['is_read'])) {
-                $where[] = 'm.is_read = :is_read';
-                $bindings['is_read'] = ($params['is_read'] === 'true' || $params['is_read'] === '1') ? 1 : 0;
+            // 状态筛选：前端使用 `status=unread|read`
+            if (isset($params['status']) && $params['status'] !== '') {
+                if ($params['status'] === 'unread') {
+                    $where[] = 'm.is_read = 0';
+                } elseif ($params['status'] === 'read') {
+                    $where[] = 'm.is_read = 1';
+                }
+            }
+
+            // 搜索：在 title 和 content 上模糊匹配
+            if (!empty($params['search'])) {
+                $where[] = '(m.title LIKE :search OR m.content LIKE :search)';
+                $bindings['search'] = '%' . trim((string)$params['search']) . '%';
             }
 
             $whereClause = implode(' AND ', $where);
 
-            // 获取总数
+            // 计算总数
             $countSql = "SELECT COUNT(*) as total FROM messages m WHERE {$whereClause}";
             $countStmt = $this->db->prepare($countSql);
             $countStmt->execute($bindings);
             $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+
+            // 检查 messages 表是否包含 priority 列（兼容老数据库）
+            $hasPriority = false;
+            try {
+                $colStmt = $this->db->query("SHOW COLUMNS FROM messages LIKE 'priority'");
+                if ($colStmt && $colStmt->fetch()) {
+                    $hasPriority = true;
+                }
+            } catch (\Throwable $_) {
+                // ignore - absence of column will be handled
+                $hasPriority = false;
+            }
+
+            // 构建 priority 排序表达式（数值越大优先级越高）
+            if ($hasPriority) {
+                $priorityExpr = "(CASE COALESCE(m.priority,'normal') WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 WHEN 'low' THEN 0 ELSE 1 END)";
+            } else {
+                // 不存在 priority 列时，使用 0 常量占位（对排序无影响）
+                $priorityExpr = "0";
+            }
+
+            // 处理排序参数，确保 priority 排序优先于用户指定排序
+            $sort = trim((string)($params['sort'] ?? 'created_at_desc'));
+            $userOrder = 'm.created_at DESC';
+            $priorityOrderDir = 'DESC';
+
+            switch ($sort) {
+                case 'created_at_asc':
+                    $userOrder = 'm.created_at ASC';
+                    break;
+                case 'created_at_desc':
+                    $userOrder = 'm.created_at DESC';
+                    break;
+                case 'priority_asc':
+                    // 用户请求优先级从低到高：priority 升序
+                    $priorityOrderDir = 'ASC';
+                    // 仍然在同一优先级内按时间倒序
+                    $userOrder = 'm.created_at DESC';
+                    break;
+                case 'priority_desc':
+                    $priorityOrderDir = 'DESC';
+                    $userOrder = 'm.created_at DESC';
+                    break;
+                default:
+                    // fallback
+                    $userOrder = 'm.created_at DESC';
+            }
+
+            // 最终 ORDER BY：未读优先 -> priority 优先 -> 用户排序 -> 最后按 id 保持稳定
+            $orderParts = [];
+            $orderParts[] = 'm.is_read ASC';
+            if ($hasPriority) {
+                $orderParts[] = $priorityExpr . ' ' . $priorityOrderDir;
+            }
+            $orderParts[] = $userOrder;
+            $orderParts[] = 'm.id DESC';
+            $orderClause = implode(', ', $orderParts);
 
             // 获取消息列表
             $sql = "
@@ -77,9 +143,7 @@ class MessageController
                     m.*
                 FROM messages m
                 WHERE {$whereClause}
-                ORDER BY 
-                    m.is_read ASC,
-                    m.created_at DESC
+                ORDER BY {$orderClause}
                 LIMIT :limit OFFSET :offset
             ";
 

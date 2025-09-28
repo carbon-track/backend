@@ -63,7 +63,8 @@ class ProductControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['data']['pagination']['total']);
         $this->assertEquals('Eco Bottle', $json['data']['products'][0]['name']);
-        $this->assertEquals(['/a.png'], $json['data']['products'][0]['images']);
+        $this->assertIsArray($json['data']['products'][0]['images']);
+        $this->assertEquals('a.png', $json['data']['products'][0]['images'][0]['file_path'] ?? null);
         $this->assertTrue($json['data']['products'][0]['is_available']);
         $this->assertEquals('Popular', $json['data']['products'][0]['tags'][0]['name']);
     }

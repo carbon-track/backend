@@ -70,7 +70,7 @@ class AdminControllerTest extends TestCase
                 [
                     $this->callback(function ($sql) {
                         $this->assertStringContainsString('u.is_admin = :is_admin', $sql);
-                        $this->assertStringContainsString('(u.username LIKE :search OR u.email LIKE :search)', $sql);
+                        $this->assertStringContainsString('(u.username LIKE :search_username OR u.email LIKE :search_email)', $sql);
                         return true;
                     })
                 ],
@@ -93,11 +93,11 @@ class AdminControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['data']['pagination']['total_items']);
         $this->assertEquals('u1', $json['data']['users'][0]['username']);
-        $this->assertEquals('%u%', $capturedParams[':search'] ?? null);
+        $this->assertEquals('%u%', $capturedParams[':search_username'] ?? null);
+        $this->assertEquals('%u%', $capturedParams[':search_email'] ?? null);
         $this->assertEquals('active', $capturedParams[':status'] ?? null);
         $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
     }
 
 }
-
 
