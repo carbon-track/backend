@@ -22,7 +22,9 @@ class IdempotencyMiddleware implements MiddlewareInterface
         '/api/v1/auth/register',
         '/api/v1/carbon-track/record',
         '/api/v1/exchange',
-        '/api/v1/messages'
+        // Only require idempotency for broadcast/send endpoints and admin message actions
+        '/api/v1/messages/broadcast',
+        '/api/v1/admin/messages'
     ];
 
     public function __construct(DatabaseService $db, Logger $logger)
@@ -35,63 +37,57 @@ class IdempotencyMiddleware implements MiddlewareInterface
     {
         $method = $request->getMethod();
         $uri = $request->getUri()->getPath();
-        
         // Only apply idempotency to specific methods and routes
         if (!in_array($method, $this->idempotentMethods) || !$this->isSensitiveRoute($uri)) {
             return $handler->handle($request);
         }
-        
+
+        $response = null;
         $idempotencyKey = $request->getHeaderLine('X-Request-ID');
-        
+
+        // Validate header presence and format; build error response if invalid
         if (empty($idempotencyKey)) {
-            return $this->badRequestResponse('X-Request-ID header is required for this operation');
-        }
-        
-        // Validate UUID format
-        if (!$this->isValidUuid($idempotencyKey)) {
-            return $this->badRequestResponse('X-Request-ID must be a valid UUID');
-        }
-        
-    try {
-            // Check if this request has been processed before
-            $existingRecord = IdempotencyRecord::where('idempotency_key', $idempotencyKey)
-                ->where('created_at', '>', date('Y-m-d H:i:s', strtotime('-24 hours'))) // Only check last 24 hours
-                ->first();
-            
-            if ($existingRecord) {
-                $this->logger->info('Idempotent request detected', [
+            $response = $this->badRequestResponse('X-Request-ID header is required for this operation');
+        } elseif (!$this->isValidUuid($idempotencyKey)) {
+            $response = $this->badRequestResponse('X-Request-ID must be a valid UUID');
+        } else {
+            try {
+                // Check if this request has been processed before
+                $existingRecord = IdempotencyRecord::where('idempotency_key', $idempotencyKey)
+                    ->where('created_at', '>', date('Y-m-d H:i:s', strtotime('-24 hours'))) // Only check last 24 hours
+                    ->first();
+
+                if ($existingRecord) {
+                    $this->logger->info('Idempotent request detected', [
+                        'idempotency_key' => $idempotencyKey,
+                        'original_status' => $existingRecord->response_status,
+                        'uri' => $uri
+                    ]);
+
+                    $resp = new Response();
+                    $resp->getBody()->write($existingRecord->response_body);
+                    $response = $resp
+                        ->withStatus($existingRecord->response_status)
+                        ->withHeader('Content-Type', 'application/json')
+                        ->withHeader('X-Idempotent-Replay', 'true');
+                } else {
+                    // Process the request and store result for future replays
+                    $response = $handler->handle($request);
+                    $this->storeIdempotencyRecord($idempotencyKey, $request, $response);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('Idempotency middleware error', [
+                    'error' => $e->getMessage(),
                     'idempotency_key' => $idempotencyKey,
-                    'original_status' => $existingRecord->response_status,
                     'uri' => $uri
                 ]);
-                
-                // Return the cached response
-                $response = new Response();
-                $response->getBody()->write($existingRecord->response_body);
-                return $response
-                    ->withStatus($existingRecord->response_status)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withHeader('X-Idempotent-Replay', 'true');
+
+                // Continue with normal processing if idempotency check fails
+                $response = $handler->handle($request);
             }
-            
-            // Process the request
-            $response = $handler->handle($request);
-            
-            // Store the response for future idempotency checks
-            $this->storeIdempotencyRecord($idempotencyKey, $request, $response);
-            
-            return $response;
-            
-    } catch (\Throwable $e) {
-            $this->logger->error('Idempotency middleware error', [
-                'error' => $e->getMessage(),
-                'idempotency_key' => $idempotencyKey,
-                'uri' => $uri
-            ]);
-            
-            // Continue with normal processing if idempotency check fails
-            return $handler->handle($request);
         }
+
+        return $response;
     }
 
     private function isSensitiveRoute(string $uri): bool
