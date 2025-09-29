@@ -34,11 +34,12 @@ class RequestLoggingMiddleware implements MiddlewareInterface
     public function process(Request $request, RequestHandler $handler): Response
     {
         $start = microtime(true);
-    $requestId = $request->getHeaderLine('X-Request-ID') ?: $this->generateRequestId();
-    // 让后续服务/中间件能够获取 request_id：
-    $request = $request->withAttribute('request_id', $requestId);
-    // 将其写回 server params（兼容旧代码使用 $_SERVER['HTTP_X_REQUEST_ID']）
-    $_SERVER['HTTP_X_REQUEST_ID'] = $requestId;
+        $requestId = $this->resolveRequestId($request->getHeaderLine('X-Request-ID'));
+        $request = $request
+            ->withHeader('X-Request-ID', $requestId)
+            ->withAttribute('request_id', $requestId);
+        // Allow legacy listeners that rely on $_SERVER to access the request id
+        $_SERVER['HTTP_X_REQUEST_ID'] = $requestId;
 
         $path = $request->getUri()->getPath();
         $method = $request->getMethod();
@@ -87,7 +88,23 @@ class RequestLoggingMiddleware implements MiddlewareInterface
             ]);
         }
 
-    return $response->withHeader('X-Request-ID', $requestId);
+        return $response->withHeader('X-Request-ID', $requestId);
+    }
+
+    private function resolveRequestId(?string $incoming): string
+    {
+        $incoming = trim((string) $incoming);
+
+        if ($incoming !== '' && $this->isValidUuid($incoming)) {
+            return strtolower($incoming);
+        }
+
+        return $this->generateRequestId();
+    }
+
+    private function isValidUuid(string $uuid): bool
+    {
+        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $uuid) === 1;
     }
 
     private function shouldSkip(string $path): bool
@@ -102,7 +119,19 @@ class RequestLoggingMiddleware implements MiddlewareInterface
 
     private function generateRequestId(): string
     {
-        return bin2hex(random_bytes(8));
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+        $hex = bin2hex($bytes);
+
+        return sprintf(
+            '%s-%s-%s-%s-%s',
+            substr($hex, 0, 8),
+            substr($hex, 8, 4),
+            substr($hex, 12, 4),
+            substr($hex, 16, 4),
+            substr($hex, 20, 12)
+        );
     }
 
     private function decodeIfJson(?string $body)

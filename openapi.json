@@ -64,7 +64,7 @@
       "headers": [
         "X-Request-ID"
       ],
-      "requirements": "必须是16位小写十六进制字符串 (^[0-9a-f]{16}$)，24小时内有效。注意：旧文档/客户端可能仍使用UUID；服务端会接受并规范化为内部16hex request_id。",
+      "requirements": "Server generates an RFC4122 UUID v4 for X-Request-ID when the header is missing. Clients may provide their own valid UUID if they need cross-service idempotency within 24 hours.",
       "error_codes": [
         "BAD_REQUEST",
         "IDEMPOTENCY_KEY_REQUIRED",
@@ -146,7 +146,7 @@
         "积分兑换",
         "发送消息"
       ],
-      "implementation": "客户端应生成 16 位小写十六进制随机ID (例如使用随机8字节经 bin2hex / md5(random_bytes(8))截取) 作为 X-Request-ID。若未提供，系统会自动生成用于日志关联，但幂等性将失效。服务端在所有4xx/5xx响应中返回相同 request_id 字段与响应头 X-Request-ID 便于排障。"
+      "implementation": "Backend middleware now injects a UUID v4 when X-Request-ID is absent. Provide your own valid UUID only if you require deterministic retries across services."
     },
     "pagination": {
       "description": "列表类API支持分页，默认每页20条记录",
@@ -7061,7 +7061,477 @@
         ],
         "responses": {
           "200": {
-            "description": "成功"
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "users",
+                        "transactions",
+                        "exchanges",
+                        "messages",
+                        "activities",
+                        "carbon",
+                        "trends",
+                        "trend_summary",
+                        "recent"
+                      ],
+                      "properties": {
+                        "users": {
+                          "type": "object",
+                          "properties": {
+                            "total_users": {
+                              "type": "integer",
+                              "example": 128
+                            },
+                            "active_users": {
+                              "type": "integer",
+                              "example": 86
+                            },
+                            "inactive_users": {
+                              "type": "integer",
+                              "example": 42
+                            },
+                            "new_users_30d": {
+                              "type": "integer",
+                              "example": 12
+                            },
+                            "active_ratio": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.67
+                            },
+                            "new_users_ratio": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.09
+                            }
+                          }
+                        },
+                        "transactions": {
+                          "type": "object",
+                          "properties": {
+                            "total_transactions": {
+                              "type": "integer",
+                              "example": 240
+                            },
+                            "pending_transactions": {
+                              "type": "integer",
+                              "example": 6
+                            },
+                            "approved_transactions": {
+                              "type": "integer",
+                              "example": 220
+                            },
+                            "rejected_transactions": {
+                              "type": "integer",
+                              "example": 14
+                            },
+                            "total_points_awarded": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 1840
+                            },
+                            "total_carbon_saved": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 524.5
+                            },
+                            "approval_rate": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.92
+                            },
+                            "pending_ratio": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.025
+                            },
+                            "avg_points_per_transaction": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 8.36
+                            },
+                            "last7_transactions": {
+                              "type": "integer",
+                              "example": 34
+                            },
+                            "last7_points_awarded": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 278.0
+                            }
+                          }
+                        },
+                        "exchanges": {
+                          "type": "object",
+                          "properties": {
+                            "total_exchanges": {
+                              "type": "integer",
+                              "example": 58
+                            },
+                            "pending_exchanges": {
+                              "type": "integer",
+                              "example": 3
+                            },
+                            "completed_exchanges": {
+                              "type": "integer",
+                              "example": 50
+                            },
+                            "other_exchanges": {
+                              "type": "integer",
+                              "example": 5
+                            },
+                            "total_points_spent": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 910
+                            },
+                            "completion_rate": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.86
+                            }
+                          }
+                        },
+                        "messages": {
+                          "type": "object",
+                          "properties": {
+                            "total_messages": {
+                              "type": "integer",
+                              "example": 320
+                            },
+                            "unread_messages": {
+                              "type": "integer",
+                              "example": 14
+                            },
+                            "read_messages": {
+                              "type": "integer",
+                              "example": 306
+                            },
+                            "unread_ratio": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.043
+                            }
+                          }
+                        },
+                        "activities": {
+                          "type": "object",
+                          "properties": {
+                            "total_activities": {
+                              "type": "integer",
+                              "example": 41
+                            },
+                            "active_activities": {
+                              "type": "integer",
+                              "example": 33
+                            },
+                            "inactive_activities": {
+                              "type": "integer",
+                              "example": 8
+                            }
+                          }
+                        },
+                        "carbon": {
+                          "type": "object",
+                          "properties": {
+                            "total_records": {
+                              "type": "integer",
+                              "example": 610
+                            },
+                            "pending_records": {
+                              "type": "integer",
+                              "example": 12
+                            },
+                            "approved_records": {
+                              "type": "integer",
+                              "example": 580
+                            },
+                            "rejected_records": {
+                              "type": "integer",
+                              "example": 18
+                            },
+                            "total_carbon_saved": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 842.3
+                            },
+                            "total_points_earned": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 2740
+                            },
+                            "last7_carbon_saved": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 86.4
+                            },
+                            "last7_points_earned": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 310
+                            },
+                            "last7_pending_records": {
+                              "type": "integer",
+                              "example": 4
+                            },
+                            "last7_approved_records": {
+                              "type": "integer",
+                              "example": 52
+                            },
+                            "approval_rate": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.92
+                            },
+                            "average_carbon_per_record": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 1.45
+                            },
+                            "average_daily_carbon": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 28.08
+                            }
+                          }
+                        },
+                        "trends": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string",
+                                "example": "2025-09-05"
+                              },
+                              "transactions": {
+                                "type": "integer",
+                                "example": 12
+                              },
+                              "carbon_saved": {
+                                "type": "number",
+                                "format": "float",
+                                "example": 15.6
+                              },
+                              "points_awarded": {
+                                "type": "number",
+                                "format": "float",
+                                "example": 96
+                              },
+                              "approved_records": {
+                                "type": "integer",
+                                "example": 18
+                              }
+                            }
+                          }
+                        },
+                        "trend_summary": {
+                          "type": "object",
+                          "properties": {
+                            "carbon_last7": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 86.4
+                            },
+                            "carbon_prev7": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 64.1
+                            },
+                            "carbon_delta": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 22.3
+                            },
+                            "carbon_delta_rate": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.35
+                            },
+                            "transactions_last7": {
+                              "type": "integer",
+                              "example": 82
+                            },
+                            "points_last7": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 640
+                            },
+                            "average_daily_carbon_30d": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 28.08
+                            }
+                          }
+                        },
+                        "recent": {
+                          "type": "object",
+                          "properties": {
+                            "pending_transactions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "example": "pt_3"
+                                  },
+                                  "user_id": {
+                                    "type": [
+                                      "integer",
+                                      "null"
+                                    ],
+                                    "example": 3
+                                  },
+                                  "username": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "inactive_user"
+                                  },
+                                  "points": {
+                                    "type": "number",
+                                    "format": "float",
+                                    "example": 5
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "example": "pending"
+                                  },
+                                  "created_at": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "2025-09-28 10:15:00"
+                                  }
+                                }
+                              }
+                            },
+                            "pending_carbon_records": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                    "example": "cr_3"
+                                  },
+                                  "user_id": {
+                                    "type": [
+                                      "integer",
+                                      "null"
+                                    ],
+                                    "example": 3
+                                  },
+                                  "username": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "inactive_user"
+                                  },
+                                  "activity_id": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "act_c"
+                                  },
+                                  "activity_name_zh": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "活动C"
+                                  },
+                                  "activity_name_en": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "Activity C"
+                                  },
+                                  "carbon_saved": {
+                                    "type": "number",
+                                    "format": "float",
+                                    "example": 1.0
+                                  },
+                                  "points_earned": {
+                                    "type": "number",
+                                    "format": "float",
+                                    "example": 0
+                                  },
+                                  "created_at": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "2025-09-28 09:30:00"
+                                  }
+                                }
+                              }
+                            },
+                            "latest_users": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "integer",
+                                    "example": 4
+                                  },
+                                  "username": {
+                                    "type": "string",
+                                    "example": "suspended_user"
+                                  },
+                                  "email": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "suspended@example.com"
+                                  },
+                                  "status": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "suspended"
+                                  },
+                                  "created_at": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ],
+                                    "example": "2025-09-27 12:50:00"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

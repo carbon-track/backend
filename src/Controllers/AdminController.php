@@ -377,100 +377,447 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $thirtyDaysAgo = date('Y-m-d H:i:s', strtotime('-30 days'));
+            $timezoneName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+            if (!$timezoneName) {
+                $timezoneName = 'UTC';
+            }
+            $timezone = new DateTimeZone($timezoneName);
+            $now = new DateTimeImmutable('now', $timezone);
+            $thirtyDaysAgo = $now->modify('-30 days')->format('Y-m-d H:i:s');
+            $sevenDaysAgo = $now->modify('-7 days')->format('Y-m-d H:i:s');
+
             $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
             $dateExpr = $driver === 'sqlite' ? "substr(created_at,1,10)" : "DATE(created_at)";
 
-            // 用户统计（参数化）
-            $stmtUser = $this->db->prepare("SELECT COUNT(*) as total_users,
-                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active_users,
-                SUM(CASE WHEN status='inactive' THEN 1 ELSE 0 END) as inactive_users,
-                SUM(CASE WHEN created_at >= :d30 THEN 1 ELSE 0 END) as new_users_30d
+            $stmtUser = $this->db->prepare("SELECT COUNT(*) AS total_users,
+                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_users,
+                SUM(CASE WHEN status IN ('inactive','suspended') THEN 1 ELSE 0 END) AS inactive_users,
+                SUM(CASE WHEN created_at >= :d30 THEN 1 ELSE 0 END) AS new_users_30d
                 FROM users WHERE deleted_at IS NULL");
             $stmtUser->execute([':d30' => $thirtyDaysAgo]);
-            $userStats = $stmtUser->fetch(PDO::FETCH_ASSOC) ?: [];
+            $userStatsRaw = $stmtUser->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 交易统计
-            $transactionStats = $this->db->query("SELECT COUNT(*) as total_transactions,
-                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending_transactions,
-                SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) as approved_transactions,
-                SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) as rejected_transactions,
-                COALESCE(SUM(CASE WHEN status='approved' THEN points ELSE 0 END),0) as total_points_awarded,
-                0 as total_carbon_saved
+            $transactionStatsRaw = $this->db->query("SELECT COUNT(*) AS total_transactions,
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_transactions,
+                SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved_transactions,
+                SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected_transactions,
+                COALESCE(SUM(CASE WHEN status='approved' THEN points ELSE 0 END), 0) AS total_points_awarded
                 FROM points_transactions WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 兼容测试环境可能缺少 carbon_saved 列
-            $carbonSaved = 0.0;
-            try {
-                $carbonSavedTotal = $this->db->query("SELECT COALESCE(SUM(carbon_saved),0) FROM carbon_records WHERE status='approved' AND deleted_at IS NULL")?->fetchColumn();
-                if ($carbonSavedTotal !== false) { $carbonSaved = (float)$carbonSavedTotal; }
-            } catch (\Throwable $ignore) {}
-            $transactionStats['total_carbon_saved'] = $carbonSaved;
+            $txWindowStmt = $this->db->prepare("SELECT COUNT(*) AS total_transactions,
+                COALESCE(SUM(CASE WHEN status='approved' THEN points ELSE 0 END), 0) AS total_points_awarded
+                FROM points_transactions
+                WHERE deleted_at IS NULL AND created_at >= :d7");
+            $txWindowStmt->execute([':d7' => $sevenDaysAgo]);
+            $txWindowRaw = $txWindowStmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 兑换统计
-            $exchangeStats = $this->db->query("SELECT COUNT(*) as total_exchanges,
-                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending_exchanges,
-                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed_exchanges,
-                COALESCE(SUM(points_used),0) as total_points_spent
+            $exchangeStatsRaw = $this->db->query("SELECT COUNT(*) AS total_exchanges,
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_exchanges,
+                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_exchanges,
+                SUM(CASE WHEN status NOT IN ('pending','completed') THEN 1 ELSE 0 END) AS other_exchanges,
+                COALESCE(SUM(points_used), 0) AS total_points_spent
                 FROM point_exchanges WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 消息统计
-            $messageStats = $this->db->query("SELECT COUNT(*) as total_messages,
-                SUM(CASE WHEN is_read=0 THEN 1 ELSE 0 END) as unread_messages
+            $messageStatsRaw = $this->db->query("SELECT COUNT(*) AS total_messages,
+                SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_messages,
+                SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read_messages
                 FROM messages WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 活动统计
-            $activityStats = $this->db->query("SELECT COUNT(*) as total_activities,
-                SUM(CASE WHEN is_active=1 THEN 1 ELSE 0 END) as active_activities
+            $activityStatsRaw = $this->db->query("SELECT COUNT(*) AS total_activities,
+                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_activities
                 FROM carbon_activities WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            // 趋势（最近30天）
-            $trendTxStmt = $this->db->prepare("SELECT {$dateExpr} as date, COUNT(*) as transactions
-                FROM points_transactions WHERE created_at >= :d30 AND deleted_at IS NULL GROUP BY {$dateExpr}");
+            $carbonStatsRaw = $this->db->query("SELECT COUNT(*) AS total_records,
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_records,
+                SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved_records,
+                SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected_records,
+                COALESCE(SUM(CASE WHEN status='approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
+                COALESCE(SUM(CASE WHEN status='approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
+                FROM carbon_records WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            $carbonWindowStmt = $this->db->prepare("SELECT
+                    COALESCE(SUM(CASE WHEN status='approved' THEN carbon_saved ELSE 0 END), 0) AS carbon_saved,
+                    COALESCE(SUM(CASE WHEN status='approved' THEN points_earned ELSE 0 END), 0) AS points_earned,
+                    SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_records,
+                    SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved_records
+                FROM carbon_records
+                WHERE deleted_at IS NULL AND created_at >= :d7");
+            $carbonWindowStmt->execute([':d7' => $sevenDaysAgo]);
+            $carbonWindowRaw = $carbonWindowStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+            $trendTxStmt = $this->db->prepare("SELECT {$dateExpr} AS date,
+                    COUNT(*) AS transactions,
+                    COALESCE(SUM(CASE WHEN status='approved' THEN points ELSE 0 END), 0) AS points_awarded
+                FROM points_transactions
+                WHERE created_at >= :d30 AND deleted_at IS NULL
+                GROUP BY {$dateExpr}");
             $trendTxStmt->execute([':d30' => $thirtyDaysAgo]);
             $trendTransactions = $trendTxStmt->fetchAll(PDO::FETCH_ASSOC);
 
             $trendCarbon = [];
             try {
-                $trendCarbonStmt = $this->db->prepare("SELECT {$dateExpr} as date, COALESCE(SUM(carbon_saved),0) as carbon_saved
-                    FROM carbon_records WHERE created_at >= :d30 AND deleted_at IS NULL AND status='approved' GROUP BY {$dateExpr}");
+                $trendCarbonStmt = $this->db->prepare("SELECT {$dateExpr} AS date,
+                        COALESCE(SUM(carbon_saved), 0) AS carbon_saved,
+                        COUNT(*) AS approved_records
+                    FROM carbon_records
+                    WHERE created_at >= :d30 AND deleted_at IS NULL AND status='approved'
+                    GROUP BY {$dateExpr}");
                 $trendCarbonStmt->execute([':d30' => $thirtyDaysAgo]);
                 $trendCarbon = $trendCarbonStmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (\Throwable $ignore) {}
+            } catch (\Throwable $ignore) {
+            }
 
-            // 合并趋势填充空缺日期
             $trendMap = [];
             for ($i = 29; $i >= 0; $i--) {
-                $d = date('Y-m-d', strtotime("-{$i} days"));
-                $trendMap[$d] = ['date' => $d, 'transactions' => 0, 'carbon_saved' => 0.0];
+                $dateKey = $now->modify("-{$i} days")->format('Y-m-d');
+                $trendMap[$dateKey] = [
+                    'date' => $dateKey,
+                    'transactions' => 0,
+                    'carbon_saved' => 0.0,
+                    'points_awarded' => 0.0,
+                    'approved_records' => 0,
+                ];
             }
+
             foreach ($trendTransactions as $row) {
-                $d = $row['date'];
-                if (isset($trendMap[$d])) { $trendMap[$d]['transactions'] = (int)($row['transactions'] ?? 0); }
+                $d = (string)($row['date'] ?? '');
+                if ($d !== '' && isset($trendMap[$d])) {
+                    $trendMap[$d]['transactions'] = $this->toInt($row['transactions'] ?? 0);
+                    $trendMap[$d]['points_awarded'] = $this->toFloat($row['points_awarded'] ?? 0);
+                }
             }
+
             foreach ($trendCarbon as $row) {
-                $d = $row['date'];
-                if (isset($trendMap[$d])) { $trendMap[$d]['carbon_saved'] = (float)($row['carbon_saved'] ?? 0); }
+                $d = (string)($row['date'] ?? '');
+                if ($d !== '' && isset($trendMap[$d])) {
+                    $trendMap[$d]['carbon_saved'] = $this->toFloat($row['carbon_saved'] ?? 0);
+                    $trendMap[$d]['approved_records'] = $this->toInt($row['approved_records'] ?? 0);
+                }
             }
+
             $trendData = array_values($trendMap);
+            $trendCount = count($trendData);
+            $trendTotals = [
+                'transactions' => 0,
+                'carbon_saved' => 0.0,
+                'points_awarded' => 0.0,
+                'approved_records' => 0,
+            ];
+            foreach ($trendData as $entry) {
+                $trendTotals['transactions'] += $entry['transactions'];
+                $trendTotals['carbon_saved'] += $entry['carbon_saved'];
+                $trendTotals['points_awarded'] += $entry['points_awarded'];
+                $trendTotals['approved_records'] += $entry['approved_records'];
+            }
+
+            $last7 = $trendCount > 7 ? array_slice($trendData, -7) : $trendData;
+            $prev7 = [];
+            if ($trendCount > 7) {
+                $prev7 = array_slice($trendData, max(0, $trendCount - 14), max(0, min(7, $trendCount - 7)));
+            }
+
+            $sumColumn = static function (array $rows, string $key): float {
+                $total = 0.0;
+                foreach ($rows as $row) {
+                    $value = $row[$key] ?? 0;
+                    $total += is_numeric($value) ? (float) $value : 0.0;
+                }
+                return $total;
+            };
+
+            $carbonLast7 = $sumColumn($last7, 'carbon_saved');
+            $carbonPrev7 = $sumColumn($prev7, 'carbon_saved');
+            $transactionsLast7 = (int) round($sumColumn($last7, 'transactions'));
+            $pointsLast7 = $sumColumn($last7, 'points_awarded');
+
+            $trendSummary = [
+                'carbon_last7' => $carbonLast7,
+                'carbon_prev7' => $carbonPrev7,
+                'carbon_delta' => $carbonLast7 - $carbonPrev7,
+                'carbon_delta_rate' => $this->safeDivide($carbonLast7 - $carbonPrev7, max($carbonPrev7, 1)),
+                'transactions_last7' => $transactionsLast7,
+                'points_last7' => $pointsLast7,
+                'average_daily_carbon_30d' => $trendCount > 0 ? $trendTotals['carbon_saved'] / $trendCount : 0.0,
+            ];
+
+            $pendingTxStmt = $this->db->prepare("SELECT id, user_id, username, points, status, created_at
+                FROM points_transactions
+                WHERE deleted_at IS NULL AND status='pending'
+                ORDER BY created_at DESC
+                LIMIT 5");
+            $pendingTxStmt->execute();
+            $pendingTransactionsList = $pendingTxStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $pendingRecordsStmt = $this->db->prepare("SELECT cr.id, cr.user_id, u.username, cr.activity_id,
+                    ca.name_zh AS activity_name_zh, ca.name_en AS activity_name_en,
+                    cr.carbon_saved, cr.points_earned, cr.created_at
+                FROM carbon_records cr
+                LEFT JOIN users u ON u.id = cr.user_id
+                LEFT JOIN carbon_activities ca ON ca.id = cr.activity_id
+                WHERE cr.deleted_at IS NULL AND cr.status='pending'
+                ORDER BY cr.created_at DESC
+                LIMIT 5");
+            $pendingRecordsStmt->execute();
+            $pendingRecordsList = $pendingRecordsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $latestUsersStmt = $this->db->prepare("SELECT id, username, email, status, created_at
+                FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5");
+            $latestUsersStmt->execute();
+            $latestUsers = $latestUsersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $users = $this->normalizeUsersStats($userStatsRaw);
+            $transactions = $this->normalizeTransactionStats($transactionStatsRaw, $txWindowRaw, $carbonStatsRaw);
+            $exchanges = $this->normalizeExchangeStats($exchangeStatsRaw);
+            $messages = $this->normalizeMessageStats($messageStatsRaw);
+            $activities = $this->normalizeActivityStats($activityStatsRaw);
+            $carbon = $this->normalizeCarbonStats($carbonStatsRaw, $carbonWindowRaw, $trendTotals, $trendCount);
+
+            $recent = [
+                'pending_transactions' => $this->formatPendingTransactions($pendingTransactionsList),
+                'pending_carbon_records' => $this->formatPendingCarbonRecords($pendingRecordsList),
+                'latest_users' => $this->formatLatestUsers($latestUsers),
+            ];
 
             return $this->jsonResponse($response, [
                 'success' => true,
                 'data' => [
-                    'users' => $userStats,
-                    'transactions' => $transactionStats,
-                    'exchanges' => $exchangeStats,
-                    'messages' => $messageStats,
-                    'activities' => $activityStats,
-                    'trends' => $trendData
-                ]
+                    'users' => $users,
+                    'transactions' => $transactions,
+                    'exchanges' => $exchanges,
+                    'messages' => $messages,
+                    'activities' => $activities,
+                    'carbon' => $carbon,
+                    'trends' => $trendData,
+                    'trend_summary' => $trendSummary,
+                    'recent' => $recent,
+                ],
             ]);
         } catch (\Exception $e) {
-            if (($_ENV['APP_ENV'] ?? '') === 'testing') { throw $e; }
+            if (($_ENV['APP_ENV'] ?? '') === 'testing') {
+                throw $e;
+            }
             $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
+    private function normalizeUsersStats(array $row): array
+    {
+        $total = $this->toInt($row['total_users'] ?? 0);
+        $active = $this->toInt($row['active_users'] ?? 0);
+        $inactive = $this->toInt($row['inactive_users'] ?? 0);
+        if ($inactive === 0 && $total >= $active) {
+            $inactive = max(0, $total - $active);
+        }
+        $newThirty = $this->toInt($row['new_users_30d'] ?? 0);
+
+        return [
+            'total_users' => $total,
+            'active_users' => $active,
+            'inactive_users' => $inactive,
+            'new_users_30d' => $newThirty,
+            'active_ratio' => $this->safeDivide((float) $active, max($total, 1)),
+            'new_users_ratio' => $this->safeDivide((float) $newThirty, max($total, 1)),
+        ];
+    }
+
+    private function normalizeTransactionStats(array $row, array $windowRow, array $carbonRow): array
+    {
+        $total = $this->toInt($row['total_transactions'] ?? 0);
+        $pending = $this->toInt($row['pending_transactions'] ?? 0);
+        $approved = $this->toInt($row['approved_transactions'] ?? 0);
+        $rejected = $this->toInt($row['rejected_transactions'] ?? 0);
+        $points = $this->toFloat($row['total_points_awarded'] ?? 0);
+        $windowTransactions = $this->toInt($windowRow['total_transactions'] ?? 0);
+        $windowPoints = $this->toFloat($windowRow['total_points_awarded'] ?? 0);
+        $totalCarbon = $this->toFloat($carbonRow['total_carbon_saved'] ?? 0);
+
+        $avgPoints = $approved > 0 ? round($points / $approved, 2) : 0.0;
+
+        return [
+            'total_transactions' => $total,
+            'pending_transactions' => $pending,
+            'approved_transactions' => $approved,
+            'rejected_transactions' => $rejected,
+            'total_points_awarded' => $points,
+            'approval_rate' => $this->safeDivide((float) $approved, max($total, 1)),
+            'pending_ratio' => $this->safeDivide((float) $pending, max($total, 1)),
+            'avg_points_per_transaction' => $avgPoints,
+            'last7_transactions' => $windowTransactions,
+            'last7_points_awarded' => $windowPoints,
+            'total_carbon_saved' => $totalCarbon,
+        ];
+    }
+
+    private function normalizeExchangeStats(array $row): array
+    {
+        $total = $this->toInt($row['total_exchanges'] ?? 0);
+        $pending = $this->toInt($row['pending_exchanges'] ?? 0);
+        $completed = $this->toInt($row['completed_exchanges'] ?? 0);
+        $other = $this->toInt($row['other_exchanges'] ?? 0);
+        if ($other === 0 && $total >= ($pending + $completed)) {
+            $other = max(0, $total - $pending - $completed);
+        }
+        $pointsSpent = $this->toFloat($row['total_points_spent'] ?? 0);
+
+        return [
+            'total_exchanges' => $total,
+            'pending_exchanges' => $pending,
+            'completed_exchanges' => $completed,
+            'other_exchanges' => $other,
+            'total_points_spent' => $pointsSpent,
+            'completion_rate' => $this->safeDivide((float) $completed, max($total, 1)),
+        ];
+    }
+
+    private function normalizeMessageStats(array $row): array
+    {
+        $total = $this->toInt($row['total_messages'] ?? 0);
+        $unread = $this->toInt($row['unread_messages'] ?? 0);
+        $read = $this->toInt($row['read_messages'] ?? 0);
+        if ($read === 0 && $total >= $unread) {
+            $read = max(0, $total - $unread);
+        }
+
+        return [
+            'total_messages' => $total,
+            'unread_messages' => $unread,
+            'read_messages' => $read,
+            'unread_ratio' => $this->safeDivide((float) $unread, max($total, 1)),
+        ];
+    }
+
+    private function normalizeActivityStats(array $row): array
+    {
+        $total = $this->toInt($row['total_activities'] ?? 0);
+        $active = $this->toInt($row['active_activities'] ?? 0);
+        $inactive = max(0, $total - $active);
+
+        return [
+            'total_activities' => $total,
+            'active_activities' => $active,
+            'inactive_activities' => $inactive,
+        ];
+    }
+
+    private function normalizeCarbonStats(array $row, array $windowRow, array $trendTotals, int $trendCount): array
+    {
+        $totalRecords = $this->toInt($row['total_records'] ?? 0);
+        $pendingRecords = $this->toInt($row['pending_records'] ?? 0);
+        $approvedRecords = $this->toInt($row['approved_records'] ?? 0);
+        $rejectedRecords = $this->toInt($row['rejected_records'] ?? 0);
+        $totalCarbon = $this->toFloat($row['total_carbon_saved'] ?? 0);
+        $totalPointsEarned = $this->toFloat($row['total_points_earned'] ?? 0);
+        $windowCarbon = $this->toFloat($windowRow['carbon_saved'] ?? 0);
+        $windowPoints = $this->toFloat($windowRow['points_earned'] ?? 0);
+        $windowPending = $this->toInt($windowRow['pending_records'] ?? 0);
+        $windowApproved = $this->toInt($windowRow['approved_records'] ?? 0);
+        $averageDaily = $trendCount > 0
+            ? $trendTotals['carbon_saved'] / $trendCount
+            : ($approvedRecords > 0 ? $totalCarbon / $approvedRecords : 0.0);
+
+        return [
+            'total_records' => $totalRecords,
+            'pending_records' => $pendingRecords,
+            'approved_records' => $approvedRecords,
+            'rejected_records' => $rejectedRecords,
+            'total_carbon_saved' => $totalCarbon,
+            'total_points_earned' => $totalPointsEarned,
+            'last7_carbon_saved' => $windowCarbon,
+            'last7_points_earned' => $windowPoints,
+            'last7_pending_records' => $windowPending,
+            'last7_approved_records' => $windowApproved,
+            'approval_rate' => $this->safeDivide((float) $approvedRecords, max($totalRecords, 1)),
+            'average_carbon_per_record' => $approvedRecords > 0 ? round($totalCarbon / $approvedRecords, 4) : 0.0,
+            'average_daily_carbon' => round($averageDaily, 4),
+        ];
+    }
+
+    private function formatPendingTransactions(array $rows): array
+    {
+        return array_values(array_map(function (array $row): array {
+            return [
+                'id' => isset($row['id']) ? (string) $row['id'] : '',
+                'user_id' => isset($row['user_id']) ? $this->toInt($row['user_id']) : null,
+                'username' => $row['username'] ?? null,
+                'points' => $this->toFloat($row['points'] ?? 0),
+                'status' => $row['status'] ?? 'pending',
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }, $rows));
+    }
+
+    private function formatPendingCarbonRecords(array $rows): array
+    {
+        return array_values(array_map(function (array $row): array {
+            return [
+                'id' => isset($row['id']) ? (string) $row['id'] : '',
+                'user_id' => isset($row['user_id']) ? $this->toInt($row['user_id']) : null,
+                'username' => $row['username'] ?? null,
+                'activity_id' => $row['activity_id'] ?? null,
+                'activity_name_zh' => $row['activity_name_zh'] ?? null,
+                'activity_name_en' => $row['activity_name_en'] ?? null,
+                'carbon_saved' => $this->toFloat($row['carbon_saved'] ?? 0),
+                'points_earned' => $this->toFloat($row['points_earned'] ?? 0),
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }, $rows));
+    }
+
+    private function formatLatestUsers(array $rows): array
+    {
+        return array_values(array_map(function (array $row): array {
+            return [
+                'id' => $this->toInt($row['id'] ?? 0),
+                'username' => $row['username'] ?? null,
+                'email' => $row['email'] ?? null,
+                'status' => $row['status'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }, $rows));
+    }
+
+    private function toInt(mixed $value): int
+    {
+        if ($value === null || $value === '') {
+            return 0;
+        }
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_string($value)) {
+            $filtered = preg_replace('/[^0-9\\-]/', '', $value);
+            return (int) ($filtered ?? 0);
+        }
+        return (int) $value;
+    }
+
+    private function toFloat(mixed $value): float
+    {
+        if ($value === null || $value === '') {
+            return 0.0;
+        }
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+        if (is_string($value)) {
+            $filtered = preg_replace('/[^0-9\\-\\.]/', '', $value);
+            return (float) ($filtered ?? 0);
+        }
+        return (float) $value;
+    }
+
+    private function safeDivide(float $numerator, float $denominator, int $scale = 4): float
+    {
+        if ($denominator <= 0.0) {
+            return 0.0;
+        }
+        return round($numerator / $denominator, $scale);
+    }
+
+
 
     /**
      * 审计日志列表
