@@ -341,21 +341,27 @@ class MessageControllerTest extends TestCase
         $audit->expects($this->once())
             ->method('log')
             ->with(
-                42,
-                'system_message_broadcast',
-                'messages',
-                null,
                 $this->callback(function (array $payload): bool {
-                    $this->assertSame('Announcement', $payload['title']);
-                    $this->assertSame('Broadcast body', $payload['content']);
-                    $this->assertSame('high', $payload['priority']);
-                    $this->assertSame('custom', $payload['scope']);
-                    $this->assertSame(2, $payload['sent_count']);
-                    $this->assertSame(2, $payload['target_count']);
-                    $this->assertSame([2], $payload['invalid_user_ids']);
-                    $this->assertSame([], $payload['failed_user_ids']);
-                    $this->assertArrayHasKey('email_delivery', $payload);
-                    $this->assertFalse($payload['email_delivery']['triggered']);
+                    $this->assertSame('system_message_broadcast', $payload['action']);
+                    $this->assertSame('admin_message', $payload['operation_category']);
+                    $this->assertSame('messages', $payload['affected_table']);
+                    $this->assertSame('broadcast', $payload['change_type']);
+
+                    $data = $payload['data'] ?? [];
+                    $this->assertSame('Announcement', $data['title']);
+                    $this->assertSame('Broadcast body', $data['content']);
+                    $this->assertSame('high', $data['priority']);
+                    $this->assertSame('custom', $data['scope']);
+                    $this->assertSame(2, $data['sent_count']);
+                    $this->assertSame(2, $data['target_count']);
+                    $this->assertSame([2], $data['invalid_user_ids']);
+                    $this->assertSame([], $data['failed_user_ids']);
+                    $this->assertArrayHasKey('email_delivery', $data);
+
+                    $delivery = $data['email_delivery'];
+                    $this->assertSame('failed', $delivery['status']);
+                    $this->assertFalse($delivery['triggered']);
+                    $this->assertContains('Email service unavailable', $delivery['errors']);
                     return true;
                 })
             );
@@ -379,6 +385,8 @@ class MessageControllerTest extends TestCase
         $this->assertSame('high', $json['priority']);
         $this->assertArrayHasKey('email_delivery', $json);
         $this->assertFalse($json['email_delivery']['triggered']);
+        $this->assertSame('failed', $json['email_delivery']['status']);
+        $this->assertContains('Email service unavailable', $json['email_delivery']['errors']);
     }
 
     public function testHighPriorityBroadcastTriggersEmailBcc(): void
@@ -419,6 +427,8 @@ class MessageControllerTest extends TestCase
             )
             ->willReturn(true);
 
+        $email->method('getLastError')->willReturn(null);
+
         $audit->expects($this->once())->method('log');
 
         $controller = new MessageController($pdo, $svc, $audit, $auth, $email);
@@ -437,6 +447,8 @@ class MessageControllerTest extends TestCase
         $this->assertSame(1, $json['email_delivery']['attempted_recipients']);
         $this->assertSame(1, $json['email_delivery']['successful_chunks']);
         $this->assertSame([], $json['email_delivery']['failed_recipient_ids']);
+        $this->assertSame('sent', $json['email_delivery']['status']);
+        $this->assertSame([], $json['email_delivery']['errors']);
     }
 
     public function testSearchBroadcastRecipientsReturnsData(): void
@@ -508,6 +520,8 @@ class MessageControllerTest extends TestCase
                         'failed_chunks' => 0,
                         'failed_recipient_ids' => [],
                         'missing_email_user_ids' => [7],
+                        'status' => 'sent',
+                        'errors' => [],
                     ],
                 ], JSON_UNESCAPED_UNICODE),
                 'created_at' => '2025-09-22 10:00:00',
@@ -549,6 +563,8 @@ class MessageControllerTest extends TestCase
         $this->assertTrue($item['email_delivery']['triggered']);
         $this->assertSame(2, $item['email_delivery']['attempted_recipients']);
         $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
+        $this->assertSame('sent', $item['email_delivery']['status']);
+        $this->assertSame([], $item['email_delivery']['errors']);
     }
 }
 

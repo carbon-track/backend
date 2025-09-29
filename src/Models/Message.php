@@ -13,15 +13,16 @@ class Message extends Model
     use SoftDeletes;
 
     protected $table = 'messages';
-    
+
     protected $fillable = [
         'sender_id',
         'receiver_id',
         'title',
         'content',
         'is_read',
+        'priority',
         // Following columns are not present in localhost.sql schema and must not be mass-assigned:
-        // 'type', 'read_at', 'related_entity_type', 'related_entity_id', 'priority'
+        // 'type', 'read_at', 'related_entity_type', 'related_entity_id'
     ];
 
     protected $casts = [
@@ -49,6 +50,11 @@ class Message extends Model
     const PRIORITY_NORMAL = 'normal';
     const PRIORITY_HIGH = 'high';
     const PRIORITY_URGENT = 'urgent';
+
+    /**
+     * Cache flag to avoid repeated schema checks when priority column exists.
+     */
+    protected static ?bool $priorityColumnKnown = null;
 
     /**
      * Get the sender of the message
@@ -96,7 +102,9 @@ class Message extends Model
      */
     public function scopeByPriority($query, string $priority)
     {
-        // 'priority' column not available in provided schema; no-op filter for compatibility
+        if (static::priorityColumnExistsStatic()) {
+            return $query->where('priority', $priority);
+        }
         return $query;
     }
 
@@ -154,8 +162,16 @@ class Message extends Model
      */
     public function isHighPriority(): bool
     {
-        // Priority not stored in provided schema; always false
-        return false;
+        if (!$this->priorityColumnExists()) {
+            return false;
+        }
+
+        $value = $this->getAttribute('priority');
+        if ($value === null) {
+            return false;
+        }
+
+        return in_array($value, [self::PRIORITY_HIGH, self::PRIORITY_URGENT], true);
     }
 
     /**
@@ -198,13 +214,21 @@ class Message extends Model
     ): self {
         // The provided DB schema (localhost.sql) does not include 'type', 'priority', 'related_entity_*', or 'read_at'.
         // We store a minimal message compatible with that schema.
-        return static::create([
+        $data = [
             'sender_id' => null, // System message
             'receiver_id' => $receiverId,
             'title' => $title,
             'content' => $content,
             'is_read' => false
-        ]);
+        ];
+
+        if (static::priorityColumnExistsStatic()) {
+            $data['priority'] = in_array($priority, self::getValidPriorities(), true)
+                ? $priority
+                : self::PRIORITY_NORMAL;
+        }
+
+        return static::create($data);
     }
 
     /**
@@ -380,6 +404,33 @@ class Message extends Model
             self::PRIORITY_HIGH,
             self::PRIORITY_URGENT
         ];
+    }
+
+    protected function priorityColumnExists(): bool
+    {
+        return static::priorityColumnExistsStatic();
+    }
+
+    protected static function priorityColumnExistsStatic(): bool
+    {
+        if (self::$priorityColumnKnown === true) {
+            return true;
+        }
+
+        try {
+            $model = new static();
+            $connection = $model->getConnection();
+            $schema = $connection->getSchemaBuilder();
+            $exists = $schema->hasColumn($model->getTable(), 'priority');
+
+            if ($exists) {
+                self::$priorityColumnKnown = true;
+            }
+
+            return $exists;
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 }
 

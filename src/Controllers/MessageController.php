@@ -579,61 +579,110 @@ class MessageController
                 'failed_chunks' => 0,
                 'failed_recipient_ids' => [],
                 'missing_email_user_ids' => [],
+                'status' => 'skipped',
+                'errors' => [],
             ];
 
-            if ($this->shouldSendPriorityEmail($priority) && $this->emailService) {
-                $emailDelivery['triggered'] = true;
-                $emailSubject = $this->buildBroadcastEmailSubject($title, $priority);
-                $emailBodyHtml = $this->renderBroadcastEmailHtml($title, $content);
-                $emailBodyText = $this->renderBroadcastEmailText($title, $content);
-
-                $recipientRows = [];
-                foreach ($targetUserIds as $recipientId) {
-                    $record = $targetUserRecords[$recipientId] ?? null;
-                    if ($record === null) {
-                        continue;
-                    }
-                    $email = trim((string)($record['email'] ?? ''));
-                    if ($email === '') {
-                        $emailDelivery['missing_email_user_ids'][] = $recipientId;
-                        continue;
-                    }
-                    $recipientRows[] = [
-                        'id' => $recipientId,
-                        'email' => $email,
-                        'name' => $record['username'] ?? $record['email'],
-                    ];
+            $addEmailError = static function (string $message) use (&$emailDelivery): void {
+                $trimmed = trim($message);
+                if ($trimmed === '') {
+                    return;
                 }
+                if (!in_array($trimmed, $emailDelivery['errors'], true)) {
+                    $emailDelivery['errors'][] = $trimmed;
+                }
+            };
 
-                $emailDelivery['attempted_recipients'] = count($recipientRows);
-                if (!empty($recipientRows)) {
-                    $chunks = array_chunk($recipientRows, 40);
-                    foreach ($chunks as $chunk) {
-                        $bccList = [];
-                        foreach ($chunk as $entry) {
-                            $bccList[] = ['email' => $entry['email'], 'name' => $entry['name']];
+            if ($this->shouldSendPriorityEmail($priority)) {
+                if ($this->emailService) {
+                    $emailDelivery['triggered'] = true;
+                    $emailDelivery['status'] = 'pending';
+
+                    $emailSubject = $this->buildBroadcastEmailSubject($title, $priority);
+                    $emailBodyHtml = $this->renderBroadcastEmailHtml($title, $content);
+                    $emailBodyText = $this->renderBroadcastEmailText($title, $content);
+
+                    $recipientRows = [];
+                    foreach ($targetUserIds as $recipientId) {
+                        $record = $targetUserRecords[$recipientId] ?? null;
+                        if ($record === null) {
+                            continue;
                         }
+                        $email = trim((string)($record['email'] ?? ''));
+                        if ($email === '') {
+                            $emailDelivery['missing_email_user_ids'][] = $recipientId;
+                            continue;
+                        }
+                        $recipientRows[] = [
+                            'id' => $recipientId,
+                            'email' => $email,
+                            'name' => $record['username'] ?? $record['email'],
+                        ];
+                    }
 
-                        $success = $this->emailService->sendBroadcastEmail($bccList, $emailSubject, $emailBodyHtml, $emailBodyText);
-                        if ($success) {
-                            $emailDelivery['successful_chunks']++;
+                    $emailDelivery['attempted_recipients'] = count($recipientRows);
+                    if (!empty($recipientRows)) {
+                        $chunks = array_chunk($recipientRows, 40);
+                        foreach ($chunks as $chunk) {
+                            $bccList = [];
+                            foreach ($chunk as $entry) {
+                                $bccList[] = ['email' => $entry['email'], 'name' => $entry['name']];
+                            }
+
+                            $success = $this->emailService->sendBroadcastEmail($bccList, $emailSubject, $emailBodyHtml, $emailBodyText);
+                            if ($success) {
+                                $emailDelivery['successful_chunks']++;
+                            } else {
+                                $emailDelivery['failed_chunks']++;
+                                $emailDelivery['failed_recipient_ids'] = array_merge(
+                                    $emailDelivery['failed_recipient_ids'],
+                                    array_map(static fn(array $entry): int => (int)$entry['id'], $chunk)
+                                );
+
+                                $error = $this->emailService->getLastError();
+                                if ($error !== null) {
+                                    $addEmailError($error);
+                                }
+                            }
+                        }
+                    } else {
+                        $addEmailError('No recipients had deliverable email addresses');
+                    }
+
+                    if ($emailDelivery['triggered']) {
+                        if ($emailDelivery['attempted_recipients'] === 0) {
+                            $emailDelivery['status'] = 'skipped';
+                            if (empty($emailDelivery['errors'])) {
+                                $addEmailError('No deliverable email recipients');
+                            }
+                        } elseif ($emailDelivery['successful_chunks'] > 0 && $emailDelivery['failed_chunks'] === 0) {
+                            $emailDelivery['status'] = 'sent';
+                        } elseif ($emailDelivery['successful_chunks'] > 0) {
+                            $emailDelivery['status'] = 'partial';
+                            if (empty($emailDelivery['errors'])) {
+                                $addEmailError('Some recipients failed to receive broadcast email');
+                            }
                         } else {
-                            $emailDelivery['failed_chunks']++;
-                            $emailDelivery['failed_recipient_ids'] = array_merge(
-                                $emailDelivery['failed_recipient_ids'],
-                                array_map(static fn(array $entry): int => (int)$entry['id'], $chunk)
-                            );
+                            $emailDelivery['status'] = 'failed';
+                            if (empty($emailDelivery['errors'])) {
+                                $addEmailError('Broadcast email failed for all recipients');
+                            }
                         }
                     }
+                } else {
+                    $addEmailError('Email service unavailable');
+                    $emailDelivery['status'] = 'failed';
                 }
             }
 
-            $this->auditLog->log(
-                $user['id'],
-                'system_message_broadcast',
-                'messages',
-                null,
-                [
+            $auditPayload = [
+                'action' => 'system_message_broadcast',
+                'operation_category' => 'admin_message',
+                'user_id' => $user['id'],
+                'actor_type' => 'admin',
+                'affected_table' => 'messages',
+                'change_type' => 'broadcast',
+                'data' => [
                     'title' => $title,
                     'content' => $content,
                     'priority' => $priority,
@@ -643,8 +692,10 @@ class MessageController
                     'invalid_user_ids' => $invalidTargetIds,
                     'failed_user_ids' => $failedUserIds,
                     'email_delivery' => $emailDelivery,
-                ]
-            );
+                ],
+            ];
+
+            $this->auditLog->log($auditPayload);
 
             return $this->json($response, [
                 'success' => true,
@@ -1307,6 +1358,8 @@ class MessageController
             'failed_chunks' => 0,
             'failed_recipient_ids' => [],
             'missing_email_user_ids' => [],
+            'status' => 'skipped',
+            'errors' => [],
         ];
 
         if (is_string($value) && $value !== '') {
@@ -1327,6 +1380,33 @@ class MessageController
         $result['failed_chunks'] = (int)($value['failed_chunks'] ?? 0);
         $result['failed_recipient_ids'] = $this->decodeIdList($value['failed_recipient_ids'] ?? []);
         $result['missing_email_user_ids'] = $this->decodeIdList($value['missing_email_user_ids'] ?? []);
+        $status = (string)($value['status'] ?? '');
+        $result['status'] = $status !== '' ? $status : 'skipped';
+
+        $errors = $value['errors'] ?? [];
+        if (is_string($errors)) {
+            $decodedErrors = json_decode($errors, true);
+            if (is_array($decodedErrors)) {
+                $errors = $decodedErrors;
+            } else {
+                $errors = array_filter(array_map('trim', preg_split('/[\r\n]+/', $errors) ?: []));
+            }
+        }
+        if (!is_array($errors)) {
+            $errors = [];
+        }
+        $normalizedErrors = [];
+        foreach ($errors as $error) {
+            if (!is_scalar($error)) {
+                continue;
+            }
+            $trimmed = trim((string)$error);
+            if ($trimmed === '' || in_array($trimmed, $normalizedErrors, true)) {
+                continue;
+            }
+            $normalizedErrors[] = $trimmed;
+        }
+        $result['errors'] = $normalizedErrors;
 
         return $result;
     }

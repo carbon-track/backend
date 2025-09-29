@@ -12087,7 +12087,7 @@
             ]
           },
           "email_delivery": {
-            "": "#/components/schemas/BroadcastEmailDelivery",
+            "$ref": "#/components/schemas/BroadcastEmailDelivery",
             "description": "高优先级广播的邮件发送统计信息。"
           }
         },
@@ -12206,7 +12206,7 @@
             "description": "执行广播的管理员用户名。"
           },
           "email_delivery": {
-            "": "#/components/schemas/BroadcastEmailDelivery",
+            "$ref": "#/components/schemas/BroadcastEmailDelivery",
             "description": "邮件投递统计信息。"
           }
         },
@@ -12388,6 +12388,23 @@
               "type": "integer"
             },
             "description": "Recipients that could not be emailed due to missing email addresses."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "skipped",
+              "sent",
+              "partial",
+              "failed"
+            ],
+            "description": "High-level delivery status for SMTP dispatch."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Diagnostic messages when delivery was skipped or failed."
           }
         }
       },

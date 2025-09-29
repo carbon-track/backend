@@ -11,6 +11,7 @@ class EmailService
     protected $config;
     protected $logger;
     protected bool $forceSimulation = false;
+    private ?string $lastError = null;
     private string $fromAddress = 'noreply@example.com';
     private string $fromName = 'CarbonTrack';
 
@@ -111,6 +112,7 @@ class EmailService
 
     public function sendEmail(string $toEmail, string $toName, string $subject, string $bodyHtml, string $bodyText = ""): bool
     {
+        $this->lastError = null;
         try {
             $mailer = $this->mailer;
 
@@ -138,6 +140,7 @@ class EmailService
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Message could not be sent.', ['to' => $toEmail, 'subject' => $subject, 'error' => $e->getMessage()]);
+            $this->lastError = $e->getMessage();
             return false;
         }
     }
@@ -148,6 +151,7 @@ class EmailService
      */
     public function sendBroadcastEmail(array $recipients, string $subject, string $bodyHtml, string $bodyText = ""): bool
     {
+        $this->lastError = null;
         $cleaned = [];
         foreach ($recipients as $recipient) {
             $email = trim((string)($recipient['email'] ?? ''));
@@ -159,6 +163,7 @@ class EmailService
         }
 
         if (empty($cleaned)) {
+            $this->lastError = 'No deliverable email recipients provided';
             return false;
         }
 
@@ -205,8 +210,14 @@ class EmailService
                 'subject' => $subject,
                 'error' => $e->getMessage()
             ]);
+            $this->lastError = $e->getMessage();
             return false;
         }
+    }
+
+    public function getLastError(): ?string
+    {
+        return $this->lastError;
     }
 
     public function sendVerificationCode(string $toEmail, string $toName, string $code)
