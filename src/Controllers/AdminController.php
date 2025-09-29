@@ -28,6 +28,7 @@ class AdminController
 
 
     private ?string $lastLoginColumn = null;
+    private ?string $pointsTransactionUserColumn = null;
     /**
      * 用户列表（带简单过滤与分页）
      */
@@ -540,11 +541,15 @@ $sql = "
                 'average_daily_carbon_30d' => $trendCount > 0 ? $trendTotals['carbon_saved'] / $trendCount : 0.0,
             ];
 
-            $pendingTxStmt = $this->db->prepare("SELECT id, user_id, username, points, status, created_at
+            $pointsTxUserColumn = $this->resolvePointsTransactionUserIdColumn();
+            $pendingTxSql = sprintf("SELECT id, %s AS user_id, username, points, status, created_at
                 FROM points_transactions
                 WHERE deleted_at IS NULL AND status='pending'
                 ORDER BY created_at DESC
-                LIMIT 5");
+                LIMIT 5",
+                $pointsTxUserColumn
+            );
+            $pendingTxStmt = $this->db->prepare($pendingTxSql);
             $pendingTxStmt->execute();
             $pendingTransactionsList = $pendingTxStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
@@ -774,6 +779,60 @@ $sql = "
                 'created_at' => $row['created_at'] ?? null,
             ];
         }, $rows));
+    }
+
+    private function resolvePointsTransactionUserIdColumn(): string
+    {
+        if ($this->pointsTransactionUserColumn !== null) {
+            return $this->pointsTransactionUserColumn;
+        }
+
+        $column = 'uid';
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+
+            if ($driver === 'mysql') {
+                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
+                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($hasUserId) {
+                    $column = 'user_id';
+                } else {
+                    $stmtUid = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'uid'");
+                    if ($stmtUid && $stmtUid->fetch(PDO::FETCH_ASSOC)) {
+                        $column = 'uid';
+                    }
+                }
+            } elseif ($driver === 'sqlite') {
+                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
+                $columns = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $names = array_map(static fn ($col) => $col['name'] ?? '', $columns);
+                if (in_array('user_id', $names, true)) {
+                    $column = 'user_id';
+                } elseif (in_array('uid', $names, true)) {
+                    $column = 'uid';
+                }
+            } else {
+                $stmt = $this->db->query("SELECT * FROM points_transactions LIMIT 0");
+                if ($stmt) {
+                    for ($i = 0, $count = $stmt->columnCount(); $i < $count; $i++) {
+                        $meta = $stmt->getColumnMeta($i);
+                        $name = $meta['name'] ?? '';
+                        if ($name === 'user_id') {
+                            $column = 'user_id';
+                            break;
+                        }
+                        if ($name === 'uid') {
+                            $column = 'uid';
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            $column = 'uid';
+        }
+
+        return $this->pointsTransactionUserColumn = $column;
     }
 
     private function toInt(mixed $value): int
