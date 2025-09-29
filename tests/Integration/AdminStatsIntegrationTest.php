@@ -116,6 +116,14 @@ class AdminStatsIntegrationTest extends TestCase
         $this->assertSame(1, $data['messages']['read_messages']);
         $this->assertGreaterThan(0, $data['messages']['unread_ratio']);
 
+        $this->assertSame(3, $data['activities']['total_records']);
+        $this->assertSame(2, $data['activities']['approved_records']);
+        $this->assertSame(1, $data['activities']['pending_records']);
+        $this->assertSame(0, $data['activities']['rejected_records']);
+        $this->assertSame(5, $data['activities']['total_activities']);
+        $this->assertSame(4, $data['activities']['active_activities']);
+        $this->assertSame(1, $data['activities']['inactive_activities']);
+
         $this->assertSame(3, $data['carbon']['total_records']);
         $this->assertSame(1, $data['carbon']['pending_records']);
         $this->assertSame(2, $data['carbon']['approved_records']);
@@ -125,6 +133,8 @@ class AdminStatsIntegrationTest extends TestCase
 
         $this->assertArrayHasKey('trend_summary', $data);
         $this->assertEquals(8.7, $data['trend_summary']['carbon_last7']);
+        $this->assertEquals(4, $data['trend_summary']['transactions_last7']);
+        $this->assertEquals(30.0, $data['trend_summary']['points_last7']);
         $this->assertArrayHasKey('recent', $data);
         $this->assertNotEmpty($data['recent']['pending_transactions']);
         $this->assertNotEmpty($data['recent']['pending_carbon_records']);

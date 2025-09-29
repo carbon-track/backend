@@ -7242,6 +7242,34 @@
                             "inactive_activities": {
                               "type": "integer",
                               "example": 8
+                            },
+                            "total_records": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "approved_records": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "pending_records": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "rejected_records": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "approved_activities": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "pending_activities": {
+                              "type": "integer",
+                              "example": 0
+                            },
+                            "rejected_activities": {
+                              "type": "integer",
+                              "example": 0
                             }
                           }
                         },
