@@ -318,7 +318,7 @@ return function (App $app) {
     });
 
     // Backward-compatible alias group for clients calling /api/auth/* (without version prefix)
-    $app->group('/api', function (RouteCollectorProxy $api) use ($registerSchoolRoutes) {
+    $app->group('/api', function (RouteCollectorProxy $api) use ($registerSchoolRoutes, $registerMessageRoutes) {
         $api->group('/auth', function (RouteCollectorProxy $auth) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
@@ -330,6 +330,9 @@ return function (App $app) {
 
         // Backward-compatible aliases for schools endpoints (mirror /api/v1)
         $registerSchoolRoutes($api);
+        // Also expose messages endpoints without version prefix for older clients/proxies
+        // This provides compatibility for requests like /api/messages/unread-count
+        $registerMessageRoutes($api);
     });
 
     // Catch-all route for 404
