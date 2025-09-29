@@ -30,11 +30,11 @@ class AdminStatsIntegrationTest extends TestCase
             (3, 'inactive_user', 'inactive@example.com', 'inactive', 0, 10, datetime('now','-40 day')),
             (4, 'suspended_user', 'suspended@example.com', 'suspended', 0, 5, datetime('now','-5 day'))");
 
-        $insertPoint = $pdo->prepare("INSERT INTO points_transactions (id, user_id, status, points, created_at) VALUES (:id, :user_id, :status, :points, :created_at)");
-        $insertPoint->execute([':id' => 'pt_1', ':user_id' => 2, ':status' => 'approved', ':points' => 10, ':created_at' => date('Y-m-d H:i:s', strtotime('-2 days'))]);
-        $insertPoint->execute([':id' => 'pt_2', ':user_id' => 2, ':status' => 'approved', ':points' => 20, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
-        $insertPoint->execute([':id' => 'pt_3', ':user_id' => 3, ':status' => 'pending', ':points' => 5, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
-        $insertPoint->execute([':id' => 'pt_4', ':user_id' => 4, ':status' => 'rejected', ':points' => 8, ':created_at' => date('Y-m-d H:i:s', strtotime('-3 day'))]);
+        $insertPoint = $pdo->prepare("INSERT INTO points_transactions (id, uid, status, points, created_at) VALUES (:id, :uid, :status, :points, :created_at)");
+        $insertPoint->execute([':id' => 'pt_1', ':uid' => 2, ':status' => 'approved', ':points' => 10, ':created_at' => date('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $insertPoint->execute([':id' => 'pt_2', ':uid' => 2, ':status' => 'approved', ':points' => 20, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $insertPoint->execute([':id' => 'pt_3', ':uid' => 3, ':status' => 'pending', ':points' => 5, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $insertPoint->execute([':id' => 'pt_4', ':uid' => 4, ':status' => 'rejected', ':points' => 8, ':created_at' => date('Y-m-d H:i:s', strtotime('-3 day'))]);
 
         $insertCarbon = $pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, carbon_saved, points_earned, status, created_at) VALUES (:id, :user_id, :activity_id, :carbon_saved, :points_earned, :status, :created_at)");
         $insertCarbon->execute([':id' => 'cr_1', ':user_id' => 2, ':activity_id' => 'act_a', ':carbon_saved' => 5.5, ':points_earned' => 2, ':status' => 'approved', ':created_at' => date('Y-m-d H:i:s', strtotime('-2 day'))]);
