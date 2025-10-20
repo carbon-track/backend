@@ -614,7 +614,16 @@ CREATE TABLE `users` (
   `is_admin` tinyint(1) NOT NULL DEFAULT '0',
   `class_name` varchar(100) DEFAULT NULL,
   `school_id` int(11) DEFAULT NULL,
-  `avatar_id` int(11) DEFAULT NULL
+  `avatar_id` int(11) DEFAULT NULL,
+  `reset_token` varchar(255) DEFAULT NULL,
+  `reset_token_expires_at` datetime DEFAULT NULL,
+  `email_verified_at` datetime DEFAULT NULL,
+  `verification_code` varchar(32) DEFAULT NULL,
+  `verification_token` varchar(128) DEFAULT NULL,
+  `verification_code_expires_at` datetime DEFAULT NULL,
+  `verification_attempts` int(11) NOT NULL DEFAULT '0',
+  `verification_send_count` int(11) NOT NULL DEFAULT '0',
+  `verification_last_sent_at` datetime DEFAULT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
 
 -- --------------------------------------------------------
@@ -822,6 +831,8 @@ ALTER TABLE `users`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `id` (`id`),
   ADD UNIQUE KEY `idx_users_email_unique` (`email`),
+  ADD KEY `idx_users_verification_token` (`verification_token`),
+  ADD KEY `idx_users_email_verified_at` (`email_verified_at`),
   ADD KEY `idx_users_username` (`username`),
   ADD KEY `idx_users_deleted_at` (`deleted_at`),
   ADD KEY `idx_users_status` (`status`),

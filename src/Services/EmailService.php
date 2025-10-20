@@ -14,6 +14,9 @@ class EmailService
     private ?string $lastError = null;
     private string $fromAddress = 'noreply@example.com';
     private string $fromName = 'CarbonTrack';
+    private string $appName = 'CarbonTrack';
+    private string $supportEmail = 'support@carbontrack.example';
+    private ?string $frontendUrl = null;
 
     private const TAG_ACTIVITY_NAME = '{{activity_name}}';
     private const TAG_POINTS_EARNED = '{{points_earned}}';
@@ -23,6 +26,28 @@ class EmailService
     private const TAG_TOTAL_POINTS = '{{total_points}}';
     private const TAG_STATUS = '{{status}}';
     private const TAG_ADMIN_NOTES = '{{admin_notes}}';
+    private const DEFAULT_LAYOUT_TEMPLATE = <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{email_title}}</title>
+</head>
+<body style="margin:0;padding:24px;font-family:Arial,sans-serif;background-color:#f5f7fa;color:#1f2937;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;padding:32px;box-shadow:0 10px 40px rgba(15,23,42,0.08);">
+        <h1 style="margin-top:0;font-size:24px;color:#0ea5e9;">{{email_title}}</h1>
+        <div style="font-size:16px;line-height:1.6;">{{content}}</div>
+        {{buttons}}
+        <div style="margin-top:32px;font-size:13px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:16px;text-align:center;">
+            <p style="margin:0 0 8px 0;">&copy; {{current_year}} {{app_name}}. All rights reserved.</p>
+            <p style="margin:0;">Need help? <a href="mailto:{{support_email}}" style="color:#0ea5e9;text-decoration:none;">{{support_email}}</a></p>
+            {{footer_note}}
+        </div>
+    </div>
+</body>
+</html>
+HTML;
+    private const DEFAULT_BUTTON_COLOR = '#0ea5e9';
 
     public function __construct(array $config, Logger $logger)
     {
@@ -42,6 +67,23 @@ class EmailService
                 $this->logger->warning('PHPMailer not available; EmailService will simulate sending emails.');
             }
         }
+
+        $configuredAppName = $this->config['app_name'] ?? null;
+        if (is_string($configuredAppName) && $configuredAppName !== '') {
+            $this->appName = $configuredAppName;
+        } else {
+            $this->appName = $this->fromName ?: 'CarbonTrack';
+        }
+
+        $support = $this->config['support_email'] ?? ($this->config['reply_to'] ?? null);
+        if (!is_string($support) || $support === '') {
+            $support = $this->fromAddress ?: 'support@example.com';
+        }
+        $this->supportEmail = $support;
+
+        $frontend = $this->config['frontend_url']
+            ?? ($_ENV['FRONTEND_URL'] ?? ($_ENV['APP_URL'] ?? null));
+        $this->frontendUrl = is_string($frontend) && $frontend !== '' ? $frontend : null;
     }
 
     private function normalizeForceSimulation($value): bool
@@ -220,14 +262,207 @@ class EmailService
         return $this->lastError;
     }
 
-    public function sendVerificationCode(string $toEmail, string $toName, string $code)
+    /**
+     * Load an email template from disk, falling back to provided content when unavailable.
+     */
+    private function readTemplate(string $filename, string $fallback): string
     {
-        $subject = $this->config['subjects']['verification_code'] ?? 'Your Verification Code';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'verification_code.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'verification_code.txt');
+        $base = $this->config['templates_path'] ?? '';
+        $base = $base !== '' ? rtrim($base, "/\\") . DIRECTORY_SEPARATOR : '';
+        $path = $base . ltrim($filename, "/\\");
 
-        $bodyHtml = str_replace('{{code}}', $code, $htmlTemplate);
-        $bodyText = str_replace('{{code}}', $code, $textTemplate);
+        try {
+            $contents = @file_get_contents($path);
+        } catch (\Throwable $e) {
+            $contents = false;
+        }
+
+        if ($contents === false || $contents === '') {
+            try {
+                $this->logger->warning('Email template missing or unreadable', [
+                    'template' => $path
+                ]);
+            } catch (\Throwable $logError) {
+                // Ignore logging failures to keep mail flow resilient
+            }
+            return $fallback;
+        }
+
+        return $contents;
+    }
+
+    private function esc(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+    }
+
+    private function buildFrontendUrl(?string $path = null): ?string
+    {
+        if ($this->frontendUrl === null || $this->frontendUrl === '') {
+            return null;
+        }
+
+        $base = rtrim($this->frontendUrl, '/');
+        if ($path === null || $path === '') {
+            return $base;
+        }
+
+        return $base . '/' . ltrim($path, '/');
+    }
+
+    /**
+     * Render the shared email layout.
+     *
+     * @param array<int, array{text:string,url:string,color?:string}> $buttons
+     */
+    private function renderLayout(string $title, string $contentHtml, array $buttons = [], ?string $footerNote = null): string
+    {
+        $layout = $this->readTemplate('layout.html', self::DEFAULT_LAYOUT_TEMPLATE);
+        $buttonHtml = $this->buildButtonsHtml($buttons);
+
+        $replacements = [
+            '{{email_title}}' => $this->esc($title),
+            '{{content}}' => $contentHtml,
+            '{{buttons}}' => $buttonHtml,
+            '{{app_name}}' => $this->esc($this->appName),
+            '{{current_year}}' => date('Y'),
+            '{{support_email}}' => $this->esc($this->supportEmail),
+            '{{footer_note}}' => $footerNote ? '<p>' . $this->esc($footerNote) . '</p>' : '',
+        ];
+
+        return str_replace(array_keys($replacements), array_values($replacements), $layout);
+    }
+
+    /**
+     * @param array<int, array{text:string,url:string,color?:string}> $buttons
+     */
+    private function buildButtonsHtml(array $buttons): string
+    {
+        $items = [];
+        foreach ($buttons as $button) {
+            $text = trim((string) ($button['text'] ?? ''));
+            $url = trim((string) ($button['url'] ?? ''));
+            if ($text === '' || $url === '') {
+                continue;
+            }
+            $color = trim((string) ($button['color'] ?? self::DEFAULT_BUTTON_COLOR));
+            $items[] = sprintf(
+                '<a class="cta-button" href="%s" style="background-color:%s">%s</a>',
+                $this->esc($url),
+                $this->esc($color),
+                $this->esc($text)
+            );
+        }
+
+        if (empty($items)) {
+            return '';
+        }
+
+        return '<div class="button-group">' . implode('', $items) . '</div>';
+    }
+
+    /**
+     * @param array<int, array{text:string,url:string,color?:string}> $buttons
+     */
+    private function appendButtonActionsToText(string $bodyText, array $buttons): string
+    {
+        $links = [];
+        foreach ($buttons as $button) {
+            $text = trim((string) ($button['text'] ?? ''));
+            $url = trim((string) ($button['url'] ?? ''));
+            if ($text === '' || $url === '') {
+                continue;
+            }
+            $links[] = $text . ': ' . $url;
+        }
+
+        if (empty($links)) {
+            return $bodyText;
+        }
+
+        $bodyText = rtrim($bodyText);
+        $bodyText .= "\n\nActions:\n" . implode("\n", $links) . "\n";
+
+        return $bodyText;
+    }
+
+    /**
+     * Build a plain-text fallback from the HTML body.
+     *
+     * @param array<int, array{text:string,url:string,color?:string}> $buttons
+     */
+    private function buildTextBody(string $html, array $buttons = []): string
+    {
+        $replacements = [
+            '<br>' => "\n",
+            '<br/>' => "\n",
+            '<br />' => "\n",
+        ];
+        $blockBreaksPattern = '/<\s*\/?(p|div|section|article|li|tr|td|h[1-6])[^>]*>/i';
+        $normalized = str_ireplace(array_keys($replacements), array_values($replacements), $html);
+        $normalized = preg_replace($blockBreaksPattern, "\n", $normalized ?? $html);
+
+        $text = strip_tags($normalized ?? $html);
+        $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        $text = preg_replace("/\r\n|\r/", "\n", $text);
+        $text = preg_replace("/[ \t]+\n/", "\n", $text);
+        $text = preg_replace("/\n{3,}/", "\n\n", $text);
+        $text = trim($text ?? '');
+
+        return $this->appendButtonActionsToText($text, $buttons);
+    }
+
+    private function formatNumber(float $value): string
+    {
+        $formatted = number_format($value, 2, '.', '');
+        return rtrim(rtrim($formatted, '0'), '.');
+    }
+
+    public function sendVerificationCode(
+        string $toEmail,
+        string $toName,
+        string $code,
+        int $expiryMinutes = 30,
+        ?string $verificationLink = null
+    ): bool {
+        $subject = $this->config['subjects']['verification_code'] ?? 'Your Verification Code';
+
+        $htmlTemplate = $this->readTemplate(
+            'verification_code.html',
+            '<p>Hello {{username}},</p><p>Your verification code is <strong>{{verification_code}}</strong>. '
+            . 'The code expires in {{expiry_minutes}} minutes.</p>{{link_block}}'
+            . '<p>If you did not request this code you can safely ignore this email.</p>'
+        );
+
+        $buttons = [];
+        $linkBlockHtml = '';
+        $safeLink = null;
+        if ($verificationLink) {
+            $safeLink = $this->esc($verificationLink);
+            $buttons[] = [
+                'text' => 'Verify Email',
+                'url' => $verificationLink,
+                'color' => self::DEFAULT_BUTTON_COLOR,
+            ];
+            $linkBlockHtml = sprintf(
+                '<p>You can also open this link directly: <a href="%1$s">%1$s</a></p>',
+                $safeLink
+            );
+        }
+
+        $replacements = [
+            '{{code}}' => $this->esc($code),
+            '{{verification_code}}' => $this->esc($code),
+            '{{username}}' => $this->esc($toName),
+            '{{expiry_minutes}}' => $this->esc((string) $expiryMinutes),
+            '{{link_block}}' => $linkBlockHtml,
+            '{{verification_link}}' => $safeLink ?? '',
+            '{{link}}' => $safeLink ?? '',
+        ];
+
+        $bodyHtmlContent = str_replace(array_keys($replacements), array_values($replacements), $htmlTemplate);
+        $bodyHtml = $this->renderLayout('Verify your email address', $bodyHtmlContent, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -235,11 +470,30 @@ class EmailService
     public function sendPasswordResetLink(string $toEmail, string $toName, string $link)
     {
         $subject = $this->config['subjects']['password_reset'] ?? 'Password Reset Request';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'password_reset.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'password_reset.txt');
+        $htmlTemplate = $this->readTemplate(
+            'password_reset.html',
+            '<p>Hello {{username}},</p>'
+            . '<p>We received a request to reset your password.</p>'
+            . '<p>If this was you, use the button below to create a new password.</p>'
+            . '<p>If you did not request a password reset you can ignore this message.</p>'
+        );
 
-        $bodyHtml = str_replace('{{link}}', $link, $htmlTemplate);
-        $bodyText = str_replace('{{link}}', $link, $textTemplate);
+        $buttons = [];
+        if (trim($link) !== '') {
+            $buttons[] = [
+                'text' => 'Reset password',
+                'url' => $link,
+                'color' => '#2563eb',
+            ];
+        }
+
+        $contentHtml = str_replace(
+            ['{{username}}', '{{link}}'],
+            [$this->esc($toName), $this->esc($link)],
+            $htmlTemplate
+        );
+        $bodyHtml = $this->renderLayout('Reset your password', $contentHtml, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -247,11 +501,39 @@ class EmailService
     public function sendActivityApprovedNotification(string $toEmail, string $toName, string $activityName, float $pointsEarned)
     {
         $subject = $this->config['subjects']['activity_approved'] ?? 'Your Carbon Activity Approved!';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'activity_approved.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'activity_approved.txt');
+        $htmlTemplate = $this->readTemplate(
+            'activity_approved.html',
+            '<p>Hello {{username}},</p>'
+            . '<p>Your submission <strong>{{activity_name}}</strong> has been approved.</p>'
+            . '<p>You earned <strong>{{points_earned}}</strong> points for this activity.</p>'
+        );
 
-        $bodyHtml = str_replace([self::TAG_ACTIVITY_NAME, self::TAG_POINTS_EARNED], [$activityName, $pointsEarned], $htmlTemplate);
-        $bodyText = str_replace([self::TAG_ACTIVITY_NAME, self::TAG_POINTS_EARNED], [$activityName, $pointsEarned], $textTemplate);
+        $buttons = [];
+        $activityUrl = $this->buildFrontendUrl('dashboard/activities');
+        if ($activityUrl) {
+            $buttons[] = [
+                'text' => 'View activity history',
+                'url' => $activityUrl,
+                'color' => '#10b981',
+            ];
+        }
+
+        $points = $this->formatNumber($pointsEarned);
+        $bodyHtmlContent = str_replace(
+            [
+                '{{username}}',
+                self::TAG_ACTIVITY_NAME,
+                self::TAG_POINTS_EARNED,
+            ],
+            [
+                $this->esc($toName),
+                $this->esc($activityName),
+                $this->esc($points),
+            ],
+            $htmlTemplate
+        );
+        $bodyHtml = $this->renderLayout('Activity approved', $bodyHtmlContent, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -259,11 +541,39 @@ class EmailService
     public function sendActivityRejectedNotification(string $toEmail, string $toName, string $activityName, string $reason)
     {
         $subject = $this->config['subjects']['activity_rejected'] ?? 'Your Carbon Activity Rejected';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'activity_rejected.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'activity_rejected.txt');
+        $htmlTemplate = $this->readTemplate(
+            'activity_rejected.html',
+            '<p>Hello {{username}},</p>'
+            . '<p>We reviewed <strong>{{activity_name}}</strong> but could not approve it.</p>'
+            . '<p>Reason: {{reason}}</p>'
+            . '<p>You can review the submission, make changes, and resubmit at any time.</p>'
+        );
 
-        $bodyHtml = str_replace([self::TAG_ACTIVITY_NAME, self::TAG_REASON], [$activityName, $reason], $htmlTemplate);
-        $bodyText = str_replace([self::TAG_ACTIVITY_NAME, self::TAG_REASON], [$activityName, $reason], $textTemplate);
+        $buttons = [];
+        $activityUrl = $this->buildFrontendUrl('dashboard/activities');
+        if ($activityUrl) {
+            $buttons[] = [
+                'text' => 'Review submission',
+                'url' => $activityUrl,
+                'color' => '#f97316',
+            ];
+        }
+
+        $bodyHtmlContent = str_replace(
+            [
+                '{{username}}',
+                self::TAG_ACTIVITY_NAME,
+                self::TAG_REASON,
+            ],
+            [
+                $this->esc($toName),
+                $this->esc($activityName),
+                $this->esc($reason),
+            ],
+            $htmlTemplate
+        );
+        $bodyHtml = $this->renderLayout('Activity requires updates', $bodyHtmlContent, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -271,11 +581,41 @@ class EmailService
     public function sendExchangeConfirmation(string $toEmail, string $toName, string $productName, int $quantity, float $totalPoints)
     {
         $subject = $this->config['subjects']['exchange_confirmation'] ?? 'Your Exchange Order Confirmed';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'exchange_confirmation.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'exchange_confirmation.txt');
+        $htmlTemplate = $this->readTemplate(
+            'exchange_confirmation.html',
+            '<p>Hello {{username}},</p>'
+            . '<p>Thanks for redeeming <strong>{{product_name}}</strong>.</p>'
+            . '<p>Quantity: {{quantity}} · Points spent: {{total_points}}</p>'
+            . '<p>We will notify you when the exchange is ready for pickup.</p>'
+        );
 
-        $bodyHtml = str_replace([self::TAG_PRODUCT_NAME, self::TAG_QUANTITY, self::TAG_TOTAL_POINTS], [$productName, $quantity, $totalPoints], $htmlTemplate);
-        $bodyText = str_replace([self::TAG_PRODUCT_NAME, self::TAG_QUANTITY, self::TAG_TOTAL_POINTS], [$productName, $quantity, $totalPoints], $textTemplate);
+        $buttons = [];
+        $storeUrl = $this->buildFrontendUrl('store');
+        if ($storeUrl) {
+            $buttons[] = [
+                'text' => 'Browse more rewards',
+                'url' => $storeUrl,
+                'color' => '#7c3aed',
+            ];
+        }
+
+        $bodyHtmlContent = str_replace(
+            [
+                '{{username}}',
+                self::TAG_PRODUCT_NAME,
+                self::TAG_QUANTITY,
+                self::TAG_TOTAL_POINTS,
+            ],
+            [
+                $this->esc($toName),
+                $this->esc($productName),
+                $this->esc((string) $quantity),
+                $this->esc($this->formatNumber($totalPoints)),
+            ],
+            $htmlTemplate
+        );
+        $bodyHtml = $this->renderLayout('Exchange confirmed', $bodyHtmlContent, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -283,11 +623,50 @@ class EmailService
     public function sendExchangeStatusUpdate(string $toEmail, string $toName, string $productName, string $status, string $adminNotes = '')
     {
         $subject = $this->config['subjects']['exchange_status_update'] ?? 'Your Exchange Order Status Updated';
-        $htmlTemplate = file_get_contents($this->config['templates_path'] . 'exchange_status_update.html');
-        $textTemplate = file_get_contents($this->config['templates_path'] . 'exchange_status_update.txt');
+        $htmlTemplate = $this->readTemplate(
+            'exchange_status_update.html',
+            '<p>Hello {{username}},</p>'
+            . '<p>Your exchange for <strong>{{product_name}}</strong> was updated to <strong>{{status}}</strong>.</p>'
+            . '{{admin_notes_block}}'
+            . '<p>Thank you for helping us reduce carbon emissions.</p>'
+        );
 
-        $bodyHtml = str_replace([self::TAG_PRODUCT_NAME, self::TAG_STATUS, self::TAG_ADMIN_NOTES], [$productName, $status, $adminNotes], $htmlTemplate);
-        $bodyText = str_replace([self::TAG_PRODUCT_NAME, self::TAG_STATUS, self::TAG_ADMIN_NOTES], [$productName, $status, $adminNotes], $textTemplate);
+        $buttons = [];
+        $storeUrl = $this->buildFrontendUrl('store');
+        if ($storeUrl) {
+            $buttons[] = [
+                'text' => 'View rewards',
+                'url' => $storeUrl,
+                'color' => '#0ea5e9',
+            ];
+        }
+
+        $notesHtml = '';
+        $notesText = '';
+        if ($adminNotes !== '') {
+            $notesHtml = '<p>Notes from our team: ' . $this->esc($adminNotes) . '</p>';
+            $notesText = 'Notes from our team: ' . $adminNotes;
+        }
+
+        $bodyHtmlContent = str_replace(
+            [
+                '{{username}}',
+                self::TAG_PRODUCT_NAME,
+                self::TAG_STATUS,
+                self::TAG_ADMIN_NOTES,
+                '{{admin_notes_block}}',
+            ],
+            [
+                $this->esc($toName),
+                $this->esc($productName),
+                $this->esc($status),
+                $this->esc($adminNotes),
+                $notesHtml,
+            ],
+            $htmlTemplate
+        );
+        $bodyHtml = $this->renderLayout('Exchange status update', $bodyHtmlContent, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
@@ -295,26 +674,41 @@ class EmailService
     public function sendWelcomeEmail(string $toEmail, string $toName): bool
     {
         $subject = $this->config['subjects']['welcome'] ?? 'Welcome to CarbonTrack';
-        $bodyHtml = sprintf(
-            '<p>Hi %s,</p><p>Welcome to CarbonTrack! Your account has been created successfully.</p><p>Thanks for joining us.</p>',
-            htmlspecialchars($toName, ENT_QUOTES, 'UTF-8')
+        $contentHtml = sprintf(
+            '<p>Hello %s,</p>'
+            . '<p>Welcome to %s! Your account is ready to go.</p>'
+            . '<p>Here are a few ideas to get started:</p>'
+            . '<ul>'
+            . '<li>Log your recent carbon saving activities.</li>'
+            . '<li>Explore the store for rewards.</li>'
+            . '<li>Invite friends to join your sustainability journey.</li>'
+            . '</ul>',
+            $this->esc($toName),
+            $this->esc($this->appName)
         );
-        $bodyText = "Hi {$toName},\n\nWelcome to CarbonTrack! Your account has been created successfully.\n\nThanks for joining us.";
+
+        $buttons = [];
+        $dashboardUrl = $this->buildFrontendUrl('dashboard');
+        if ($dashboardUrl) {
+            $buttons[] = [
+                'text' => 'Open dashboard',
+                'url' => $dashboardUrl,
+                'color' => '#16a34a',
+            ];
+        }
+
+        $bodyHtml = $this->renderLayout('Welcome aboard', $contentHtml, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
+
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
 
     public function sendPasswordResetEmail(string $toEmail, string $toName, string $token): bool
     {
         $base = $this->config['reset_link_base']
-            ?? ($_ENV['APP_URL'] ?? ($_ENV['FRONTEND_URL'] ?? ''));
+            ?? ($_ENV['FRONTEND_URL'] ?? ($_ENV['APP_URL'] ?? ''));
         $link = $base ? rtrim($base, '/') . '/reset-password?token=' . urlencode($token) : '#';
-        $subject = $this->config['subjects']['password_reset'] ?? 'Password Reset Request';
-        $bodyHtml = sprintf(
-            '<p>Hi %s,</p><p>We received a request to reset your password.</p><p><a href="%s">Click here to reset your password</a>. This link will expire in 60 minutes.</p><p>If you did not request a password reset, you can safely ignore this email.</p>',
-            htmlspecialchars($toName, ENT_QUOTES, 'UTF-8'),
-            htmlspecialchars($link, ENT_QUOTES, 'UTF-8')
-        );
-        $bodyText = "Hi {$toName},\n\nWe received a request to reset your password.\nOpen this link to reset: {$link}\nThe link expires in 60 minutes. If you did not request this, please ignore this email.";
-        return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+
+        return $this->sendPasswordResetLink($toEmail, $toName, $link);
     }
 }

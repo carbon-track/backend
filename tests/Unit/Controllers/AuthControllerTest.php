@@ -47,6 +47,8 @@ class AuthControllerTest extends TestCase
         $this->assertTrue(method_exists(AuthController::class, 'register'));
         $this->assertTrue(method_exists(AuthController::class, 'login'));
         $this->assertTrue(method_exists(AuthController::class, 'logout'));
+        $this->assertTrue(method_exists(AuthController::class, 'sendVerificationCode'));
+        $this->assertTrue(method_exists(AuthController::class, 'verifyEmail'));
         $this->assertTrue(method_exists(AuthController::class, 'me'));
         $this->assertTrue(method_exists(AuthController::class, 'forgotPassword'));
         $this->assertTrue(method_exists(AuthController::class, 'resetPassword'));

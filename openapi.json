@@ -39,947 +39,13 @@
       "required_routes": [
         "/auth/register",
         "/auth/login",
-        "/auth/send-verification-code",
-        "/carbon-track/record"
-      ],
-      "headers": [
-        "X-Turnstile-Token"
-      ],
-      "body_fields": [
-        "cf_turnstile_response"
-      ],
-      "error_codes": [
-        "TURNSTILE_VERIFICATION_FAILED",
-        "MISSING_TURNSTILE_TOKEN"
-      ]
-    },
-    "idempotency": {
-      "description": "幂等性中间件，防止重复提交敏感操作",
-      "required_routes": [
-        "/auth/register",
-        "/carbon-track/record",
-        "/exchange",
-        "/messages"
-      ],
-      "headers": [
-        "X-Request-ID"
-      ],
-      "requirements": "Server generates an RFC4122 UUID v4 for X-Request-ID when the header is missing. Clients may provide their own valid UUID if they need cross-service idempotency within 24 hours.",
-      "error_codes": [
-        "BAD_REQUEST",
-        "IDEMPOTENCY_KEY_REQUIRED",
-        "INVALID_UUID"
-      ]
-    },
-    "cors": {
-      "description": "跨域资源共享中间件",
-      "allowed_origins": "环境变量CORS_ALLOWED_ORIGINS配置",
-      "allowed_methods": "GET,POST,PUT,DELETE,OPTIONS",
-      "allowed_headers": "Content-Type,Authorization,X-Request-ID,X-Requested-With,X-Turnstile-Token",
-      "credentials": true
-    },
-    "logging": {
-      "description": "请求日志中间件，记录所有API请求和响应",
-      "logs": [
-        "请求信息",
-        "响应状态",
-        "执行时间",
-        "错误信息"
-      ]
-    }
-  },
-  "x-error-codes": {
-    "description": "全局错误代码说明",
-    "authentication": {
-      "UNAUTHORIZED": "未授权访问，需要有效的JWT令牌",
-      "TOKEN_EXPIRED": "JWT令牌已过期，需要重新登录",
-      "INVALID_TOKEN": "无效的JWT令牌格式",
-      "AUTH_REQUIRED": "需要身份验证",
-      "ADMIN_REQUIRED": "需要管理员权限"
-    },
-    "validation": {
-      "BAD_REQUEST": "请求参数错误或格式不正确",
-      "MISSING_FIELDS": "缺少必需的字段",
-      "INVALID_FORMAT": "字段格式不正确",
-      "VALIDATION_FAILED": "数据验证失败"
-    },
-    "security": {
-      "TURNSTILE_VERIFICATION_FAILED": "Turnstile验证失败",
-      "MISSING_TURNSTILE_TOKEN": "缺少Turnstile验证令牌",
-      "IDEMPOTENCY_KEY_REQUIRED": "缺少幂等性请求ID",
-      "INVALID_UUID": "无效的UUID格式"
-    },
-    "business": {
-      "USER_NOT_FOUND": "用户不存在",
-      "ACTIVITY_NOT_FOUND": "碳活动不存在",
-      "INSUFFICIENT_POINTS": "积分不足",
-      "DUPLICATE_OPERATION": "重复操作"
-    },
-    "server": {
-      "INTERNAL_ERROR": "内部服务器错误",
-      "SERVICE_UNAVAILABLE": "服务暂时不可用",
-      "DATABASE_ERROR": "数据库操作错误"
-    }
-  },
-  "x-api-usage": {
-    "description": "API使用指南",
-    "authentication": {
-      "description": "所有需要认证的API都需要在请求头中包含有效的JWT令牌",
-      "example": "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-      "note": "令牌有效期为24小时，过期后需要重新登录"
-    },
-    "turnstile": {
-      "description": "敏感操作需要Turnstile验证，防止机器人攻击",
-      "required_operations": [
-        "用户注册",
-        "用户登录",
-        "发送验证码",
-        "提交碳记录"
-      ],
-      "implementation": "前端需要集成Cloudflare Turnstile组件，获取验证令牌后随请求发送"
-    },
-    "idempotency": {
-      "description": "敏感操作需要幂等性ID，防止重复提交。与日志 request_id 共用 X-Request-ID 头。",
-      "required_operations": [
-        "用户注册",
-        "提交碳记录",
-        "积分兑换",
-        "发送消息"
-      ],
-      "implementation": "Backend middleware now injects a UUID v4 when X-Request-ID is absent. Provide your own valid UUID only if you require deterministic retries across services."
-    },
-    "pagination": {
-      "description": "列表类API支持分页，默认每页20条记录",
-      "parameters": {
-        "page": "页码，从1开始",
-        "limit": "每页数量，最小10，最大100"
-      },
-      "response": "包含分页信息的响应结构"
-    },
-    "error_handling": {
-      "description": "所有API都返回统一的错误响应格式",
-      "structure": {
-        "success": false,
-        "message": "错误描述",
-        "code": "错误代码"
-      },
-      "http_status": "HTTP状态码与错误类型对应"
-    },
-    "rate_limiting": {
-      "description": "API有速率限制，防止滥用",
-      "limits": {
-        "auth": "登录尝试每分钟最多5次",
-        "verification": "验证码发送每小时最多3次",
-        "general": "其他API每分钟最多100次请求"
-      }
-    }
-  },
-  "servers": [
-    {
-      "url": "/api/v1",
-      "description": "生产环境API服务器"
-    },
-    {
-      "url": "/api",
-      "description": "生产环境API服务器（兼容 /api 前缀，不含版本号）"
-    },
-    {
-      "url": "http://localhost:8000/api/v1",
-      "description": "本地开发环境"
-    },
-    {
-      "url": "/",
-      "description": "根路径服务器（用于健康检查 /）"
-    }
-  ],
-  "security": [
-    {
-      "bearerAuth": []
-    }
-  ],
-  "paths": {
-    "/admin/logs/search": {
-      "get": {
-        "tags": [
-          "Admin",
-          "Logs"
-        ],
-        "summary": "统一日志搜索 (system/audit/error)",
-        "description": "聚合查询 system_logs、audit_logs、error_logs 三类日志。支持关键字模糊(q)，时间范围(date_from/date_to)，日志类型过滤(types 逗号分隔) 以及 每类返回条数限制(limit_per_type)。关键字会在系统日志(method,path,request_body,response_body,error_message,server_meta)、审计日志(action,operation_category,details_raw,summary)、错误日志(error_type,error_message,error_file,stack_trace) 中执行 LIKE 匹配。",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "q",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "关键字模糊匹配(可选)"
-          },
-          {
-            "name": "date_from",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "date"
-            },
-            "description": "开始日期(含) YYYY-MM-DD"
-          },
-          {
-            "name": "date_to",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "date"
-            },
-            "description": "结束日期(含) YYYY-MM-DD"
-          },
-          {
-            "name": "types",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "example": "system,audit,error"
-            },
-            "description": "需要的日志类型集合，逗号分隔: system,audit,error (默认全部)"
-          },
-          {
-            "name": "limit_per_type",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 50,
-              "minimum": 1,
-              "maximum": 200
-            },
-            "description": "每种日志分页大小 (默认50, 上限200)"
-          },
-          {
-            "name": "system_page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 1,
-              "minimum": 1
-            },
-            "description": "system 日志页码(>=1)"
-          },
-          {
-            "name": "audit_page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 1,
-              "minimum": 1
-            },
-            "description": "audit 日志页码(>=1)"
-          },
-          {
-            "name": "error_page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 1,
-              "minimum": 1
-            },
-            "description": "error 日志页码(>=1)"
-          },
-          {
-            "name": "method",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "仅筛选 system_logs 的 HTTP 方法"
-          },
-          {
-            "name": "status_code",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "仅筛选 system_logs 的响应状态码"
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "匹配 system/audit 两类日志 user_id"
-          },
-          {
-            "name": "request_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "按 request_id 精确匹配三类日志"
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "system_logs path LIKE 模糊匹配"
-          },
-          {
-            "name": "min_duration",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system_logs duration_ms 下限 (>=)"
-          },
-          {
-            "name": "max_duration",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system_logs duration_ms 上限 (<=)"
-          },
-          {
-            "name": "action",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "audit_logs action 精确匹配"
-          },
-          {
-            "name": "audit_status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "audit_logs status 精确匹配"
-          },
-          {
-            "name": "error_type",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "error_logs error_type 精确匹配"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "查询成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnifiedLogSearchResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "未授权",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "内部服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/logs/export": {
-      "get": {
-        "tags": [
-          "Admin",
-          "Logs"
-        ],
-        "summary": "导出日志 (CSV / NDJSON)",
-        "description": "按过滤条件导出选定类型日志。若不指定 types 默认全部。max 限制总导出行数 (默认1000，上限10000)。CSV 使用UTF-8含表头，NDJSON每行一条JSON对象。",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "q",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "date_from",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "date"
-            }
-          },
-          {
-            "name": "date_to",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "format": "date"
-            }
-          },
-          {
-            "name": "types",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "example": "system,audit,error"
-            }
-          },
-          {
-            "name": "format",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "csv",
-                "ndjson"
-              ],
-              "default": "csv"
-            }
-          },
-          {
-            "name": "max",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 1000,
-              "minimum": 1,
-              "maximum": 10000
-            }
-          },
-          {
-            "name": "method",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "system_logs HTTP 方法"
-          },
-          {
-            "name": "status_code",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system_logs 状态码"
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system/audit user_id"
-          },
-          {
-            "name": "request_id",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "按 request_id 过滤三类日志"
-          },
-          {
-            "name": "path",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "system_logs path LIKE"
-          },
-          {
-            "name": "min_duration",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system_logs duration_ms 下限"
-          },
-          {
-            "name": "max_duration",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            },
-            "description": "system_logs duration_ms 上限"
-          },
-          {
-            "name": "action",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "audit_logs action"
-          },
-          {
-            "name": "audit_status",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "audit_logs status"
-          },
-          {
-            "name": "error_type",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "error_logs error_type"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "导出成功",
-            "content": {
-              "text/csv": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              },
-              "application/x-ndjson": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "未授权",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "内部服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/admin/logs/related": {
-      "get": {
-        "tags": [
-          "Admin",
-          "Logs"
-        ],
-        "summary": "按 request_id 关联审计与错误日志",
-        "description": "根据已知 request_id 返回同一请求产生的 audit 和 error 日志(如果存在)。",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "request_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "请求ID"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "查询成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RelatedLogsResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "未授权",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "内部服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/files/presign": {
-      "post": {
-        "tags": [
-          "Files"
-        ],
-        "summary": "获取直传预签名 (含去重)",
-        "description": "如果提供 sha256 且已存在相同文件, 返回 duplicate=true 且不生成预签名URL。否则返回预签名 PUT 信息。",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FilePresignRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FilePresignResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "未授权",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/files/confirm": {
-      "post": {
-        "tags": [
-          "Files"
-        ],
-        "summary": "确认直传完成并记录元数据",
-        "description": "前端完成直传后调用。若携带 sha256 则进行去重引用计数维护。",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FileConfirmRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "确认成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FileConfirmResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "参数错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "未授权",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "文件不存在",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器错误",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/register": {
+        "/auth/send-verification-code": {
       "post": {
         "tags": [
           "Auth"
         ],
-        "summary": "用户注册",
-        "description": "注册新用户账户。需要Turnstile验证以防止机器人注册。",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RegisterRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "User registered successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RegisterSuccessResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request (e.g., missing fields, password mismatch)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict (e.g., username or email already exists)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/login": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "用户登录",
-        "description": "用户身份验证并获取JWT令牌。需要Turnstile验证以防止暴力破解攻击。",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LoginRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Login successful",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LoginSuccessResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request (e.g., missing credentials)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized (e.g., invalid credentials)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/logout": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "User Logout",
-        "description": "Logs out the currently authenticated user.",
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Logout successful",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "message": {
-                      "type": "string",
-                      "example": "Logout successful"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/send-verification-code": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "发送验证码",
-        "description": "向用户邮箱发送验证码，用于密码重置或邮箱验证。需要Turnstile验证以防止滥用。",
+        "summary": "Send Verification Code",
+        "description": "Sends an email verification code to the supplied address. Optionally accepts a Cloudflare Turnstile token to prevent abuse.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -988,19 +54,17 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "email",
-                  "cf_turnstile_response"
+                  "email"
                 ],
                 "properties": {
                   "email": {
                     "type": "string",
                     "format": "email",
-                    "example": "johndoe@example.com",
-                    "description": "需要发送验证码的邮箱地址"
+                    "description": "Email address that should receive the verification code"
                   },
                   "cf_turnstile_response": {
                     "type": "string",
-                    "description": "Cloudflare Turnstile验证令牌"
+                    "description": "Optional Cloudflare Turnstile token for bot mitigation"
                   }
                 }
               }
@@ -1009,7 +73,7 @@
         },
         "responses": {
           "200": {
-            "description": "If the email exists, a verification code has been sent.",
+            "description": "Verification email dispatched or already verified",
             "content": {
               "application/json": {
                 "schema": {
@@ -1021,75 +85,21 @@
                     },
                     "message": {
                       "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/auth/reset-password": {
-      "post": {
-        "tags": [
-          "Auth"
-        ],
-        "summary": "Reset Password",
-        "description": "Resets the user's password using a valid reset token.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "token",
-                  "password",
-                  "confirm_password"
-                ],
-                "properties": {
-                  "token": {
-                    "type": "string"
-                  },
-                  "password": {
-                    "type": "string",
-                    "format": "password"
-                  },
-                  "confirm_password": {
-                    "type": "string",
-                    "format": "password"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Password reset successful",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
                     },
-                    "message": {
-                      "type": "string",
-                      "example": "Password reset successful"
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "verification_expires_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        },
+                        "verification_resend_available_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "nullable": true
+                        }
+                      }
                     }
                   }
                 }
@@ -1097,7 +107,17 @@
             }
           },
           "400": {
-            "description": "Bad Request (e.g., invalid token, password mismatch)",
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Verification requests are temporarily rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -1125,21 +145,32 @@
           "Auth"
         ],
         "summary": "Verify Email",
-        "description": "Verifies a user's email address with a token.",
+        "description": "Verifies a user's email address by either providing the verification token or the original email plus code.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "token"
-                ],
                 "properties": {
                   "token": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Verification token included in the email link"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Email address used during registration (required when verifying with a code)"
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Verification code sent to the email address"
                   }
-                }
+                },
+                "anyOf": [
+                  { "required": ["token"] },
+                  { "required": ["email", "code"] }
+                ]
               }
             }
           }
@@ -1152,21 +183,25 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": {
-                      "type": "boolean",
-                      "example": true
-                    },
-                    "message": {
-                      "type": "string",
-                      "example": "Email verified successfully"
-                    }
+                    "success": { "type": "boolean", "example": true },
+                    "message": { "type": "string", "example": "Email verified successfully" }
                   }
                 }
               }
             }
           },
           "400": {
-            "description": "Bad Request (e.g., invalid token)",
+            "description": "Invalid token or verification code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many invalid verification attempts",
             "content": {
               "application/json": {
                 "schema": {
@@ -9750,17 +8785,34 @@
       "RegisterSuccessResponse": {
         "type": "object",
         "properties": {
-          "user_id": {
-            "type": "integer",
-            "description": "新注册用户的ID"
+          "success": {
+            "type": "boolean",
+            "example": true
           },
-          "username": {
+          "message": {
             "type": "string",
-            "description": "用户名"
+            "example": "User registered successfully"
           },
-          "email": {
-            "type": "string",
-            "description": "邮箱地址"
+          "data": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "integer" },
+                  "username": { "type": "string" },
+                  "email": { "type": "string", "format": "email" },
+                  "points": { "type": "number" },
+                  "is_admin": { "type": "boolean" },
+                  "email_verified_at": { "type": "string", "format": "date-time", "nullable": true }
+                }
+              },
+              "token": { "type": "string" },
+              "email_verification_required": { "type": "boolean" },
+              "email_verification_sent": { "type": "boolean" },
+              "verification_expires_at": { "type": "string", "format": "date-time", "nullable": true },
+              "verification_resend_available_at": { "type": "string", "format": "date-time", "nullable": true }
+            }
           }
         }
       },

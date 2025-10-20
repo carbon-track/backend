@@ -21,7 +21,7 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         // Minimal schema: users & schools
         $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
+        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT);");
     }
 
     private function makeController(): AuthController
@@ -32,6 +32,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $auth->method('generateToken')->willReturn('fake-jwt');
         /** @var EmailService&PHPUnit\Framework\MockObject\MockObject $email */
         $email = $this->createMock(EmailService::class);
+        $email->method('sendWelcomeEmail')->willReturn(true);
+        $email->expects($this->once())->method('sendVerificationCode')->willReturn(true);
         /** @var TurnstileService&PHPUnit\Framework\MockObject\MockObject $turnstile */
         $turnstile = $this->createMock(TurnstileService::class);
     // TurnstileService::verify has return type array; mock must respect signature

@@ -27,6 +27,7 @@ class ProductController
 
     private ?string $pointExchangeUserIdColumn = null;
     private ?string $pointsTransactionUserIdColumn = null;
+    private ?array $pointsTransactionColumns = null;
     private ?bool $pointExchangeHasAreaCode = null;
 
     public function __construct(
@@ -373,7 +374,7 @@ class ProductController
 
                 // 记录积分交易
                 $this->recordPointTransaction(
-                    $user['id'],
+                    $user,
                     -$totalPoints,
                     'product_exchange',
                     "兑换商品：{$product['name']} x{$quantity}",
@@ -2127,29 +2128,284 @@ class ProductController
     /**
      * 记录积分交易
      */
-    private function recordPointTransaction(int $userId, float $points, string $type, string $description, ?string $relatedTable = null, ?string $relatedId = null): void
+    private function recordPointTransaction(array $user, float $points, string $type, string $description, ?string $relatedTable = null, ?string $relatedId = null): void
     {
-        $userColumn = $this->resolvePointsTransactionUserIdColumn();
-        $sql = "
-            INSERT INTO points_transactions (
-                id, {$userColumn}, points, type, description, 
-                related_table, related_id, created_at
-            ) VALUES (
-                :id, :points_user_id, :points, :type, :description,
-                :related_table, :related_id, NOW()
-            )
-        ";
+        $userId = (int)($user['id'] ?? 0);
+        if ($userId <= 0) {
+            throw new \InvalidArgumentException('Invalid user for points transaction');
+        }
+
+        $username = $user['username'] ?? null;
+        $email = $user['email'] ?? null;
+
+        if (!$username || !$email) {
+            try {
+                $stmt = $this->db->prepare('SELECT username, email FROM users WHERE id = :id');
+                $stmt->execute(['id' => $userId]);
+                $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $username = $username ?: ($row['username'] ?? null);
+                $email = $email ?: ($row['email'] ?? null);
+            } catch (\Throwable $ignore) {
+                // 忽略补充信息失败，继续以已有数据写入
+            }
+        }
+
+        $email = $email ?? '';
+        $username = $username ?? '';
+
+        $columns = $this->getPointsTransactionColumns();
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+        $normalizedType = $points < 0 ? 'spend' : 'earn';
+        $absolutePoints = abs($points);
+        $isLegacySchema = isset($columns['time']);
+
+        if ($isLegacySchema) {
+            $columnMap = [];
+            $params = [];
+
+            $userColumn = $this->resolvePointsTransactionUserIdColumn();
+            $columnMap[$userColumn] = 'user_column_value';
+            $params['user_column_value'] = $userId;
+
+            if (isset($columns['username'])) {
+                $columnMap['username'] = 'username_value';
+                $params['username_value'] = $username;
+            }
+
+            if (isset($columns['email'])) {
+                $columnMap['email'] = 'email_value';
+                $params['email_value'] = $email;
+            }
+
+            $columnMap['points'] = 'points_value';
+            $params['points_value'] = $points;
+
+            if (isset($columns['raw'])) {
+                $columnMap['raw'] = 'raw_value';
+                $params['raw_value'] = $absolutePoints;
+            }
+
+            if (isset($columns['auth'])) {
+                $columnMap['auth'] = 'auth_value';
+                $params['auth_value'] = $type;
+            }
+
+            $columnMap['type'] = 'type_value';
+            $params['type_value'] = $normalizedType;
+
+            if (isset($columns['notes'])) {
+                $columnMap['notes'] = 'notes_value';
+                $params['notes_value'] = $description;
+            }
+
+            if (isset($columns['status'])) {
+                $columnMap['status'] = 'status_value';
+                $params['status_value'] = 'approved';
+            }
+
+            if (isset($columns['time'])) {
+                $columnMap['time'] = 'time_value';
+                $params['time_value'] = $now;
+            }
+
+            if (isset($columns['activity_id'])) {
+                $columnMap['activity_id'] = 'activity_id_value';
+                $params['activity_id_value'] = $relatedId;
+            }
+
+            if (isset($columns['approved_at'])) {
+                $columnMap['approved_at'] = 'approved_at_value';
+                $params['approved_at_value'] = $now;
+            }
+
+            if (isset($columns['created_at'])) {
+                $columnMap['created_at'] = 'created_at_value';
+                $params['created_at_value'] = $now;
+            }
+
+            if (isset($columns['updated_at'])) {
+                $columnMap['updated_at'] = 'updated_at_value';
+                $params['updated_at_value'] = $now;
+            }
+
+            if (isset($columns['activity_date'])) {
+                $columnMap['activity_date'] = 'activity_date_value';
+                $params['activity_date_value'] = $now;
+            }
+
+            $columnsSql = implode(', ', array_keys($columnMap));
+            $placeholdersSql = implode(', ', array_map(static fn(string $param) => ':' . $param, array_values($columnMap)));
+            $sql = sprintf('INSERT INTO points_transactions (%s) VALUES (%s)', $columnsSql, $placeholdersSql);
+
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute($params);
+
+            return;
+        }
+
+        $columnMap = [];
+        $params = [];
+
+        $columnMap['id'] = 'transaction_id';
+        $params['transaction_id'] = $this->generateUuid();
+
+        if (isset($columns['uid'])) {
+            $columnMap['uid'] = 'uid_value';
+            $params['uid_value'] = $userId;
+        }
+
+        if (isset($columns['user_id'])) {
+            $columnMap['user_id'] = 'user_id_value';
+            $params['user_id_value'] = $userId;
+        }
+
+        if (!isset($columns['uid']) && !isset($columns['user_id'])) {
+            $userColumn = $this->resolvePointsTransactionUserIdColumn();
+            $columnMap[$userColumn] = 'user_column_value';
+            $params['user_column_value'] = $userId;
+        }
+
+        $columnMap['points'] = 'points_value';
+        $params['points_value'] = $points;
+
+        if (isset($columns['raw'])) {
+            $columnMap['raw'] = 'raw_value';
+            $params['raw_value'] = $absolutePoints;
+        }
+
+        $columnMap['type'] = 'type_value';
+        $params['type_value'] = $normalizedType;
+
+        if (isset($columns['description'])) {
+            $columnMap['description'] = 'description_value';
+            $params['description_value'] = $description;
+        }
+
+        if (isset($columns['notes'])) {
+            $columnMap['notes'] = 'notes_value';
+            $params['notes_value'] = $description;
+        }
+
+        if (isset($columns['act'])) {
+            $columnMap['act'] = 'act_value';
+            $params['act_value'] = $description;
+        }
+
+        if (isset($columns['status'])) {
+            $columnMap['status'] = 'status_value';
+            $params['status_value'] = 'approved';
+        }
+
+        if (isset($columns['related_table'])) {
+            $columnMap['related_table'] = 'related_table_value';
+            $params['related_table_value'] = $relatedTable;
+        }
+
+        if (isset($columns['related_id'])) {
+            $columnMap['related_id'] = 'related_id_value';
+            $params['related_id_value'] = $relatedId;
+        }
+
+        if (isset($columns['username'])) {
+            $columnMap['username'] = 'username_value';
+            $params['username_value'] = $username;
+        }
+
+        if (isset($columns['email'])) {
+            $columnMap['email'] = 'email_value';
+            $params['email_value'] = $email;
+        }
+
+        if (isset($columns['auth'])) {
+            $columnMap['auth'] = 'auth_value';
+            $params['auth_value'] = $type;
+        }
+
+        if (isset($columns['approved_at'])) {
+            $columnMap['approved_at'] = 'approved_at_value';
+            $params['approved_at_value'] = $now;
+        }
+
+        if (isset($columns['approved_by'])) {
+            $columnMap['approved_by'] = 'approved_by_value';
+            $params['approved_by_value'] = null;
+        }
+
+        if (isset($columns['created_at'])) {
+            $columnMap['created_at'] = 'created_at_value';
+            $params['created_at_value'] = $now;
+        }
+
+        if (isset($columns['updated_at'])) {
+            $columnMap['updated_at'] = 'updated_at_value';
+            $params['updated_at_value'] = $now;
+        }
+
+        if (isset($columns['activity_id'])) {
+            $columnMap['activity_id'] = 'activity_id_value';
+            $params['activity_id_value'] = $relatedId;
+        }
+
+        if (isset($columns['activity_date'])) {
+            $columnMap['activity_date'] = 'activity_date_value';
+            $params['activity_date_value'] = $now;
+        }
+
+        $columnsSql = implode(', ', array_keys($columnMap));
+        $placeholdersSql = implode(', ', array_map(static fn(string $param) => ':' . $param, array_values($columnMap)));
+        $sql = sprintf('INSERT INTO points_transactions (%s) VALUES (%s)', $columnsSql, $placeholdersSql);
 
         $stmt = $this->db->prepare($sql);
-        $stmt->execute([
-            'id' => $this->generateUuid(),
-            'points_user_id' => $userId,
-            'points' => $points,
-            'type' => $type,
-            'description' => $description,
-            'related_table' => $relatedTable,
-            'related_id' => $relatedId
-        ]);
+        $stmt->execute($params);
+    }
+
+    private function getPointsTransactionColumns(): array
+    {
+        if ($this->pointsTransactionColumns !== null) {
+            return $this->pointsTransactionColumns;
+        }
+
+        $columns = [];
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+
+            if ($driver === 'sqlite') {
+                $stmt = $this->db->query('PRAGMA table_info(points_transactions)');
+                if ($stmt) {
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        $name = $row['name'] ?? null;
+                        if ($name) {
+                            $columns[strtolower((string)$name)] = (string)$name;
+                        }
+                    }
+                }
+            } elseif ($driver === 'pgsql') {
+                $stmt = $this->db->prepare('SELECT column_name FROM information_schema.columns WHERE table_name = :table');
+                if ($stmt && $stmt->execute(['table' => 'points_transactions'])) {
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        $name = $row['column_name'] ?? null;
+                        if ($name) {
+                            $columns[strtolower((string)$name)] = (string)$name;
+                        }
+                    }
+                }
+            } else {
+                $stmt = $this->db->query('SHOW COLUMNS FROM points_transactions');
+                if ($stmt) {
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        $field = $row['Field'] ?? $row['field'] ?? null;
+                        if ($field) {
+                            $columns[strtolower((string)$field)] = (string)$field;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $ignore) {
+            // 读取表结构失败时按空集合处理，后续逻辑会走“现代”路径
+        }
+
+        return $this->pointsTransactionColumns = $columns;
     }
 
     private function pointExchangeUserColumn(?string $alias = null): string

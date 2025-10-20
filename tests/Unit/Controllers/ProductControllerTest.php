@@ -215,6 +215,8 @@ class ProductControllerTest extends TestCase
             $updateStock,
             $insertExchange,
             $insertTxn,
+            $selectAdmins,
+            $selectAdmins,
             $selectAdmins
         );
 

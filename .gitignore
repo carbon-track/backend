@@ -5,3 +5,4 @@
 /.phpunit.cache/
 /.phpunit.result.cache
 /test.db
+/scripts/

@@ -24,9 +24,13 @@ class AuthController
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
-    private ?CloudflareR2Service $r2Service;
-    private Logger $logger;
-    private PDO $db;
+   private ?CloudflareR2Service $r2Service;
+   private Logger $logger;
+   private PDO $db;
+
+    private const VERIFICATION_RESEND_LIMIT = 3;
+    private const VERIFICATION_CODE_TTL_MINUTES = 30;
+    private const VERIFICATION_MAX_ATTEMPTS = 5;
 
     public function __construct(
         AuthService $authService,
@@ -130,14 +134,15 @@ class AuthController
             $hashed = password_hash((string)$data['password'], PASSWORD_DEFAULT);
             // 为兼容旧库，这里优先写入 password 列
             // 不再接受/存储 real_name 或 class_name，保持向后兼容：如果客户端仍发送则忽略
+            $now = date('Y-m-d H:i:s');
             $stmt = $this->db->prepare('INSERT INTO users (username, email, password, school_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
             $stmt->execute([
                 $data['username'],
                 $data['email'],
                 $hashed,
                 $schoolId,
-                date('Y-m-d H:i:s'),
-                date('Y-m-d H:i:s')
+                $now,
+                $now
             ]);
             $userId = (int)$this->db->lastInsertId();
             $this->auditLogService->logAuthOperation('register', $userId, true, [
@@ -149,6 +154,12 @@ class AuthController
                 ]
             ]);
             try { $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']); } catch (\Throwable $e) { $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]); }
+            $verificationMeta = null;
+            try {
+                $verificationMeta = $this->dispatchEmailVerification($userId, (string)$data['email'], (string)$data['username'], 1);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to dispatch verification email', ['error' => $e->getMessage()]);
+            }
             // 发送站内欢迎消息暂时跳过（测试最小 schema 可能缺少完整列 / 触发 Eloquent timestamps 逻辑），以保持测试稳定
             // 生成登录 token 以符合测试对返回结构的期望
             $token = $this->authService->generateToken([
@@ -167,9 +178,14 @@ class AuthController
                         'username' => $data['username'],
                         'email' => $data['email'],
                         'points' => 0,
-                        'is_admin' => false
+                        'is_admin' => false,
+                        'email_verified_at' => null
                     ],
-                    'token' => $token
+                    'token' => $token,
+                    'email_verification_required' => true,
+                    'email_verification_sent' => $verificationMeta !== null,
+                    'verification_expires_at' => $verificationMeta['expires_at'] ?? null,
+                    'verification_resend_available_at' => $verificationMeta['resend_available_at'] ?? null
                 ]
             ], 201);
         } catch (\Throwable $e) {
@@ -254,21 +270,7 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent')
                 ]
             ]);
-            $avatar = $this->resolveAvatar($user['avatar_path'] ?? $user['avatar_url'] ?? null);
-
-            $userInfo = [
-                'id' => $user['id'],
-                'uuid' => $user['uuid'] ?? null,
-                'username' => $user['username'],
-                'email' => $user['email'] ?? null,
-                'school_id' => $user['school_id'] ?? null,
-                'school_name' => $user['school_name'] ?? null,
-                'points' => (int)($user['points'] ?? 0),
-                'is_admin' => (bool)($user['is_admin'] ?? 0),
-                'avatar_path' => $avatar['avatar_path'],
-                'avatar_url' => $avatar['avatar_url'],
-                'lastlgn' => $user['lastlgn'] ?? ($user['last_login_at'] ?? null),
-            ];
+            $userInfo = $this->formatUserPayload($user);
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Login successful',
@@ -308,6 +310,215 @@ class AuthController
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Logout failed'
+            ], 500);
+        }
+    }
+
+    public function sendVerificationCode(Request $request, Response $response): Response
+    {
+        try {
+            $data = $request->getParsedBody() ?? [];
+            $emailRaw = isset($data['email']) ? trim((string)$data['email']) : '';
+
+            if ($emailRaw === '' || !filter_var($emailRaw, FILTER_VALIDATE_EMAIL)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'A valid email address is required',
+                    'code' => 'INVALID_EMAIL'
+                ], 400);
+            }
+
+            if (!empty($data['cf_turnstile_response'])) {
+                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Turnstile verification failed',
+                        'code' => 'TURNSTILE_FAILED'
+                    ], 400);
+                }
+            }
+
+            $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_last_sent_at, verification_send_count FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$emailRaw]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'message' => 'If the account exists, a verification email has been sent'
+                ], 200);
+            }
+
+            if (!empty($user['email_verified_at'])) {
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'message' => 'Email already verified',
+                    'data' => [
+                        'already_verified' => true
+                    ]
+                ]);
+            }
+
+            $throttle = $this->calculateVerificationThrottle($user);
+            if ($throttle['blocked']) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Verification code rate limit reached. Please try again later.',
+                    'code' => 'VERIFICATION_RATE_LIMIT',
+                    'retry_after' => $throttle['retry_after']
+                ], 429);
+            }
+
+            $challenge = $this->dispatchEmailVerification(
+                (int)$user['id'],
+                (string)$user['email'],
+                (string)($user['username'] ?? ''),
+                $throttle['send_count'],
+                $throttle['retry_after']
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Verification email dispatched',
+                'data' => [
+                    'verification_expires_at' => $challenge['expires_at'] ?? null,
+                    'verification_resend_available_at' => $challenge['resend_available_at'] ?? null
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Send verification code failed', ['error' => $e->getMessage()]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to send verification code'
+            ], 500);
+        }
+    }
+
+    public function verifyEmail(Request $request, Response $response): Response
+    {
+        try {
+            $data = $request->getParsedBody() ?? [];
+            $token = trim((string)($data['token'] ?? ''));
+            $code = trim((string)($data['code'] ?? ''));
+            $emailInput = isset($data['email']) ? trim((string)$data['email']) : '';
+
+            if ($token === '' && ($emailInput === '' || $code === '')) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Verification token or email/code is required',
+                    'code' => 'MISSING_TOKEN'
+                ], 400);
+            }
+
+            $mode = $token !== '' ? 'token' : 'code';
+            if ($mode === 'code' && !filter_var($emailInput, FILTER_VALIDATE_EMAIL)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'A valid email address is required',
+                    'code' => 'INVALID_EMAIL'
+                ], 400);
+            }
+
+            if ($mode === 'token') {
+                $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code_expires_at FROM users WHERE verification_token = ? AND deleted_at IS NULL LIMIT 1');
+                $stmt->execute([$token]);
+            } else {
+                $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code, verification_code_expires_at, verification_attempts FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1');
+                $stmt->execute([$emailInput]);
+            }
+
+            $user = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid or expired verification token',
+                    'code' => 'INVALID_TOKEN'
+                ], 400);
+            }
+
+            if (!empty($user['email_verified_at'])) {
+                return $this->jsonResponse($response, [
+                    'success' => true,
+                    'message' => 'Email already verified'
+                ]);
+            }
+
+            $expiresAt = $user['verification_code_expires_at'] ?? null;
+            if (!$expiresAt) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Verification token expired',
+                    'code' => 'TOKEN_EXPIRED'
+                ], 400);
+            }
+
+            try {
+                $expiry = new \DateTimeImmutable($expiresAt);
+            } catch (\Throwable $e) {
+                $expiry = null;
+            }
+
+            if (!$expiry || $expiry <= new \DateTimeImmutable('now')) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Verification token expired',
+                    'code' => 'TOKEN_EXPIRED'
+                ], 400);
+            }
+
+            if ($mode === 'code') {
+                $attempts = (int)($user['verification_attempts'] ?? 0);
+                if ($attempts >= self::VERIFICATION_MAX_ATTEMPTS) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Too many invalid verification attempts. Please request a new code.',
+                        'code' => 'VERIFICATION_ATTEMPTS_EXCEEDED'
+                    ], 429);
+                }
+                if (!hash_equals((string)($user['verification_code'] ?? ''), $code)) {
+                    $this->updateVerificationAttempts((int)$user['id'], $attempts + 1);
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Verification code is invalid',
+                        'code' => 'INVALID_CODE'
+                    ], 400);
+                }
+            }
+
+            $this->markEmailVerified((int)$user['id']);
+            $this->auditLogService->logAuthOperation('email_verified', (int)$user['id'], true, [
+                'ip_address' => $this->getClientIP($request),
+                'user_agent' => $request->getHeaderLine('User-Agent'),
+                'method' => $mode
+            ]);
+
+            $userDetail = $this->findUserDetailed((int)$user['id']);
+            if ($userDetail === null) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'User not found after verification',
+                    'code' => 'USER_NOT_FOUND'
+                ], 500);
+            }
+
+            $token = $this->authService->generateToken($userDetail);
+            $formattedUser = $this->formatUserPayload($userDetail);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Email verified successfully',
+                'data' => [
+                    'token' => $token,
+                    'user' => $formattedUser
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Verify email failed', ['error' => $e->getMessage()]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to verify email'
             ], 500);
         }
     }
@@ -558,6 +769,185 @@ class AuthController
                 'message' => 'Failed to change password'
             ], 500);
         }
+    }
+
+    private function calculateVerificationThrottle(array $user): array
+    {
+        $sendCount = (int)($user['verification_send_count'] ?? 0);
+        $lastSentAtRaw = $user['verification_last_sent_at'] ?? null;
+        $now = new \DateTimeImmutable('now');
+        $windowStart = $now->modify('-1 hour');
+        $lastSentAt = null;
+
+        if ($lastSentAtRaw) {
+            try {
+                $lastSentAt = new \DateTimeImmutable((string)$lastSentAtRaw);
+            } catch (\Throwable $e) {
+                $lastSentAt = null;
+            }
+        }
+
+        if ($lastSentAt && $lastSentAt > $windowStart) {
+            if ($sendCount >= self::VERIFICATION_RESEND_LIMIT) {
+                $retryAfter = $lastSentAt->modify('+1 hour')->format('Y-m-d H:i:s');
+                return [
+                    'blocked' => true,
+                    'send_count' => $sendCount,
+                    'retry_after' => $retryAfter
+                ];
+            }
+
+            $retryAfter = $lastSentAt->modify('+1 hour')->format('Y-m-d H:i:s');
+            return [
+                'blocked' => false,
+                'send_count' => $sendCount + 1,
+                'retry_after' => $retryAfter
+            ];
+        }
+
+        return [
+            'blocked' => false,
+            'send_count' => 1,
+            'retry_after' => $now->modify('+1 hour')->format('Y-m-d H:i:s')
+        ];
+    }
+
+    private function dispatchEmailVerification(int $userId, string $email, string $username, int $sendCount, ?string $retryAfter = null): array
+    {
+        $challenge = $this->createVerificationChallenge($userId, $email, $username, $sendCount);
+        $challenge['resend_available_at'] = $retryAfter;
+
+        $sent = false;
+        try {
+            $sent = $this->emailService->sendVerificationCode(
+                $email,
+                $challenge['recipient_name'],
+                $challenge['code'],
+                $challenge['ttl_minutes'],
+                $challenge['link']
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Verification email dispatch threw exception', [
+                'user_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        if (!$sent) {
+            $this->logger->warning('Verification email dispatch returned false', ['user_id' => $userId]);
+        }
+
+        try {
+            $this->auditLogService->logAuthOperation('email_verification_code_sent', $userId, $sent, [
+                'attempt' => $sendCount,
+                'expires_at' => $challenge['expires_at'],
+                'resend_available_at' => $challenge['resend_available_at']
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to record verification code audit log', ['error' => $e->getMessage()]);
+        }
+
+        return $challenge;
+    }
+
+    private function createVerificationChallenge(int $userId, string $email, string $username, int $sendCount): array
+    {
+        $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $token = bin2hex(random_bytes(32));
+        $ttlMinutes = (int)($_ENV['EMAIL_VERIFICATION_TTL_MINUTES'] ?? self::VERIFICATION_CODE_TTL_MINUTES);
+        if ($ttlMinutes <= 0) {
+            $ttlMinutes = self::VERIFICATION_CODE_TTL_MINUTES;
+        }
+        $now = date('Y-m-d H:i:s');
+        $expiresAt = (new \DateTimeImmutable($now))->modify('+' . $ttlMinutes . ' minutes')->format('Y-m-d H:i:s');
+
+        $stmt = $this->db->prepare('UPDATE users SET verification_code = ?, verification_token = ?, verification_code_expires_at = ?, verification_attempts = 0, verification_send_count = ?, verification_last_sent_at = ?, updated_at = ? WHERE id = ?');
+        $stmt->execute([
+            $code,
+            $token,
+            $expiresAt,
+            $sendCount,
+            $now,
+            $now,
+            $userId
+        ]);
+
+        return [
+            'code' => $code,
+            'token' => $token,
+            'ttl_minutes' => $ttlMinutes,
+            'expires_at' => $expiresAt,
+            'link' => $this->buildVerificationLink($token),
+            'recipient_name' => $username !== '' ? $username : explode('@', $email)[0]
+        ];
+    }
+
+    private function buildVerificationLink(string $token): ?string
+    {
+        $base = $_ENV['EMAIL_VERIFICATION_URL']
+            ?? $_ENV['FRONTEND_URL']
+            ?? $_ENV['APP_URL']
+            ?? null;
+
+        if (!$base) {
+            return null;
+        }
+
+        return rtrim($base, '/') . '/verify-email?token=' . urlencode($token);
+    }
+
+    private function markEmailVerified(int $userId): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $stmt = $this->db->prepare('UPDATE users SET email_verified_at = ?, verification_code = NULL, verification_token = NULL, verification_code_expires_at = NULL, verification_attempts = 0, verification_send_count = 0, verification_last_sent_at = NULL, updated_at = ? WHERE id = ?');
+        $stmt->execute([$now, $now, $userId]);
+    }
+
+    private function updateVerificationAttempts(int $userId, int $attempts): void
+    {
+        $stmt = $this->db->prepare('UPDATE users SET verification_attempts = ?, updated_at = ? WHERE id = ?');
+        $stmt->execute([$attempts, date('Y-m-d H:i:s'), $userId]);
+    }
+
+    private function findUserDetailed(int $userId): ?array
+    {
+        $stmt = $this->db->prepare("
+            SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
+            FROM users u
+            LEFT JOIN schools s ON u.school_id = s.id
+            LEFT JOIN avatars a ON u.avatar_id = a.id
+            WHERE u.id = ? AND u.deleted_at IS NULL
+            LIMIT 1
+        ");
+        $stmt->execute([$userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+
+        return $row;
+    }
+
+    private function formatUserPayload(array $row): array
+    {
+        $avatar = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
+        return [
+            'id' => (int)($row['id'] ?? 0),
+            'uuid' => $row['uuid'] ?? null,
+            'username' => $row['username'] ?? null,
+            'email' => $row['email'] ?? null,
+            'school_id' => $row['school_id'] ?? null,
+            'school_name' => $row['school_name'] ?? null,
+            'points' => (int)($row['points'] ?? 0),
+            'is_admin' => (bool)($row['is_admin'] ?? 0),
+            'email_verified_at' => $row['email_verified_at'] ?? null,
+            'avatar_id' => $row['avatar_id'] ?? null,
+            'avatar_path' => $avatar['avatar_path'],
+            'avatar_url' => $avatar['avatar_url'],
+            'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
+            'status' => $row['status'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
+        ];
     }
 
     private function resolveAvatar(?string $filePath, int $ttlSeconds = 600): array

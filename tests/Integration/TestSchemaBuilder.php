@@ -25,7 +25,7 @@ class TestSchemaBuilder
 
         $tables = [
             // Users
-            "CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                avatar_id INTEGER,\n                image_path TEXT,\n                lastlgn TEXT,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                avatar_id INTEGER,\n                image_path TEXT,\n                lastlgn TEXT,\n                reset_token TEXT,\n                reset_token_expires_at TEXT,\n                email_verified_at TEXT,\n                verification_code TEXT,\n                verification_token TEXT,\n                verification_code_expires_at TEXT,\n                verification_attempts INTEGER DEFAULT 0,\n                verification_send_count INTEGER DEFAULT 0,\n                verification_last_sent_at TEXT,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Products
             "CREATE TABLE IF NOT EXISTS products (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                description TEXT,\n                category TEXT,\n                category_slug TEXT,\n                images TEXT,\n                image_path TEXT,\n                stock INTEGER DEFAULT 0,\n                points_required INTEGER DEFAULT 0,\n                status TEXT DEFAULT 'active',\n                sort_order INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             "CREATE TABLE IF NOT EXISTS product_categories (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT NOT NULL,\n                slug TEXT NOT NULL,\n                description TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(slug)\n            )",
@@ -77,7 +77,18 @@ class TestSchemaBuilder
         }
 
         // Perform lightweight schema upgrades for existing SQLite file (idempotent)
-        self::ensureColumns($pdo, 'users', ['avatar_id INTEGER']);
+        self::ensureColumns($pdo, 'users', [
+            'avatar_id INTEGER',
+            'reset_token TEXT',
+            'reset_token_expires_at TEXT',
+            'email_verified_at TEXT',
+            'verification_code TEXT',
+            'verification_token TEXT',
+            'verification_code_expires_at TEXT',
+            'verification_attempts INTEGER DEFAULT 0',
+            'verification_send_count INTEGER DEFAULT 0',
+            'verification_last_sent_at TEXT'
+        ]);
         self::ensureColumns($pdo, 'products', ['category_slug TEXT']);
         self::ensureColumns($pdo, 'audit_logs', [
             'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',

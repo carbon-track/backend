@@ -21,7 +21,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
     $this->pdo->exec("CREATE TABLE carbon_activities (id TEXT PRIMARY KEY,name_zh TEXT,name_en TEXT,category TEXT,carbon_factor REAL,unit TEXT,icon TEXT,points_factor REAL DEFAULT 1,description_zh TEXT,description_en TEXT,sort_order INTEGER DEFAULT 0,is_active INTEGER DEFAULT 1,deleted_at TEXT);");
     $this->pdo->exec("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit,icon) VALUES ('act-1','活动','Activity','daily',1.5,'times','icon-car');");
     // minimal users table for controller queries (notifyAdminsNewRecord & auth mocks)
-    $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, is_admin INTEGER DEFAULT 0, school_id INTEGER, points REAL DEFAULT 0, deleted_at TEXT);");
+    $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, is_admin INTEGER DEFAULT 0, school_id INTEGER, points REAL DEFAULT 0, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT);");
     $this->pdo->exec("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (1,'tester','t@example.com',0,1,0);");
     $this->pdo->exec("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (2,'admin','admin@example.com',1,1,0);");
     }

@@ -52,11 +52,6 @@ class Message extends Model
     const PRIORITY_URGENT = 'urgent';
 
     /**
-     * Cache flag to avoid repeated schema checks when priority column exists.
-     */
-    protected static ?bool $priorityColumnKnown = null;
-
-    /**
      * Get the sender of the message
      */
     public function sender()
@@ -102,10 +97,7 @@ class Message extends Model
      */
     public function scopeByPriority($query, string $priority)
     {
-        if (static::priorityColumnExistsStatic()) {
-            return $query->where('priority', $priority);
-        }
-        return $query;
+        return $query->where('priority', $priority);
     }
 
     /**
@@ -355,7 +347,6 @@ class Message extends Model
         $unread = static::forUser($userId)->unread()->count();
         $read = static::forUser($userId)->read()->count();
 
-        // 'type' and 'priority' not available; return empty breakdowns for compatibility
         return [
             'total' => $total,
             'unread' => $unread,
@@ -370,7 +361,6 @@ class Message extends Model
      */
     public static function cleanupOldMessages(int $daysToKeep = 90): int
     {
-        // No 'priority' column; perform a simple cleanup based on is_read and age only
         $threshold = (new DateTimeImmutable("now"))->modify("-{$daysToKeep} days")->format('Y-m-d H:i:s');
         return (int) static::where('is_read', true)
             ->where('created_at', '<', $threshold)
@@ -405,32 +395,4 @@ class Message extends Model
             self::PRIORITY_URGENT
         ];
     }
-
-    protected function priorityColumnExists(): bool
-    {
-        return static::priorityColumnExistsStatic();
-    }
-
-    protected static function priorityColumnExistsStatic(): bool
-    {
-        if (self::$priorityColumnKnown === true) {
-            return true;
-        }
-
-        try {
-            $model = new static();
-            $connection = $model->getConnection();
-            $schema = $connection->getSchemaBuilder();
-            $exists = $schema->hasColumn($model->getTable(), 'priority');
-
-            if ($exists) {
-                self::$priorityColumnKnown = true;
-            }
-
-            return $exists;
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
 }
-

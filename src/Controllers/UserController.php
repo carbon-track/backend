@@ -89,6 +89,7 @@ class UserController
                 'school_name' => $row['school_name'],
                 'points' => (int)$row['points'],
                 'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
+                'email_verified_at' => $row['email_verified_at'] ?? null,
                 'avatar_id' => $row['avatar_id'],
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],

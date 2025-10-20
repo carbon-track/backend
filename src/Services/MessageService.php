@@ -30,13 +30,13 @@ class MessageService
         string $priority = Message::PRIORITY_NORMAL,
         ?int $senderId = null
     ): Message {
-        // Store only columns available in provided DB schema
         $message = Message::create([
             'sender_id' => $senderId,
             'receiver_id' => $receiverId,
             'title' => $title,
             'content' => $content,
-            'is_read' => false
+            'is_read' => false,
+            'priority' => $priority
         ]);
 
         $this->logger->info('Message sent', [
