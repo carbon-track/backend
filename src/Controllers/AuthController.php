@@ -270,13 +270,30 @@ class AuthController
                 ]
             ]);
             $userInfo = $this->formatUserPayload($user);
+            $verificationMeta = null;
+            if (empty($user['email_verified_at'])) {
+                $verificationMeta = $this->handlePendingEmailVerification($user);
+            }
+
+            $responsePayload = [
+                'token' => $token,
+                'user' => $userInfo
+            ];
+
+            if ($verificationMeta !== null) {
+                $responsePayload['email_verification_required'] = $verificationMeta['required'];
+                $responsePayload['email_verification_sent'] = $verificationMeta['sent'];
+                $responsePayload['verification_expires_at'] = $verificationMeta['expires_at'];
+                $responsePayload['verification_resend_available_at'] = $verificationMeta['resend_available_at'];
+                if (isset($verificationMeta['rate_limited'])) {
+                    $responsePayload['email_verification_rate_limited'] = $verificationMeta['rate_limited'];
+                }
+            }
+
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Login successful',
-                'data' => [
-                    'token' => $token,
-                    'user' => $userInfo
-                ]
+                'data' => $responsePayload
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('User login failed', ['error' => $e->getMessage()]);
@@ -777,6 +794,78 @@ class AuthController
                 'message' => 'Failed to change password'
             ], 500);
         }
+    }
+
+    private function handlePendingEmailVerification(array $user): ?array
+    {
+        $email = $user['email'] ?? null;
+        if (!$email) {
+            return null;
+        }
+
+        $meta = [
+            'required' => true,
+            'sent' => false,
+            'expires_at' => null,
+            'resend_available_at' => null,
+            'rate_limited' => false,
+        ];
+
+        $now = new \DateTimeImmutable('now');
+        $existingExpiryRaw = $user['verification_code_expires_at'] ?? null;
+        $existingCode = $user['verification_code'] ?? null;
+        $expiry = null;
+
+        if ($existingExpiryRaw) {
+            try {
+                $expiry = new \DateTimeImmutable((string)$existingExpiryRaw);
+                $meta['expires_at'] = $expiry->format('Y-m-d H:i:s');
+            } catch (\Throwable $e) {
+                $expiry = null;
+                $meta['expires_at'] = is_string($existingExpiryRaw) ? $existingExpiryRaw : null;
+            }
+        }
+
+        $shouldSend = false;
+        if (empty($existingCode)) {
+            $shouldSend = true;
+        } elseif (!$expiry || $expiry <= $now) {
+            $shouldSend = true;
+        }
+
+        if ($shouldSend) {
+            $throttle = $this->calculateVerificationThrottle($user);
+            if ($throttle['blocked']) {
+                $meta['rate_limited'] = true;
+                $meta['resend_available_at'] = $throttle['retry_after'] ?? null;
+                return $meta;
+            }
+
+            $challenge = $this->dispatchEmailVerification(
+                (int)$user['id'],
+                (string)$email,
+                (string)($user['username'] ?? ''),
+                $throttle['send_count'],
+                $throttle['retry_after'] ?? null
+            );
+
+            $meta['sent'] = true;
+            $meta['expires_at'] = $challenge['expires_at'] ?? $meta['expires_at'];
+            $meta['resend_available_at'] = $challenge['resend_available_at'] ?? $meta['resend_available_at'];
+            return $meta;
+        }
+
+        $lastSentRaw = $user['verification_last_sent_at'] ?? null;
+        if ($lastSentRaw) {
+            try {
+                $lastSent = new \DateTimeImmutable((string)$lastSentRaw);
+                $meta['resend_available_at'] = $lastSent->modify('+1 hour')->format('Y-m-d H:i:s');
+            } catch (\Throwable $e) {
+                $meta['resend_available_at'] = is_string($lastSentRaw) ? $lastSentRaw : null;
+            }
+        }
+
+        return $meta;
     }
 
     private function calculateVerificationThrottle(array $user): array

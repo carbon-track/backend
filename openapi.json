@@ -8931,17 +8931,54 @@
       "LoginSuccessResponse": {
         "type": "object",
         "properties": {
-          "access_token": {
-            "type": "string",
-            "description": "JWT访问令牌"
+          "success": {
+            "type": "boolean",
+            "example": true,
+            "description": "请求是否成功"
           },
-          "expires_in": {
-            "type": "integer",
-            "description": "令牌有效期（秒）"
-          },
-          "refresh_token": {
+          "message": {
             "type": "string",
-            "description": "JWT刷新令牌"
+            "example": "Login successful",
+            "description": "响应消息"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "登录JWT令牌"
+              },
+              "user": {
+                "$ref": "#/components/schemas/UserResponse"
+              },
+              "email_verification_required": {
+                "type": "boolean",
+                "nullable": true,
+                "description": "当前登录会话是否需要邮箱验证"
+              },
+              "email_verification_sent": {
+                "type": "boolean",
+                "nullable": true,
+                "description": "本次登录流程是否触发了验证邮件发送"
+              },
+              "verification_expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true,
+                "description": "当前有效的验证代码过期时间"
+              },
+              "verification_resend_available_at": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true,
+                "description": "下次允许重新发送验证邮件的时间（若受限）"
+              },
+              "email_verification_rate_limited": {
+                "type": "boolean",
+                "nullable": true,
+                "description": "是否因频率限制而未发送新的验证邮件"
+              }
+            }
           }
         }
       },
