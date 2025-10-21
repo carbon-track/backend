@@ -39,7 +39,13 @@
       "required_routes": [
         "/auth/register",
         "/auth/login",
-        "/auth/send-verification-code": {
+        "/auth/send-verification-code",
+        "/auth/verify-email"
+      ]
+    }
+  },
+  "paths": {
+    "/auth/send-verification-code": {
       "post": {
         "tags": [
           "Auth"
@@ -13700,7 +13706,6 @@
     }
   }
 }
-
 
 
 
