@@ -18,6 +18,7 @@ use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
+use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
@@ -87,9 +88,11 @@ return function (App $app) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
             $auth->post('/logout', [AuthController::class, 'logout']);
+            $auth->post('/forgot-password', [AuthController::class, 'forgotPassword']);
             $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
             $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
             $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
+            $auth->post('/change-password', [AuthController::class, 'changePassword'])->add(AuthMiddleware::class);
         });
     };
 
@@ -314,6 +317,8 @@ return function (App $app) {
             $adminFiles->post('/cleanup', [FileUploadController::class, 'cleanupExpiredFiles']);
         })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
 
+        $group->get('/stats/summary', [StatsController::class, 'getPublicSummary']);
+
         // Backward-compatible aliases for activities listing and categories
         $group->get('/activities', [CarbonTrackController::class, 'getUserRecords'])->add(AuthMiddleware::class);
         $group->get('/activities/categories', [CarbonActivityController::class, 'getActivities']);
@@ -325,9 +330,11 @@ return function (App $app) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
             $auth->post('/logout', [AuthController::class, 'logout']);
+            $auth->post('/forgot-password', [AuthController::class, 'forgotPassword']);
             $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
             $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
             $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
+            $auth->post('/change-password', [AuthController::class, 'changePassword'])->add(AuthMiddleware::class);
         });
 
         // Backward-compatible aliases for schools endpoints (mirror /api/v1)

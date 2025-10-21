@@ -36,9 +36,11 @@ use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Services\BadgeService;
+use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
+use CarbonTrack\Controllers\StatsController;
 
 $__deps_initializer = function (Container $container) {
     // Logger
@@ -194,6 +196,11 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(Logger::class)
         );
+    });
+
+    $container->set(StatisticsService::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new StatisticsService($db);
     });
 
     // Email Service
@@ -397,8 +404,15 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(BadgeService::class),
+            $c->get(StatisticsService::class),
             $c->get(ErrorLogService::class),
             $c->get(CloudflareR2Service::class)
+        );
+    });
+
+    $container->set(StatsController::class, function (ContainerInterface $c) {
+        return new StatsController(
+            $c->get(StatisticsService::class)
         );
     });
 
