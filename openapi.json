@@ -8959,7 +8959,7 @@
               "email_verification_sent": {
                 "type": "boolean",
                 "nullable": true,
-                "description": "本次登录流程是否触发了验证邮件发送"
+                "description": "本次登录流程是否已成功排入验证邮件异步发送队列"
               },
               "verification_expires_at": {
                 "type": "string",

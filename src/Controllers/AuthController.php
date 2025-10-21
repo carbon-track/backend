@@ -182,7 +182,7 @@ class AuthController
                     ],
                     'token' => $token,
                     'email_verification_required' => true,
-                    'email_verification_sent' => $verificationMeta !== null,
+                    'email_verification_sent' => (bool)($verificationMeta['dispatched'] ?? false),
                     'verification_expires_at' => $verificationMeta['expires_at'] ?? null,
                     'verification_resend_available_at' => $verificationMeta['resend_available_at'] ?? null
                 ]
@@ -849,7 +849,7 @@ class AuthController
                 $throttle['retry_after'] ?? null
             );
 
-            $meta['sent'] = true;
+            $meta['sent'] = (bool)($challenge['dispatched'] ?? false);
             $meta['expires_at'] = $challenge['expires_at'] ?? $meta['expires_at'];
             $meta['resend_available_at'] = $challenge['resend_available_at'] ?? $meta['resend_available_at'];
             return $meta;
@@ -914,37 +914,207 @@ class AuthController
         $challenge = $this->createVerificationChallenge($userId, $email, $username, $sendCount);
         $challenge['resend_available_at'] = $retryAfter;
 
+        $context = [
+            'attempt' => $sendCount,
+            'expires_at' => $challenge['expires_at'],
+            'resend_available_at' => $challenge['resend_available_at'],
+            'email' => $email
+        ];
+
+        $dispatched = $this->sendVerificationEmailWithStrategy(
+            $userId,
+            $email,
+            $challenge['recipient_name'],
+            $challenge['code'],
+            $challenge['ttl_minutes'],
+            $challenge['link'],
+            $context
+        );
+
+        if (!$dispatched) {
+            $this->logger->warning('Verification email dispatch could not be queued', [
+                'user_id' => $userId,
+                'email' => $email
+            ]);
+        }
+
+        $challenge['dispatched'] = $dispatched;
+
+        return $challenge;
+    }
+
+    private function sendVerificationEmailWithStrategy(
+        int $userId,
+        string $email,
+        string $recipientName,
+        string $code,
+        int $ttlMinutes,
+        ?string $link,
+        array $context
+    ): bool {
+        $sapi = PHP_SAPI ?? php_sapi_name();
+        $isCli = in_array($sapi, ['cli', 'phpdbg', 'embed'], true);
+
+        if ($isCli) {
+            return $this->sendVerificationEmailNow(
+                $userId,
+                $email,
+                $recipientName,
+                $code,
+                $ttlMinutes,
+                $link,
+                false,
+                $context
+            );
+        }
+
+        $queued = $this->queueVerificationEmail(
+            $userId,
+            $email,
+            $recipientName,
+            $code,
+            $ttlMinutes,
+            $link,
+            $context
+        );
+
+        if (!$queued) {
+            return $this->sendVerificationEmailNow(
+                $userId,
+                $email,
+                $recipientName,
+                $code,
+                $ttlMinutes,
+                $link,
+                false,
+                $context
+            );
+        }
+
+        return true;
+    }
+
+    private function sendVerificationEmailNow(
+        int $userId,
+        string $email,
+        string $recipientName,
+        string $code,
+        int $ttlMinutes,
+        ?string $link,
+        bool $asyncContext,
+        array $context
+    ): bool {
         $sent = false;
         try {
             $sent = $this->emailService->sendVerificationCode(
                 $email,
-                $challenge['recipient_name'],
-                $challenge['code'],
-                $challenge['ttl_minutes'],
-                $challenge['link']
+                $recipientName,
+                $code,
+                $ttlMinutes,
+                $link
             );
-        } catch (\Throwable $e) {
-            $this->logger->warning('Verification email dispatch threw exception', [
-                'user_id' => $userId,
-                'error' => $e->getMessage()
-            ]);
-        }
 
-        if (!$sent) {
-            $this->logger->warning('Verification email dispatch returned false', ['user_id' => $userId]);
+            if (!$sent) {
+                $this->logger->warning('Verification email send reported failure', [
+                    'user_id' => $userId,
+                    'email' => $email,
+                    'context' => $asyncContext ? 'async' : 'sync'
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('Verification email send failed', [
+                'user_id' => $userId,
+                'email' => $email,
+                'error' => $e->getMessage(),
+                'context' => $asyncContext ? 'async' : 'sync'
+            ]);
         }
 
         try {
-            $this->auditLogService->logAuthOperation('email_verification_code_sent', $userId, $sent, [
-                'attempt' => $sendCount,
-                'expires_at' => $challenge['expires_at'],
-                'resend_available_at' => $challenge['resend_available_at']
-            ]);
+            $this->auditLogService->logAuthOperation(
+                $asyncContext ? 'email_verification_code_sent_async' : 'email_verification_code_sent',
+                $userId,
+                $sent,
+                array_merge($context, [
+                    'strategy' => $asyncContext ? 'async' : 'sync'
+                ])
+            );
         } catch (\Throwable $e) {
-            $this->logger->debug('Failed to record verification code audit log', ['error' => $e->getMessage()]);
+            $this->logger->debug('Failed to record verification email audit log', [
+                'error' => $e->getMessage(),
+                'strategy' => $asyncContext ? 'async' : 'sync'
+            ]);
         }
 
-        return $challenge;
+        return $sent;
+    }
+
+    private function queueVerificationEmail(
+        int $userId,
+        string $email,
+        string $recipientName,
+        string $code,
+        int $ttlMinutes,
+        ?string $link,
+        array $context
+    ): bool {
+        try {
+            register_shutdown_function(function () use ($userId, $email, $recipientName, $code, $ttlMinutes, $link, $context) {
+                try {
+                    if (function_exists('fastcgi_finish_request')) {
+                        @fastcgi_finish_request();
+                    }
+                } catch (\Throwable $finishError) {
+                    try {
+                        $this->logger->debug('fastcgi_finish_request failed prior to async verification email send', [
+                            'error' => $finishError->getMessage()
+                        ]);
+                    } catch (\Throwable $logError) {
+                        // ignore logging issues
+                    }
+                }
+
+                $this->sendVerificationEmailNow(
+                    $userId,
+                    $email,
+                    $recipientName,
+                    $code,
+                    $ttlMinutes,
+                    $link,
+                    true,
+                    $context
+                );
+            });
+
+            try {
+                $this->auditLogService->logAuthOperation('email_verification_code_schedule', $userId, true, array_merge($context, [
+                    'strategy' => 'async'
+                ]));
+            } catch (\Throwable $e) {
+                $this->logger->debug('Failed to record verification email schedule log', ['error' => $e->getMessage()]);
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to queue verification email', [
+                'user_id' => $userId,
+                'email' => $email,
+                'error' => $e->getMessage()
+            ]);
+
+            try {
+                $this->auditLogService->logAuthOperation('email_verification_code_schedule', $userId, false, array_merge($context, [
+                    'strategy' => 'async',
+                    'error' => $e->getMessage()
+                ]));
+            } catch (\Throwable $logError) {
+                $this->logger->debug('Failed to record verification email schedule failure', [
+                    'error' => $logError->getMessage()
+                ]);
+            }
+
+            return false;
+        }
     }
 
     private function createVerificationChallenge(int $userId, string $email, string $username, int $sendCount): array
