@@ -303,6 +303,14 @@ class ComprehensiveBusinessDataTest extends TestCase
         $factory = new ServerRequestFactory();
         $request = $factory->createServerRequest($method, $uri);
         
+        if (
+            strtoupper($method) === 'POST'
+            && preg_match('#/auth/register$#i', $uri)
+            && !array_key_exists('cf_turnstile_response', $data)
+        ) {
+            $data['cf_turnstile_response'] = 'test_turnstile_token';
+        }
+
         if (!empty($data)) {
             $request = $request->withParsedBody($data);
         }
@@ -347,6 +355,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             'confirm_password' => 'SecurePassword123!',
             // phone 字段已移除
             'school_id' => 1,
+            'cf_turnstile_response' => 'test_turnstile_token',
             // 测试环境跳过 Turnstile 验证，省略 cf_turnstile_response
         ];
 

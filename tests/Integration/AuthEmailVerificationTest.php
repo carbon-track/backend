@@ -45,7 +45,8 @@ final class AuthEmailVerificationTest extends TestCase
                 verification_code_expires_at TEXT,
                 verification_attempts INTEGER DEFAULT 0,
                 verification_send_count INTEGER DEFAULT 0,
-                verification_last_sent_at TEXT
+                verification_last_sent_at TEXT,
+                notification_email_mask INTEGER DEFAULT 0
             );
         ");
         $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT);");

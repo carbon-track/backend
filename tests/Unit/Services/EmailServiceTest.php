@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\NotificationPreferenceService;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
@@ -34,7 +35,7 @@ class EmailServiceTest extends TestCase
         $logger = new Logger('email-service-test');
         $logger->pushHandler($handler);
 
-        $service = new EmailService($config, $logger);
+        $service = new EmailService($config, $logger, null);
 
         $result = $service->sendEmail('to@example.com', 'To', 'Subj', '<b>body</b>', 'body');
 
@@ -51,6 +52,89 @@ class EmailServiceTest extends TestCase
         $this->assertNotEmpty($simulationRecords, 'Expected simulation log record to be captured.');
         $record = $simulationRecords[0];
         $this->assertSame('force_simulation', $record['context']['reason'] ?? null);
+    }
+
+    public function testSendMessageNotificationRespectsPreferences(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'templates_path' => __DIR__ . '/',
+            'force_simulation' => true,
+            'app_name' => 'CarbonTrack QA',
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $handlerAllow = new TestHandler();
+        $loggerAllow = new Logger('email-service-allow');
+        $loggerAllow->pushHandler($handlerAllow);
+
+        $preferenceAllow = new class(true, $loggerAllow) extends NotificationPreferenceService {
+            private bool $result;
+
+            public function __construct(bool $result, Logger $logger)
+            {
+                parent::__construct($logger);
+                $this->result = $result;
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                return $this->result;
+            }
+        };
+
+        $serviceAllow = new EmailService($config, $loggerAllow, $preferenceAllow);
+        $this->assertTrue($serviceAllow->sendMessageNotification(
+            'to@example.com',
+            'User',
+            'A subject',
+            "Line one\n\nLine two",
+            'system',
+            'high'
+        ));
+        $this->assertTrue(
+            $handlerAllow->hasInfoThatContains('Simulated email send'),
+            'Expected simulated send when preferences allow email delivery.'
+        );
+
+        $handlerBlock = new TestHandler();
+        $loggerBlock = new Logger('email-service-block');
+        $loggerBlock->pushHandler($handlerBlock);
+
+        $preferenceBlock = new class(false, $loggerBlock) extends NotificationPreferenceService {
+            private bool $result;
+
+            public function __construct(bool $result, Logger $logger)
+            {
+                parent::__construct($logger);
+                $this->result = $result;
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                return $this->result;
+            }
+        };
+
+        $serviceBlock = new EmailService($config, $loggerBlock, $preferenceBlock);
+        $this->assertFalse($serviceBlock->sendMessageNotification(
+            'to@example.com',
+            'User',
+            'Blocked subject',
+            'Any content',
+            'system',
+            'normal'
+        ));
+        $this->assertFalse(
+            $handlerBlock->hasInfoThatContains('Simulated email send'),
+            'Expected no send when preferences block email delivery.'
+        );
     }
 
     public function testTemplateWrappersReturnSuccess(): void
@@ -91,13 +175,15 @@ class EmailServiceTest extends TestCase
             'force_simulation' => true,
             'app_name' => 'CarbonTrack QA',
             'support_email' => 'help@example.com',
+            'frontend_url' => 'https://app.example.com',
+            'reset_link_base' => 'https://app.example.com',
         ];
 
         $handler = new TestHandler();
         $logger = new Logger('email-service-test');
         $logger->pushHandler($handler);
 
-        $svc = new EmailService($config, $logger);
+        $svc = new EmailService($config, $logger, null);
 
         $this->assertTrue($svc->sendVerificationCode('to@example.com', 'User', '123456'));
         $this->assertTrue($svc->sendPasswordResetLink('to@example.com', 'User', 'https://reset'));

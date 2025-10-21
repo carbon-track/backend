@@ -45,7 +45,7 @@
           "Auth"
         ],
         "summary": "Send Verification Code",
-        "description": "Sends an email verification code to the supplied address. Optionally accepts a Cloudflare Turnstile token to prevent abuse.",
+        "description": "Sends an email verification code to the supplied address. Requests must include a Cloudflare Turnstile token to mitigate abuse.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -53,9 +53,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [
-                  "email"
-                ],
+                "required": [\n                  "email",\n                  "cf_turnstile_response"\n                ],
                 "properties": {
                   "email": {
                     "type": "string",
@@ -64,7 +62,7 @@
                   },
                   "cf_turnstile_response": {
                     "type": "string",
-                    "description": "Optional Cloudflare Turnstile token for bot mitigation"
+                    "description": "Cloudflare Turnstile token returned from the client-side human verification widget"
                   }
                 }
               }
@@ -145,7 +143,7 @@
           "Auth"
         ],
         "summary": "Verify Email",
-        "description": "Verifies a user's email address by either providing the verification token or the original email plus code.",
+        "description": "Verifies a user's email address by providing either the verification token or the original email plus code. Manual verification requests must include a Cloudflare Turnstile token.",
         "requestBody": {
           "required": true,
           "content": {
@@ -779,6 +777,96 @@
           },
           "500": {
             "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/notification-preferences": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "获取通知偏好",
+        "description": "返回当前用户的通知类别及邮件发送偏好。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "获取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "User"
+        ],
+        "summary": "更新通知偏好",
+        "description": "更新用户邮件通知的开关设置。部分关键通知（站内信、安全提醒等）始终保持开启。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferenceUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPreferencesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
             "content": {
               "application/json": {
                 "schema": {
@@ -9241,12 +9329,12 @@
           }
         }
       },
-      "UserStatsResponse": {
-        "type": "object",
-        "required": [
-          "success",
-          "data"
-        ],
+    "UserStatsResponse": {
+      "type": "object",
+      "required": [
+        "success",
+        "data"
+      ],
         "properties": {
           "success": {
             "type": "boolean",
@@ -12181,6 +12269,93 @@
         }
       }
     },
+    "NotificationPreference": {
+      "type": "object",
+      "required": [
+        "category",
+        "label",
+        "locked",
+        "email_enabled"
+      ],
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "通知类别标识"
+        },
+        "label": {
+          "type": "string",
+          "description": "通知类别名称"
+        },
+        "locked": {
+          "type": "boolean",
+          "description": "是否为强制开启的通知类别"
+        },
+        "email_enabled": {
+          "type": "boolean",
+          "description": "是否通过邮件发送此类通知"
+        }
+      }
+    },
+    "NotificationPreferenceUpdateRequest": {
+      "type": "object",
+      "required": [
+        "preferences"
+      ],
+      "properties": {
+        "preferences": {
+          "type": "array",
+          "description": "需要更新的通知偏好列表，锁定的通知类型将被忽略。",
+          "items": {
+            "type": "object",
+            "required": [
+              "category",
+              "email_enabled"
+            ],
+            "properties": {
+              "category": {
+                "type": "string",
+                "description": "通知类别标识"
+              },
+              "email_enabled": {
+                "type": "boolean",
+                "description": "是否开启该通知的邮件提醒"
+              }
+            }
+          }
+        }
+      }
+    },
+    "NotificationPreferencesResponse": {
+      "type": "object",
+      "required": [
+        "success",
+        "data"
+      ],
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": true
+        },
+        "message": {
+          "type": "string",
+          "nullable": true
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "preferences"
+          ],
+          "properties": {
+            "preferences": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/NotificationPreference"
+              }
+            }
+          }
+        }
+      }
+    },
     "/messages/{id}": {
       "get": {
         "tags": [
@@ -13488,3 +13663,7 @@
     }
   }
 }
+
+
+
+

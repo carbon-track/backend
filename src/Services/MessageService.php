@@ -6,17 +6,54 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\Message;
 use CarbonTrack\Models\User;
+use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\NotificationPreferenceService;
 use Monolog\Logger;
 
 class MessageService
 {
     private Logger $logger;
     private AuditLogService $auditLogService;
+    private ?EmailService $emailService;
+    /** @var callable|null */
+    private $userResolver;
 
-    public function __construct(Logger $logger, AuditLogService $auditLogService)
+    /**
+     * @var array<string,string>
+     */
+    private const TYPE_CATEGORY_MAP = [
+        Message::TYPE_SYSTEM => NotificationPreferenceService::CATEGORY_SYSTEM,
+        Message::TYPE_NOTIFICATION => NotificationPreferenceService::CATEGORY_SYSTEM,
+        Message::TYPE_APPROVAL => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        Message::TYPE_REJECTION => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        Message::TYPE_EXCHANGE => NotificationPreferenceService::CATEGORY_TRANSACTION,
+        Message::TYPE_WELCOME => NotificationPreferenceService::CATEGORY_SYSTEM,
+        Message::TYPE_REMINDER => NotificationPreferenceService::CATEGORY_SYSTEM,
+        'record_submitted' => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        'record_approved' => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        'record_rejected' => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        'new_record_pending' => NotificationPreferenceService::CATEGORY_ACTIVITY,
+        'product_exchanged' => NotificationPreferenceService::CATEGORY_TRANSACTION,
+        'new_exchange_pending' => NotificationPreferenceService::CATEGORY_TRANSACTION,
+        'exchange_status_updated' => NotificationPreferenceService::CATEGORY_TRANSACTION,
+        'direct_message' => NotificationPreferenceService::CATEGORY_MESSAGE,
+        'message' => NotificationPreferenceService::CATEGORY_MESSAGE,
+    ];
+
+    public function __construct(Logger $logger, AuditLogService $auditLogService, ?EmailService $emailService = null)
     {
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
+        $this->emailService = $emailService;
+        $this->userResolver = null;
+    }
+
+    /**
+     * @param callable|null $resolver receives (int $userId): ?User
+     */
+    public function setUserResolver(?callable $resolver): void
+    {
+        $this->userResolver = $resolver;
     }
 
     /**
@@ -62,6 +99,8 @@ class MessageService
             'notes' => 'Message sent to user ' . $receiverId
         ]);
 
+        $this->maybeSendLinkedEmail($receiverId, $title, $content, $type, $priority);
+
         return $message;
     }
 
@@ -75,9 +114,10 @@ class MessageService
         string $type = Message::TYPE_SYSTEM,
         string $priority = Message::PRIORITY_NORMAL,
         ?string $relatedEntityType = null,
-        ?int $relatedEntityId = null
+        ?int $relatedEntityId = null,
+        bool $sendEmail = true
     ): Message {
-        return Message::createSystemMessage(
+        $message = Message::createSystemMessage(
             $receiverId,
             $title,
             $content,
@@ -86,6 +126,12 @@ class MessageService
             $relatedEntityType,
             $relatedEntityId
         );
+
+        if ($sendEmail) {
+            $this->maybeSendLinkedEmail($receiverId, $title, $content, $type, $priority);
+        }
+
+        return $message;
     }
 
     /**
@@ -153,15 +199,20 @@ class MessageService
                   "Points have been added to your account. Current total: {$user->points}\n\n" .
                   "Thank you for your contribution to environmental protection!";
 
-        return $this->sendSystemMessage(
+        $message = $this->sendSystemMessage(
             $user->id,
             $title,
             $content,
             Message::TYPE_APPROVAL,
             Message::PRIORITY_HIGH,
             null,
-            null
+            null,
+            false
         );
+
+        $this->sendActivityApprovedEmail($user, $activity, $transaction);
+
+        return $message;
     }
 
     /**
@@ -201,15 +252,20 @@ class MessageService
         $content .= "Please check if the submitted information is accurate and complete. You can resubmit the correct record.\n\n" .
                    "If you have any questions, please contact the administrator.";
 
-        return $this->sendSystemMessage(
+        $message = $this->sendSystemMessage(
             $user->id,
             $title,
             $content,
             Message::TYPE_REJECTION,
             Message::PRIORITY_HIGH,
             null,
-            null
+            null,
+            false
         );
+
+        $this->sendActivityRejectedEmail($user, $activity, $reason);
+
+        return $message;
     }
 
     /**
@@ -239,15 +295,22 @@ class MessageService
                   "We will arrange product delivery as soon as possible. Please keep your contact information available.\n\n" .
                   "Thank you for supporting environmental protection!";
 
-        return $this->sendSystemMessage(
+        $message = $this->sendSystemMessage(
             $user->id,
             $title,
             $content,
             Message::TYPE_EXCHANGE,
             Message::PRIORITY_NORMAL,
             null,
-            null
+            null,
+            false
         );
+
+        $quantity = is_array($exchange) ? ($exchange['quantity'] ?? 1) : ($exchange->quantity ?? 1);
+        $pointsSpent = is_array($exchange) ? ($exchange['points_spent'] ?? 0) : ($exchange->points_spent ?? 0);
+        $this->sendExchangeConfirmationEmail($user, $product, (int) $quantity, (float) $pointsSpent);
+
+        return $message;
     }
 
     /**
@@ -521,6 +584,294 @@ class MessageService
         }
         
         return $sent;
+    }
+
+    private function maybeSendLinkedEmail(int $receiverId, string $title, string $content, string $type, string $priority): void
+    {
+        if ($this->emailService === null) {
+            return;
+        }
+
+        $recipient = $this->resolveEmailRecipient($receiverId);
+        if ($recipient === null) {
+            return;
+        }
+
+        $subject = $this->buildEmailSubject($title, $priority);
+        $category = $this->resolveNotificationCategory($type);
+
+        try {
+            $sent = $this->emailService->sendMessageNotification(
+                $recipient['email'],
+                $recipient['name'],
+                $subject,
+                $content,
+                $category,
+                $priority
+            );
+
+            if (!$sent) {
+                $this->logger->debug('Message email was skipped due to user preferences or simulation mode', [
+                    'receiver_id' => $receiverId,
+                    'category' => $category,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to send linked email notification', [
+                'receiver_id' => $receiverId,
+                'subject' => $subject,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Resolve email recipient details for notifications.
+     *
+     * @return array{email:string,name:string}|null
+     */
+    private function resolveEmailRecipient(int $userId, ?string $fallbackEmail = null, ?string $fallbackName = null): ?array
+    {
+        if ($userId > 0 && $this->userResolver !== null) {
+            try {
+                $resolved = call_user_func($this->userResolver, $userId);
+                if ($resolved instanceof User && !empty($resolved->email)) {
+                    $name = $resolved->getDisplayName() ?: (string) $resolved->email;
+                    return [
+                        'email' => (string) $resolved->email,
+                        'name' => $name,
+                    ];
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to resolve receiver for email notification', [
+                    'receiver_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($userId > 0) {
+            try {
+                $user = User::query()->find($userId);
+                if ($user instanceof User && !empty($user->email)) {
+                    $name = $user->getDisplayName() ?: (string) $user->email;
+                    return [
+                        'email' => (string) $user->email,
+                        'name' => $name,
+                    ];
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to load user for email notification', [
+                    'receiver_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($fallbackEmail !== null && $fallbackEmail !== '') {
+            return [
+                'email' => $fallbackEmail,
+                'name' => $fallbackName && $fallbackName !== '' ? $fallbackName : $fallbackEmail,
+            ];
+        }
+
+        return null;
+    }
+
+    public function sendExchangeConfirmationEmailToUser(
+        int $userId,
+        string $productName,
+        int $quantity,
+        float $pointsSpent,
+        ?string $fallbackEmail = null,
+        ?string $fallbackName = null
+    ): void {
+        if ($this->emailService === null) {
+            return;
+        }
+
+        $recipient = $this->resolveEmailRecipient($userId, $fallbackEmail, $fallbackName);
+        if ($recipient === null) {
+            return;
+        }
+
+        try {
+            $this->emailService->sendExchangeConfirmation(
+                $recipient['email'],
+                $recipient['name'],
+                $productName,
+                $quantity,
+                $pointsSpent
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to send exchange confirmation email', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    public function sendExchangeStatusUpdateEmailToUser(
+        int $userId,
+        string $productName,
+        string $status,
+        ?string $trackingNumber = null,
+        ?string $adminNotes = null,
+        ?string $fallbackEmail = null,
+        ?string $fallbackName = null
+    ): void {
+        if ($this->emailService === null) {
+            return;
+        }
+
+        $recipient = $this->resolveEmailRecipient($userId, $fallbackEmail, $fallbackName);
+        if ($recipient === null) {
+            return;
+        }
+
+        $noteParts = [];
+        if ($trackingNumber !== null && $trackingNumber !== '') {
+            $noteParts[] = 'Tracking number: ' . $trackingNumber;
+        }
+        if ($adminNotes !== null && $adminNotes !== '') {
+            $noteParts[] = $adminNotes;
+        }
+        $combinedNotes = implode("\n", $noteParts);
+
+        try {
+            $this->emailService->sendExchangeStatusUpdate(
+                $recipient['email'],
+                $recipient['name'],
+                $productName,
+                $status,
+                $combinedNotes
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to send exchange status update email', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resolveNotificationCategory(string $type): string
+    {
+        $key = strtolower(trim($type));
+        if ($key === '') {
+            return NotificationPreferenceService::CATEGORY_SYSTEM;
+        }
+
+        if (isset(self::TYPE_CATEGORY_MAP[$key])) {
+            return self::TYPE_CATEGORY_MAP[$key];
+        }
+
+        return NotificationPreferenceService::CATEGORY_SYSTEM;
+    }
+
+    private function buildEmailSubject(string $title, string $priority): string
+    {
+        $prefix = '';
+        switch ($priority) {
+            case Message::PRIORITY_URGENT:
+                $prefix = '[URGENT] ';
+                break;
+            case Message::PRIORITY_HIGH:
+                $prefix = '[HIGH] ';
+                break;
+        }
+
+        return $prefix . $title;
+    }
+
+    private function sendActivityApprovedEmail(?User $user, $activity, $transaction): void
+    {
+        if ($this->emailService === null || !$user || empty($user->email)) {
+            return;
+        }
+
+        $activityName = '';
+        if (is_object($activity) && method_exists($activity, 'getCombinedName')) {
+            $activityName = (string) $activity->getCombinedName();
+        } elseif (is_array($activity)) {
+            $activityName = (string) ($activity['name'] ?? '');
+        } elseif (is_object($activity) && isset($activity->name)) {
+            $activityName = (string) $activity->name;
+        }
+        $points = is_array($transaction) ? ($transaction['points'] ?? 0) : ($transaction->points ?? 0);
+
+        try {
+            $this->emailService->sendActivityApprovedNotification(
+                (string) $user->email,
+                $user->getDisplayName() ?: (string) $user->email,
+                (string) $activityName,
+                (float) $points
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to send activity approved email', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function sendActivityRejectedEmail(?User $user, $activity, ?string $reason): void
+    {
+        if ($this->emailService === null || !$user || empty($user->email)) {
+            return;
+        }
+
+        $activityName = '';
+        if (is_object($activity) && method_exists($activity, 'getCombinedName')) {
+            $activityName = (string) $activity->getCombinedName();
+        } elseif (is_array($activity)) {
+            $activityName = (string) ($activity['name'] ?? '');
+        } elseif (is_object($activity) && isset($activity->name)) {
+            $activityName = (string) $activity->name;
+        }
+        $reasonText = $reason ?? 'See in-app notification for details.';
+
+        try {
+            $this->emailService->sendActivityRejectedNotification(
+                (string) $user->email,
+                $user->getDisplayName() ?: (string) $user->email,
+                (string) $activityName,
+                (string) $reasonText
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to send activity rejected email', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function sendExchangeConfirmationEmail(?User $user, $product, int $quantity, float $pointsSpent): void
+    {
+        if ($this->emailService === null || !$user || empty($user->email)) {
+            return;
+        }
+
+        $productName = '';
+        if (is_object($product)) {
+            $productName = (string) ($product->name ?? '');
+        } elseif (is_array($product)) {
+            $productName = (string) ($product['name'] ?? '');
+        }
+
+        try {
+            $this->emailService->sendExchangeConfirmation(
+                (string) $user->email,
+                $user->getDisplayName() ?: (string) $user->email,
+                $productName,
+                $quantity,
+                $pointsSpent
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to send exchange confirmation email', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
 

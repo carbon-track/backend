@@ -12,6 +12,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\NotificationPreferenceService;
 use Monolog\Logger;
 use PDO;
 
@@ -25,12 +26,14 @@ class UserController
     private ?CloudflareR2Service $r2Service;
     private Logger $logger;
     private PDO $db;
+    private NotificationPreferenceService $notificationPreferenceService;
 
     public function __construct(
         AuthService $authService,
         AuditLogService $auditLogService,
         MessageService $messageService,
         Avatar $avatarModel,
+        NotificationPreferenceService $notificationPreferenceService,
         Logger $logger,
         PDO $db,
         ErrorLogService $errorLogService = null,
@@ -40,6 +43,7 @@ class UserController
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
         $this->avatarModel = $avatarModel;
+        $this->notificationPreferenceService = $notificationPreferenceService;
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
@@ -294,6 +298,96 @@ class UserController
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to update profile'
+            ], 500);
+        }
+    }
+
+    public function getNotificationPreferences(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED',
+                ], 401);
+            }
+
+            $preferences = $this->notificationPreferenceService->getPreferencesForUser((int) $user['id']);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'preferences' => $preferences,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to load notification preferences', [
+                'error' => $e->getMessage(),
+            ]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to load notification preferences',
+            ], 500);
+        }
+    }
+
+    public function updateNotificationPreferences(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED',
+                ], 401);
+            }
+
+            $payload = $request->getParsedBody();
+            $preferences = $payload['preferences'] ?? [];
+            if (!is_array($preferences)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid preferences payload',
+                    'code' => 'INVALID_PAYLOAD',
+                ], 400);
+            }
+
+            $this->notificationPreferenceService->updatePreferences((int) $user['id'], $preferences);
+            $updated = $this->notificationPreferenceService->getPreferencesForUser((int) $user['id']);
+
+            $this->auditLogService->log([
+                'action' => 'notification_preferences_updated',
+                'operation_category' => 'user_management',
+                'user_id' => $user['id'],
+                'actor_type' => 'user',
+                'affected_table' => 'users',
+                'affected_id' => $user['id'],
+                'new_data' => ['preferences' => $updated],
+                'status' => 'success',
+                'request_data' => $preferences,
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Notification preferences updated',
+                'data' => [
+                    'preferences' => $updated,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to update notification preferences', [
+                'error' => $e->getMessage(),
+            ]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to update notification preferences',
             ], 500);
         }
     }

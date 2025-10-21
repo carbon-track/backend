@@ -21,7 +21,7 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         // Minimal schema: users & schools
         $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT);");
+        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
     }
 
     private function makeController(): AuthController
@@ -69,7 +69,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
             'email' => 'user_new_school@example.com',
             'password' => $pwd,
             'confirm_password' => $pwd,
-            'new_school_name' => 'Carbon Innovation Institute'
+            'new_school_name' => 'Carbon Innovation Institute',
+            'cf_turnstile_response' => 'test_turnstile_token'
         ];
         $resp = new Response();
         $out = $controller->register($this->makeRequest($body), $resp);
@@ -102,7 +103,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
             'password' => $pwd,
             'confirm_password' => $pwd,
             'school_id' => $schoolId,
-            'new_school_name' => 'Another New School Name' // should be ignored
+            'new_school_name' => 'Another New School Name', // should be ignored
+            'cf_turnstile_response' => 'test_turnstile_token'
         ];
         $resp = new Response();
         $out = $controller->register($this->makeRequest($body), $resp);

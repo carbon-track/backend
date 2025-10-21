@@ -74,7 +74,8 @@ class UserControllerTest extends TestCase
             $stmtJoined
         );
 
-    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
     $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
@@ -104,7 +105,8 @@ class UserControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
         $avatar->method('isAvatarAvailable')->willReturn(false);
 
-    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('PUT', '/users/me/avatar', ['avatar_id' => 999]);
         $response = new \Slim\Psr7\Response();
@@ -140,7 +142,8 @@ class UserControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
 
-    $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('GET', '/users/me/points-history');
         $response = new \Slim\Psr7\Response();
@@ -236,7 +239,8 @@ class UserControllerTest extends TestCase
             return false;
         });
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -300,7 +304,8 @@ class UserControllerTest extends TestCase
         $r2->method('generatePresignedUrl')->willReturn('https://cdn.example.com/proofs/a.jpg?token=abc');
         $r2->method('getPublicUrl')->willReturn('https://cdn.example.com/proofs/a.jpg');
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo, $errorLog, $r2);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $errorLog, $r2);
 
         $request = makeRequest('GET', '/users/me/activities');
         $response = new \Slim\Psr7\Response();
@@ -349,7 +354,8 @@ class UserControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo);
         $request = makeRequest('GET', '/users/me');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCurrentUser($request, $response);
@@ -414,7 +420,8 @@ class UserControllerTest extends TestCase
             $stmtJoined
         );
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $logger, $pdo);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo);
     $request = makeRequest('PUT', '/users/me', ['avatar_id' => 10]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateCurrentUser($request, $response);

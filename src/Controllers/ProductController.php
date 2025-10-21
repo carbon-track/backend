@@ -403,6 +403,15 @@ class ProductController
                     "您已成功兑换 {$product['name']} x{$quantity}，消耗 {$totalPoints} 积分。我们将尽快为您安排发货。",
                     'normal'
                 );
+                $this->messageService->sendExchangeConfirmationEmailToUser(
+                    (int) $user['id'],
+                    (string) ($product['name'] ?? ''),
+                    $quantity,
+                    (float) $totalPoints,
+                    $user['email'] ?? null,
+                    $user['username'] ?? ($user['full_name'] ?? ($user['name'] ?? null))
+                );
+
 
                 // 通知管理员
                 $this->notifyAdminsNewExchange($exchangeId, $user, $product, $quantity);
@@ -2581,12 +2590,29 @@ class ProductController
             $message .= "\n备注：{$notes}";
         }
 
+        $userColumn = $this->resolvePointExchangeUserIdColumn();
+        $userId = isset($exchange[$userColumn]) ? (int)$exchange[$userColumn] : 0;
+
+        if ($userId <= 0) {
+            return;
+        }
+
         $this->messageService->sendMessage(
-            $exchange['user_id'],
+            $userId,
             'exchange_status_updated',
             $title,
             $message,
             'normal'
+        );
+
+        $this->messageService->sendExchangeStatusUpdateEmailToUser(
+            $userId,
+            (string) ($exchange['product_name'] ?? ''),
+            $status,
+            $trackingNumber,
+            $notes,
+            $exchange['email'] ?? null,
+            $exchange['username'] ?? null
         );
     }
 

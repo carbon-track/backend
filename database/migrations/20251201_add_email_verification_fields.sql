@@ -13,4 +13,3 @@ ALTER TABLE `users`
 ALTER TABLE `users`
     ADD INDEX IF NOT EXISTS `idx_users_verification_token` (`verification_token`),
     ADD INDEX IF NOT EXISTS `idx_users_email_verified_at` (`email_verified_at`);
-

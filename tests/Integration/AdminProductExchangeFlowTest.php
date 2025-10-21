@@ -106,6 +106,18 @@ class AdminProductExchangeFlowTest extends TestCase
                 $this->equalTo('normal')
             );
 
+        $messageService->expects($this->once())
+            ->method('sendExchangeStatusUpdateEmailToUser')
+            ->with(
+                $this->equalTo(2),
+                $this->equalTo('Eco Bottle'),
+                $this->equalTo('shipped'),
+                $this->equalTo('TRACK123'),
+                $this->equalTo('发货完成'),
+                $this->anything(),
+                $this->anything()
+            );
+
         $auditLog = $this->createMock(AuditLogService::class);
         $auditLog->method('log')->willReturn(true);
 
@@ -162,7 +174,8 @@ class AdminProductExchangeFlowTest extends TestCase
             is_admin INTEGER,
             status TEXT,
             created_at TEXT,
-            deleted_at TEXT
+            deleted_at TEXT,
+            notification_email_mask INTEGER DEFAULT 0
         )');
 
         $pdo->exec('CREATE TABLE product_categories (

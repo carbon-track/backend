@@ -75,14 +75,13 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-            if (!empty($data['cf_turnstile_response'])) {
-                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
-                    return $this->jsonResponse($response, [
-                        'success' => false,
-                        'message' => 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED'
-                    ], 400);
-                }
+            if (empty($data['cf_turnstile_response'])
+                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Turnstile verification failed',
+                    'code' => 'TURNSTILE_FAILED'
+                ], 400);
             }
             $stmt = $this->db->prepare('SELECT id FROM users WHERE username = ? AND deleted_at IS NULL');
             $stmt->execute([$data['username']]);
@@ -424,6 +423,15 @@ class AuthController
                 $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code_expires_at FROM users WHERE verification_token = ? AND deleted_at IS NULL LIMIT 1');
                 $stmt->execute([$token]);
             } else {
+                if (empty($data['cf_turnstile_response'])
+                    || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Turnstile verification failed',
+                        'code' => 'TURNSTILE_FAILED'
+                    ], 400);
+                }
+
                 $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code, verification_code_expires_at, verification_attempts FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1');
                 $stmt->execute([$emailInput]);
             }

@@ -28,17 +28,21 @@ class SystemLogService
     public function log(array $data): void
     {
         try {
+            $requestId = $data['request_id'] ?? null;
+            if ($requestId !== null) {
+                $requestId = substr((string) $requestId, 0, 64);
+            }
             $requestBody = $this->sanitizeBody($data['request_body'] ?? null);
             $responseBody = $this->sanitizeBody($data['response_body'] ?? null);
             $serverMeta = $this->buildServerMeta($data['server_params'] ?? []);
 
-            // 为兼容 MySQL 与 SQLite：不显式写 created_at，使用表默认 CURRENT_TIMESTAMP 或触发器
+            // 为了兼容 MySQL 和 SQLite，采用字符串形式写 created_at，使用默认的 CURRENT_TIMESTAMP 进行处理
             $stmt = $this->db->prepare("INSERT INTO system_logs (
                 request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
 
             $stmt->execute([
-                $data['request_id'] ?? null,
+                $requestId,
                 $data['method'] ?? null,
                 $data['path'] ?? null,
                 $data['status_code'] ?? null,
@@ -51,7 +55,7 @@ class SystemLogService
                 $serverMeta
             ]);
         } catch (\Throwable $e) {
-            // 仅记录到应用日志，避免影响主业务
+            // ����¼��Ӧ����־������Ӱ����ҵ��
             try {
                 $this->logger->warning('System log insert failed', [
                     'error' => $e->getMessage(),
@@ -111,3 +115,4 @@ class SystemLogService
         return $json;
     }
 }
+

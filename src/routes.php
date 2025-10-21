@@ -99,6 +99,8 @@ return function (App $app) {
             $users->put('/me', [UserController::class, 'updateCurrentUser']);
             $users->put('/me/profile', [UserController::class, 'updateProfile']);
             $users->put('/me/avatar', [UserController::class, 'selectAvatar']);
+            $users->get('/me/notification-preferences', [UserController::class, 'getNotificationPreferences']);
+            $users->put('/me/notification-preferences', [UserController::class, 'updateNotificationPreferences']);
             $users->get('/me/badges', [BadgeController::class, 'myBadges']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);

@@ -20,6 +20,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\SystemLogService;
+use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Services\FileMetadataService;
@@ -197,6 +198,9 @@ $__deps_initializer = function (Container $container) {
 
     // Email Service
     $container->set(EmailService::class, function (ContainerInterface $c) {
+        $frontendUrl = $_ENV['FRONTEND_URL'] ?? ($_ENV['APP_URL'] ?? '');
+        $supportEmail = $_ENV['SUPPORT_EMAIL'] ?? ($_ENV['MAIL_FROM_ADDRESS'] ?? 'support@carbontrackapp.com');
+
         return new EmailService([
             'host' => $_ENV['MAIL_HOST'],
             'port' => (int) ($_ENV['MAIL_PORT']),
@@ -213,8 +217,12 @@ $__deps_initializer = function (Container $container) {
                 'password_reset' => 'Password Reset Request',
                 'activity_approved' => 'Your Carbon Activity Approved!'
             ],
-            'templates_path' => __DIR__ . '/../templates/emails/'
-        ], $c->get(Logger::class));
+            'templates_path' => __DIR__ . '/../templates/emails/',
+            'app_name' => $_ENV['APP_NAME'] ?? ($_ENV['MAIL_FROM_NAME'] ?? 'CarbonTrack'),
+            'support_email' => $supportEmail,
+            'frontend_url' => $frontendUrl,
+            'reset_link_base' => $frontendUrl,
+        ], $c->get(Logger::class), $c->get(NotificationPreferenceService::class));
     });
 
     // Audit Log Service
@@ -237,7 +245,15 @@ $__deps_initializer = function (Container $container) {
     $container->set(MessageService::class, function (ContainerInterface $c) {
         return new MessageService(
             $c->get(Logger::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(EmailService::class)
+        );
+    });
+
+    // Notification preferences
+    $container->set(NotificationPreferenceService::class, function (ContainerInterface $c) {
+        return new NotificationPreferenceService(
+            $c->get(Logger::class)
         );
     });
 
@@ -289,6 +305,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(MessageService::class),
             $c->get(Avatar::class),
+            $c->get(NotificationPreferenceService::class),
             $c->get(Logger::class),
             $db,
             $c->get(ErrorLogService::class),

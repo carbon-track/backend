@@ -183,7 +183,8 @@ class ProductExchangeLegacySchemaTest extends TestCase
             verification_attempts INTEGER NOT NULL DEFAULT 0,
             verification_send_count INTEGER NOT NULL DEFAULT 0,
             verification_last_sent_at TEXT,
-            deleted_at TEXT
+            deleted_at TEXT,
+            notification_email_mask INTEGER NOT NULL DEFAULT 0
         )');
 
         $pdo->exec('CREATE TABLE products (

@@ -92,6 +92,14 @@ class RealisticBusinessDataTest extends TestCase
         $factory = new ServerRequestFactory();
         $request = $factory->createServerRequest($method, $uri);
         
+        if (
+            strtoupper($method) === 'POST'
+            && preg_match('#/auth/register$#i', $uri)
+            && !array_key_exists('cf_turnstile_response', $data)
+        ) {
+            $data['cf_turnstile_response'] = 'test_turnstile_token';
+        }
+
         if (!empty($data)) {
             $request = $request->withParsedBody($data);
         }
@@ -381,3 +389,4 @@ class RealisticBusinessDataTest extends TestCase
 
     // tearDown 使用基类默认实现
 }
+

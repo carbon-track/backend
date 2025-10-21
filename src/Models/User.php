@@ -25,7 +25,8 @@ class User extends Model
         'school',
         'location',
         'is_admin',
-        'lastlgn'
+        'lastlgn',
+        'notification_email_mask'
     ];
 
     protected $hidden = [
@@ -38,7 +39,8 @@ class User extends Model
         'lastlgn' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
-        'deleted_at' => 'datetime'
+        'deleted_at' => 'datetime',
+        'notification_email_mask' => 'integer'
     ];
 
     protected $dates = ['deleted_at'];
@@ -298,4 +300,3 @@ class User extends Model
             ->count();
     }
 }
-

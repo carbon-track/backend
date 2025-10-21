@@ -124,6 +124,13 @@ class BusinessScenarioTest extends TestCase
             $headers['X-Request-ID'] = $this->generateRequestId();
         }
 
+        if (strcasecmp($method, 'POST') === 0
+            && preg_match('#/auth/register$#i', $endpoint)
+            && !array_key_exists('cf_turnstile_response', $data)
+        ) {
+            $data['cf_turnstile_response'] = 'test_turnstile_token';
+        }
+
         $options = [
             'http' => [
                 'method' => strtoupper($method),
@@ -375,3 +382,5 @@ class BusinessScenarioTest extends TestCase
 
     // tearDown 使用基类默认实现
 }
+
+

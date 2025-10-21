@@ -182,6 +182,16 @@ class ProductControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $messageService->expects($this->exactly(2))->method('sendMessage');
+        $messageService->expects($this->once())
+            ->method('sendExchangeConfirmationEmailToUser')
+            ->with(
+                $this->equalTo(1),
+                $this->equalTo('Gift'),
+                $this->equalTo(2),
+                $this->equalTo(100.0),
+                $this->equalTo(null),
+                $this->equalTo('u')
+            );
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'username'=>'u','points'=>1000]);
@@ -337,6 +347,17 @@ class ProductControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $messageService->expects($this->once())->method('sendMessage');
+        $messageService->expects($this->once())
+            ->method('sendExchangeStatusUpdateEmailToUser')
+            ->with(
+                $this->equalTo(1),
+                $this->equalTo('Gift'),
+                $this->equalTo('shipped'),
+                $this->equalTo('T123'),
+                $this->equalTo(null),
+                $this->equalTo(null),
+                $this->equalTo(null)
+            );
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
