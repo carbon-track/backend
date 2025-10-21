@@ -1160,7 +1160,11 @@ class AuthController
             return null;
         }
 
-        return rtrim($base, '/') . '/verify-email?token=' . urlencode($token);
+        $path = $_ENV['EMAIL_VERIFICATION_PATH'] ?? '/auth/verify-email';
+        $normalizedBase = rtrim($base, '/');
+        $normalizedPath = '/' . ltrim($path, '/');
+
+        return $normalizedBase . $normalizedPath . '?token=' . urlencode($token);
     }
 
     private function markEmailVerified(int $userId): void
