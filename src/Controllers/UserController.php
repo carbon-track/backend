@@ -55,6 +55,328 @@ class UserController
         $this->r2Service = $r2Service;
     }
 
+    private function buildNotificationTestEmailJob(array $user, string $category, string $email, string $displayName): ?array
+    {
+        $baseContext = [
+            'category' => $category,
+        ];
+
+        switch ($category) {
+            case NotificationPreferenceService::CATEGORY_ACTIVITY: {
+                $sample = $this->fetchLatestActivitySample((int)$user['id']);
+                $activityName = $sample['name'];
+                if ($sample['generated']) {
+                    $activityName .= ' (Test sample)';
+                }
+                $points = (float)($sample['points'] ?? 0);
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $activityName, $points) {
+                        return $this->emailService->sendActivityApprovedNotification(
+                            $email,
+                            $displayName,
+                            $activityName,
+                            $points
+                        );
+                    },
+                    'context' => array_merge($baseContext, ['sample' => $sample]),
+                    'generated' => $sample['generated'],
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_TRANSACTION: {
+                $sample = $this->fetchLatestExchangeSample((int)$user['id']);
+                $productName = $sample['product'];
+                if ($sample['generated']) {
+                    $productName .= ' (Test sample)';
+                }
+                $quantity = (int)($sample['quantity'] ?? 1);
+                $points = (float)($sample['points'] ?? 0);
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $productName, $quantity, $points) {
+                        return $this->emailService->sendExchangeConfirmation(
+                            $email,
+                            $displayName,
+                            $productName,
+                            $quantity,
+                            $points
+                        );
+                    },
+                    'context' => array_merge($baseContext, ['sample' => $sample]),
+                    'generated' => $sample['generated'],
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_VERIFICATION: {
+                $code = str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT) . ' (TEST)';
+                $token = bin2hex(random_bytes(16));
+                $link = $this->buildTestLink('auth/verify-email', [
+                    'token' => $token,
+                    'test' => 1,
+                ]);
+                $ttl = 30;
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $code, $ttl, $link) {
+                        return $this->emailService->sendVerificationCode(
+                            $email,
+                            $displayName,
+                            $code,
+                            $ttl,
+                            $link
+                        );
+                    },
+                    'context' => array_merge($baseContext, [
+                        'code' => $code,
+                        'link' => $link,
+                    ]),
+                    'generated' => true,
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_SECURITY: {
+                $link = $this->buildTestLink('auth/reset-password', [
+                    'token' => bin2hex(random_bytes(16)),
+                    'test' => 1,
+                ]);
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $link) {
+                        return $this->emailService->sendPasswordResetLink(
+                            $email,
+                            $displayName . ' (Test preview)',
+                            $link
+                        );
+                    },
+                    'context' => array_merge($baseContext, ['link' => $link]),
+                    'generated' => true,
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_SYSTEM: {
+                $appName = $this->emailService->getAppName();
+                $subject = sprintf('[Test] %s onboarding sample', $appName);
+                $body = sprintf(
+                    "Hello %s,\n\nThis is a sample onboarding message showcasing the tips and guidance emails from %s.\n"
+                    . "Use this to verify deliverability and spam settings.\n\nThank you for helping us keep communications open!",
+                    $displayName,
+                    $appName
+                );
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $subject, $body) {
+                        return $this->emailService->sendMessageNotification(
+                            $email,
+                            $displayName,
+                            $subject,
+                            $body,
+                            NotificationPreferenceService::CATEGORY_SYSTEM,
+                            Message::PRIORITY_LOW
+                        );
+                    },
+                    'context' => $baseContext,
+                    'generated' => true,
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_ANNOUNCEMENT: {
+                $appName = $this->emailService->getAppName();
+                $subject = sprintf('[Test] %s announcement preview', $appName);
+                $body = sprintf(
+                    "Hi %s,\n\nThis is how platform announcements will appear in your inbox. "
+                    . "Announcements may include maintenance notices, feature rollouts, or community news.\n\n"
+                    . "This message was generated for preview purposes only.",
+                    $displayName
+                );
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $subject, $body) {
+                        return $this->emailService->sendMessageNotification(
+                            $email,
+                            $displayName,
+                            $subject,
+                            $body,
+                            NotificationPreferenceService::CATEGORY_ANNOUNCEMENT,
+                            Message::PRIORITY_LOW
+                        );
+                    },
+                    'context' => $baseContext,
+                    'generated' => true,
+                ];
+            }
+
+            case NotificationPreferenceService::CATEGORY_MESSAGE: {
+                $sample = $this->fetchLatestMessageSample((int)$user['id']);
+                $subject = $sample['title'];
+                $body = $sample['content'];
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $subject, $body) {
+                        return $this->emailService->sendMessageNotification(
+                            $email,
+                            $displayName,
+                            $subject,
+                            $body,
+                            NotificationPreferenceService::CATEGORY_MESSAGE,
+                            Message::PRIORITY_LOW
+                        );
+                    },
+                    'context' => array_merge($baseContext, ['sample' => $sample]),
+                    'generated' => $sample['generated'],
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    private function fetchLatestActivitySample(int $userId): array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT r.points_earned, r.created_at, a.name_en, a.name_zh, a.unit
+                FROM carbon_records r
+                LEFT JOIN carbon_activities a ON r.activity_id = a.id
+                WHERE r.user_id = :uid AND r.deleted_at IS NULL
+                ORDER BY r.created_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['uid' => $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                $nameEn = trim((string)($row['name_en'] ?? ''));
+                $nameZh = trim((string)($row['name_zh'] ?? ''));
+                $name = $nameZh !== '' ? $nameZh : ($nameEn !== '' ? $nameEn : 'Your carbon-saving activity');
+                if ($nameZh !== '' && $nameEn !== '' && $nameZh !== $nameEn) {
+                    $name = $nameZh . ' / ' . $nameEn;
+                }
+
+                return [
+                    'name' => $name,
+                    'points' => (float)($row['points_earned'] ?? 0),
+                    'unit' => $row['unit'] ?? null,
+                    'recorded_at' => $row['created_at'] ?? null,
+                    'generated' => false,
+                ];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to fetch latest carbon record for test email', [
+                'error' => $e->getMessage(),
+                'user_id' => $userId,
+            ]);
+        }
+
+        return [
+            'name' => 'Commute by bike',
+            'points' => 12.5,
+            'unit' => 'km',
+            'recorded_at' => null,
+            'generated' => true,
+        ];
+    }
+
+    private function fetchLatestExchangeSample(int $userId): array
+    {
+        try {
+            $userColumn = $this->resolvePointsUserIdColumn();
+            $stmt = $this->db->prepare("
+                SELECT e.quantity, e.points_used, e.created_at, e.product_name, p.name AS product_name_fallback
+                FROM point_exchanges e
+                LEFT JOIN products p ON e.product_id = p.id
+                WHERE e.{$userColumn} = :uid AND e.deleted_at IS NULL
+                ORDER BY e.created_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['uid' => $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                $product = trim((string)($row['product_name'] ?? ''));
+                if ($product === '') {
+                    $product = trim((string)($row['product_name_fallback'] ?? ''));
+                }
+                if ($product === '') {
+                    $product = 'Reward item';
+                }
+
+                return [
+                    'product' => $product,
+                    'quantity' => (int)($row['quantity'] ?? 1),
+                    'points' => (float)($row['points_used'] ?? 0),
+                    'exchanged_at' => $row['created_at'] ?? null,
+                    'generated' => false,
+                ];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to fetch latest exchange for test email', [
+                'error' => $e->getMessage(),
+                'user_id' => $userId,
+            ]);
+        }
+
+        return [
+            'product' => 'Reusable water bottle',
+            'quantity' => 1,
+            'points' => 150,
+            'exchanged_at' => null,
+            'generated' => true,
+        ];
+    }
+
+    private function fetchLatestMessageSample(int $userId): array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT title, content, created_at
+                FROM messages
+                WHERE receiver_id = :uid AND deleted_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute(['uid' => $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row) {
+                return [
+                    'title' => (string)$row['title'],
+                    'content' => (string)$row['content'],
+                    'created_at' => $row['created_at'] ?? null,
+                    'generated' => false,
+                ];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to fetch latest direct message for test email', [
+                'error' => $e->getMessage(),
+                'user_id' => $userId,
+            ]);
+        }
+
+        return [
+            'title' => '[Test] Sample direct message preview',
+            'content' => "Hello,\n\nThis is a generated sample direct message to show how CarbonTrack forwards messages by email.\n\n— CarbonTrack (test preview)",
+            'created_at' => null,
+            'generated' => true,
+        ];
+    }
+
+    private function buildTestLink(string $path, array $query = []): string
+    {
+        $base = $_ENV['EMAIL_VERIFICATION_URL']
+            ?? $_ENV['FRONTEND_URL']
+            ?? $_ENV['APP_URL']
+            ?? 'https://example.com';
+
+        $base = rtrim((string)$base, '/');
+        $path = '/' . ltrim($path, '/');
+        if (!empty($query)) {
+            $path .= '?' . http_build_query($query);
+        }
+
+        return $base . $path;
+    }
+
     /**
      * 获取当前用户信息
      */
