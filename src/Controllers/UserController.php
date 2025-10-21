@@ -11,8 +11,10 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\NotificationPreferenceService;
+use CarbonTrack\Models\Message;
 use Monolog\Logger;
 use PDO;
 
@@ -22,6 +24,7 @@ class UserController
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
+    private ?EmailService $emailService;
     private Avatar $avatarModel;
     private ?CloudflareR2Service $r2Service;
     private Logger $logger;
@@ -34,6 +37,7 @@ class UserController
         MessageService $messageService,
         Avatar $avatarModel,
         NotificationPreferenceService $notificationPreferenceService,
+        ?EmailService $emailService = null,
         Logger $logger,
         PDO $db,
         ErrorLogService $errorLogService = null,
@@ -42,6 +46,7 @@ class UserController
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
+        $this->emailService = $emailService;
         $this->avatarModel = $avatarModel;
         $this->notificationPreferenceService = $notificationPreferenceService;
         $this->logger = $logger;
@@ -388,6 +393,92 @@ class UserController
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => 'Failed to update notification preferences',
+            ], 500);
+        }
+    }
+
+    public function sendNotificationTestEmail(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED',
+                ], 401);
+            }
+
+            if ($this->emailService === null) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Email service unavailable',
+                    'code' => 'EMAIL_SERVICE_UNAVAILABLE',
+                ], 503);
+            }
+
+            $email = trim((string)($user['email'] ?? ''));
+            if ($email === '') {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Email address not set',
+                    'code' => 'EMAIL_NOT_SET',
+                ], 422);
+            }
+
+            $displayName = (string)($user['username'] ?? $email);
+            $appName = $this->emailService->getAppName();
+            $subject = sprintf('%s notification test email', $appName);
+            $body = sprintf(
+                "Hello %s,\n\nThis is a test message to confirm that email notifications from %s are delivering successfully. "
+                . "If you received this message, your notification preferences are working as expected.\n\n"
+                . "You can adjust your preferences at any time in the CarbonTrack app.\n\nThanks for staying connected!",
+                $displayName,
+                $appName
+            );
+
+            $context = [
+                'type' => 'notification_test_email',
+                'user_id' => $user['id'],
+                'email' => $email,
+            ];
+
+            $dispatched = $this->emailService->dispatchAsyncEmail(
+                function (bool $async) use ($email, $displayName, $subject, $body) {
+                    return $this->emailService->sendMessageNotification(
+                        $email,
+                        $displayName,
+                        $subject,
+                        $body,
+                        NotificationPreferenceService::CATEGORY_SYSTEM,
+                        Message::PRIORITY_LOW
+                    );
+                },
+                $context
+            );
+
+            $this->auditLogService->logAuthOperation('notification_test_email', (int)$user['id'], true, array_merge($context, [
+                'queued' => $dispatched,
+            ]));
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => $dispatched
+                    ? 'Test email scheduled successfully.'
+                    : 'Test email sent successfully.',
+                'data' => [
+                    'queued' => $dispatched,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            $this->logger->error('Failed to send notification test email', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to send test email',
             ], 500);
         }
     }

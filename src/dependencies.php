@@ -313,6 +313,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(MessageService::class),
             $c->get(Avatar::class),
             $c->get(NotificationPreferenceService::class),
+            $c->get(EmailService::class),
             $c->get(Logger::class),
             $db,
             $c->get(ErrorLogService::class),

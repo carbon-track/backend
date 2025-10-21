@@ -104,6 +104,7 @@ return function (App $app) {
             $users->put('/me/avatar', [UserController::class, 'selectAvatar']);
             $users->get('/me/notification-preferences', [UserController::class, 'getNotificationPreferences']);
             $users->put('/me/notification-preferences', [UserController::class, 'updateNotificationPreferences']);
+            $users->post('/me/notification-preferences/test-email', [UserController::class, 'sendNotificationTestEmail']);
             $users->get('/me/badges', [BadgeController::class, 'myBadges']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);

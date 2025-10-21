@@ -1059,42 +1059,35 @@ class AuthController
         array $context
     ): bool {
         try {
-            register_shutdown_function(function () use ($userId, $email, $recipientName, $code, $ttlMinutes, $link, $context) {
-                try {
-                    if (function_exists('fastcgi_finish_request')) {
-                        @fastcgi_finish_request();
-                    }
-                } catch (\Throwable $finishError) {
-                    try {
-                        $this->logger->debug('fastcgi_finish_request failed prior to async verification email send', [
-                            'error' => $finishError->getMessage()
-                        ]);
-                    } catch (\Throwable $logError) {
-                        // ignore logging issues
-                    }
-                }
-
-                $this->sendVerificationEmailNow(
-                    $userId,
-                    $email,
-                    $recipientName,
-                    $code,
-                    $ttlMinutes,
-                    $link,
-                    true,
-                    $context
-                );
-            });
+            $result = $this->emailService->dispatchAsyncEmail(
+                function (bool $async) use ($userId, $email, $recipientName, $code, $ttlMinutes, $link, $context) {
+                    return $this->sendVerificationEmailNow(
+                        $userId,
+                        $email,
+                        $recipientName,
+                        $code,
+                        $ttlMinutes,
+                        $link,
+                        $async,
+                        $context
+                    );
+                },
+                array_merge($context, [
+                    'user_id' => $userId,
+                    'email' => $email,
+                    'purpose' => 'verification_code',
+                ])
+            );
 
             try {
                 $this->auditLogService->logAuthOperation('email_verification_code_schedule', $userId, true, array_merge($context, [
-                    'strategy' => 'async'
+                    'strategy' => $result ? 'async' : 'sync'
                 ]));
             } catch (\Throwable $e) {
                 $this->logger->debug('Failed to record verification email schedule log', ['error' => $e->getMessage()]);
             }
 
-            return true;
+            return $result;
         } catch (\Throwable $e) {
             $this->logger->error('Failed to queue verification email', [
                 'user_id' => $userId,

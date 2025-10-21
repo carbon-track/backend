@@ -502,6 +502,56 @@ HTML;
         return rtrim(rtrim($formatted, '0'), '.');
     }
 
+    public function getAppName(): string
+    {
+        return $this->appName;
+    }
+
+    /**
+     * Schedule an email-related callback to run after response is sent, with synchronous fallback.
+     *
+     * @param callable $callback Receives a boolean flag indicating whether it's running in async context.
+     */
+    public function dispatchAsyncEmail(callable $callback, array $context = [], bool $preferAsync = true): bool
+    {
+        $sapi = PHP_SAPI ?? php_sapi_name();
+        $isCli = in_array($sapi, ['cli', 'phpdbg', 'embed'], true);
+
+        if (!$preferAsync || $this->forceSimulation || $isCli) {
+            return (bool) $callback(false);
+        }
+
+        try {
+            register_shutdown_function(function () use ($callback, $context): void {
+                try {
+                    $callback(true);
+                } catch (\Throwable $e) {
+                    try {
+                        $this->logger->error('Async email callback failed', [
+                            'error' => $e->getMessage(),
+                            'context' => $context,
+                        ]);
+                    } catch (\Throwable $logError) {
+                        // ignore logging issues in shutdown context
+                    }
+                }
+            });
+
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $this->logger->debug('Failed to register async email callback; falling back to sync send', [
+                    'error' => $e->getMessage(),
+                    'context' => $context,
+                ]);
+            } catch (\Throwable $logError) {
+                // ignore
+            }
+
+            return (bool) $callback(false);
+        }
+    }
+
     private function shouldSendEmail(string $email, string $category): bool
     {
         if ($this->preferenceService === null) {
