@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Jobs\EmailJobRunner;
 use CarbonTrack\Models\Message;
 use CarbonTrack\Models\User;
 use CarbonTrack\Services\EmailService;
@@ -18,6 +19,7 @@ class MessageService
     /** @var callable|null */
     private $userResolver;
     private bool $responseFlushedForAsyncEmail = false;
+    private ?string $emailDispatcherScript = null;
 
     /**
      * @var array<string,string>
@@ -47,6 +49,8 @@ class MessageService
         $this->auditLogService = $auditLogService;
         $this->emailService = $emailService;
         $this->userResolver = null;
+        $scriptPath = realpath(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'email_dispatcher.php');
+        $this->emailDispatcherScript = $scriptPath !== false ? $scriptPath : null;
     }
 
     /**
@@ -660,31 +664,16 @@ class MessageService
         $subject = $this->buildEmailSubject($title, $priority);
         $category = $this->resolveNotificationCategory($type);
 
-        $this->dispatchEmail(function () use ($receiverId, $recipient, $subject, $content, $category, $priority) {
-            try {
-                $sent = $this->emailService->sendMessageNotification(
-                    $recipient['email'],
-                    $recipient['name'],
-                    $subject,
-                    $content,
-                    $category,
-                    $priority
-                );
-
-                if (!$sent) {
-                    $this->logger->debug('Message email was skipped due to user preferences or simulation mode', [
-                        'receiver_id' => $receiverId,
-                        'category' => $category,
-                    ]);
-                }
-            } catch (\Throwable $e) {
-                $this->logger->error('Failed to send linked email notification', [
-                    'receiver_id' => $receiverId,
-                    'subject' => $subject,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
+        $this->dispatchEmail('message_notification', [
+            'receiver_id' => $receiverId,
+            'email' => $recipient['email'],
+            'name' => $recipient['name'],
+            'subject' => $subject,
+            'content' => $content,
+            'category' => $category,
+            'priority' => $priority,
+            'type' => $type,
+        ]);
     }
 
     /**
@@ -724,63 +713,108 @@ class MessageService
         $subject = $this->buildEmailSubject($title, $priority);
         $category = $this->resolveNotificationCategory($type);
 
-        $this->dispatchEmail(function () use ($formatted, $subject, $content, $category, $priority, $type) {
-            try {
-                $sent = $this->emailService->sendMessageNotificationToMany(
-                    $formatted,
-                    $subject,
-                    $content,
-                    $category,
-                    $priority
-                );
-
-                if (!$sent) {
-                    $this->logger->debug('Bulk message email was skipped', [
-                        'subject' => $subject,
-                        'type' => $type,
-                        'priority' => $priority,
-                        'recipient_count' => count($formatted),
-                    ]);
-                }
-            } catch (\Throwable $e) {
-                $this->logger->error('Failed to send bulk linked email notification', [
-                    'subject' => $subject,
-                    'type' => $type,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
+        $this->dispatchEmail('message_notification_bulk', [
+            'recipients' => $formatted,
+            'subject' => $subject,
+            'content' => $content,
+            'category' => $category,
+            'priority' => $priority,
+            'type' => $type,
+        ]);
     }
 
     /**
      * Defer email sending until after the response is flushed when running under web SAPI.
      */
-    private function dispatchEmail(callable $callback): void
+    private function dispatchEmail(string $jobType, array $payload): void
     {
-        if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') {
-            $callback();
+        if ($this->emailService === null) {
             return;
         }
 
-        $runner = function () use ($callback) {
-            try {
-                $callback();
-            } catch (\Throwable $e) {
-                $this->logger->error('Deferred email dispatch failed', [
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        };
+        if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') {
+            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            return;
+        }
 
-        register_shutdown_function($runner);
+        if (function_exists('fastcgi_finish_request')) {
+            register_shutdown_function(function () use ($jobType, $payload) {
+                EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            });
 
-        if (!$this->responseFlushedForAsyncEmail && function_exists('fastcgi_finish_request')) {
-            $this->responseFlushedForAsyncEmail = true;
-            try {
-                fastcgi_finish_request();
-            } catch (\Throwable $ignore) {
-                // Some SAPIs do not support this call; safe to ignore.
+            if (!$this->responseFlushedForAsyncEmail) {
+                $this->responseFlushedForAsyncEmail = true;
+                try {
+                    fastcgi_finish_request();
+                } catch (\Throwable $ignore) {
+                    // Some SAPIs do not support this call; safe to ignore.
+                }
             }
+
+            return;
+        }
+
+        $this->spawnBackgroundEmailProcess($jobType, $payload);
+    }
+
+    private function spawnBackgroundEmailProcess(string $jobType, array $payload): void
+    {
+        if ($this->emailDispatcherScript === null || !is_file($this->emailDispatcherScript)) {
+            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            return;
+        }
+
+        $jobFile = null;
+
+        try {
+            $jobData = [
+                'job_type' => $jobType,
+                'payload' => $payload,
+            ];
+
+            $jobFile = tempnam(sys_get_temp_dir(), 'ct_email_job_');
+            if ($jobFile === false) {
+                throw new \RuntimeException('Unable to allocate temporary file for email job.');
+            }
+
+            file_put_contents($jobFile, json_encode($jobData, JSON_THROW_ON_ERROR));
+
+            $phpBinary = PHP_BINARY ?: 'php';
+
+            if (stripos(PHP_OS_FAMILY, 'Windows') !== false) {
+                $escapedBinary = str_replace('"', '""', $phpBinary);
+                $escapedScript = str_replace('"', '""', $this->emailDispatcherScript);
+                $escapedJobFile = str_replace('"', '""', $jobFile);
+                $command = sprintf('"%s" "%s" "%s"', $escapedBinary, $escapedScript, $escapedJobFile);
+                $process = @popen('start /B "" ' . $command, 'r');
+                if (is_resource($process)) {
+                    pclose($process);
+                } else {
+                    throw new \RuntimeException('Unable to spawn background email process.');
+                }
+            } else {
+                $command = sprintf(
+                    '%s %s %s',
+                    escapeshellarg($phpBinary),
+                    escapeshellarg($this->emailDispatcherScript),
+                    escapeshellarg($jobFile)
+                );
+                $result = @exec($command . ' > /dev/null 2>&1 &');
+                if ($result === false) {
+                    throw new \RuntimeException('Unable to spawn background email process.');
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Falling back to synchronous email dispatch', [
+                'job_type' => $jobType,
+                'error' => $e->getMessage(),
+            ]);
+
+            if ($jobFile !== null && is_file($jobFile)) {
+                @unlink($jobFile);
+            }
+
+            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
         }
     }
 
@@ -854,22 +888,14 @@ class MessageService
             return;
         }
 
-        $this->dispatchEmail(function () use ($userId, $productName, $quantity, $pointsSpent, $recipient) {
-            try {
-                $this->emailService->sendExchangeConfirmation(
-                    $recipient['email'],
-                    $recipient['name'],
-                    $productName,
-                    $quantity,
-                    $pointsSpent
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send exchange confirmation email', [
-                    'user_id' => $userId,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
+        $this->dispatchEmail('exchange_confirmation', [
+            'user_id' => $userId,
+            'email' => $recipient['email'],
+            'name' => $recipient['name'],
+            'product_name' => $productName,
+            'quantity' => $quantity,
+            'points_spent' => $pointsSpent,
+        ]);
     }
 
     public function sendExchangeStatusUpdateEmailToUser(
@@ -899,22 +925,14 @@ class MessageService
         }
         $combinedNotes = implode("\n", $noteParts);
 
-        $this->dispatchEmail(function () use ($userId, $productName, $status, $combinedNotes, $recipient) {
-            try {
-                $this->emailService->sendExchangeStatusUpdate(
-                    $recipient['email'],
-                    $recipient['name'],
-                    $productName,
-                    $status,
-                    $combinedNotes
-                );
-            } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send exchange status update email', [
-                    'user_id' => $userId,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        });
+        $this->dispatchEmail('exchange_status_update', [
+            'user_id' => $userId,
+            'email' => $recipient['email'],
+            'name' => $recipient['name'],
+            'product_name' => $productName,
+            'status' => $status,
+            'notes' => $combinedNotes,
+        ]);
     }
 
     private function resolveNotificationCategory(string $type): string
@@ -1037,4 +1055,5 @@ class MessageService
         }
     }
 }
+
 

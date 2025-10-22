@@ -1180,7 +1180,8 @@ class ProductController
                         ];
                     }, $rows)
                 ]
-            ]);
+                ]
+            );
         } catch (\Exception $e) {
             $this->logControllerException($e, $request, 'ProductController::searchProductTags error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
@@ -2550,7 +2551,7 @@ class ProductController
      */
     private function notifyAdminsNewExchange(string $exchangeId, array $user, array $product, int $quantity): void
     {
-        // ��ȡ���й���Ա
+        // 获取管理员
         $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute();
@@ -2571,8 +2572,8 @@ class ProductController
         $this->messageService->sendAdminNotificationBatch(
             $recipients,
             'new_exchange_pending',
-            '�µ���Ʒ�һ�����',
-            "�û� {$user['username']} �һ��� {$product['name']} x{$quantity}���뼰ʱ������",
+            '有新兑换待处理',
+            "用户 {$user['username']} 刚刚兑换了 {$product['name']} x{$quantity}，请尽快处理。",
             'high'
         );
     }
