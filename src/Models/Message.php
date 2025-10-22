@@ -224,6 +224,22 @@ class Message extends Model
     }
 
     /**
+     * Determine if the priority column exists for the current table (instance context).
+     */
+    protected function priorityColumnExists(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Determine if the priority column exists for the current table (static context).
+     */
+    protected static function priorityColumnExistsStatic(): bool
+    {
+        return true;
+    }
+
+    /**
      * Create a notification message
      */
     public static function createNotification(
