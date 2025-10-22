@@ -748,48 +748,99 @@ class UserController
                 ], 422);
             }
 
-            $displayName = (string)($user['username'] ?? $email);
-            $appName = $this->emailService->getAppName();
-            $subject = sprintf('%s notification test email', $appName);
-            $body = sprintf(
-                "Hello %s,\n\nThis is a test message to confirm that email notifications from %s are delivering successfully. "
-                . "If you received this message, your notification preferences are working as expected.\n\n"
-                . "You can adjust your preferences at any time in the CarbonTrack app.\n\nThanks for staying connected!",
-                $displayName,
-                $appName
-            );
+            $parsedBody = $request->getParsedBody();
+            $category = '';
+            if (is_array($parsedBody)) {
+                $category = trim((string)($parsedBody['category'] ?? ''));
+            }
+            if ($category === '') {
+                $category = NotificationPreferenceService::CATEGORY_SYSTEM;
+            }
 
-            $context = [
+            $definitions = $this->notificationPreferenceService->allCategories();
+            if (!isset($definitions[$category])) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid notification category',
+                    'code' => 'INVALID_CATEGORY',
+                ], 422);
+            }
+
+            $displayName = (string)($user['username'] ?? $email);
+            $job = $this->buildNotificationTestEmailJob($user, $category, $email, $displayName);
+
+            if ($job === null) {
+                $appName = $this->emailService->getAppName();
+                $subject = sprintf('%s notification test email', $appName);
+                $body = sprintf(
+                    "Hello %s,\n\nThis is a test message to confirm that email notifications from %s are delivering successfully. "
+                    . "If you received this message, your notification preferences are working as expected.\n\n"
+                    . "You can adjust your preferences at any time in the CarbonTrack app.\n\nThanks for staying connected!",
+                    $displayName,
+                    $appName
+                );
+
+                $job = [
+                    'callback' => function (bool $async) use ($email, $displayName, $subject, $body) {
+                        return $this->emailService->sendMessageNotification(
+                            $email,
+                            $displayName,
+                            $subject,
+                            $body,
+                            NotificationPreferenceService::CATEGORY_SYSTEM,
+                            Message::PRIORITY_LOW
+                        );
+                    },
+                    'context' => [
+                        'category' => $category,
+                        'fallback' => true,
+                    ],
+                    'generated' => true,
+                ];
+            }
+
+            $context = array_merge([
                 'type' => 'notification_test_email',
                 'user_id' => $user['id'],
                 'email' => $email,
-            ];
+                'category' => $category,
+            ], $job['context'] ?? []);
 
-            $dispatched = $this->emailService->dispatchAsyncEmail(
-                function (bool $async) use ($email, $displayName, $subject, $body) {
-                    return $this->emailService->sendMessageNotification(
-                        $email,
-                        $displayName,
-                        $subject,
-                        $body,
-                        NotificationPreferenceService::CATEGORY_SYSTEM,
-                        Message::PRIORITY_LOW
-                    );
-                },
-                $context
+            $delivered = $this->emailService->dispatchAsyncEmail(
+                $job['callback'],
+                $context,
+                false
             );
 
-            $this->auditLogService->logAuthOperation('notification_test_email', (int)$user['id'], true, array_merge($context, [
-                'queued' => $dispatched,
-            ]));
+            $generated = (bool)($job['generated'] ?? false);
+            if ($delivered) {
+                $message = $generated
+                    ? 'Test email sent with generated preview data.'
+                    : 'Test email sent using your latest records.';
+            } else {
+                $message = 'Test email was not sent. The category may be disabled or unavailable.';
+            }
+
+            $this->auditLogService->logAuthOperation(
+                'notification_test_email',
+                (int)$user['id'],
+                $delivered,
+                array_merge($context, [
+                    'queued' => false,
+                    'delivered' => $delivered,
+                    'generated' => $generated,
+                ])
+            );
 
             return $this->jsonResponse($response, [
                 'success' => true,
-                'message' => $dispatched
-                    ? 'Test email scheduled successfully.'
-                    : 'Test email sent successfully.',
+                'message' => $message,
                 'data' => [
-                    'queued' => $dispatched,
+                    'queued' => false,
+                    'delivered' => $delivered,
+                    'generated' => $generated,
+                    'category' => $category,
+                    'preview' => $job['context'] ?? null,
                 ],
             ]);
         } catch (\Throwable $e) {

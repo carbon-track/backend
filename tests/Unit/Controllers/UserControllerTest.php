@@ -75,7 +75,7 @@ class UserControllerTest extends TestCase
         );
 
     $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
     $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
@@ -106,7 +106,7 @@ class UserControllerTest extends TestCase
         $avatar->method('isAvatarAvailable')->willReturn(false);
 
     $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('PUT', '/users/me/avatar', ['avatar_id' => 999]);
         $response = new \Slim\Psr7\Response();
@@ -143,7 +143,7 @@ class UserControllerTest extends TestCase
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
 
     $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('GET', '/users/me/points-history');
         $response = new \Slim\Psr7\Response();
@@ -240,7 +240,7 @@ class UserControllerTest extends TestCase
         });
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -305,7 +305,7 @@ class UserControllerTest extends TestCase
         $r2->method('getPublicUrl')->willReturn('https://cdn.example.com/proofs/a.jpg');
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo, $errorLog, $r2);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $errorLog, $r2);
 
         $request = makeRequest('GET', '/users/me/activities');
         $response = new \Slim\Psr7\Response();
@@ -355,7 +355,7 @@ class UserControllerTest extends TestCase
         $pdo->method('prepare')->willReturn($stmt);
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo);
         $request = makeRequest('GET', '/users/me');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCurrentUser($request, $response);
@@ -421,7 +421,7 @@ class UserControllerTest extends TestCase
         );
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $logger, $pdo);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo);
     $request = makeRequest('PUT', '/users/me', ['avatar_id' => 10]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateCurrentUser($request, $response);
@@ -429,6 +429,249 @@ class UserControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(10, $json['data']['avatar_id']);
+    }
+
+    public function testSendNotificationTestEmailActivityUsesLatestRecord(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn([
+            'id' => 5,
+            'email' => 'user@example.com',
+            'username' => 'EcoHero',
+        ]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logAuthOperation')
+            ->with(
+                'notification_test_email',
+                5,
+                true,
+                $this->callback(function (array $context): bool {
+                    $this->assertSame('activity', $context['category']);
+                    $this->assertArrayHasKey('sample', $context);
+                    $this->assertFalse($context['sample']['generated']);
+                    $this->assertTrue($context['delivered']);
+                    $this->assertFalse($context['queued']);
+                    return true;
+                })
+            );
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $emailService = $this->createMock(\CarbonTrack\Services\EmailService::class);
+        $emailService->expects($this->once())
+            ->method('sendActivityApprovedNotification')
+            ->with(
+                'user@example.com',
+                'EcoHero',
+                'Metro ride to office',
+                42.5
+            )
+            ->willReturn(true);
+
+        $emailService->expects($this->once())
+            ->method('dispatchAsyncEmail')
+            ->with(
+                $this->callback(static fn($callback): bool => is_callable($callback)),
+                $this->callback(function (array $context): bool {
+                    $this->assertSame('activity', $context['category']);
+                    $this->assertArrayHasKey('sample', $context);
+                    $this->assertFalse($context['sample']['generated']);
+                    return true;
+                }),
+                false
+            )
+            ->willReturnCallback(function (callable $callback, array $context, bool $preferAsync): bool {
+                $this->assertFalse($preferAsync);
+                return (bool) $callback(false);
+            });
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $prefs->method('allCategories')->willReturn([
+            'activity' => ['label' => 'Activity reviews', 'locked' => false],
+        ]);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->once())->method('execute')->with(['uid' => 5])->willReturn(true);
+        $stmt->method('fetch')->willReturn([
+            'points_earned' => 42.5,
+            'created_at' => '2025-01-10 10:00:00',
+            'name_en' => 'Metro ride to office',
+            'name_zh' => '',
+            'unit' => 'km',
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $emailService,
+            $logger,
+            $pdo,
+            $errorLog
+        );
+
+        $request = makeRequest('POST', '/users/me/notification-preferences/test-email', ['category' => 'activity']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->sendNotificationTestEmail($request, $response);
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['data']['delivered']);
+        $this->assertFalse($json['data']['generated']);
+        $this->assertSame('activity', $json['data']['category']);
+        $this->assertSame('activity', $json['data']['preview']['category']);
+        $this->assertArrayHasKey('sample', $json['data']['preview']);
+    }
+
+    public function testSendNotificationTestEmailMarksGeneratedSampleWhenMissingData(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn([
+            'id' => 8,
+            'email' => 'preview@example.com',
+            'username' => 'PreviewUser',
+        ]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logAuthOperation')
+            ->with(
+                'notification_test_email',
+                8,
+                true,
+                $this->callback(function (array $context): bool {
+                    $this->assertTrue($context['generated']);
+                    $this->assertArrayHasKey('sample', $context);
+                    $this->assertTrue($context['sample']['generated']);
+                    return true;
+                })
+            );
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $emailService = $this->createMock(\CarbonTrack\Services\EmailService::class);
+        $emailService->expects($this->once())
+            ->method('sendActivityApprovedNotification')
+            ->with(
+                'preview@example.com',
+                'PreviewUser',
+                $this->stringContains('Test sample'),
+                12.5
+            )
+            ->willReturn(true);
+
+        $emailService->expects($this->once())
+            ->method('dispatchAsyncEmail')
+            ->with(
+                $this->callback(static fn($callback): bool => is_callable($callback)),
+                $this->isType('array'),
+                false
+            )
+            ->willReturnCallback(function (callable $callback, array $context, bool $preferAsync): bool {
+                $this->assertFalse($preferAsync);
+                return (bool) $callback(false);
+            });
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $prefs->method('allCategories')->willReturn([
+            'activity' => ['label' => 'Activity reviews', 'locked' => false],
+        ]);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->once())->method('execute')->with(['uid' => 8])->willReturn(true);
+        $stmt->method('fetch')->willReturn(false);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $emailService,
+            $logger,
+            $pdo,
+            $errorLog
+        );
+
+        $request = makeRequest('POST', '/users/me/notification-preferences/test-email', ['category' => 'activity']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->sendNotificationTestEmail($request, $response);
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['data']['delivered']);
+        $this->assertTrue($json['data']['generated']);
+        $this->assertSame('activity', $json['data']['category']);
+        $this->assertStringContainsString('generated preview', $json['message']);
+        $this->assertTrue($json['data']['preview']['sample']['generated']);
+    }
+
+    public function testSendNotificationTestEmailRejectsInvalidCategory(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn([
+            'id' => 3,
+            'email' => 'user@example.com',
+        ]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->never())->method('logAuthOperation');
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $emailService = $this->createMock(\CarbonTrack\Services\EmailService::class);
+        $emailService->expects($this->never())->method('dispatchAsyncEmail');
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $prefs->method('allCategories')->willReturn([
+            'system' => ['label' => 'System updates', 'locked' => false],
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $emailService,
+            $logger,
+            $pdo,
+            $errorLog
+        );
+
+        $request = makeRequest('POST', '/users/me/notification-preferences/test-email', ['category' => 'unknown']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->sendNotificationTestEmail($request, $response);
+        $this->assertSame(422, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('INVALID_CATEGORY', $json['code']);
     }
 }
 

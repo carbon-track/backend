@@ -1274,6 +1274,72 @@
               }
             }
           }
+      }
+    }
+  },
+    "/users/me/notification-preferences/test-email": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "发送通知测试邮件",
+        "description": "根据所选通知类别发送测试邮件。优先使用用户最近的数据填充模版，若无相关数据则生成仅供测试的样本并在邮件中标注。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationTestEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "发送结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationTestEmailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求参数无效或缺少邮箱",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "邮件服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -12888,6 +12954,116 @@
               "items": {
                 "$ref": "#/components/schemas/NotificationPreference"
               }
+            }
+          }
+        }
+      }
+    },
+    "NotificationTestEmailRequest": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "要预览的通知类别，留空时默认使用 system。",
+          "enum": [
+            "verification",
+            "security",
+            "system",
+            "transaction",
+            "activity",
+            "announcement",
+            "message"
+          ]
+        }
+      }
+    },
+    "NotificationTestEmailPreview": {
+      "type": "object",
+      "description": "生成测试邮件时填充模版的数据预览，字段会根据类别变化。",
+      "properties": {
+        "category": {
+          "type": "string",
+          "description": "通知类别标识"
+        },
+        "sample": {
+          "type": "object",
+          "description": "用于渲染模版的最近数据。如果 generated = true，则表示该数据为测试生成。",
+          "properties": {
+            "generated": {
+              "type": "boolean",
+              "description": "是否为自动生成的测试样本"
+            }
+          },
+          "additionalProperties": true,
+          "nullable": true
+        },
+        "code": {
+          "type": "string",
+          "description": "验证码或临时代码（仅适用于验证相关模板）",
+          "nullable": true
+        },
+        "link": {
+          "type": "string",
+          "description": "用于预览的测试链接",
+          "format": "uri",
+          "nullable": true
+        },
+        "fallback": {
+          "type": "boolean",
+          "description": "是否使用了兜底模版",
+          "nullable": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "NotificationTestEmailResponse": {
+      "type": "object",
+      "required": [
+        "success",
+        "message",
+        "data"
+      ],
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "example": true
+        },
+        "message": {
+          "type": "string",
+          "description": "操作提示信息"
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "queued",
+            "delivered",
+            "generated",
+            "category"
+          ],
+          "properties": {
+            "queued": {
+              "type": "boolean",
+              "description": "是否异步排队发送（测试邮件默认同步发送）"
+            },
+            "delivered": {
+              "type": "boolean",
+              "description": "邮件是否已发送或已调度执行"
+            },
+            "generated": {
+              "type": "boolean",
+              "description": "是否使用了自动生成的示例数据"
+            },
+            "category": {
+              "type": "string",
+              "description": "本次预览的通知类别"
+            },
+            "preview": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/NotificationTestEmailPreview"
+                }
+              ],
+              "nullable": true
             }
           }
         }
