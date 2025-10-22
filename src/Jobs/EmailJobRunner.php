@@ -41,6 +41,14 @@ class EmailJobRunner
                     self::runExchangeStatusUpdateJob($emailService, $logger, $payload);
                     break;
 
+                case 'activity_approved_notification':
+                    self::runActivityApprovedJob($emailService, $logger, $payload);
+                    break;
+
+                case 'activity_rejected_notification':
+                    self::runActivityRejectedJob($emailService, $logger, $payload);
+                    break;
+
                 default:
                     $logger->warning('Unknown email job type received', ['job_type' => $jobType]);
                     break;
@@ -124,7 +132,73 @@ class EmailJobRunner
     /**
      * @param array<string,mixed> $payload
      */
-    private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
+    
+    /**
+     * @param array<string,mixed> $payload
+     */
+        /**
+     * @param array<string,mixed> $payload
+     */
+    private static function runActivityApprovedJob(EmailService $emailService, Logger $logger, array $payload): void
+    {
+        $email = (string) ($payload['email'] ?? '');
+        if ($email === '') {
+            $logger->warning('Activity approved job missing recipient email.');
+            return;
+        }
+
+        $name = (string) ($payload['name'] ?? $email);
+        $activity = (string) ($payload['activity_name'] ?? '');
+        $points = (float) ($payload['points'] ?? 0);
+        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
+
+        try {
+            $emailService->sendActivityApprovedNotification(
+                $email,
+                $name !== '' ? $name : $email,
+                $activity,
+                $points
+            );
+        } catch (\Throwable $e) {
+            $logger->warning('Failed to send activity approved email', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private static function runActivityRejectedJob(EmailService $emailService, Logger $logger, array $payload): void
+    {
+        $email = (string) ($payload['email'] ?? '');
+        if ($email === '') {
+            $logger->warning('Activity rejected job missing recipient email.');
+            return;
+        }
+
+        $name = (string) ($payload['name'] ?? $email);
+        $activity = (string) ($payload['activity_name'] ?? '');
+        $reason = (string) ($payload['reason'] ?? '');
+        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
+
+        try {
+            $emailService->sendActivityRejectedNotification(
+                $email,
+                $name !== '' ? $name : $email,
+                $activity,
+                $reason
+            );
+        } catch (\Throwable $e) {
+            $logger->warning('Failed to send activity rejected email', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
     {
         $email = (string) ($payload['email'] ?? '');
         if ($email === '') {

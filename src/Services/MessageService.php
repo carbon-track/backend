@@ -20,6 +20,9 @@ class MessageService
     private $userResolver;
     private bool $responseFlushedForAsyncEmail = false;
     private ?string $emailDispatcherScript = null;
+    /** @var array<int,array{job_type:string,payload:array<string,mixed>}> */
+    private array $pendingEmailJobs = [];
+    private bool $emailShutdownRegistered = false;
 
     /**
      * @var array<string,string>
@@ -737,30 +740,66 @@ class MessageService
             return;
         }
 
-        if (function_exists('fastcgi_finish_request')) {
-            register_shutdown_function(function () use ($jobType, $payload) {
-                EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
-            });
+        $this->pendingEmailJobs[] = [
+            'job_type' => $jobType,
+            'payload' => $payload,
+        ];
 
-            if (!$this->responseFlushedForAsyncEmail) {
-                $this->responseFlushedForAsyncEmail = true;
-                try {
-                    fastcgi_finish_request();
-                } catch (\Throwable $ignore) {
-                    // Some SAPIs do not support this call; safe to ignore.
-                }
+        if (!$this->emailShutdownRegistered) {
+            $this->emailShutdownRegistered = true;
+            register_shutdown_function([$this, 'flushPendingEmailJobs']);
+        }
+
+        if (function_exists('fastcgi_finish_request') && !$this->responseFlushedForAsyncEmail) {
+            $this->responseFlushedForAsyncEmail = true;
+            try {
+                fastcgi_finish_request();
+            } catch (\Throwable $ignore) {
+                // Some SAPIs do not support this call; safe to ignore.
             }
+        }
+    }
 
+    /**
+     * @internal Called automatically on script shutdown.
+     */
+    public function flushPendingEmailJobs(): void
+    {
+        if ($this->emailService === null || empty($this->pendingEmailJobs)) {
             return;
         }
 
-        $this->spawnBackgroundEmailProcess($jobType, $payload);
+        $jobs = $this->pendingEmailJobs;
+        $this->pendingEmailJobs = [];
+
+        if (function_exists('fastcgi_finish_request')) {
+            foreach ($jobs as $job) {
+                EmailJobRunner::run(
+                    $this->emailService,
+                    $this->logger,
+                    $job['job_type'],
+                    $job['payload']
+                );
+            }
+            return;
+        }
+
+        $this->spawnBackgroundEmailProcess($jobs);
     }
 
-    private function spawnBackgroundEmailProcess(string $jobType, array $payload): void
+    /**
+     * @param array<int,array{job_type:string,payload:array<string,mixed>}> $jobs
+     */
+    private function spawnBackgroundEmailProcess(array $jobs): void
     {
+        if (empty($jobs)) {
+            return;
+        }
+
         if ($this->emailDispatcherScript === null || !is_file($this->emailDispatcherScript)) {
-            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            foreach ($jobs as $job) {
+                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload']);
+            }
             return;
         }
 
@@ -768,8 +807,7 @@ class MessageService
 
         try {
             $jobData = [
-                'job_type' => $jobType,
-                'payload' => $payload,
+                'jobs' => $jobs,
             ];
 
             $jobFile = tempnam(sys_get_temp_dir(), 'ct_email_job_');
@@ -806,7 +844,7 @@ class MessageService
             }
         } catch (\Throwable $e) {
             $this->logger->warning('Falling back to synchronous email dispatch', [
-                'job_type' => $jobType,
+                'job_count' => count($jobs),
                 'error' => $e->getMessage(),
             ]);
 
@@ -814,7 +852,9 @@ class MessageService
                 @unlink($jobFile);
             }
 
-            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            foreach ($jobs as $job) {
+                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload']);
+            }
         }
     }
 
@@ -980,19 +1020,13 @@ class MessageService
         }
         $points = is_array($transaction) ? ($transaction['points'] ?? 0) : ($transaction->points ?? 0);
 
-        try {
-            $this->emailService->sendActivityApprovedNotification(
-                (string) $user->email,
-                $user->getDisplayName() ?: (string) $user->email,
-                (string) $activityName,
-                (float) $points
-            );
-        } catch (\Throwable $e) {
-            $this->logger->warning('Failed to send activity approved email', [
-                'user_id' => $user->id ?? null,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $this->dispatchEmail('activity_approved_notification', [
+            'user_id' => $user->id ?? null,
+            'email' => (string) $user->email,
+            'name' => $user->getDisplayName() ?: (string) $user->email,
+            'activity_name' => (string) $activityName,
+            'points' => (float) $points,
+        ]);
     }
 
     private function sendActivityRejectedEmail(?User $user, $activity, ?string $reason): void
@@ -1011,19 +1045,13 @@ class MessageService
         }
         $reasonText = $reason ?? 'See in-app notification for details.';
 
-        try {
-            $this->emailService->sendActivityRejectedNotification(
-                (string) $user->email,
-                $user->getDisplayName() ?: (string) $user->email,
-                (string) $activityName,
-                (string) $reasonText
-            );
-        } catch (\Throwable $e) {
-            $this->logger->warning('Failed to send activity rejected email', [
-                'user_id' => $user->id ?? null,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $this->dispatchEmail('activity_rejected_notification', [
+            'user_id' => $user->id ?? null,
+            'email' => (string) $user->email,
+            'name' => $user->getDisplayName() ?: (string) $user->email,
+            'activity_name' => (string) $activityName,
+            'reason' => (string) $reasonText,
+        ]);
     }
 
     private function sendExchangeConfirmationEmail(?User $user, $product, int $quantity, float $pointsSpent): void

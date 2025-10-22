@@ -49,6 +49,16 @@ $emailService = $container->get(EmailService::class);
 /** @var Logger $logger */
 $logger = $container->get(Logger::class);
 
+$jobs = $jobData['jobs'] ?? null;
+if (is_array($jobs)) {
+    foreach ($jobs as $job) {
+        $jobType = (string) ($job['job_type'] ?? '');
+        $payload = is_array($job['payload'] ?? null) ? $job['payload'] : [];
+        EmailJobRunner::run($emailService, $logger, $jobType, $payload);
+    }
+    exit(0);
+}
+
 $jobType = (string) ($jobData['job_type'] ?? '');
 $payload = is_array($jobData['payload'] ?? null) ? $jobData['payload'] : [];
 
