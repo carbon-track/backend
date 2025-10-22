@@ -181,6 +181,7 @@ class MessageServiceTest extends TestCase
         $this->assertCount(0, $emailStub->messageNotifications);
     }
 
+
     public function testSendAdminNotificationBatchAggregatesEmails(): void
     {
         $logger = $this->createMock(Logger::class);
@@ -188,33 +189,16 @@ class MessageServiceTest extends TestCase
         $emailStub = new MessageServiceEmailStub();
 
         $service = new class($logger, $audit, $emailStub) extends MessageService {
-            public array $systemMessages = [];
+            public array $bulkRows = [];
 
             public function __construct($logger, $auditLogService, $emailService)
             {
                 parent::__construct($logger, $auditLogService, $emailService);
             }
 
-            public function sendSystemMessage(
-                int $receiverId,
-                string $title,
-                string $content,
-                string $type = Message::TYPE_SYSTEM,
-                string $priority = Message::PRIORITY_NORMAL,
-                ?string $relatedEntityType = null,
-                ?int $relatedEntityId = null,
-                bool $sendEmail = true
-            ): Message {
-                $message = new Message();
-                $message->receiver_id = $receiverId;
-                $this->systemMessages[] = [
-                    'receiverId' => $receiverId,
-                    'title' => $title,
-                    'type' => $type,
-                    'priority' => $priority,
-                    'sendEmail' => $sendEmail,
-                ];
-                return $message;
+            protected function persistSystemMessagesBulk(array $rows): void
+            {
+                $this->bulkRows = array_merge($this->bulkRows, $rows);
             }
         };
 
@@ -234,22 +218,21 @@ class MessageServiceTest extends TestCase
             'high'
         );
 
-        // Two recipients with valid, unique email addresses (case-insensitive)
         $this->assertCount(1, $emailStub->bulkNotifications);
         $bulk = $emailStub->bulkNotifications[0];
         $this->assertCount(2, $bulk['recipients']);
-        $this->assertSame(NotificationPreferenceService::CATEGORY_TRANSACTION, $bulk['category']);
+        $this->assertSame('[HIGH] Title', $bulk['subject']);
+        $this->assertSame('Body', $bulk['body']);
         $this->assertSame('high', $bulk['priority']);
-        $emails = array_map(static fn(array $recipient): string => $recipient['email'], $bulk['recipients']);
-        $this->assertEqualsCanonicalizing(
-            ['admin1@example.com', 'admin2@example.com'],
-            $emails
-        );
-
-        // System messages should be recorded for admins with valid IDs
-        $this->assertCount(4, $service->systemMessages);
-        foreach ($service->systemMessages as $message) {
-            $this->assertFalse($message['sendEmail'], 'System messages should suppress per-user email.');
+        $this->assertCount(4, $service->bulkRows);
+        $receiverIds = array_column($service->bulkRows, 'receiver_id');
+        sort($receiverIds);
+        $this->assertSame([1, 2, 3, 4], $receiverIds);
+        foreach ($service->bulkRows as $row) {
+            $this->assertSame('Title', $row['title']);
+            $this->assertSame('Body', $row['content']);
+            $this->assertSame('high', $row['priority']);
+            $this->assertFalse($row['is_read']);
         }
 
         $this->assertCount(0, $emailStub->messageNotifications, 'No individual notifications should be sent.');

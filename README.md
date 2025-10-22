@@ -128,3 +128,15 @@ Authorization: Bearer <token>
 ### 前端整合
 - 管理端页面 `/admin/system-logs` 已重构为 “统一日志中心”，调用该接口并按类别展示。
 
+## 邮件/应用标识相关环境变量
+
+以下变量现已由后端邮件服务优先从 `.env` 读取（优先级：环境变量 > 依赖注入配置 > 内置默认值）：
+
+- APP_NAME：应用显示名称（用于邮件模板页脚/标题）
+- MAIL_FROM_ADDRESS：发信邮箱地址
+- MAIL_FROM_NAME：发信显示名称
+- SUPPORT_EMAIL：支持/联系邮箱（页脚和邮件链接）
+- FRONTEND_URL：前端站点地址（用于邮件按钮跳转）
+
+请在 `backend/.env` 中配置上述变量；参考 `backend/.env.example`。
+

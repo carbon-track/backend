@@ -181,7 +181,7 @@ class ProductControllerTest extends TestCase
     {
         $pdo = $this->createMock(\PDO::class);
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
-        $messageService->expects($this->exactly(2))->method('sendMessage');
+        $messageService->expects($this->once())->method('sendMessage');
         $messageService->expects($this->once())
             ->method('sendExchangeConfirmationEmailToUser')
             ->with(

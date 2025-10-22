@@ -132,13 +132,6 @@ class EmailJobRunner
     /**
      * @param array<string,mixed> $payload
      */
-    
-    /**
-     * @param array<string,mixed> $payload
-     */
-        /**
-     * @param array<string,mixed> $payload
-     */
     private static function runActivityApprovedJob(EmailService $emailService, Logger $logger, array $payload): void
     {
         $email = (string) ($payload['email'] ?? '');
@@ -198,7 +191,23 @@ class EmailJobRunner
         }
     }
 
-private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
+/**
+
+     * @param array<string,mixed> $payload
+
+     */
+
+    /**
+
+     * @param array<string,mixed> $payload
+
+     */
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
+
     {
         $email = (string) ($payload['email'] ?? '');
         if ($email === '') {

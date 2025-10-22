@@ -13,10 +13,11 @@ class EmailService
     protected $logger;
     protected bool $forceSimulation = false;
     private ?string $lastError = null;
-    private string $fromAddress = 'noreply@example.com';
-    private string $fromName = 'CarbonTrack';
-    private string $appName = 'CarbonTrack';
-    private string $supportEmail = 'support@carbontrack.example';
+    // These will be initialized from environment variables (with config fallbacks) in the constructor
+    private string $fromAddress;
+    private string $fromName;
+    private string $appName;
+    private string $supportEmail;
     private ?string $frontendUrl = null;
     private ?NotificationPreferenceService $preferenceService = null;
 
@@ -58,6 +59,12 @@ HTML;
         $this->preferenceService = $preferenceService;
         $this->forceSimulation = $this->normalizeForceSimulation($config['force_simulation'] ?? false);
 
+        // Initialize identity fields from environment first, then config, then sane defaults
+        $this->fromAddress = (string) ($_ENV['MAIL_FROM_ADDRESS']
+            ?? ($this->config['from_address'] ?? $this->config['from_email'] ?? 'noreply@example.com'));
+        $this->fromName = (string) ($_ENV['MAIL_FROM_NAME']
+            ?? ($this->config['from_name'] ?? 'CarbonTrack'));
+
         if (!$this->forceSimulation && class_exists(PHPMailer::class)) {
             $this->mailer = new PHPMailer(true);
             $this->configureMailer();
@@ -71,22 +78,28 @@ HTML;
             }
         }
 
-        $configuredAppName = $this->config['app_name'] ?? null;
-        if (is_string($configuredAppName) && $configuredAppName !== '') {
-            $this->appName = $configuredAppName;
+        // APP_NAME (or fallback to MAIL_FROM_NAME, then config, then 'CarbonTrack')
+        $appNameEnv = $_ENV['APP_NAME'] ?? ($_ENV['MAIL_FROM_NAME'] ?? null);
+        if (is_string($appNameEnv) && trim($appNameEnv) !== '') {
+            $this->appName = $appNameEnv;
+        } elseif (is_string($this->config['app_name'] ?? null) && trim((string) $this->config['app_name']) !== '') {
+            $this->appName = (string) $this->config['app_name'];
         } else {
             $this->appName = $this->fromName ?: 'CarbonTrack';
         }
 
-        $support = $this->config['support_email'] ?? ($this->config['reply_to'] ?? null);
-        if (!is_string($support) || $support === '') {
-            $support = $this->fromAddress ?: 'support@example.com';
+        // SUPPORT_EMAIL (or fallback to reply_to, then MAIL_FROM_ADDRESS, then default)
+        $support = $_ENV['SUPPORT_EMAIL']
+            ?? ($this->config['support_email'] ?? ($this->config['reply_to'] ?? null));
+        if (!is_string($support) || trim((string) $support) === '') {
+            $support = $_ENV['MAIL_FROM_ADDRESS'] ?? $this->fromAddress ?? 'support@example.com';
         }
-        $this->supportEmail = $support;
+        $this->supportEmail = (string) $support;
 
-        $frontend = $this->config['frontend_url']
-            ?? ($_ENV['FRONTEND_URL'] ?? ($_ENV['APP_URL'] ?? null));
-        $this->frontendUrl = is_string($frontend) && $frontend !== '' ? $frontend : null;
+        // FRONTEND_URL (prefer explicit env, then APP_URL, then config)
+        $frontend = $_ENV['FRONTEND_URL']
+            ?? ($_ENV['APP_URL'] ?? ($this->config['frontend_url'] ?? null));
+        $this->frontendUrl = is_string($frontend) && trim((string) $frontend) !== '' ? (string) $frontend : null;
     }
 
     private function normalizeForceSimulation($value): bool
@@ -141,8 +154,11 @@ HTML;
 
             $this->mailer->Port = (int) ($this->config['port'] ?? 587);
 
-            $fromAddress = $this->config['from_address'] ?? ($this->config['from_email'] ?? 'noreply@example.com');
-            $fromName = $this->config['from_name'] ?? 'CarbonTrack';
+            // Prioritize environment variables for identity fields
+            $fromAddress = $_ENV['MAIL_FROM_ADDRESS']
+                ?? ($this->config['from_address'] ?? ($this->config['from_email'] ?? 'noreply@example.com'));
+            $fromName = $_ENV['MAIL_FROM_NAME']
+                ?? ($this->config['from_name'] ?? 'CarbonTrack');
             $this->fromAddress = $fromAddress ?: 'noreply@example.com';
             $this->fromName = $fromName ?: 'CarbonTrack';
 
@@ -692,7 +708,7 @@ HTML;
             $buttons[] = [
                 'text' => 'Reset password',
                 'url' => $link,
-                'color' => '#2563eb',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 
@@ -727,7 +743,7 @@ HTML;
             $buttons[] = [
                 'text' => 'View activity history',
                 'url' => $activityUrl,
-                'color' => '#10b981',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 
@@ -772,7 +788,7 @@ HTML;
             $buttons[] = [
                 'text' => 'Review submission',
                 'url' => $activityUrl,
-                'color' => '#f97316',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 
@@ -816,7 +832,7 @@ HTML;
             $buttons[] = [
                 'text' => 'Browse more rewards',
                 'url' => $storeUrl,
-                'color' => '#7c3aed',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 
@@ -862,7 +878,7 @@ HTML;
             $buttons[] = [
                 'text' => 'View rewards',
                 'url' => $storeUrl,
-                'color' => '#0ea5e9',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 
@@ -922,7 +938,7 @@ HTML;
             $buttons[] = [
                 'text' => 'Open dashboard',
                 'url' => $dashboardUrl,
-                'color' => '#16a34a',
+                'color' => self::DEFAULT_BUTTON_COLOR,
             ];
         }
 

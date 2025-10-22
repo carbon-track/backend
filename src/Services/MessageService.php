@@ -46,6 +46,16 @@ class MessageService
         'message' => NotificationPreferenceService::CATEGORY_MESSAGE,
     ];
 
+    /**
+     * Message types that already have a dedicated email notification.
+     *
+     * @var array<int,string>
+     */
+    private const TYPES_WITH_DEDICATED_EMAIL = [
+        'product_exchanged',
+        'exchange_status_updated',
+    ];
+
     public function __construct(Logger $logger, AuditLogService $auditLogService, ?EmailService $emailService = null)
     {
         $this->logger = $logger;
@@ -619,14 +629,33 @@ class MessageService
             return;
         }
 
+        $messageRows = [];
         $emailRecipients = [];
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+        $count = 0;
+
         foreach ($adminUsers as $admin) {
             $adminId = isset($admin['id']) ? (int) $admin['id'] : 0;
             if ($adminId <= 0) {
                 continue;
             }
 
-            $this->sendSystemMessage($adminId, $title, $content, $type, $priority, null, null, false);
+            $count++;
+            $row = [
+                'sender_id' => null,
+                'receiver_id' => $adminId,
+                'title' => $title,
+                'content' => $content,
+                'is_read' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+
+            $row['priority'] = in_array($priority, Message::getValidPriorities(), true)
+                ? $priority
+                : Message::PRIORITY_NORMAL;
+
+            $messageRows[] = $row;
 
             $email = isset($admin['email']) ? trim((string) $admin['email']) : '';
             if ($email === '') {
@@ -650,12 +679,66 @@ class MessageService
             ];
         }
 
+        if (empty($messageRows)) {
+            return;
+        }
+
+        $insertStart = microtime(true);
+        try {
+            $this->persistSystemMessagesBulk($messageRows);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Bulk admin message insert failed, falling back to per-recipient create', [
+                'error' => $e->getMessage(),
+            ]);
+            foreach ($messageRows as $row) {
+                try {
+                    $createRow = $row;
+                    unset($createRow['created_at'], $createRow['updated_at']);
+                    Message::create($createRow);
+                } catch (\Throwable $inner) {
+                    $this->logger->error('Failed to create admin notification message', [
+                        'receiver_id' => $row['receiver_id'],
+                        'error' => $inner->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        $duration = round((microtime(true) - $insertStart) * 1000.0, 2);
+        $this->logger->info('Admin notifications inserted', [
+            'recipient_count' => $count,
+            'duration_ms' => $duration,
+        ]);
+
         $this->sendBulkLinkedEmail($emailRecipients, $title, $content, $type, $priority);
+    }
+
+    protected function persistSystemMessagesBulk(array $rows): void
+    {
+        if (empty($rows)) {
+            return;
+        }
+
+        Message::query()->insert($rows);
+    }
+
+    private function shouldSuppressLinkedEmail(string $type): bool
+    {
+        $normalized = strtolower(trim($type));
+        if ($normalized === '') {
+            return false;
+        }
+
+        return in_array($normalized, self::TYPES_WITH_DEDICATED_EMAIL, true);
     }
 
     private function maybeSendLinkedEmail(int $receiverId, string $title, string $content, string $type, string $priority): void
     {
         if ($this->emailService === null) {
+            return;
+        }
+
+        if ($this->shouldSuppressLinkedEmail($type)) {
             return;
         }
 
@@ -685,6 +768,10 @@ class MessageService
     private function sendBulkLinkedEmail(array $recipients, string $title, string $content, string $type, string $priority): void
     {
         if ($this->emailService === null || empty($recipients)) {
+            return;
+        }
+
+        if ($this->shouldSuppressLinkedEmail($type)) {
             return;
         }
 
