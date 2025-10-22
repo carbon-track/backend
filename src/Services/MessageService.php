@@ -17,6 +17,7 @@ class MessageService
     private ?EmailService $emailService;
     /** @var callable|null */
     private $userResolver;
+    private bool $responseFlushedForAsyncEmail = false;
 
     /**
      * @var array<string,string>
@@ -659,29 +660,31 @@ class MessageService
         $subject = $this->buildEmailSubject($title, $priority);
         $category = $this->resolveNotificationCategory($type);
 
-        try {
-            $sent = $this->emailService->sendMessageNotification(
-                $recipient['email'],
-                $recipient['name'],
-                $subject,
-                $content,
-                $category,
-                $priority
-            );
+        $this->dispatchEmail(function () use ($receiverId, $recipient, $subject, $content, $category, $priority) {
+            try {
+                $sent = $this->emailService->sendMessageNotification(
+                    $recipient['email'],
+                    $recipient['name'],
+                    $subject,
+                    $content,
+                    $category,
+                    $priority
+                );
 
-            if (!$sent) {
-                $this->logger->debug('Message email was skipped due to user preferences or simulation mode', [
+                if (!$sent) {
+                    $this->logger->debug('Message email was skipped due to user preferences or simulation mode', [
+                        'receiver_id' => $receiverId,
+                        'category' => $category,
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to send linked email notification', [
                     'receiver_id' => $receiverId,
-                    'category' => $category,
+                    'subject' => $subject,
+                    'error' => $e->getMessage(),
                 ]);
             }
-        } catch (\Throwable $e) {
-            $this->logger->error('Failed to send linked email notification', [
-                'receiver_id' => $receiverId,
-                'subject' => $subject,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        });
     }
 
     /**
@@ -721,29 +724,63 @@ class MessageService
         $subject = $this->buildEmailSubject($title, $priority);
         $category = $this->resolveNotificationCategory($type);
 
-        try {
-            $sent = $this->emailService->sendMessageNotificationToMany(
-                $formatted,
-                $subject,
-                $content,
-                $category,
-                $priority
-            );
+        $this->dispatchEmail(function () use ($formatted, $subject, $content, $category, $priority, $type) {
+            try {
+                $sent = $this->emailService->sendMessageNotificationToMany(
+                    $formatted,
+                    $subject,
+                    $content,
+                    $category,
+                    $priority
+                );
 
-            if (!$sent) {
-                $this->logger->debug('Bulk message email was skipped', [
+                if (!$sent) {
+                    $this->logger->debug('Bulk message email was skipped', [
+                        'subject' => $subject,
+                        'type' => $type,
+                        'priority' => $priority,
+                        'recipient_count' => count($formatted),
+                    ]);
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to send bulk linked email notification', [
                     'subject' => $subject,
                     'type' => $type,
-                    'priority' => $priority,
-                    'recipient_count' => count($formatted),
+                    'error' => $e->getMessage(),
                 ]);
             }
-        } catch (\Throwable $e) {
-            $this->logger->error('Failed to send bulk linked email notification', [
-                'subject' => $subject,
-                'type' => $type,
-                'error' => $e->getMessage(),
-            ]);
+        });
+    }
+
+    /**
+     * Defer email sending until after the response is flushed when running under web SAPI.
+     */
+    private function dispatchEmail(callable $callback): void
+    {
+        if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') {
+            $callback();
+            return;
+        }
+
+        $runner = function () use ($callback) {
+            try {
+                $callback();
+            } catch (\Throwable $e) {
+                $this->logger->error('Deferred email dispatch failed', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        };
+
+        register_shutdown_function($runner);
+
+        if (!$this->responseFlushedForAsyncEmail && function_exists('fastcgi_finish_request')) {
+            $this->responseFlushedForAsyncEmail = true;
+            try {
+                fastcgi_finish_request();
+            } catch (\Throwable $ignore) {
+                // Some SAPIs do not support this call; safe to ignore.
+            }
         }
     }
 
@@ -817,20 +854,22 @@ class MessageService
             return;
         }
 
-        try {
-            $this->emailService->sendExchangeConfirmation(
-                $recipient['email'],
-                $recipient['name'],
-                $productName,
-                $quantity,
-                $pointsSpent
-            );
-        } catch (\Throwable $e) {
-            $this->logger->warning('Failed to send exchange confirmation email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $this->dispatchEmail(function () use ($userId, $productName, $quantity, $pointsSpent, $recipient) {
+            try {
+                $this->emailService->sendExchangeConfirmation(
+                    $recipient['email'],
+                    $recipient['name'],
+                    $productName,
+                    $quantity,
+                    $pointsSpent
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to send exchange confirmation email', [
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
     }
 
     public function sendExchangeStatusUpdateEmailToUser(
@@ -860,20 +899,22 @@ class MessageService
         }
         $combinedNotes = implode("\n", $noteParts);
 
-        try {
-            $this->emailService->sendExchangeStatusUpdate(
-                $recipient['email'],
-                $recipient['name'],
-                $productName,
-                $status,
-                $combinedNotes
-            );
-        } catch (\Throwable $e) {
-            $this->logger->warning('Failed to send exchange status update email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $this->dispatchEmail(function () use ($userId, $productName, $status, $combinedNotes, $recipient) {
+            try {
+                $this->emailService->sendExchangeStatusUpdate(
+                    $recipient['email'],
+                    $recipient['name'],
+                    $productName,
+                    $status,
+                    $combinedNotes
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to send exchange status update email', [
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        });
     }
 
     private function resolveNotificationCategory(string $type): string
