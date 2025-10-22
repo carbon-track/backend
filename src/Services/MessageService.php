@@ -814,6 +814,61 @@ class MessageService
     }
 
     /**
+     * @param array<int, array{user_id:int,email:string,name:string}> $recipients
+     * @return array{queued:bool,recipient_count:int,error?:string}
+     */
+    public function queueBroadcastEmail(array $recipients, string $title, string $content, string $priority = Message::PRIORITY_NORMAL, array $context = []): array
+    {
+        if ($this->emailService === null) {
+            return ['queued' => false, 'recipient_count' => 0, 'error' => 'Email service unavailable'];
+        }
+
+        $formatted = [];
+        $seenEmails = [];
+        foreach ($recipients as $recipient) {
+            $email = isset($recipient['email']) ? trim((string)$recipient['email']) : '';
+            if ($email === '') {
+                continue;
+            }
+            $key = strtolower($email);
+            if (isset($seenEmails[$key])) {
+                continue;
+            }
+            $seenEmails[$key] = true;
+
+            $name = isset($recipient['name']) && $recipient['name'] !== ''
+                ? (string)$recipient['name']
+                : $email;
+
+            $formatted[] = [
+                'email' => $email,
+                'name' => $name,
+                'user_id' => isset($recipient['user_id']) ? (int)$recipient['user_id'] : null,
+            ];
+        }
+
+        if (empty($formatted)) {
+            return ['queued' => false, 'recipient_count' => 0];
+        }
+
+        $payload = [
+            'recipients' => $formatted,
+            'title' => $title,
+            'content' => $content,
+            'priority' => $priority,
+            'subject' => $this->buildEmailSubject($title, $priority),
+        ];
+
+        if (!empty($context)) {
+            $payload['context'] = $context;
+        }
+
+        $this->dispatchEmail('broadcast_announcement', $payload);
+
+        return ['queued' => true, 'recipient_count' => count($formatted)];
+    }
+
+    /**
      * Defer email sending until after the response is flushed when running under web SAPI.
      */
     private function dispatchEmail(string $jobType, array $payload): void

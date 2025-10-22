@@ -12327,6 +12327,13 @@
               "custom"
             ]
           },
+          "message_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "IDs of messages created for this broadcast."
+          },
           "email_delivery": {
             "$ref": "#/components/schemas/BroadcastEmailDelivery",
             "description": "高优先级广播的邮件发送统计信息。"
@@ -12438,6 +12445,19 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "message_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "message_id_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Maps user IDs to message IDs created during the broadcast."
           },
           "actor_username": {
             "type": [
@@ -12636,9 +12656,10 @@
               "skipped",
               "sent",
               "partial",
+              "queued",
               "failed"
             ],
-            "description": "High-level delivery status for SMTP dispatch."
+            "description": "High-level delivery status for SMTP dispatch, including queued when deferred for asynchronous processing."
           },
           "errors": {
             "type": "array",

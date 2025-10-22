@@ -323,6 +323,64 @@ HTML;
     }
 
     /**
+     * @param array<int, array{email:string,name:string|null}> $recipients
+     */
+    public function sendAnnouncementBroadcast(
+        array $recipients,
+        string $title,
+        string $content,
+        string $priority = Message::PRIORITY_NORMAL
+    ): bool {
+        if (empty($recipients)) {
+            $this->lastError = 'No deliverable email recipients provided';
+            return false;
+        }
+
+        $subject = $this->buildAnnouncementSubject($title, $priority);
+        $priorityNotice = $this->buildPriorityNoticeText($priority);
+
+        $contentHtml = '<p style="margin:0 0 16px 0;">'
+            . sprintf('Hello %s community member,', $this->esc($this->appName))
+            . '</p>';
+
+        if ($priorityNotice !== '') {
+            $contentHtml .= '<p style="margin:0 0 16px 0;color:#dc2626;font-weight:600;">' . $this->esc($priorityNotice) . '</p>';
+        }
+
+        $contentHtml .= '<p style="margin:0 0 12px 0;">'
+            . $this->esc($this->appName)
+            . ' has published a new announcement:</p>';
+
+        $contentHtml .= '<div style="margin:16px 0;padding:16px;background:#f8fafc;border-radius:12px;">'
+            . '<h2 style="margin:0 0 12px 0;font-size:18px;color:#0f172a;">' . $this->esc($title) . '</h2>'
+            . $this->renderMessageContentHtml($content)
+            . '</div>';
+
+        $contentHtml .= '<p style="margin:12px 0 0 0;">You can review the announcement in your inbox at any time.</p>';
+
+        $buttons = [];
+        $messagesUrl = $this->buildFrontendUrl('messages');
+        if ($messagesUrl) {
+            $buttons[] = [
+                'text' => 'View announcements',
+                'url' => $messagesUrl,
+                'color' => self::DEFAULT_BUTTON_COLOR,
+            ];
+        }
+
+        $bodyHtml = $this->renderLayout($subject, $contentHtml, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
+
+        return $this->sendBroadcastEmail(
+            $recipients,
+            $subject,
+            $bodyHtml,
+            $bodyText,
+            NotificationPreferenceService::CATEGORY_ANNOUNCEMENT
+        );
+    }
+
+    /**
      * Send a message notification email to multiple recipients using BCC.
      *
      * @param array<int, array{email:string,name:string|null}> $recipients
@@ -370,6 +428,24 @@ HTML;
     public function getLastError(): ?string
     {
         return $this->lastError;
+    }
+
+    private function buildAnnouncementSubject(string $title, string $priority): string
+    {
+        $prefix = '';
+        $normalized = strtolower(trim($priority));
+        if ($normalized === Message::PRIORITY_URGENT) {
+            $prefix = '[URGENT] ';
+        } elseif ($normalized === Message::PRIORITY_HIGH) {
+            $prefix = '[HIGH] ';
+        }
+
+        $trimmedTitle = trim($title);
+        if ($trimmedTitle === '') {
+            $trimmedTitle = 'Platform announcement';
+        }
+
+        return $prefix . $trimmedTitle;
     }
 
     /**

@@ -248,6 +248,63 @@ class EmailServiceTest extends TestCase
         );
     }
 
+    public function testSendAnnouncementBroadcastRespectsTemplatesAndPreferences(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'CarbonTrack',
+            'force_simulation' => true,
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-announcement');
+        $logger->pushHandler($handler);
+
+        $preference = new class($logger) extends NotificationPreferenceService {
+            public function __construct(Logger $logger)
+            {
+                parent::__construct($logger);
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                return strtolower($email) === 'allowed@example.com';
+            }
+        };
+
+        $service = new EmailService($config, $logger, $preference);
+
+        $result = $service->sendAnnouncementBroadcast(
+            [
+                ['email' => 'allowed@example.com', 'name' => 'Allowed User'],
+                ['email' => 'blocked@example.com', 'name' => 'Blocked User'],
+            ],
+            'Planned maintenance',
+            "Systems will undergo maintenance tonight.\nPlease review the announcement in the app.",
+            'high'
+        );
+
+        $this->assertTrue($result, 'Expected queued send when at least one recipient allows announcement emails.');
+        $records = array_values(array_filter(
+            $handler->getRecords(),
+            static fn(array $record): bool => $record['message'] === 'Simulated broadcast email send'
+        ));
+        $this->assertNotEmpty($records, 'Expected simulation log for announcement broadcast.');
+        $context = $records[0]['context'] ?? [];
+        $this->assertSame(1, $context['recipient_count'] ?? null, 'Only allowed recipients should be included.');
+        $this->assertSame(
+            NotificationPreferenceService::CATEGORY_ANNOUNCEMENT,
+            $context['category'] ?? null,
+            'Announcement emails should be tagged with the announcement category.'
+        );
+    }
+
     public function testTemplateWrappersReturnSuccess(): void
     {
         $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ct_email_tpl_' . uniqid();

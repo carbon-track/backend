@@ -551,17 +551,23 @@ class MessageController
 
             $sentCount = 0;
             $failedUserIds = [];
-
+            $createdMessageIds = [];
             foreach ($targetUserIds as $targetUserId) {
                 try {
-                    $this->messageService->sendSystemMessage(
+                    $message = $this->messageService->sendSystemMessage(
                         (int)$targetUserId,
                         $title,
                         $content,
                         Message::TYPE_SYSTEM,
-                        $priority
+                        $priority,
+                        null,
+                        null,
+                        false
                     );
                     $sentCount++;
+                    if ($message && isset($message->id)) {
+                        $createdMessageIds[(int)$targetUserId] = (int)$message->id;
+                    }
                 } catch (\Throwable $e) {
                     $failedUserIds[] = (int)$targetUserId;
                     if ($this->errorLogService) {
@@ -572,106 +578,58 @@ class MessageController
                 }
             }
 
+            $missingEmailUserIds = [];
+            $emailRecipients = [];
+            foreach ($targetUserIds as $recipientId) {
+                $record = $targetUserRecords[$recipientId] ?? null;
+                if ($record === null) {
+                    continue;
+                }
+                $email = trim((string)($record['email'] ?? ''));
+                if ($email === '') {
+                    $missingEmailUserIds[] = (int)$recipientId;
+                    continue;
+                }
+                $displayName = $record['username'] ?? null;
+                if ($displayName === null || $displayName === '') {
+                    $displayName = $email;
+                }
+                $emailRecipients[] = [
+                    'user_id' => (int)$recipientId,
+                    'email' => $email,
+                    'name' => $displayName,
+                ];
+            }
+
             $emailDelivery = [
                 'triggered' => false,
-                'attempted_recipients' => 0,
+                'attempted_recipients' => count($emailRecipients),
                 'successful_chunks' => 0,
                 'failed_chunks' => 0,
                 'failed_recipient_ids' => [],
-                'missing_email_user_ids' => [],
-                'status' => 'skipped',
+                'missing_email_user_ids' => $missingEmailUserIds,
+                'status' => count($emailRecipients) > 0 ? 'queued' : 'skipped',
                 'errors' => [],
             ];
-
-            $addEmailError = static function (string $message) use (&$emailDelivery): void {
-                $trimmed = trim($message);
-                if ($trimmed === '') {
-                    return;
-                }
-                if (!in_array($trimmed, $emailDelivery['errors'], true)) {
-                    $emailDelivery['errors'][] = $trimmed;
-                }
-            };
-
-            if ($this->shouldSendPriorityEmail($priority)) {
-                if ($this->emailService) {
+            if ($this->shouldSendPriorityEmail($priority) && !empty($emailRecipients)) {
+                $queueResult = $this->messageService->queueBroadcastEmail(
+                    $emailRecipients,
+                    $title,
+                    $content,
+                    $priority,
+                    [
+                        'scope' => $scope,
+                        'message_ids' => array_values(array_filter($createdMessageIds)),
+                    ]
+                );
+                if (!empty($queueResult['queued'])) {
                     $emailDelivery['triggered'] = true;
-                    $emailDelivery['status'] = 'pending';
-
-                    $emailSubject = $this->buildBroadcastEmailSubject($title, $priority);
-                    $emailBodyHtml = $this->renderBroadcastEmailHtml($title, $content);
-                    $emailBodyText = $this->renderBroadcastEmailText($title, $content);
-
-                    $recipientRows = [];
-                    foreach ($targetUserIds as $recipientId) {
-                        $record = $targetUserRecords[$recipientId] ?? null;
-                        if ($record === null) {
-                            continue;
-                        }
-                        $email = trim((string)($record['email'] ?? ''));
-                        if ($email === '') {
-                            $emailDelivery['missing_email_user_ids'][] = $recipientId;
-                            continue;
-                        }
-                        $recipientRows[] = [
-                            'id' => $recipientId,
-                            'email' => $email,
-                            'name' => $record['username'] ?? $record['email'],
-                        ];
-                    }
-
-                    $emailDelivery['attempted_recipients'] = count($recipientRows);
-                    if (!empty($recipientRows)) {
-                        $chunks = array_chunk($recipientRows, 40);
-                        foreach ($chunks as $chunk) {
-                            $bccList = [];
-                            foreach ($chunk as $entry) {
-                                $bccList[] = ['email' => $entry['email'], 'name' => $entry['name']];
-                            }
-
-                            $success = $this->emailService->sendBroadcastEmail($bccList, $emailSubject, $emailBodyHtml, $emailBodyText);
-                            if ($success) {
-                                $emailDelivery['successful_chunks']++;
-                            } else {
-                                $emailDelivery['failed_chunks']++;
-                                $emailDelivery['failed_recipient_ids'] = array_merge(
-                                    $emailDelivery['failed_recipient_ids'],
-                                    array_map(static fn(array $entry): int => (int)$entry['id'], $chunk)
-                                );
-
-                                $error = $this->emailService->getLastError();
-                                if ($error !== null) {
-                                    $addEmailError($error);
-                                }
-                            }
-                        }
-                    } else {
-                        $addEmailError('No recipients had deliverable email addresses');
-                    }
-
-                    if ($emailDelivery['triggered']) {
-                        if ($emailDelivery['attempted_recipients'] === 0) {
-                            $emailDelivery['status'] = 'skipped';
-                            if (empty($emailDelivery['errors'])) {
-                                $addEmailError('No deliverable email recipients');
-                            }
-                        } elseif ($emailDelivery['successful_chunks'] > 0 && $emailDelivery['failed_chunks'] === 0) {
-                            $emailDelivery['status'] = 'sent';
-                        } elseif ($emailDelivery['successful_chunks'] > 0) {
-                            $emailDelivery['status'] = 'partial';
-                            if (empty($emailDelivery['errors'])) {
-                                $addEmailError('Some recipients failed to receive broadcast email');
-                            }
-                        } else {
-                            $emailDelivery['status'] = 'failed';
-                            if (empty($emailDelivery['errors'])) {
-                                $addEmailError('Broadcast email failed for all recipients');
-                            }
-                        }
-                    }
-                } else {
-                    $addEmailError('Email service unavailable');
+                    $emailDelivery['status'] = 'queued';
+                } elseif (!empty($queueResult['error'])) {
+                    $emailDelivery['errors'][] = $queueResult['error'];
                     $emailDelivery['status'] = 'failed';
+                } else {
+                    $emailDelivery['status'] = 'skipped';
                 }
             }
 
@@ -691,6 +649,8 @@ class MessageController
                     'sent_count' => $sentCount,
                     'invalid_user_ids' => $invalidTargetIds,
                     'failed_user_ids' => $failedUserIds,
+                    'message_ids' => array_values(array_filter($createdMessageIds)),
+                    'message_id_map' => $createdMessageIds,
                     'email_delivery' => $emailDelivery,
                 ],
             ];
@@ -706,6 +666,7 @@ class MessageController
                 'scope' => $scope,
                 'message' => 'System message sent successfully',
                 'priority' => $priority,
+                'message_ids' => array_values(array_filter($createdMessageIds)),
                 'email_delivery' => $emailDelivery,
             ]);
         } catch (\Exception $e) {
@@ -867,10 +828,12 @@ class MessageController
                 $invalidIds = $this->decodeIdList($meta['invalid_user_ids'] ?? []);
                 $failedIds = $this->decodeIdList($meta['failed_user_ids'] ?? []);
                 $emailDelivery = $this->normalizeEmailDeliveryMeta($meta['email_delivery'] ?? []);
+                $messageIds = $this->decodeIdList($meta['message_ids'] ?? []);
+                $messageIdMap = $this->normalizeMessageIdMap($meta['message_id_map'] ?? []);
 
                 $startTime = (string)($logRow['created_at'] ?? date('Y-m-d H:i:s'));
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
-                $recipients = $this->loadBroadcastRecipients($title, $content, $startTime, $endTime);
+                $recipients = $this->loadBroadcastRecipients($title, $content, $startTime, $endTime, $messageIds);
 
                 $readUsers = [];
                 $unreadUsers = [];
@@ -905,6 +868,8 @@ class MessageController
                     'read_users' => $readUsers,
                     'unread_users' => $unreadUsers,
                     'created_at' => $startTime,
+                    'message_ids' => $messageIds,
+                    'message_id_map' => $messageIdMap,
                     'email_delivery' => $emailDelivery,
                 ];
             }
@@ -965,9 +930,24 @@ class MessageController
         return [];
     }
 
-    private function loadBroadcastRecipients(string $title, string $content, string $start, string $end): array
+    private function loadBroadcastRecipients(string $title, string $content, string $start, string $end, array $messageIds = []): array
     {
         try {
+            $ids = array_values(array_filter(array_map('intval', $messageIds), static fn(int $value): bool => $value > 0));
+            if (!empty($ids)) {
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
+                $stmt = $this->db->prepare($sql);
+                if (!$stmt) {
+                    return [];
+                }
+                foreach ($ids as $index => $id) {
+                    $stmt->bindValue($index + 1, $id, PDO::PARAM_INT);
+                }
+                $stmt->execute();
+                return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            }
+
             $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.content = :content AND m.created_at >= :start AND m.created_at <= :end';
             $stmt = $this->db->prepare($sql);
             if (!$stmt) {
@@ -1411,42 +1391,30 @@ class MessageController
         return $result;
     }
 
+    private function normalizeMessageIdMap($value): array
+    {
+        $result = [];
+        if (is_array($value)) {
+            foreach ($value as $userId => $messageId) {
+                $intUserId = is_numeric($userId) ? (int)$userId : null;
+                $intMessageId = is_numeric($messageId) ? (int)$messageId : null;
+                if ($intUserId !== null && $intUserId > 0 && $intMessageId !== null && $intMessageId > 0) {
+                    $result[$intUserId] = $intMessageId;
+                }
+            }
+        } elseif (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                return $this->normalizeMessageIdMap($decoded);
+            }
+        }
+        return $result;
+    }
+
     private function shouldSendPriorityEmail(string $priority): bool
     {
         return in_array($priority, [Message::PRIORITY_HIGH, Message::PRIORITY_URGENT], true);
     }
-
-    private function buildBroadcastEmailSubject(string $title, string $priority): string
-    {
-        $prefix = '';
-        if ($priority === Message::PRIORITY_URGENT) {
-            $prefix = '[URGENT] ';
-        } elseif ($priority === Message::PRIORITY_HIGH) {
-            $prefix = '[HIGH] ';
-        }
-        return $prefix . $title;
-    }
-
-    private function renderBroadcastEmailHtml(string $title, string $content): string
-    {
-        $safeTitle = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $safeContent = nl2br(htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
-
-        return '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333;">'
-            . '<h2 style="color:#0d9488;">' . $safeTitle . '</h2>'
-            . '<div>' . $safeContent . '</div>'
-            . '<p style="margin-top:24px; color:#555;">'
-            . 'This is an automated notification from CarbonTrack. Please do not reply directly to this email.'
-            . '</p>'
-            . '</div>';
-    }
-
-    private function renderBroadcastEmailText(string $title, string $content): string
-    {
-        $normalizedContent = preg_replace("/\r\n|\r|\n/", '\n', $content);
-
-        return $title . "\n\n" . $normalizedContent . "\n\n" . 'This is an automated notification from CarbonTrack. Please do not reply.';
-  }
 
     private function loadUsernames(array $ids): array
     {

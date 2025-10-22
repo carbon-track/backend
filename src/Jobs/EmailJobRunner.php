@@ -49,6 +49,10 @@ class EmailJobRunner
                     self::runActivityRejectedJob($emailService, $logger, $payload);
                     break;
 
+                case 'broadcast_announcement':
+                    self::runBroadcastAnnouncementJob($emailService, $logger, $payload);
+                    break;
+
                 default:
                     $logger->warning('Unknown email job type received', ['job_type' => $jobType]);
                     break;
@@ -187,6 +191,66 @@ class EmailJobRunner
             $logger->warning('Failed to send activity rejected email', [
                 'user_id' => $userId,
                 'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private static function runBroadcastAnnouncementJob(EmailService $emailService, Logger $logger, array $payload): void
+    {
+        $recipients = $payload['recipients'] ?? [];
+        if (!is_array($recipients) || empty($recipients)) {
+            $logger->debug('Broadcast announcement job skipped due to empty recipients.');
+            return;
+        }
+
+        $title = (string) ($payload['title'] ?? '');
+        $content = (string) ($payload['content'] ?? '');
+        $priority = (string) ($payload['priority'] ?? Message::PRIORITY_NORMAL);
+
+        $cleanedRecipients = [];
+        foreach ($recipients as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $email = isset($entry['email']) ? trim((string) $entry['email']) : '';
+            if ($email === '') {
+                continue;
+            }
+            $name = isset($entry['name']) && $entry['name'] !== ''
+                ? (string) $entry['name']
+                : $email;
+            $cleanedRecipients[] = [
+                'email' => $email,
+                'name' => $name,
+            ];
+        }
+
+        if (empty($cleanedRecipients)) {
+            $logger->debug('Broadcast announcement job skipped after cleaning recipients.');
+            return;
+        }
+
+        try {
+            $sent = $emailService->sendAnnouncementBroadcast(
+                $cleanedRecipients,
+                $title,
+                $content,
+                $priority
+            );
+
+            if (!$sent) {
+                $logger->debug('Broadcast announcement email was not dispatched.', [
+                    'recipient_count' => count($cleanedRecipients),
+                    'priority' => $priority,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $logger->error('Failed to send broadcast announcement email', [
+                'error' => $e->getMessage(),
+                'recipient_count' => count($cleanedRecipients),
             ]);
         }
     }
