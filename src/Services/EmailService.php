@@ -194,9 +194,10 @@ HTML;
      * Send a broadcast email using BCC to protect recipient privacy
      * @param array<int, array{email:string, name: string|null}> $recipients
      */
-    public function sendBroadcastEmail(array $recipients, string $subject, string $bodyHtml, string $bodyText = ""): bool
+    public function sendBroadcastEmail(array $recipients, string $subject, string $bodyHtml, string $bodyText = "", ?string $category = null): bool
     {
         $this->lastError = null;
+        $category = $category ?: NotificationPreferenceService::CATEGORY_ANNOUNCEMENT;
         $cleaned = [];
         foreach ($recipients as $recipient) {
             $email = trim((string)($recipient['email'] ?? ''));
@@ -204,7 +205,7 @@ HTML;
                 continue;
             }
             $name = $recipient['name'] ?? null;
-            if (!$this->shouldSendEmail($email, NotificationPreferenceService::CATEGORY_ANNOUNCEMENT)) {
+            if (!$this->shouldSendEmail($email, $category)) {
                 continue;
             }
             $cleaned[] = ['email' => $email, 'name' => $name];
@@ -241,7 +242,8 @@ HTML;
                 $mailer->send();
                 $this->logger->info('Broadcast email sent successfully', [
                     'recipient_count' => count($cleaned),
-                    'subject' => $subject
+                    'subject' => $subject,
+                    'category' => $category,
                 ]);
                 return true;
             }
@@ -250,7 +252,8 @@ HTML;
             $this->logger->info('Simulated broadcast email send', [
                 'recipient_count' => count($cleaned),
                 'subject' => $subject,
-                'reason' => $reason
+                'reason' => $reason,
+                'category' => $category,
             ]);
             return true;
         } catch (\Throwable $e) {
@@ -301,6 +304,51 @@ HTML;
         $bodyText = $this->buildTextBody($bodyHtml, $buttons);
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+    }
+
+    /**
+     * Send a message notification email to multiple recipients using BCC.
+     *
+     * @param array<int, array{email:string,name:string|null}> $recipients
+     */
+    public function sendMessageNotificationToMany(
+        array $recipients,
+        string $subject,
+        string $messageBody,
+        string $category,
+        string $priority = Message::PRIORITY_NORMAL
+    ): bool {
+        if (empty($recipients)) {
+            $this->lastError = 'No recipients provided for bulk notification.';
+            return false;
+        }
+
+        $buttons = [];
+        $messagesUrl = $this->buildFrontendUrl('messages');
+        if ($messagesUrl) {
+            $buttons[] = [
+                'text' => 'Open CarbonTrack',
+                'url' => $messagesUrl,
+                'color' => self::DEFAULT_BUTTON_COLOR,
+            ];
+        }
+
+        $priorityNotice = $this->buildPriorityNoticeText($priority);
+
+        $contentHtml = '<p style="margin:0 0 16px 0;">Hello,</p>';
+        if ($priorityNotice !== '') {
+            $contentHtml .= '<p style="margin:0 0 16px 0;color:#dc2626;font-weight:600;">' . $this->esc($priorityNotice) . '</p>';
+        }
+        $contentHtml .= '<p style="margin:0 0 12px 0;">There is a new notification in ' . $this->esc($this->appName) . ' that may require your attention.</p>';
+        $contentHtml .= '<div style="margin:16px 0;padding:16px;background:#f8fafc;border-radius:12px;">'
+            . $this->renderMessageContentHtml($messageBody)
+            . '</div>';
+        $contentHtml .= '<p style="margin:12px 0 0 0;">You can review the full details in the app at any time.</p>';
+
+        $bodyHtml = $this->renderLayout($subject, $contentHtml, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
+
+        return $this->sendBroadcastEmail($recipients, $subject, $bodyHtml, $bodyText, $category);
     }
 
     public function getLastError(): ?string

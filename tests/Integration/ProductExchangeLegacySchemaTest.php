@@ -73,7 +73,8 @@ class ProductExchangeLegacySchemaTest extends TestCase
                 string $title,
                 string $content,
                 string $priority = Message::PRIORITY_NORMAL,
-                ?int $senderId = null
+                ?int $senderId = null,
+                bool $sendEmail = true
             ): Message {
                 $stmt = $this->pdo->prepare('INSERT INTO messages (sender_id, receiver_id, title, content, is_read, created_at, updated_at) VALUES (:sender_id, :receiver_id, :title, :content, 0, :now, :now)');
                 $now = date('Y-m-d H:i:s');

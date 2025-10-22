@@ -137,6 +137,117 @@ class EmailServiceTest extends TestCase
         );
     }
 
+    public function testSendMessageNotificationToManyUsesBroadcastAndPreferences(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'force_simulation' => true,
+            'app_name' => 'CarbonTrack QA',
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-bulk');
+        $logger->pushHandler($handler);
+
+        $preference = new class(['admin1@example.com'], $logger) extends NotificationPreferenceService {
+            private array $allowed;
+
+            public function __construct(array $allowed, Logger $logger)
+            {
+                parent::__construct($logger);
+                $this->allowed = array_map('strtolower', $allowed);
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                return in_array(strtolower($email), $this->allowed, true);
+            }
+        };
+
+        $service = new EmailService($config, $logger, $preference);
+
+        $result = $service->sendMessageNotificationToMany(
+            [
+                ['email' => 'admin1@example.com', 'name' => 'Admin A'],
+                ['email' => 'blocked@example.com', 'name' => 'Admin B'],
+            ],
+            'Pending review alert',
+            "Line 1\n\nLine 2",
+            'system',
+            'high'
+        );
+
+        $this->assertTrue($result, 'Expected broadcast send when at least one recipient allows email.');
+        $records = array_values(array_filter(
+            $handler->getRecords(),
+            static fn(array $record): bool => $record['message'] === 'Simulated broadcast email send'
+        ));
+        $this->assertNotEmpty($records, 'Simulated broadcast log expected.');
+        $context = $records[0]['context'] ?? [];
+        $this->assertSame(1, $context['recipient_count'] ?? null, 'Only allowed recipients should be counted.');
+        $this->assertSame('system', $context['category'] ?? null);
+    }
+
+    public function testSendMessageNotificationToManySkipsWhenNoEligibleRecipients(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'force_simulation' => true,
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-bulk-skip');
+        $logger->pushHandler($handler);
+
+        $preference = new class($logger) extends NotificationPreferenceService {
+            public function __construct(Logger $logger)
+            {
+                parent::__construct($logger);
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                return false;
+            }
+        };
+
+        $service = new EmailService($config, $logger, $preference);
+
+        $result = $service->sendMessageNotificationToMany(
+            [
+                ['email' => 'blocked@example.com', 'name' => 'Admin'],
+            ],
+            'Ignored',
+            'Body',
+            'system',
+            'normal'
+        );
+
+        $this->assertFalse($result, 'Expected failure when no recipients are eligible.');
+        $this->assertSame(
+            'No deliverable email recipients provided',
+            $service->getLastError()
+        );
+        $this->assertFalse(
+            $handler->hasInfoThatContains('Simulated broadcast email send'),
+            'No broadcast send should occur when every recipient is filtered out.'
+        );
+    }
+
     public function testTemplateWrappersReturnSuccess(): void
     {
         $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ct_email_tpl_' . uniqid();

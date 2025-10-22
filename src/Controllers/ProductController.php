@@ -2550,21 +2550,31 @@ class ProductController
      */
     private function notifyAdminsNewExchange(string $exchangeId, array $user, array $product, int $quantity): void
     {
-        // 获取所有管理员
-        $sql = "SELECT id FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
+        // ��ȡ���й���Ա
+        $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute();
         $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        foreach ($admins as $admin) {
-            $this->messageService->sendMessage(
-                $admin['id'],
-                'new_exchange_pending',
-                '新的商品兑换订单',
-                "用户 {$user['username']} 兑换了 {$product['name']} x{$quantity}，请及时处理。",
-                'high'
-            );
+        if (empty($admins)) {
+            return;
         }
+
+        $recipients = array_map(static function (array $admin): array {
+            return [
+                'id' => isset($admin['id']) ? (int) $admin['id'] : 0,
+                'email' => $admin['email'] ?? null,
+                'username' => $admin['username'] ?? null,
+            ];
+        }, $admins);
+
+        $this->messageService->sendAdminNotificationBatch(
+            $recipients,
+            'new_exchange_pending',
+            '�µ���Ʒ�һ�����',
+            "�û� {$user['username']} �һ��� {$product['name']} x{$quantity}���뼰ʱ������",
+            'high'
+        );
     }
 
     /**

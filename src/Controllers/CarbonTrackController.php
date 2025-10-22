@@ -1070,22 +1070,33 @@ class CarbonTrackController
      */
     private function notifyAdminsNewRecord(string $recordId, array $user, array $activity): void
     {
-        // 获取所有管理员
-        $sql = "SELECT id FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
+        // ��ȡ���й���Ա
+        $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute();
         $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        foreach ($admins as $admin) {
-            $this->messageService->sendMessage(
-                $admin['id'],
-                'new_record_pending',
-                '新的碳减排记录待审核',
-                "用户 {$user['username']} 提交了新的{$activity['name_zh']}记录，请及时审核。",
-                'high'
-            );
+        if (empty($admins)) {
+            return;
         }
+
+        $recipients = array_map(static function (array $admin): array {
+            return [
+                'id' => isset($admin['id']) ? (int) $admin['id'] : 0,
+                'email' => $admin['email'] ?? null,
+                'username' => $admin['username'] ?? null,
+            ];
+        }, $admins);
+
+        $this->messageService->sendAdminNotificationBatch(
+            $recipients,
+            'new_record_pending',
+            '�µ�̼���ż�¼�����',
+            "�û� {$user['username']} �ύ���µ�{$activity['name_zh']}��¼���뼰ʱ��ˡ�",
+            'high'
+        );
     }
+
 
     /**
      * 发送审核通知

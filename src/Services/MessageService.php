@@ -65,7 +65,8 @@ class MessageService
         string $title,
         string $content,
         string $priority = Message::PRIORITY_NORMAL,
-        ?int $senderId = null
+        ?int $senderId = null,
+        bool $sendEmail = true
     ): Message {
         $message = Message::create([
             'sender_id' => $senderId,
@@ -99,7 +100,9 @@ class MessageService
             'notes' => 'Message sent to user ' . $receiverId
         ]);
 
-        $this->maybeSendLinkedEmail($receiverId, $title, $content, $type, $priority);
+        if ($sendEmail) {
+            $this->maybeSendLinkedEmail($receiverId, $title, $content, $type, $priority);
+        }
 
         return $message;
     }
@@ -402,18 +405,26 @@ class MessageService
 
         // Send to all admin users
         $adminUsers = User::where('is_admin', true)->where('status', 'active')->get();
-        
-        foreach ($adminUsers as $admin) {
-            $this->sendSystemMessage(
-                $admin->id,
-                $title,
-                $content,
-                Message::TYPE_NOTIFICATION,
-                Message::PRIORITY_HIGH,
-                null,
-                null
-            );
+
+        if ($adminUsers->isEmpty()) {
+            return;
         }
+
+        $batch = $adminUsers->map(function (User $admin): array {
+            return [
+                'id' => (int) $admin->id,
+                'email' => $admin->email ? (string) $admin->email : null,
+                'username' => $admin->username ? (string) $admin->username : null,
+            ];
+        })->all();
+
+        $this->sendAdminNotificationBatch(
+            $batch,
+            'new_record_pending',
+            $title,
+            $content,
+            Message::PRIORITY_HIGH
+        );
     }
 
     /**
@@ -586,6 +597,54 @@ class MessageService
         return $sent;
     }
 
+    /**
+     * @param array<int, array{id:int,email:string|null,username:string|null,name?:string|null}> $adminUsers
+     */
+    public function sendAdminNotificationBatch(
+        array $adminUsers,
+        string $type,
+        string $title,
+        string $content,
+        string $priority = Message::PRIORITY_NORMAL
+    ): void {
+        if (empty($adminUsers)) {
+            return;
+        }
+
+        $emailRecipients = [];
+        foreach ($adminUsers as $admin) {
+            $adminId = isset($admin['id']) ? (int) $admin['id'] : 0;
+            if ($adminId <= 0) {
+                continue;
+            }
+
+            $this->sendSystemMessage($adminId, $title, $content, $type, $priority, null, null, false);
+
+            $email = isset($admin['email']) ? trim((string) $admin['email']) : '';
+            if ($email === '') {
+                continue;
+            }
+
+            $name = null;
+            if (isset($admin['username']) && $admin['username'] !== null && $admin['username'] !== '') {
+                $name = (string) $admin['username'];
+            } elseif (isset($admin['name']) && $admin['name'] !== null && $admin['name'] !== '') {
+                $name = (string) $admin['name'];
+            }
+
+            if ($name === null) {
+                $name = $email;
+            }
+
+            $emailRecipients[] = [
+                'email' => $email,
+                'name' => $name,
+            ];
+        }
+
+        $this->sendBulkLinkedEmail($emailRecipients, $title, $content, $type, $priority);
+    }
+
     private function maybeSendLinkedEmail(int $receiverId, string $title, string $content, string $type, string $priority): void
     {
         if ($this->emailService === null) {
@@ -620,6 +679,69 @@ class MessageService
             $this->logger->error('Failed to send linked email notification', [
                 'receiver_id' => $receiverId,
                 'subject' => $subject,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param array<int, array{email:string,name:string|null}> $recipients
+     */
+    private function sendBulkLinkedEmail(array $recipients, string $title, string $content, string $type, string $priority): void
+    {
+        if ($this->emailService === null || empty($recipients)) {
+            return;
+        }
+
+        $formatted = [];
+        $seen = [];
+        foreach ($recipients as $recipient) {
+            $email = trim((string)($recipient['email'] ?? ''));
+            if ($email === '') {
+                continue;
+            }
+
+            $key = strtolower($email);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $name = $recipient['name'] ?? null;
+            $formatted[] = [
+                'email' => $email,
+                'name' => ($name !== null && $name !== '') ? (string) $name : null,
+            ];
+        }
+
+        if (empty($formatted)) {
+            return;
+        }
+
+        $subject = $this->buildEmailSubject($title, $priority);
+        $category = $this->resolveNotificationCategory($type);
+
+        try {
+            $sent = $this->emailService->sendMessageNotificationToMany(
+                $formatted,
+                $subject,
+                $content,
+                $category,
+                $priority
+            );
+
+            if (!$sent) {
+                $this->logger->debug('Bulk message email was skipped', [
+                    'subject' => $subject,
+                    'type' => $type,
+                    'priority' => $priority,
+                    'recipient_count' => count($formatted),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to send bulk linked email notification', [
+                'subject' => $subject,
+                'type' => $type,
                 'error' => $e->getMessage(),
             ]);
         }

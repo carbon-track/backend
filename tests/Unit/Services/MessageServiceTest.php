@@ -17,6 +17,8 @@ class MessageServiceEmailStub extends \CarbonTrack\Services\EmailService
     /** @var array<int,array<string,mixed>> */
     public array $messageNotifications = [];
     /** @var array<int,array<string,mixed>> */
+    public array $bulkNotifications = [];
+    /** @var array<int,array<string,mixed>> */
     public array $exchangeConfirmations = [];
     /** @var array<int,array<string,mixed>> */
     public array $exchangeStatusUpdates = [];
@@ -46,6 +48,24 @@ class MessageServiceEmailStub extends \CarbonTrack\Services\EmailService
         $this->messageNotifications[] = [
             'toEmail' => $toEmail,
             'toName' => $toName,
+            'subject' => $subject,
+            'body' => $messageBody,
+            'category' => $category,
+            'priority' => $priority,
+        ];
+
+        return $this->allowSend;
+    }
+
+    public function sendMessageNotificationToMany(
+        array $recipients,
+        string $subject,
+        string $messageBody,
+        string $category,
+        string $priority = Message::PRIORITY_NORMAL
+    ): bool {
+        $this->bulkNotifications[] = [
+            'recipients' => $recipients,
             'subject' => $subject,
             'body' => $messageBody,
             'category' => $category,
@@ -159,6 +179,80 @@ class MessageServiceTest extends TestCase
         $method->invoke($service, 99, 'Notice', 'Body', Message::TYPE_SYSTEM, Message::PRIORITY_NORMAL);
 
         $this->assertCount(0, $emailStub->messageNotifications);
+    }
+
+    public function testSendAdminNotificationBatchAggregatesEmails(): void
+    {
+        $logger = $this->createMock(Logger::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $emailStub = new MessageServiceEmailStub();
+
+        $service = new class($logger, $audit, $emailStub) extends MessageService {
+            public array $systemMessages = [];
+
+            public function __construct($logger, $auditLogService, $emailService)
+            {
+                parent::__construct($logger, $auditLogService, $emailService);
+            }
+
+            public function sendSystemMessage(
+                int $receiverId,
+                string $title,
+                string $content,
+                string $type = Message::TYPE_SYSTEM,
+                string $priority = Message::PRIORITY_NORMAL,
+                ?string $relatedEntityType = null,
+                ?int $relatedEntityId = null,
+                bool $sendEmail = true
+            ): Message {
+                $message = new Message();
+                $message->receiver_id = $receiverId;
+                $this->systemMessages[] = [
+                    'receiverId' => $receiverId,
+                    'title' => $title,
+                    'type' => $type,
+                    'priority' => $priority,
+                    'sendEmail' => $sendEmail,
+                ];
+                return $message;
+            }
+        };
+
+        $admins = [
+            ['id' => 1, 'email' => 'admin1@example.com', 'username' => 'Admin One'],
+            ['id' => 2, 'email' => 'admin2@example.com', 'username' => 'Admin Two'],
+            ['id' => 3, 'email' => null, 'username' => 'No Email'],
+            ['id' => 4, 'email' => 'ADMIN1@example.com', 'username' => 'Duplicate Email'],
+            ['id' => 0, 'email' => 'ignored@example.com', 'username' => 'Ignore'],
+        ];
+
+        $service->sendAdminNotificationBatch(
+            $admins,
+            'new_exchange_pending',
+            'Title',
+            'Body',
+            'high'
+        );
+
+        // Two recipients with valid, unique email addresses (case-insensitive)
+        $this->assertCount(1, $emailStub->bulkNotifications);
+        $bulk = $emailStub->bulkNotifications[0];
+        $this->assertCount(2, $bulk['recipients']);
+        $this->assertSame(NotificationPreferenceService::CATEGORY_TRANSACTION, $bulk['category']);
+        $this->assertSame('high', $bulk['priority']);
+        $emails = array_map(static fn(array $recipient): string => $recipient['email'], $bulk['recipients']);
+        $this->assertEqualsCanonicalizing(
+            ['admin1@example.com', 'admin2@example.com'],
+            $emails
+        );
+
+        // System messages should be recorded for admins with valid IDs
+        $this->assertCount(4, $service->systemMessages);
+        foreach ($service->systemMessages as $message) {
+            $this->assertFalse($message['sendEmail'], 'System messages should suppress per-user email.');
+        }
+
+        $this->assertCount(0, $emailStub->messageNotifications, 'No individual notifications should be sent.');
     }
 
     public function testSendExchangeConfirmationEmailToUserUsesEmailService(): void
