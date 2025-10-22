@@ -810,7 +810,7 @@ class MessageService
                 'error' => $e->getMessage(),
             ]);
 
-            if ($jobFile !== null && is_file($jobFile)) {
+            if (is_string($jobFile) && $jobFile !== '' && is_file($jobFile)) {
                 @unlink($jobFile);
             }
 
