@@ -601,6 +601,12 @@ class MessageController
                 ];
             }
 
+            $allMessageIds = array_values(array_filter($createdMessageIds));
+            $messageIdCount = count($allMessageIds);
+            $messageIdSample = $messageIdCount > 200 ? array_slice($allMessageIds, 0, 200) : $allMessageIds;
+            $messageMapSample = $messageIdCount > 200 ? array_slice($createdMessageIds, 0, 200, true) : $createdMessageIds;
+            $contentHash = hash('sha256', $title . '||' . $content);
+
             $emailDelivery = [
                 'triggered' => false,
                 'attempted_recipients' => count($emailRecipients),
@@ -619,7 +625,7 @@ class MessageController
                     $priority,
                     [
                         'scope' => $scope,
-                        'message_ids' => array_values(array_filter($createdMessageIds)),
+                        'message_ids' => $messageIdSample,
                     ]
                 );
                 if (!empty($queueResult['queued'])) {
@@ -649,9 +655,11 @@ class MessageController
                     'sent_count' => $sentCount,
                     'invalid_user_ids' => $invalidTargetIds,
                     'failed_user_ids' => $failedUserIds,
-                    'message_ids' => array_values(array_filter($createdMessageIds)),
-                    'message_id_map' => $createdMessageIds,
-                    'email_delivery' => $emailDelivery,
+                    'message_ids' => $messageIdSample,
+                    'message_id_count' => $messageIdCount,
+                    'message_id_map' => $messageMapSample,
+                    'content_hash' => $contentHash,
+                    'email_delivery' => $this->trimEmailDeliveryForLog($emailDelivery),
                 ],
             ];
 
@@ -666,7 +674,8 @@ class MessageController
                 'scope' => $scope,
                 'message' => 'System message sent successfully',
                 'priority' => $priority,
-                'message_ids' => array_values(array_filter($createdMessageIds)),
+                'message_ids' => $messageIdSample,
+                'message_id_count' => $messageIdCount,
                 'email_delivery' => $emailDelivery,
             ]);
         } catch (\Exception $e) {
@@ -829,11 +838,15 @@ class MessageController
                 $failedIds = $this->decodeIdList($meta['failed_user_ids'] ?? []);
                 $emailDelivery = $this->normalizeEmailDeliveryMeta($meta['email_delivery'] ?? []);
                 $messageIds = $this->decodeIdList($meta['message_ids'] ?? []);
+                $messageIdCount = isset($meta['message_id_count']) ? (int)$meta['message_id_count'] : (count($messageIds) ?: null);
                 $messageIdMap = $this->normalizeMessageIdMap($meta['message_id_map'] ?? []);
+                $contentHash = isset($meta['content_hash']) && is_string($meta['content_hash'])
+                    ? trim($meta['content_hash'])
+                    : null;
 
                 $startTime = (string)($logRow['created_at'] ?? date('Y-m-d H:i:s'));
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
-                $recipients = $this->loadBroadcastRecipients($title, $content, $startTime, $endTime, $messageIds);
+                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $contentHash);
 
                 $readUsers = [];
                 $unreadUsers = [];
@@ -868,6 +881,7 @@ class MessageController
                     'read_users' => $readUsers,
                     'unread_users' => $unreadUsers,
                     'created_at' => $startTime,
+                    'message_id_count' => $messageIdCount ?? count($recipients),
                     'message_ids' => $messageIds,
                     'message_id_map' => $messageIdMap,
                     'email_delivery' => $emailDelivery,
@@ -930,7 +944,7 @@ class MessageController
         return [];
     }
 
-    private function loadBroadcastRecipients(string $title, string $content, string $start, string $end, array $messageIds = []): array
+    private function loadBroadcastRecipients(string $title, string $start, string $end, array $messageIds = [], ?string $contentHash = null): array
     {
         try {
             $ids = array_values(array_filter(array_map('intval', $messageIds), static fn(int $value): bool => $value > 0));
@@ -948,17 +962,49 @@ class MessageController
                 return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
             }
 
-            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.content = :content AND m.created_at >= :start AND m.created_at <= :end';
+            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
             $stmt = $this->db->prepare($sql);
             if (!$stmt) {
                 return [];
             }
             $stmt->bindValue(':title', $title);
-            $stmt->bindValue(':content', $content);
             $stmt->bindValue(':start', $start);
             $stmt->bindValue(':end', $end);
             $stmt->execute();
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            if ($contentHash !== null && $contentHash !== '' && !empty($rows)) {
+                $filtered = [];
+                $contentStmt = $this->db->prepare('SELECT content FROM messages WHERE id = :id');
+                foreach ($rows as $row) {
+                    $messageId = isset($row['id']) ? (int)$row['id'] : 0;
+                    if ($messageId <= 0) {
+                        continue;
+                    }
+                    try {
+                        if (!$contentStmt) {
+                            $filtered = $rows;
+                            break;
+                        }
+                        $contentStmt->bindValue(':id', $messageId, PDO::PARAM_INT);
+                        $contentStmt->execute();
+                        $contentRow = $contentStmt->fetch(PDO::FETCH_ASSOC);
+                        $contentStmt->closeCursor();
+                        $contentValue = is_array($contentRow) ? (string)($contentRow['content'] ?? '') : '';
+                        if (hash('sha256', $title . '||' . $contentValue) === $contentHash) {
+                            $filtered[] = $row;
+                        }
+                    } catch (\Throwable $e) {
+                        $filtered = $rows;
+                        break;
+                    }
+                }
+                if (!empty($filtered)) {
+                    return $filtered;
+                }
+            }
+
+            return $rows;
         } catch (\Throwable $e) {
             return [];
         }
@@ -1388,6 +1434,22 @@ class MessageController
         }
         $result['errors'] = $normalizedErrors;
 
+        return $result;
+    }
+
+    private function trimEmailDeliveryForLog(array $delivery): array
+    {
+        $result = $delivery;
+        $limit = 100;
+        foreach (['failed_recipient_ids', 'missing_email_user_ids', 'errors'] as $key) {
+            if (!isset($result[$key]) || !is_array($result[$key])) {
+                continue;
+            }
+            if (count($result[$key]) > $limit) {
+                $result[$key] = array_slice($result[$key], 0, $limit);
+                $result[$key . '_truncated'] = true;
+            }
+        }
         return $result;
     }
 

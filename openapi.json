@@ -12332,7 +12332,11 @@
             "items": {
               "type": "integer"
             },
-            "description": "IDs of messages created for this broadcast."
+            "description": "Sample of message IDs created for this broadcast."
+          },
+          "message_id_count": {
+            "type": "integer",
+            "description": "Total number of messages created for this broadcast."
           },
           "email_delivery": {
             "$ref": "#/components/schemas/BroadcastEmailDelivery",
@@ -12451,6 +12455,9 @@
             "items": {
               "type": "integer"
             }
+          },
+          "message_id_count": {
+            "type": "integer"
           },
           "message_id_map": {
             "type": "object",

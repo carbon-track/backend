@@ -61,6 +61,9 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         $response = $handler->handle($request);
 
         if (!$skip) {
+            $serverParams = $this->snapshotServerParams($request);
+            $ipAddress = $this->resolveClientIp($serverParams);
+
             $duration = (microtime(true) - $start) * 1000.0;
             $respBody = null;
             try {
@@ -80,11 +83,12 @@ class RequestLoggingMiddleware implements MiddlewareInterface
                 'path' => $path,
                 'status_code' => $response->getStatusCode(),
                 'user_id' => $userId,
-                'ip_address' => $request->getServerParams()['REMOTE_ADDR'] ?? null,
+                'ip_address' => $ipAddress,
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'duration_ms' => round($duration, 2),
                 'request_body' => $parsedBody,
-                'response_body' => $this->decodeIfJson($respBody)
+                'response_body' => $this->decodeIfJson($respBody),
+                'server_params' => $serverParams,
             ]);
         }
 
@@ -144,5 +148,53 @@ class RequestLoggingMiddleware implements MiddlewareInterface
             if (json_last_error() === JSON_ERROR_NONE) return $decoded;
         }
         return $trim;
+    }
+
+    /**
+     * Merge PSR-7 server params with the global $_SERVER snapshot for richer metadata.
+     */
+    private function snapshotServerParams(Request $request): array
+    {
+        $psrServer = $request->getServerParams();
+        if (!is_array($psrServer)) {
+            $psrServer = [];
+        }
+        $globals = $_SERVER ?? [];
+        return array_replace($globals, $psrServer);
+    }
+
+    /**
+     * Resolve client IP preferring Cloudflare's connecting IP headers when present.
+     */
+    private function resolveClientIp(array $serverParams): ?string
+    {
+        $candidates = [
+            $serverParams['HTTP_CF_CONNNECTING_IP'] ?? null, // handle potential typo key
+            $serverParams['HTTP_CF_CONNECTING_IP'] ?? null,
+            $serverParams['CF_CONNECTING_IP'] ?? null,
+            $_SERVER['HTTP_CF_CONNNECTING_IP'] ?? null,
+            $_SERVER['HTTP_CF_CONNECTING_IP'] ?? null,
+            $_SERVER['CF_CONNECTING_IP'] ?? null,
+            $serverParams['REMOTE_ADDR'] ?? null,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+        ];
+
+        foreach ($candidates as $raw) {
+            if (!is_string($raw)) {
+                continue;
+            }
+            $value = trim($raw);
+            if ($value === '') {
+                continue;
+            }
+            $first = trim(explode(',', $value)[0]);
+            if ($first === '') {
+                continue;
+            }
+            if (filter_var($first, FILTER_VALIDATE_IP)) {
+                return $first;
+            }
+        }
+        return null;
     }
 }

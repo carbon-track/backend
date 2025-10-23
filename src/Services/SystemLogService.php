@@ -34,7 +34,14 @@ class SystemLogService
             }
             $requestBody = $this->sanitizeBody($data['request_body'] ?? null);
             $responseBody = $this->sanitizeBody($data['response_body'] ?? null);
-            $serverMeta = $this->buildServerMeta($data['server_params'] ?? []);
+            $serverMeta = $this->buildServerMeta(
+                $data['server_params'] ?? [],
+                [
+                    'method' => $data['method'] ?? null,
+                    'path' => $data['path'] ?? null,
+                    'ip_address' => $data['ip_address'] ?? null,
+                ]
+            );
 
             // 为了兼容 MySQL 和 SQLite，采用字符串形式写 created_at，使用默认的 CURRENT_TIMESTAMP 进行处理
             $stmt = $this->db->prepare("INSERT INTO system_logs (
@@ -93,26 +100,99 @@ class SystemLogService
         return $body;
     }
 
-    private function buildServerMeta(array $server): string
+    private function buildServerMeta(array $server, array $summaryOverride = []): string
     {
-        // 深拷贝 + 脱敏（Authorization / 密码类） + 控制大小
         $clone = $server;
         $sensitiveKeys = ['HTTP_AUTHORIZATION','PHP_AUTH_PW','HTTP_COOKIE'];
         foreach ($sensitiveKeys as $k) {
             if (isset($clone[$k])) { $clone[$k] = '[REDACTED]'; }
         }
-        // 添加精简 summary
         $clone['_summary'] = [
-            'method' => $clone['REQUEST_METHOD'] ?? null,
-            'uri' => $clone['REQUEST_URI'] ?? null,
-            'ip' => $clone['REMOTE_ADDR'] ?? null,
+            'method' => $this->resolveSummaryMethod($clone, $summaryOverride),
+            'uri' => $this->resolveSummaryUri($clone, $summaryOverride),
+            'ip' => $this->resolveSummaryIp($clone, $summaryOverride),
         ];
         $json = json_encode($clone, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($json === false) { return '{}'; }
-        if (strlen($json) > 120000) { // 防止极端环境变量撑爆
+        if (strlen($json) > 120000) { // 防止爆炸日志撑满磁盘
             $json = substr($json, 0, 120000) . '...[TRUNCATED]';
         }
         return $json;
+    }
+
+    private function resolveSummaryMethod(array $server, array $context): ?string
+    {
+        return $this->firstNonEmptyString([
+            $context['method'] ?? null,
+            $server['REQUEST_METHOD'] ?? null,
+            $_SERVER['REQUEST_METHOD'] ?? null,
+        ]);
+    }
+
+    private function resolveSummaryUri(array $server, array $context): ?string
+    {
+        $uri = $this->firstNonEmptyString([
+            $server['REQUEST_URI'] ?? null,
+            $_SERVER['REQUEST_URI'] ?? null,
+        ]);
+        if ($uri !== null) {
+            return $uri;
+        }
+
+        return $this->firstNonEmptyString([
+            $context['path'] ?? null,
+            $server['PATH_INFO'] ?? null,
+            $_SERVER['PATH_INFO'] ?? null,
+        ]);
+    }
+
+    private function resolveSummaryIp(array $server, array $context): ?string
+    {
+        $candidates = [
+            $server['HTTP_CF_CONNNECTING_IP'] ?? null, // common typo with double N
+            $_SERVER['HTTP_CF_CONNNECTING_IP'] ?? null,
+            $server['HTTP_CF_CONNECTING_IP'] ?? null,
+            $_SERVER['HTTP_CF_CONNECTING_IP'] ?? null,
+            $server['CF_CONNECTING_IP'] ?? null,
+            $_SERVER['CF_CONNECTING_IP'] ?? null,
+            $context['ip_address'] ?? null,
+            $server['REMOTE_ADDR'] ?? null,
+            $_SERVER['REMOTE_ADDR'] ?? null,
+        ];
+
+        foreach ($candidates as $raw) {
+            if (!is_string($raw)) {
+                continue;
+            }
+            $trimmed = trim($raw);
+            if ($trimmed === '') {
+                continue;
+            }
+            $first = trim(explode(',', $trimmed)[0]);
+            if ($first === '') {
+                continue;
+            }
+            if (filter_var($first, FILTER_VALIDATE_IP)) {
+                return $first;
+            }
+        }
+
+        return null;
+    }
+
+    private function firstNonEmptyString(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            if (!is_string($candidate)) {
+                continue;
+            }
+            $trimmed = trim($candidate);
+            if ($trimmed === '') {
+                continue;
+            }
+            return $trimmed;
+        }
+        return null;
     }
 }
 
