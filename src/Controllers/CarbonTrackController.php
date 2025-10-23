@@ -603,87 +603,109 @@ class CarbonTrackController
     public function reviewRecord(Request $request, Response $response, array $args): Response
     {
         try {
-            $user = $this->authService->getCurrentUser($request);
-            if (!$user || !$this->authService->isAdminUser($user)) {
+            $adminUser = $this->authService->getCurrentUser($request);
+            if (!$adminUser || !$this->authService->isAdminUser($adminUser)) {
                 return $this->json($response, ['error' => 'Admin access required'], 403);
             }
 
-            $recordId = $args['id'];
             $data = $request->getParsedBody();
-
-            // Accept either { action: 'approve'|'reject' } or { status: 'approved'|'rejected' }
-            $action = $data['action'] ?? null;
-            if (!$action && isset($data['status'])) {
-                if (in_array($data['status'], ['approved', 'rejected'])) {
-                    $action = $data['status'] === 'approved' ? 'approve' : 'reject';
-                }
+            if (!is_array($data)) {
+                $data = [];
             }
-            if (!in_array($action, ['approve', 'reject'], true)) {
+
+            $action = $this->resolveReviewAction($data);
+            if ($action === null) {
                 return $this->json($response, ['error' => 'Invalid action or status'], 400);
             }
 
-            // 获取记录信息
-            $record = $this->getCarbonRecord($recordId);
+            $recordId = (string) $args['id'];
+            $records = $this->getCarbonRecordsByIds([$recordId]);
+            $record = $records[0] ?? null;
             if (!$record) {
                 return $this->json($response, ['error' => 'Record not found'], 404);
             }
 
-            if ($record['status'] !== 'pending') {
+            if (($record['status'] ?? '') !== 'pending') {
                 return $this->json($response, ['error' => 'Record already reviewed'], 400);
             }
 
-            $reviewNote = $data['review_note'] ?? null;
+            $reviewNote = $this->normalizeReviewNote($data);
 
-            // 更新记录状态
-            $sql = "
-                UPDATE carbon_records 
-                SET status = :status, 
-                    reviewed_by = :reviewed_by, 
-                    reviewed_at = NOW(),
-                    review_note = :review_note
-                WHERE id = :record_id
-            ";
-
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
-                'status' => $action === 'approve' ? 'approved' : 'rejected',
-                'reviewed_by' => $user['id'],
-                'review_note' => $reviewNote,
-                'record_id' => $recordId
-            ]);
-
-            // 如果审核通过，更新用户积分
-            if ($action === 'approve') {
-                $this->updateUserPoints($record['user_id'], $record['points_earned']);
-            }
-
-            // 记录审计日志
-            $this->auditLog->logAdminOperation(
-                "carbon_record_{$action}",
-                $user['id'],
-                'carbon_management',
-                [
-                    'table' => 'carbon_records',
-                    'record_id' => $recordId,
-                    'review_note' => $reviewNote,
-                    'old_data' => ['status' => 'pending'],
-                    'new_data' => ['status' => $action === 'approve' ? 'approved' : 'rejected']
-                ]
-            );
-
-            // 发送站内信通知用户
-            $this->sendReviewNotification($record, $action, $reviewNote);
+            $result = $this->processRecordReviewBatch([$record], $action, $reviewNote, $adminUser);
 
             return $this->json($response, [
-                'success' => true,
-                'message' => "Record {$action}d successfully"
+                'success' => !empty($result['processed']),
+                'message' => $action === 'approve'
+                    ? 'Record approved successfully'
+                    : 'Record rejected successfully',
+                'processed_ids' => $result['processed'],
+                'skipped' => $result['skipped'],
             ]);
-
         } catch (\Exception $e) {
             $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecord error: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
+
+    /**
+     * 管理员批量审核碳减排记录
+     */
+    public function reviewRecordsBulk(Request $request, Response $response): Response
+    {
+        try {
+            $adminUser = $this->authService->getCurrentUser($request);
+            if (!$adminUser || !$this->authService->isAdminUser($adminUser)) {
+                return $this->json($response, ['error' => 'Admin access required'], 403);
+            }
+
+            $data = $request->getParsedBody();
+            if (!is_array($data)) {
+                $data = [];
+            }
+
+            $action = $this->resolveReviewAction($data);
+            if ($action === null) {
+                return $this->json($response, ['error' => 'Invalid action or status'], 400);
+            }
+
+            $recordIds = $this->normalizeRecordIds($data['record_ids'] ?? ($data['ids'] ?? null));
+            if (empty($recordIds)) {
+                return $this->json($response, ['error' => 'record_ids must be a non-empty array'], 400);
+            }
+
+            $records = $this->getCarbonRecordsByIds($recordIds);
+            if (empty($records)) {
+                return $this->json($response, [
+                    'error' => 'No records found for provided ids',
+                    'missing_ids' => array_values($recordIds),
+                ], 404);
+            }
+
+            $reviewNote = $this->normalizeReviewNote($data);
+
+            $result = $this->processRecordReviewBatch($records, $action, $reviewNote, $adminUser);
+
+            $foundIds = array_column($records, 'id');
+            $missingIds = array_values(array_diff($recordIds, $foundIds));
+
+            $processedCount = count($result['processed']);
+            $message = $processedCount > 0
+                ? sprintf('%d record(s) %s', $processedCount, $action === 'approve' ? 'approved' : 'rejected')
+                : 'No pending records matched the selection';
+
+            return $this->json($response, [
+                'success' => $processedCount > 0,
+                'message' => $message,
+                'processed_ids' => $result['processed'],
+                'skipped' => $result['skipped'],
+                'missing_ids' => $missingIds,
+            ]);
+        } catch (\Exception $e) {
+            $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecordsBulk error: ' . $e->getMessage());
+            return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
+        }
+    }
+
 
     /**
      * 管理员获取碳减排记录列表（支持筛选与排序）
@@ -1047,12 +1069,300 @@ class CarbonTrackController
     /**
      * 获取碳减排记录
      */
+    private function resolveReviewAction(array $data): ?string
+    {
+        $action = $data['action'] ?? null;
+        if ($action === null && isset($data['status'])) {
+            $action = $data['status'];
+        }
+
+        if (!is_string($action)) {
+            return null;
+        }
+
+        $normalized = strtolower(trim($action));
+        if ($normalized === 'approve' || $normalized === 'approved') {
+            return 'approve';
+        }
+        if ($normalized === 'reject' || $normalized === 'rejected') {
+            return 'reject';
+        }
+
+        return null;
+    }
+
+    private function normalizeReviewNote($raw): ?string
+    {
+        $note = null;
+        if (is_array($raw)) {
+            $note = $raw['review_note'] ?? ($raw['admin_notes'] ?? ($raw['note'] ?? null));
+        } elseif (is_string($raw)) {
+            $note = $raw;
+        }
+
+        if (!is_string($note)) {
+            return null;
+        }
+
+        $note = trim($note);
+        return $note === '' ? null : $note;
+    }
+
+    /**
+     * @param mixed $raw
+     * @return array<int,string>
+     */
+    private function normalizeRecordIds($raw): array
+    {
+        if (is_string($raw)) {
+            $raw = preg_split('/[\s,]+/', $raw);
+        }
+
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($raw as $value) {
+            if (is_array($value) || is_object($value)) {
+                continue;
+            }
+
+            $id = trim((string) $value);
+            if ($id === '') {
+                continue;
+            }
+
+            $normalized[$id] = $id;
+        }
+
+        return array_values($normalized);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $records
+     * @param array<string,mixed> $adminUser
+     * @return array{processed:array<int,string>,skipped:array<int,array<string,mixed>>}
+     */
+    private function processRecordReviewBatch(array $records, string $action, ?string $reviewNote, array $adminUser): array
+    {
+        $pending = [];
+        $skipped = [];
+
+        foreach ($records as $record) {
+            $status = $record['status'] ?? '';
+            if ($status !== 'pending') {
+                $skipped[] = [
+                    'id' => $record['id'] ?? null,
+                    'status' => $status,
+                ];
+                continue;
+            }
+
+            $pending[] = $record;
+        }
+
+        if (empty($pending)) {
+            return ['processed' => [], 'skipped' => $skipped];
+        }
+
+        $newStatus = $action === 'approve' ? 'approved' : 'rejected';
+        $pointsByUser = [];
+        $startedTransaction = false;
+
+        try {
+            $inTransaction = false;
+            if (method_exists($this->db, 'inTransaction')) {
+                try {
+                    $inTransaction = $this->db->inTransaction();
+                } catch (\Throwable $ignore) {
+                    $inTransaction = false;
+                }
+            }
+
+            if (!$inTransaction) {
+                $startedTransaction = $this->db->beginTransaction();
+            }
+
+            $updateStmt = $this->db->prepare("UPDATE carbon_records\n                    SET status = :status,\n                        reviewed_by = :reviewed_by,\n                        reviewed_at = NOW(),\n                        review_note = :review_note\n                 WHERE id = :record_id");
+
+            foreach ($pending as $index => $record) {
+                $updateStmt->execute([
+                    'status' => $newStatus,
+                    'reviewed_by' => $adminUser['id'] ?? null,
+                    'review_note' => $reviewNote,
+                    'record_id' => $record['id'],
+                ]);
+
+                if ($action === 'approve') {
+                    $points = (float) ($record['points_earned'] ?? 0);
+                    if ($points !== 0.0) {
+                        $userId = (int) ($record['user_id'] ?? 0);
+                        if ($userId > 0) {
+                            $pointsByUser[$userId] = ($pointsByUser[$userId] ?? 0) + $points;
+                        }
+                    }
+                }
+
+                $pending[$index]['status'] = $newStatus;
+                $pending[$index]['review_note'] = $reviewNote;
+                $pending[$index]['reviewed_by'] = $adminUser['id'] ?? null;
+            }
+
+            if ($action === 'approve' && !empty($pointsByUser)) {
+                foreach ($pointsByUser as $userId => $points) {
+                    if ($points != 0.0) {
+                        $this->updateUserPoints($userId, $points);
+                    }
+                }
+            }
+
+            if ($startedTransaction) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($startedTransaction) {
+                try {
+                    if ($this->db->inTransaction()) {
+                        $this->db->rollBack();
+                    }
+                } catch (\Throwable $ignore) {
+                    // ignore rollback failure
+                }
+            }
+            throw $e;
+        }
+
+        foreach ($pending as $record) {
+            $this->auditLog->logAdminOperation(
+                'carbon_record_' . ($action === 'approve' ? 'approve' : 'reject'),
+                $adminUser['id'] ?? null,
+                'carbon_management',
+                [
+                    'table' => 'carbon_records',
+                    'record_id' => $record['id'],
+                    'review_note' => $reviewNote,
+                    'old_data' => ['status' => 'pending'],
+                    'new_data' => ['status' => $record['status']],
+                ]
+            );
+        }
+
+        $recordsByUser = [];
+        foreach ($pending as $record) {
+            $userId = (int) ($record['user_id'] ?? 0);
+            if ($userId <= 0) {
+                continue;
+            }
+
+            $recordsByUser[$userId][] = $this->buildReviewSummaryRecord($record);
+        }
+
+        foreach ($recordsByUser as $userId => $userRecords) {
+            $options = [
+                'reviewed_by' => $adminUser['username'] ?? null,
+                'reviewed_by_id' => $adminUser['id'] ?? null,
+            ];
+            $this->messageService->sendCarbonRecordReviewSummary($userId, $action, $userRecords, $reviewNote, $options);
+        }
+
+        $processedIds = [];
+        foreach ($pending as $record) {
+            if (isset($record['id'])) {
+                $processedIds[] = $record['id'];
+            }
+        }
+
+        return [
+            'processed' => $processedIds,
+            'skipped' => $skipped,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $record
+     * @return array<string,mixed>
+     */
+    private function buildReviewSummaryRecord(array $record): array
+    {
+        $activityName = $record['activity_name_zh']
+            ?? $record['activity_name_en']
+            ?? $record['activity_name']
+            ?? $record['activity_id']
+            ?? '';
+
+        $amount = $record['amount'] ?? ($record['data_value'] ?? null);
+        $unit = $record['activity_unit'] ?? ($record['unit'] ?? null);
+        $date = $record['date'] ?? ($record['created_at'] ?? null);
+
+        return [
+            'id' => $record['id'] ?? null,
+            'activity_name' => $activityName,
+            'activity_category' => $record['activity_category'] ?? null,
+            'data_value' => $amount,
+            'unit' => $unit,
+            'carbon_saved' => $record['carbon_saved'] ?? null,
+            'points_earned' => $record['points_earned'] ?? null,
+            'date' => $date,
+            'status' => $record['status'] ?? null,
+            'review_note' => $record['review_note'] ?? null,
+        ];
+    }
+
     private function getCarbonRecord(string $recordId): ?array
     {
-        $sql = "SELECT * FROM carbon_records WHERE id = :id AND deleted_at IS NULL";
+        $records = $this->getCarbonRecordsByIds([$recordId]);
+        return $records[0] ?? null;
+    }
+
+    /**
+     * @param array<int,string> $recordIds
+     * @return array<int,array<string,mixed>>
+     */
+    private function getCarbonRecordsByIds(array $recordIds): array
+    {
+        if (empty($recordIds)) {
+            return [];
+        }
+
+        $recordIds = array_values(array_unique(array_filter(array_map(static function ($value) {
+            if (is_array($value) || is_object($value)) {
+                return null;
+            }
+
+            $value = trim((string) $value);
+            return $value === '' ? null : $value;
+        }, $recordIds))));
+
+        if (empty($recordIds)) {
+            return [];
+        }
+
+        $placeholders = [];
+        $params = [];
+        foreach ($recordIds as $index => $id) {
+            $placeholder = ':id' . $index;
+            $placeholders[] = $placeholder;
+            $params[$placeholder] = $id;
+        }
+
+        $sql = sprintf(
+            "SELECT r.*,\n                    u.username AS user_username,\n                    u.email AS user_email,\n                    u.full_name AS user_full_name,\n                    a.name_zh AS activity_name_zh,\n                    a.name_en AS activity_name_en,\n                    a.category AS activity_category,\n                    a.unit AS activity_unit\n             FROM carbon_records r\n             LEFT JOIN users u ON r.user_id = u.id\n             LEFT JOIN carbon_activities a ON r.activity_id = a.id\n             WHERE r.id IN (%s) AND r.deleted_at IS NULL",
+            implode(',', $placeholders)
+        );
+
         $stmt = $this->db->prepare($sql);
-        $stmt->execute(['id' => $recordId]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->execute();
+
+        $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!is_array($records)) {
+            return [];
+        }
+
+        return $records;
     }
 
     /**
@@ -1101,26 +1411,6 @@ class CarbonTrackController
     /**
      * 发送审核通知
      */
-    private function sendReviewNotification(array $record, string $action, ?string $reviewNote): void
-    {
-        $title = $action === 'approve' ? '碳减排记录审核通过' : '碳减排记录审核未通过';
-        $message = $action === 'approve' 
-            ? "恭喜！您的碳减排记录已审核通过，获得 {$record['points_earned']} 积分。"
-            : "很抱歉，您的碳减排记录审核未通过。";
-        
-        if ($reviewNote) {
-            $message .= "\n审核备注：{$reviewNote}";
-        }
-
-        $this->messageService->sendMessage(
-            $record['user_id'],
-            $action === 'approve' ? 'record_approved' : 'record_rejected',
-            $title,
-            $message,
-            'normal'
-        );
-    }
-
     /**
      * 生成UUID
      */

@@ -53,6 +53,10 @@ class EmailJobRunner
                     self::runBroadcastAnnouncementJob($emailService, $logger, $payload);
                     break;
 
+                case 'carbon_record_review_summary':
+                    self::runCarbonRecordReviewSummaryJob($emailService, $logger, $payload);
+                    break;
+
                 default:
                     $logger->warning('Unknown email job type received', ['job_type' => $jobType]);
                     break;
@@ -255,21 +259,45 @@ class EmailJobRunner
         }
     }
 
-/**
-
-     * @param array<string,mixed> $payload
-
-     */
-
-    /**
-
-     * @param array<string,mixed> $payload
-
-     */
-
     /**
      * @param array<string,mixed> $payload
      */
+    private static function runCarbonRecordReviewSummaryJob(EmailService $emailService, Logger $logger, array $payload): void
+    {
+        $email = (string) ($payload['email'] ?? '');
+        if ($email === '') {
+            $logger->warning('Carbon record review summary job missing recipient email.');
+            return;
+        }
+
+        $name = (string) ($payload['name'] ?? $email);
+        $action = strtolower((string) ($payload['action'] ?? 'approve')) === 'approve' ? 'approve' : 'reject';
+        $title = (string) ($payload['title'] ?? ($action === 'approve' ? 'Carbon record review approved' : 'Carbon record review result'));
+        $records = $payload['records'] ?? [];
+        if (!is_array($records)) {
+            $records = [];
+        }
+        $reviewNote = isset($payload['review_note']) ? (string) $payload['review_note'] : null;
+        $reviewedBy = isset($payload['reviewed_by']) ? (string) $payload['reviewed_by'] : null;
+
+        try {
+            $emailService->sendCarbonRecordReviewSummaryEmail(
+                $email,
+                $name,
+                $action,
+                $records,
+                $title,
+                $reviewNote,
+                $reviewedBy
+            );
+        } catch (\Throwable $e) {
+            $logger->warning('Failed to send carbon record review summary email', [
+                'email' => $email,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
     private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
 
     {

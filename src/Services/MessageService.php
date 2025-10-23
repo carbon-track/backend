@@ -54,6 +54,8 @@ class MessageService
     private const TYPES_WITH_DEDICATED_EMAIL = [
         'product_exchanged',
         'exchange_status_updated',
+        'record_approved',
+        'record_rejected',
     ];
 
     public function __construct(Logger $logger, AuditLogService $auditLogService, ?EmailService $emailService = null)
@@ -333,6 +335,7 @@ class MessageService
 
         return $message;
     }
+
 
     /**
      * Send welcome message to new user
@@ -1005,6 +1008,229 @@ class MessageService
      *
      * @return array{email:string,name:string}|null
      */
+    /**
+     * @param array<int,array<string,mixed>> $records
+     * @param array<string,mixed> $options
+     */
+    public function sendCarbonRecordReviewSummary(int $userId, string $action, array $records, ?string $reviewNote = null, array $options = []): void
+    {
+        if (empty($records)) {
+            return;
+        }
+
+        $normalizedAction = strtolower(trim($action));
+        if ($normalizedAction === 'approved') {
+            $normalizedAction = 'approve';
+        } elseif ($normalizedAction === 'rejected') {
+            $normalizedAction = 'reject';
+        }
+
+        $isApprove = $normalizedAction === 'approve';
+        $title = $isApprove ? '碳减排记录审核通过通知' : '碳减排记录审核结果';
+        $type = $isApprove ? 'record_approved' : 'record_rejected';
+        $priority = $isApprove ? Message::PRIORITY_HIGH : Message::PRIORITY_NORMAL;
+
+        $lines = [];
+        $lines[] = $isApprove
+            ? '以下碳减排记录已通过审核：'
+            : '以下碳减排记录未通过审核：';
+
+        foreach ($records as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $activity = (string) ($entry['activity_name'] ?? '');
+            if ($activity === '') {
+                $activity = '未命名活动';
+            }
+
+            $value = $entry['data_value'] ?? null;
+            $unit = $entry['unit'] ?? null;
+            $carbon = $entry['carbon_saved'] ?? null;
+            $points = $entry['points_earned'] ?? null;
+            $date = $entry['date'] ?? null;
+
+            $parts = [
+                '活动：' . $activity,
+            ];
+
+            if ($value !== null && $value !== '') {
+                $dataText = (string) $value;
+                if ($unit !== null && $unit !== '') {
+                    $dataText .= ' ' . $unit;
+                }
+                $parts[] = '数据：' . $dataText;
+            }
+
+            if ($carbon !== null && $carbon !== '') {
+                $parts[] = '碳减排：' . (string) $carbon;
+            }
+
+            if ($points !== null && $points !== '') {
+                $parts[] = '积分：' . (string) $points;
+            }
+
+            if ($date !== null && $date !== '') {
+                $parts[] = '日期：' . (string) $date;
+            }
+
+            $lines[] = '- ' . implode('；', $parts);
+        }
+
+        if ($reviewNote) {
+            $lines[] = '审核备注：' . $reviewNote;
+        }
+        if (!empty($options['reviewed_by'])) {
+            $lines[] = '审核人：' . (string) $options['reviewed_by'];
+        }
+
+        $lines[] = '';
+        $lines[] = $isApprove ? 'Approved records:' : 'Rejected records:';
+        foreach ($records as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $activity = (string) ($entry['activity_name'] ?? '');
+            if ($activity === '') {
+                $activity = 'Unknown activity';
+            }
+            $value = $entry['data_value'] ?? null;
+            $unit = $entry['unit'] ?? null;
+            $points = $entry['points_earned'] ?? null;
+            $date = $entry['date'] ?? null;
+
+            $parts = ['Activity: ' . $activity];
+            if ($value !== null && $value !== '') {
+                $dataText = (string) $value;
+                if ($unit !== null && $unit !== '') {
+                    $dataText .= ' ' . $unit;
+                }
+                $parts[] = 'Data: ' . $dataText;
+            }
+            if ($points !== null && $points !== '') {
+                $parts[] = 'Points: ' . (string) $points;
+            }
+            if ($date !== null && $date !== '') {
+                $parts[] = 'Date: ' . (string) $date;
+            }
+            $lines[] = '- ' . implode(', ', $parts);
+        }
+
+        if ($reviewNote) {
+            $lines[] = 'Review note: ' . $reviewNote;
+        }
+        if (!empty($options['reviewed_by'])) {
+            $lines[] = 'Reviewer: ' . (string) $options['reviewed_by'];
+        }
+
+        $content = implode("
+", $lines);
+
+        $this->sendSystemMessage(
+            $userId,
+            $title,
+            $content,
+            $type,
+            $priority,
+            null,
+            null,
+            false
+        );
+
+        $this->dispatchCarbonRecordReviewSummaryEmail(
+            $userId,
+            $isApprove ? 'approve' : 'reject',
+            $records,
+            $title,
+            $reviewNote,
+            $options
+        );
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $records
+     * @return array<int,array<string,mixed>>
+     */
+    private function sanitizeReviewSummaryRecords(array $records): array
+    {
+        $normalized = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+
+            $entry = [
+                'activity_name' => (string) ($record['activity_name'] ?? ''),
+            ];
+
+            if (isset($record['data_value']) && $record['data_value'] !== '') {
+                $entry['data_value'] = $record['data_value'];
+            }
+            if (isset($record['unit']) && $record['unit'] !== '') {
+                $entry['unit'] = (string) $record['unit'];
+            }
+            if (isset($record['carbon_saved']) && $record['carbon_saved'] !== '' && $record['carbon_saved'] !== null) {
+                $entry['carbon_saved'] = (float) $record['carbon_saved'];
+            }
+            if (isset($record['points_earned']) && $record['points_earned'] !== '' && $record['points_earned'] !== null) {
+                $entry['points_earned'] = (float) $record['points_earned'];
+            }
+            if (isset($record['date']) && $record['date'] !== '') {
+                $entry['date'] = (string) $record['date'];
+            }
+            if (isset($record['review_note']) && $record['review_note'] !== null && $record['review_note'] !== '') {
+                $entry['review_note'] = (string) $record['review_note'];
+            }
+            if (isset($record['activity_category']) && $record['activity_category'] !== '') {
+                $entry['activity_category'] = (string) $record['activity_category'];
+            }
+
+            $normalized[] = $entry;
+        }
+
+        return $normalized;
+    }
+
+    private function dispatchCarbonRecordReviewSummaryEmail(int $userId, string $action, array $records, string $title, ?string $reviewNote, array $options): void
+    {
+        if ($this->emailService === null) {
+            return;
+        }
+
+        $recipient = $this->resolveEmailRecipient(
+            $userId,
+            $options['fallback_email'] ?? null,
+            $options['fallback_name'] ?? null
+        );
+
+        if ($recipient === null) {
+            return;
+        }
+
+        $payload = [
+            'user_id' => $userId,
+            'email' => $recipient['email'],
+            'name' => $recipient['name'],
+            'action' => $action,
+            'title' => $title,
+            'records' => $this->sanitizeReviewSummaryRecords($records),
+        ];
+
+        if ($reviewNote !== null && $reviewNote !== '') {
+            $payload['review_note'] = $reviewNote;
+        }
+        if (!empty($options['reviewed_by'])) {
+            $payload['reviewed_by'] = (string) $options['reviewed_by'];
+        }
+        if (!empty($options['reviewed_by_id'])) {
+            $payload['reviewed_by_id'] = (int) $options['reviewed_by_id'];
+        }
+
+        $this->dispatchEmail('carbon_record_review_summary', $payload);
+    }
+
     private function resolveEmailRecipient(int $userId, ?string $fallbackEmail = null, ?string $fallbackName = null): ?array
     {
         if ($userId > 0 && $this->userResolver !== null) {

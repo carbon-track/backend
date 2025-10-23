@@ -224,6 +224,7 @@ return function (App $app) {
             // Unified logs export & related (previously missing, causing 404 in frontend)
             $admin->get('/logs/export', [LogSearchController::class, 'export']);
             $admin->get('/logs/related', [LogSearchController::class, 'related']);
+            $admin->put('/activities/review', [CarbonTrackController::class, 'reviewRecordsBulk']);
             $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);
             $admin->get('/exchanges/{id:[0-9a-fA-F\-]+}', [ProductController::class, 'getExchangeRecordDetail']);
@@ -233,6 +234,7 @@ return function (App $app) {
             $admin->post('/messages/broadcast', [MessageController::class, 'sendSystemMessage']);
             $admin->get('/messages/broadcast/recipients', [MessageController::class, 'searchBroadcastRecipients']);
             $admin->get('/messages/broadcasts', [MessageController::class, 'getBroadcastHistory']);
+            $admin->post('/messages/broadcasts/flush', [MessageController::class, 'flushBroadcastEmailQueue']);
             $admin->get(PATH_PRODUCTS, [ProductController::class, 'getProducts']);
             $admin->get(PATH_PRODUCTS . '/tags', [ProductController::class, 'searchProductTags']);
             $admin->post(PATH_PRODUCTS, [ProductController::class, 'createProduct']);

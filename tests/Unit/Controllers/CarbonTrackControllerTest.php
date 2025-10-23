@@ -161,29 +161,152 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testReviewRecordRejectFlow(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->sqliteCreateFunction('NOW', static function (): string {
+            return date('Y-m-d H:i:s');
+        });
+
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
+        $pdo->exec('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
+        $pdo->exec('CREATE TABLE carbon_records (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            activity_id TEXT,
+            status TEXT,
+            points_earned REAL,
+            carbon_saved REAL,
+            amount REAL,
+            review_note TEXT,
+            reviewed_by INTEGER,
+            reviewed_at TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec("INSERT INTO users (id, username, email, full_name, points) VALUES (1, 'u1', 'user@example.com', 'User One', 0)");
+        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a1', '活动', 'Activity', 'general', 'kg')");
+        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r2', 1, 'a1', 'pending', 20, 5, 10)");
+
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $msg->expects($this->once())
+            ->method('sendCarbonRecordReviewSummary')
+            ->with(
+                $this->equalTo(1),
+                $this->equalTo('reject'),
+                $this->callback(function (array $records): bool {
+                    $this->assertCount(1, $records);
+                    $this->assertSame('r2', $records[0]['id']);
+                    $this->assertSame('rejected', $records[0]['status']);
+                    return true;
+                }),
+                $this->equalTo('资料不完整'),
+                $this->callback(function (array $options): bool {
+                    $this->assertSame(9, $options['reviewed_by_id']);
+                    return true;
+                })
+            );
+
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())->method('logAdminOperation');
+
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
-        $auth->method('getCurrentUser')->willReturn(['id'=>9]);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        // fetch record
-        $fetch = $this->createMock(\PDOStatement::class);
-        $fetch->method('execute')->willReturn(true);
-        $fetch->method('fetch')->willReturn(['id'=>'r2','user_id'=>1,'points_earned'=>20,'status'=>'pending']);
-        // update record status
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
-
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update);
-
         $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
-        $request = makeRequest('PUT', '/carbon-track/transactions/r2/reject', ['action' => 'reject', 'review_note' => '资料不完整']);
+        $request = makeRequest('PUT', '/admin/activities/r2/review', ['action' => 'reject', 'review_note' => '资料不完整']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r2']);
+
         $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame(['r2'], $json['processed_ids']);
+
+        $row = $pdo->query("SELECT status, review_note FROM carbon_records WHERE id = 'r2'")->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame('rejected', $row['status']);
+        $this->assertSame('资料不完整', $row['review_note']);
+    }
+
+    public function testReviewRecordsBulkApprovesAndAggregatesNotifications(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->sqliteCreateFunction('NOW', static function (): string {
+            return date('Y-m-d H:i:s');
+        });
+
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
+        $pdo->exec('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
+        $pdo->exec('CREATE TABLE carbon_records (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            activity_id TEXT,
+            status TEXT,
+            points_earned REAL,
+            carbon_saved REAL,
+            amount REAL,
+            review_note TEXT,
+            reviewed_by INTEGER,
+            reviewed_at TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec("INSERT INTO users (id, username, email, full_name, points) VALUES (3, 'u3', 'user3@example.com', 'User Three', 10)");
+        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a3', '节能', 'Energy Saving', 'energy', 'kWh')");
+        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r10', 3, 'a3', 'pending', 15, 2.5, 5)");
+        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r11', 3, 'a3', 'pending', 25, 3.5, 7)");
+
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $msg->expects($this->once())
+            ->method('sendCarbonRecordReviewSummary')
+            ->with(
+                $this->equalTo(3),
+                $this->equalTo('approve'),
+                $this->callback(function (array $records): bool {
+                    $this->assertCount(2, $records);
+                    $ids = array_column($records, 'id');
+                    sort($ids);
+                    $this->assertSame(['r10', 'r11'], $ids);
+                    foreach ($records as $record) {
+                        $this->assertSame('approved', $record['status']);
+                    }
+                    return true;
+                }),
+                $this->isNull(),
+                $this->callback(function (array $options): bool {
+                    $this->assertSame(9, $options['reviewed_by_id']);
+                    return true;
+                })
+            );
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->exactly(2))->method('logAdminOperation');
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $request = makeRequest('PUT', '/admin/activities/review', ['action' => 'approve', 'record_ids' => ['r10', 'r11']]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->reviewRecordsBulk($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame(['r10', 'r11'], $json['processed_ids']);
+        $this->assertEmpty($json['missing_ids']);
+
+        $ids = $pdo->query("SELECT id, status FROM carbon_records ORDER BY id")->fetchAll(\PDO::FETCH_ASSOC);
+        foreach ($ids as $row) {
+            $this->assertSame('approved', $row['status']);
+        }
+
+        $points = $pdo->query('SELECT points FROM users WHERE id = 3')->fetchColumn();
+        $this->assertEquals(50, $points);
     }
 
     public function testGetRecordDetailAsAdmin(): void

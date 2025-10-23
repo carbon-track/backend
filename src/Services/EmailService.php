@@ -887,6 +887,106 @@ HTML;
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
 
+    public function sendCarbonRecordReviewSummaryEmail(
+        string $toEmail,
+        string $toName,
+        string $action,
+        array $records,
+        string $title,
+        ?string $reviewNote = null,
+        ?string $reviewedBy = null
+    ): bool {
+        if (!$this->shouldSendEmail($toEmail, NotificationPreferenceService::CATEGORY_ACTIVITY)) {
+            return false;
+        }
+
+        $normalizedAction = strtolower(trim($action));
+        if ($normalizedAction === 'approved') {
+            $normalizedAction = 'approve';
+        } elseif ($normalizedAction === 'rejected') {
+            $normalizedAction = 'reject';
+        }
+        $isApprove = $normalizedAction === 'approve';
+
+        $subjectMap = $this->config['subjects']['carbon_record_review_summary'] ?? [];
+        if (is_array($subjectMap)) {
+            $subject = (string) ($subjectMap[$normalizedAction] ?? ($isApprove ? 'Carbon record review approved' : 'Carbon record review result'));
+        } else {
+            $subject = is_string($subjectMap) ? (string) $subjectMap : ($isApprove ? 'Carbon record review approved' : 'Carbon record review result');
+        }
+
+        $headline = $title !== '' ? $title : ($isApprove ? 'Carbon record review approved' : 'Carbon record review result');
+        $intro = $isApprove
+            ? 'The following carbon reduction records were approved:'
+            : 'The following carbon reduction records require your attention:';
+
+        $items = [];
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+
+            $activity = (string) ($record['activity_name'] ?? 'Activity');
+            $value = $record['data_value'] ?? null;
+            $unit = $record['unit'] ?? null;
+            $points = $record['points_earned'] ?? null;
+            $date = $record['date'] ?? null;
+
+            $parts = ['Activity: ' . $this->esc($activity)];
+            if ($value !== null && $value !== '') {
+                $dataText = (string) $value;
+                if ($unit !== null && $unit !== '') {
+                    $dataText .= ' ' . $unit;
+                }
+                $parts[] = 'Data: ' . $this->esc($dataText);
+            }
+            if ($points !== null && $points !== '') {
+                $parts[] = 'Points: ' . $this->esc((string) $points);
+            }
+            if ($date !== null && $date !== '') {
+                $parts[] = 'Date: ' . $this->esc((string) $date);
+            }
+
+            if ($reviewNote && !empty($record['review_note'])) {
+                $parts[] = 'Note: ' . $this->esc((string) $record['review_note']);
+            }
+
+            $items[] = '<li>' . implode(' · ', $parts) . '</li>';
+        }
+
+        if (empty($items)) {
+            $items[] = '<li>No record details provided.</li>';
+        }
+
+        $listHtml = '<ul style="padding-left:20px;">' . implode('', $items) . '</ul>';
+
+        $contentHtml = '<p>Hello ' . $this->esc($toName) . ',</p>'
+            . '<p>' . $this->esc($intro) . '</p>'
+            . $listHtml;
+
+        if ($reviewNote) {
+            $contentHtml .= '<p>Review note: ' . $this->esc($reviewNote) . '</p>';
+        }
+        if ($reviewedBy) {
+            $contentHtml .= '<p>Reviewer: ' . $this->esc($reviewedBy) . '</p>';
+        }
+
+        $buttons = [];
+        $activitiesUrl = $this->buildFrontendUrl('dashboard/activities');
+        if ($activitiesUrl) {
+            $buttons[] = [
+                'text' => $isApprove ? 'View approved records' : 'Review records',
+                'url' => $activitiesUrl,
+                'color' => self::DEFAULT_BUTTON_COLOR,
+            ];
+        }
+
+        $bodyHtml = $this->renderLayout($headline, $contentHtml, $buttons);
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
+
+        return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+    }
+
     public function sendExchangeConfirmation(string $toEmail, string $toName, string $productName, int $quantity, float $totalPoints)
     {
         if (!$this->shouldSendEmail($toEmail, NotificationPreferenceService::CATEGORY_TRANSACTION)) {
@@ -932,6 +1032,7 @@ HTML;
 
         return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
     }
+
 
     public function sendExchangeStatusUpdate(string $toEmail, string $toName, string $productName, string $status, string $adminNotes = '')
     {
@@ -1039,3 +1140,4 @@ HTML;
         return $this->sendPasswordResetLink($toEmail, $toName, $link);
     }
 }
+

@@ -8103,6 +8103,53 @@
         }
       }
     },
+    "/admin/activities/review": {
+      "put": {
+        "tags": [
+          "Admin",
+          "Carbon Track"
+        ],
+        "summary": "批量审核碳减排记录",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "record_ids"],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": ["approve", "approved", "reject", "rejected"]
+                  },
+                  "record_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "待审核的记录ID列表"
+                  },
+                  "review_note": {
+                    "type": "string",
+                    "description": "驳回时填写的备注"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "批量审核结果"
+          }
+        }
+      }
+    },
     "/admin/activities/{id}/review": {
       "put": {
         "tags": [
