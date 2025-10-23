@@ -618,6 +618,7 @@ class MessageController
                 'missing_email_user_ids' => $missingEmailUserIds,
                 'status' => count($emailRecipients) > 0 ? 'queued' : 'skipped',
                 'errors' => [],
+                'completed_at' => null,
             ];
             if ($this->shouldSendPriorityEmail($priority) && !empty($emailRecipients)) {
                 $queueResult = $this->messageService->queueBroadcastEmail(
