@@ -25,7 +25,7 @@ class SystemLogService
         $this->logger = $logger;
     }
 
-    public function log(array $data): void
+    public function log(array $data): ?int
     {
         try {
             $requestId = $data['request_id'] ?? null;
@@ -61,6 +61,8 @@ class SystemLogService
                 $responseBody,
                 $serverMeta
             ]);
+            $id = (int) $this->db->lastInsertId();
+            return $id > 0 ? $id : null;
         } catch (\Throwable $e) {
             // ����¼��Ӧ����־������Ӱ����ҵ��
             try {
@@ -71,6 +73,7 @@ class SystemLogService
                 // swallow secondary logging failure
             }
         }
+        return null;
     }
 
     private function sanitizeBody($body): ?string

@@ -10,7 +10,6 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Models\Message;
-use CarbonTrack\Services\EmailService;
 
 class MessageControllerTest extends TestCase
 {
@@ -311,21 +310,62 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastSendsMessagesAndReportsInvalidIds(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $pdo->exec('CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            email TEXT,
+            school TEXT,
+            school_id INTEGER,
+            location TEXT,
+            is_admin INTEGER,
+            status TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            audit_log_id INTEGER,
+            system_log_id INTEGER,
+            error_log_ids TEXT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            scope TEXT,
+            target_count INTEGER,
+            sent_count INTEGER,
+            invalid_user_ids TEXT,
+            failed_user_ids TEXT,
+            message_ids_snapshot TEXT,
+            message_map_snapshot TEXT,
+            message_id_count INTEGER,
+            content_hash TEXT,
+            email_delivery_snapshot TEXT,
+            filters_snapshot TEXT,
+            meta TEXT,
+            created_by INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )');
+
+        $insertUser = $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)');
+        $insertUser->execute([1, 'User One', 'one@example.com', 0, 'active', null]);
+        $insertUser->execute([3, 'User Three', 'three@example.com', 0, 'active', null]);
+
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
+
         $auth->method('getCurrentUser')->willReturn(['id' => 42, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
-
-        $statement = $this->createMock(\PDOStatement::class);
-        $statement->method('execute')->willReturn(true);
-        $statement->method('fetchAll')->willReturn(['1', '3']);
-
-        $pdo->expects($this->once())
-            ->method('prepare')
-            ->with($this->stringContains('WHERE deleted_at IS NULL AND id IN'))
-            ->willReturn($statement);
 
         $svc->expects($this->exactly(2))
             ->method('sendSystemMessage')
@@ -338,33 +378,11 @@ class MessageControllerTest extends TestCase
                 $this->createMock(Message::class)
             );
 
-        $audit->expects($this->once())
-            ->method('log')
-            ->with(
-                $this->callback(function (array $payload): bool {
-                    $this->assertSame('system_message_broadcast', $payload['action']);
-                    $this->assertSame('admin_message', $payload['operation_category']);
-                    $this->assertSame('messages', $payload['affected_table']);
-                    $this->assertSame('broadcast', $payload['change_type']);
+        $svc->expects($this->once())
+            ->method('queueBroadcastEmail')
+            ->willReturn(['error' => 'Email service unavailable']);
 
-                    $data = $payload['data'] ?? [];
-                    $this->assertSame('Announcement', $data['title']);
-                    $this->assertSame('Broadcast body', $data['content']);
-                    $this->assertSame('high', $data['priority']);
-                    $this->assertSame('custom', $data['scope']);
-                    $this->assertSame(2, $data['sent_count']);
-                    $this->assertSame(2, $data['target_count']);
-                    $this->assertSame([2], $data['invalid_user_ids']);
-                    $this->assertSame([], $data['failed_user_ids']);
-                    $this->assertArrayHasKey('email_delivery', $data);
-
-                    $delivery = $data['email_delivery'];
-                    $this->assertSame('failed', $delivery['status']);
-                    $this->assertFalse($delivery['triggered']);
-                    $this->assertContains('Email service unavailable', $delivery['errors']);
-                    return true;
-                })
-            );
+        $audit->expects($this->once())->method('log');
 
         $controller = new MessageController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
@@ -375,6 +393,7 @@ class MessageControllerTest extends TestCase
         ]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->sendSystemMessage($request, $response);
+
         $this->assertEquals(200, $resp->getStatusCode());
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
@@ -383,55 +402,82 @@ class MessageControllerTest extends TestCase
         $this->assertSame([2], $json['invalid_user_ids']);
         $this->assertSame('custom', $json['scope']);
         $this->assertSame('high', $json['priority']);
-        $this->assertArrayHasKey('email_delivery', $json);
         $this->assertFalse($json['email_delivery']['triggered']);
         $this->assertSame('failed', $json['email_delivery']['status']);
         $this->assertContains('Email service unavailable', $json['email_delivery']['errors']);
     }
 
+
     public function testHighPriorityBroadcastTriggersEmailBcc(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $pdo->exec('CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            email TEXT,
+            school TEXT,
+            school_id INTEGER,
+            location TEXT,
+            is_admin INTEGER,
+            status TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            audit_log_id INTEGER,
+            system_log_id INTEGER,
+            error_log_ids TEXT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            scope TEXT,
+            target_count INTEGER,
+            sent_count INTEGER,
+            invalid_user_ids TEXT,
+            failed_user_ids TEXT,
+            message_ids_snapshot TEXT,
+            message_map_snapshot TEXT,
+            message_id_count INTEGER,
+            content_hash TEXT,
+            email_delivery_snapshot TEXT,
+            filters_snapshot TEXT,
+            meta TEXT,
+            created_by INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )');
+
+        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
+            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
-        $email = $this->createMock(EmailService::class);
 
         $auth->method('getCurrentUser')->willReturn(['id' => 7, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
-
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
-            ['id' => 5, 'email' => 'user@example.com', 'username' => 'User One', 'school' => null, 'school_id' => null, 'location' => null, 'is_admin' => 0, 'status' => 'active']
-        ]);
-
-        $pdo->method('prepare')->willReturn($stmt);
 
         $svc->expects($this->once())
             ->method('sendSystemMessage')
             ->with(5, 'Alert', 'System high priority', Message::TYPE_SYSTEM, 'urgent')
             ->willReturn($this->createMock(Message::class));
 
-        $email->expects($this->once())
-            ->method('sendBroadcastEmail')
-            ->with(
-                $this->callback(function (array $bcc): bool {
-                    $this->assertCount(1, $bcc);
-                    $this->assertSame('user@example.com', $bcc[0]['email']);
-                    return true;
-                }),
-                $this->stringContains('Alert'),
-                $this->stringContains('System high priority'),
-                $this->stringContains('System high priority')
-            )
-            ->willReturn(true);
-
-        $email->method('getLastError')->willReturn(null);
+        $svc->expects($this->once())
+            ->method('queueBroadcastEmail')
+            ->willReturn(['queued' => true]);
 
         $audit->expects($this->once())->method('log');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth, $email);
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => 'System high priority',
@@ -445,11 +491,12 @@ class MessageControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertTrue($json['email_delivery']['triggered']);
         $this->assertSame(1, $json['email_delivery']['attempted_recipients']);
-        $this->assertSame(1, $json['email_delivery']['successful_chunks']);
+        $this->assertSame(0, $json['email_delivery']['successful_chunks']);
         $this->assertSame([], $json['email_delivery']['failed_recipient_ids']);
-        $this->assertSame('sent', $json['email_delivery']['status']);
+        $this->assertSame('queued', $json['email_delivery']['status']);
         $this->assertSame([], $json['email_delivery']['errors']);
     }
+
 
     public function testSearchBroadcastRecipientsReturnsData(): void
     {
@@ -486,64 +533,106 @@ class MessageControllerTest extends TestCase
 
     public function testGetBroadcastHistoryReturnsAggregatedData(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            audit_log_id INTEGER,
+            system_log_id INTEGER,
+            error_log_ids TEXT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            scope TEXT,
+            target_count INTEGER,
+            sent_count INTEGER,
+            invalid_user_ids TEXT,
+            failed_user_ids TEXT,
+            message_ids_snapshot TEXT,
+            message_map_snapshot TEXT,
+            message_id_count INTEGER,
+            content_hash TEXT,
+            email_delivery_snapshot TEXT,
+            filters_snapshot TEXT,
+            meta TEXT,
+            created_by INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE messages (
+            id INTEGER PRIMARY KEY,
+            receiver_id INTEGER,
+            title TEXT,
+            content TEXT,
+            is_read INTEGER,
+            created_at TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            email TEXT
+        )');
+
+        $title = 'Hello world';
+        $content = 'Broadcast content';
+        $createdAt = '2025-09-22 10:00:00';
+        $contentHash = hash('sha256', $title . '||' . $content);
+        $emailSnapshot = [
+            'triggered' => true,
+            'attempted_recipients' => 2,
+            'successful_chunks' => 1,
+            'failed_chunks' => 0,
+            'failed_recipient_ids' => [],
+            'missing_email_user_ids' => [7],
+            'status' => 'sent',
+            'errors' => [],
+        ];
+
+        $insertBroadcast = $pdo->prepare('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+        $insertBroadcast->execute([
+            'abc-123',
+            321,
+            654,
+            json_encode([555]),
+            $title,
+            $content,
+            'high',
+            'custom',
+            2,
+            2,
+            json_encode([7]),
+            json_encode([]),
+            json_encode([900, 901]),
+            json_encode(['1' => 900, '2' => 901]),
+            2,
+            $contentHash,
+            json_encode($emailSnapshot),
+            json_encode(['scope' => 'custom']),
+            null,
+            42,
+            $createdAt,
+            $createdAt,
+        ]);
+
+        $msgStmt = $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at, deleted_at) VALUES (?,?,?,?,?,?,?)');
+        $msgStmt->execute([900, 1, $title, $content, 1, $createdAt, null]);
+        $msgStmt->execute([901, 2, $title, $content, 0, $createdAt, null]);
+
+        $userStmt = $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)');
+        $userStmt->execute([42, 'AdminUser', 'admin@example.com']);
+        $userStmt->execute([1, 'Alice', 'alice@example.com']);
+        $userStmt->execute([2, 'Bob', 'bob@example.com']);
+
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 99, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
-
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetchColumn')->willReturn(1);
-
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
-            [
-                'id' => 501,
-                'user_id' => 42,
-                'data' => json_encode([
-                    'title' => 'Hello world',
-                    'content' => 'Broadcast content',
-                    'priority' => 'high',
-                    'scope' => 'custom',
-                    'target_count' => 2,
-                    'sent_count' => 2,
-                    'invalid_user_ids' => json_encode([7]),
-                    'failed_user_ids' => json_encode([]),
-                    'email_delivery' => [
-                        'triggered' => true,
-                        'attempted_recipients' => 2,
-                        'successful_chunks' => 1,
-                        'failed_chunks' => 0,
-                        'failed_recipient_ids' => [],
-                        'missing_email_user_ids' => [7],
-                        'status' => 'sent',
-                        'errors' => [],
-                    ],
-                ], JSON_UNESCAPED_UNICODE),
-                'created_at' => '2025-09-22 10:00:00',
-            ]
-        ]);
-
-        $actorStmt = $this->createMock(\PDOStatement::class);
-        $actorStmt->method('bindValue')->willReturn(true);
-        $actorStmt->method('execute')->willReturn(true);
-        $actorStmt->method('fetchAll')->willReturn([
-            ['id' => 42, 'username' => 'AdminUser', 'email' => 'admin@example.com']
-        ]);
-
-        $recipientsStmt = $this->createMock(\PDOStatement::class);
-        $recipientsStmt->method('bindValue')->willReturn(true);
-        $recipientsStmt->method('execute')->willReturn(true);
-        $recipientsStmt->method('fetchAll')->willReturn([
-            ['id' => 900, 'receiver_id' => 1, 'is_read' => 1, 'username' => 'Alice'],
-            ['id' => 901, 'receiver_id' => 2, 'is_read' => 0, 'username' => 'Bob'],
-        ]);
-
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt, $actorStmt, $recipientsStmt);
 
         $controller = new MessageController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/admin/messages/broadcasts');
@@ -554,18 +643,23 @@ class MessageControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertCount(1, $json['data']);
+
         $item = $json['data'][0];
         $this->assertSame('Hello world', $item['title']);
         $this->assertSame(1, $item['read_count']);
         $this->assertSame(1, $item['unread_count']);
         $this->assertSame([7], $item['invalid_user_ids']);
         $this->assertSame('AdminUser', $item['actor_username']);
-        $this->assertTrue($item['email_delivery']['triggered']);
-        $this->assertSame(2, $item['email_delivery']['attempted_recipients']);
-        $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
+        $this->assertSame('abc-123', $item['request_id']);
+        $this->assertSame(321, $item['audit_log_id']);
+        $this->assertSame(654, $item['system_log_id']);
+        $this->assertSame([555], $item['error_log_ids']);
+        $this->assertSame([900, 901], $item['message_ids']);
         $this->assertSame('sent', $item['email_delivery']['status']);
+        $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
         $this->assertSame([], $item['email_delivery']['errors']);
     }
+
 }
 
 

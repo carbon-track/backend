@@ -507,6 +507,8 @@ class MessageController
             $targetUserRecords = [];
             $targetUserIds = [];
             $invalidTargetIds = [];
+            $errorLogIds = [];
+            $loggedErrorMessages = [];
 
             if ($targetUsersRaw !== null) {
                 if (!is_array($targetUsersRaw)) {
@@ -632,14 +634,45 @@ class MessageController
                     $emailDelivery['triggered'] = true;
                     $emailDelivery['status'] = 'queued';
                 } elseif (!empty($queueResult['error'])) {
-                    $emailDelivery['errors'][] = $queueResult['error'];
+                    $normalizedError = trim((string) $queueResult['error']);
+                    if ($normalizedError !== '') {
+                        $emailDelivery['errors'][] = $normalizedError;
+                        $loggedErrorMessages[$normalizedError] = true;
+                    }
                     $emailDelivery['status'] = 'failed';
+                    $errorId = $this->logBroadcastError($request, 'broadcast_email_queue_failed', [
+                        'scope' => $scope,
+                        'message' => $normalizedError,
+                        'priority' => $priority,
+                    ]);
+                    if ($errorId) {
+                        $errorLogIds[] = $errorId;
+                    }
                 } else {
                     $emailDelivery['status'] = 'skipped';
                 }
             }
 
-            $auditPayload = [
+            if (!empty($emailDelivery['errors'])) {
+                foreach ($emailDelivery['errors'] as $deliveryError) {
+                    $normalized = trim((string) $deliveryError);
+                    if ($normalized === '' || isset($loggedErrorMessages[$normalized])) {
+                        continue;
+                    }
+                    $errorId = $this->logBroadcastError($request, $normalized, [
+                        'scope' => $scope,
+                        'priority' => $priority,
+                    ]);
+                    if ($errorId) {
+                        $errorLogIds[] = $errorId;
+                    }
+                    $loggedErrorMessages[$normalized] = true;
+                }
+            }
+
+            $emailDeliveryForLog = $this->trimEmailDeliveryForLog($emailDelivery);
+
+$auditPayload = [
                 'action' => 'system_message_broadcast',
                 'operation_category' => 'admin_message',
                 'user_id' => $user['id'],
@@ -659,13 +692,88 @@ class MessageController
                     'message_id_count' => $messageIdCount,
                     'message_id_map' => $messageMapSample,
                     'content_hash' => $contentHash,
-                    'email_delivery' => $this->trimEmailDeliveryForLog($emailDelivery),
+                    'email_delivery' => $emailDeliveryForLog,
                 ],
             ];
 
             $this->auditLog->log($auditPayload);
+            $auditLogId = method_exists($this->auditLog, 'getLastInsertId') ? $this->auditLog->getLastInsertId() : null;
+            $requestId = $request->getAttribute('request_id') ?? $request->getHeaderLine('X-Request-ID') ?? ($request->getServerParams()['HTTP_X_REQUEST_ID'] ?? null);
+            if (is_string($requestId)) {
+                $requestId = trim($requestId);
+                if ($requestId === '') {
+                    $requestId = null;
+                }
+            } else {
+                $requestId = null;
+            }
+            $systemLogId = $this->lookupSystemLogId($requestId);
 
-            return $this->json($response, [
+            $cleanErrorLogIds = [];
+            foreach ($errorLogIds as $candidateId) {
+                $candidateId = (int) $candidateId;
+                if ($candidateId > 0) {
+                    $cleanErrorLogIds[$candidateId] = $candidateId;
+                }
+            }
+            $cleanErrorLogIds = array_values($cleanErrorLogIds);
+
+            $filtersSnapshot = ['scope' => $scope];
+            if ($filterGroupsRaw !== null) {
+                $filtersSnapshot['target_filters'] = $filterGroupsRaw;
+            }
+            if ($targetUsersRaw !== null) {
+                $filtersSnapshot['explicit_targets'] = $targetUsersRaw;
+            }
+            if (empty($filtersSnapshot['target_filters']) && empty($filtersSnapshot['explicit_targets'])) {
+                $filtersSnapshot = ['scope' => $scope];
+            }
+            if ($filtersSnapshot === ['scope' => $scope]) {
+                $filtersSnapshot = null;
+            }
+
+            $metaSnapshot = [];
+
+            if (!empty($targetUserRecords)) {
+                $metaSnapshot['target_records_sample'] = array_slice(array_values($targetUserRecords), 0, 50);
+            }
+            if (!empty($loggedErrorMessages)) {
+                $metaSnapshot['error_messages_logged'] = array_keys($loggedErrorMessages);
+            }
+
+            try {
+                $insert = $this->db->prepare('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+                if ($insert) {
+                    $insert->execute([
+                        $requestId,
+                        $auditLogId,
+                        $systemLogId,
+                        $this->encodeJson($cleanErrorLogIds),
+                        $title,
+                        $content,
+                        $priority,
+                        $scope,
+                        count($targetUserIds),
+                        $sentCount,
+                        $this->encodeJson($invalidTargetIds),
+                        $this->encodeJson($failedUserIds),
+                        $this->encodeJson($messageIdSample),
+                        $this->encodeJson($messageMapSample),
+                        $messageIdCount,
+                        $contentHash,
+                        $this->encodeJson($emailDeliveryForLog),
+                        $this->encodeJson($filtersSnapshot),
+                        $this->encodeJson(!empty($metaSnapshot) ? $metaSnapshot : null),
+                        $user['id'] ?? null,
+                    ]);
+                }
+            } catch (\Throwable $persistError) {
+                $this->logBroadcastError($request, 'broadcast_record_persist_failed', [
+                    'message' => $persistError->getMessage(),
+                ]);
+            }
+
+                        return $this->json($response, [
                 'success' => true,
                 'sent_count' => $sentCount,
                 'total_targets' => count($targetUserIds),
@@ -677,6 +785,8 @@ class MessageController
                 'message_ids' => $messageIdSample,
                 'message_id_count' => $messageIdCount,
                 'email_delivery' => $emailDelivery,
+                'error_log_ids' => $cleanErrorLogIds,
+                'request_id' => $requestId,
             ]);
         } catch (\Exception $e) {
             try {
@@ -774,7 +884,7 @@ class MessageController
     /**
      * 获取广播历史（管理员）
      */
-    public function getBroadcastHistory(Request $request, Response $response): Response
+        public function getBroadcastHistory(Request $request, Response $response): Response
     {
         try {
             $user = $this->authService->getCurrentUser($request);
@@ -787,66 +897,68 @@ class MessageController
             $limit = min(50, max(5, (int)($params['limit'] ?? 10)));
             $offset = ($page - 1) * $limit;
 
-            $countStmt = $this->db->prepare('SELECT COUNT(*) FROM audit_logs WHERE action = :action');
-            if ($countStmt && $countStmt->execute(['action' => 'system_message_broadcast'])) {
-                $total = (int) $countStmt->fetchColumn();
-            } else {
+            $total = 0;
+            try {
+                $countStmt = $this->db->query('SELECT COUNT(*) FROM message_broadcasts');
+                if ($countStmt !== false) {
+                    $total = (int) $countStmt->fetchColumn();
+                }
+            } catch (\Throwable $countError) {
                 $total = 0;
             }
 
-            $listStmt = $this->db->prepare('SELECT id, user_id, data, created_at FROM audit_logs WHERE action = :action ORDER BY id DESC LIMIT :limit OFFSET :offset');
-            if ($listStmt) {
-                $listStmt->bindValue(':action', 'system_message_broadcast');
-                $listStmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-                $listStmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-                $listStmt->execute();
-                $logs = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            } else {
-                $logs = [];
+            $rows = [];
+            try {
+                $listStmt = $this->db->prepare('SELECT * FROM message_broadcasts ORDER BY id DESC LIMIT :limit OFFSET :offset');
+                if ($listStmt) {
+                    $listStmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+                    $listStmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+                    $listStmt->execute();
+                    $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                }
+            } catch (\Throwable $listError) {
+                $rows = [];
             }
 
-            $actorMap = [];
-            if (!empty($logs)) {
-                $actorIds = [];
-                foreach ($logs as $logRow) {
-                    if (isset($logRow['user_id']) && $logRow['user_id'] !== null) {
-                        $actorIds[] = (int)$logRow['user_id'];
-                    }
-                }
-                if (!empty($actorIds)) {
-                    $actorMap = $this->loadUsernames($actorIds);
+            $actorIds = [];
+            foreach ($rows as $row) {
+                if (isset($row['created_by']) && $row['created_by'] !== null) {
+                    $actorIds[] = (int) $row['created_by'];
                 }
             }
+            $actorMap = !empty($actorIds) ? $this->loadUsernames($actorIds) : [];
 
             $items = [];
-            foreach ($logs as $logRow) {
-                $meta = $this->decodeAuditData($logRow['data'] ?? null);
-                $title = (string)($meta['title'] ?? '');
-                $content = (string)($meta['content'] ?? '');
-                if ($title === '' || $content === '') {
-                    continue;
-                }
-                $actorId = isset($logRow['user_id']) ? (int)$logRow['user_id'] : null;
-                $priority = (string)($meta['priority'] ?? Message::PRIORITY_NORMAL);
+            foreach ($rows as $row) {
+                $broadcastId = (int)($row['id'] ?? 0);
+                $createdBy = isset($row['created_by']) ? (int)$row['created_by'] : null;
+                $title = (string)($row['title'] ?? '');
+                $content = (string)($row['content'] ?? '');
+                $priority = (string)($row['priority'] ?? Message::PRIORITY_NORMAL);
                 if (!in_array($priority, Message::getValidPriorities(), true)) {
                     $priority = Message::PRIORITY_NORMAL;
                 }
-                $scope = (string)($meta['scope'] ?? 'all');
-                $targetCount = (int)($meta['target_count'] ?? 0);
-                $sentCount = (int)($meta['sent_count'] ?? 0);
-                $invalidIds = $this->decodeIdList($meta['invalid_user_ids'] ?? []);
-                $failedIds = $this->decodeIdList($meta['failed_user_ids'] ?? []);
-                $emailDelivery = $this->normalizeEmailDeliveryMeta($meta['email_delivery'] ?? []);
-                $messageIds = $this->decodeIdList($meta['message_ids'] ?? []);
-                $messageIdCount = isset($meta['message_id_count']) ? (int)$meta['message_id_count'] : (count($messageIds) ?: null);
-                $messageIdMap = $this->normalizeMessageIdMap($meta['message_id_map'] ?? []);
-                $contentHash = isset($meta['content_hash']) && is_string($meta['content_hash'])
-                    ? trim($meta['content_hash'])
-                    : null;
-
-                $startTime = (string)($logRow['created_at'] ?? date('Y-m-d H:i:s'));
+                $scope = (string)($row['scope'] ?? 'all');
+                $targetCount = (int)($row['target_count'] ?? 0);
+                $sentCount = (int)($row['sent_count'] ?? 0);
+                $invalidIds = $this->decodeIdList($row['invalid_user_ids'] ?? []);
+                $failedIds = $this->decodeIdList($row['failed_user_ids'] ?? []);
+                $messageIds = $this->decodeIdList($row['message_ids_snapshot'] ?? []);
+                $messageIdCount = isset($row['message_id_count']) ? (int)$row['message_id_count'] : (count($messageIds) ?: null);
+                $messageIdMap = $this->decodeJsonObject($row['message_map_snapshot'] ?? null);
+                $emailDelivery = $this->normalizeEmailDeliveryMeta($this->decodeJsonValue($row['email_delivery_snapshot'] ?? null));
+                $errorIds = $this->decodeIdList($row['error_log_ids'] ?? []);
+                $requestId = isset($row['request_id']) ? trim((string)$row['request_id']) : null;
+                if ($requestId === '') {
+                    $requestId = null;
+                }
+                $createdAtRaw = $row['created_at'] ?? date('Y-m-d H:i:s');
+                $startTime = is_string($createdAtRaw) ? $createdAtRaw : date('Y-m-d H:i:s');
+                if ($createdAtRaw instanceof \DateTimeInterface) {
+                    $startTime = $createdAtRaw->format('Y-m-d H:i:s');
+                }
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
-                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $contentHash);
+                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $row['content_hash'] ?? null);
 
                 $readUsers = [];
                 $unreadUsers = [];
@@ -865,9 +977,9 @@ class MessageController
                 }
 
                 $items[] = [
-                    'id' => (int)($logRow['id'] ?? 0),
-                    'actor_user_id' => $actorId,
-                    'actor_username' => ($actorId !== null && isset($actorMap[$actorId])) ? $actorMap[$actorId] : null,
+                    'id' => $broadcastId,
+                    'actor_user_id' => $createdBy,
+                    'actor_username' => ($createdBy !== null && isset($actorMap[$createdBy])) ? $actorMap[$createdBy] : null,
                     'title' => $title,
                     'content' => $content,
                     'priority' => $priority,
@@ -885,6 +997,10 @@ class MessageController
                     'message_ids' => $messageIds,
                     'message_id_map' => $messageIdMap,
                     'email_delivery' => $emailDelivery,
+                    'request_id' => $requestId,
+                    'audit_log_id' => isset($row['audit_log_id']) ? (int)$row['audit_log_id'] : null,
+                    'system_log_id' => isset($row['system_log_id']) ? (int)$row['system_log_id'] : null,
+                    'error_log_ids' => $errorIds,
                 ];
             }
 
@@ -895,7 +1011,7 @@ class MessageController
                     'page' => $page,
                     'limit' => $limit,
                     'total' => $total,
-                    'pages' => (int)max(1, ceil($total / max(1, $limit))),
+                    'pages' => (int) max(1, ceil($total / max(1, $limit))),
                 ],
             ]);
         } catch (\Throwable $e) {
@@ -906,6 +1022,74 @@ class MessageController
             } catch (\Throwable $ignore) {}
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
+    }
+
+    private function logBroadcastError(Request $request, string $message, array $context = []): ?int
+    {
+        if (!$this->errorLogService) {
+            return null;
+        }
+        try {
+            $payload = array_merge([
+                'controller' => 'MessageController',
+                'action' => 'sendSystemMessage',
+            ], $context);
+            return $this->errorLogService->logError('broadcast_error', $message, $request, $payload);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function lookupSystemLogId(?string $requestId): ?int
+    {
+        if ($requestId === null || $requestId === '') {
+            return null;
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT id FROM system_logs WHERE request_id = :request_id ORDER BY id DESC LIMIT 1');
+            if ($stmt && $stmt->execute(['request_id' => $requestId])) {
+                $value = $stmt->fetchColumn();
+                if ($value !== false) {
+                    $id = (int) $value;
+                    return $id > 0 ? $id : null;
+                }
+            }
+        } catch (\Throwable $ignored) {
+        }
+        return null;
+    }
+
+    private function encodeJson($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        try {
+            $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            return $encoded === false ? null : $encoded;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function decodeJsonValue($value)
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                return $decoded;
+            }
+        }
+        return [];
+    }
+
+    private function decodeJsonObject($value): array
+    {
+        $decoded = $this->decodeJsonValue($value);
+        return is_array($decoded) ? $decoded : [];
     }
 
     private function decodeAuditData(?string $raw): array

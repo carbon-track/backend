@@ -21,6 +21,7 @@ class AuditLogService
 
     private PDO $db;
     private Logger $logger;
+    private ?int $lastInsertId = null;
     private int $maxDataLength = 10000; // JSON 字段截断长度
     private array $sensitiveFields = [
         'password','pass','token','authorization','auth','secret',
@@ -40,6 +41,7 @@ class AuditLogService
      */
     public function log($arg1, $arg2 = null, $arg3 = null): bool
     {
+        $this->lastInsertId = null;
         $result = false;
         try {
             if (is_array($arg1)) {
@@ -156,12 +158,15 @@ class AuditLogService
             ]);
 
             if (!$ok) {
+                $this->lastInsertId = null;
                 $this->logger->warning('Audit log insert returned false', [
                     'action' => $data['action'],
                     'category' => $data['operation_category']
                 ]);
                 return false;
             }
+            $insertId = (int) $this->db->lastInsertId();
+            $this->lastInsertId = $insertId > 0 ? $insertId : null;
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Audit logging exception', [
@@ -452,5 +457,10 @@ class AuditLogService
         if ($oldData !== null && $newData !== null) return 'update';
         if ($oldData === null && $newData === null) return 'read';
         return 'other';
+    }
+
+    public function getLastInsertId(): ?int
+    {
+        return $this->lastInsertId;
     }
 }

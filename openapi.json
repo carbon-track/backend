@@ -12394,6 +12394,34 @@
           "content": {
             "type": "string"
           },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "X-Request-ID captured when the broadcast was created."
+          },
+          "audit_log_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "audit_logs.id referencing the broadcast operation."
+          },
+          "system_log_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "system_logs.id recorded for the broadcast request."
+          },
+          "error_log_ids": {
+            "type": "array",
+            "description": "List of error_logs ids created while processing the broadcast.",
+            "items": {
+              "type": "integer"
+            }
+          },
           "priority": {
             "type": "string",
             "enum": [

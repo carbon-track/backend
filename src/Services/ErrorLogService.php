@@ -23,9 +23,9 @@ class ErrorLogService
     /**
      * Persist an exception and request context into error_logs table.
      */
-    public function logException(\Throwable $e, Request $request, array $extra = []): void
+    public function logException(\Throwable $e, Request $request, array $extra = []): ?int
     {
-        $this->insertLog([
+        return $this->insertLog([
             'error_type' => get_class($e),
             'error_message' => $e->getMessage(),
             'error_file' => $e->getFile(),
@@ -45,9 +45,9 @@ class ErrorLogService
     /**
      * Persist a non-exception error with a custom type/message and request context.
      */
-    public function logError(string $type, string $message, Request $request, array $context = []): void
+    public function logError(string $type, string $message, Request $request, array $context = []): ?int
     {
-        $this->insertLog([
+        return $this->insertLog([
             'error_type' => $type,
             'error_message' => $message,
             'error_file' => $context['file'] ?? null,
@@ -64,7 +64,7 @@ class ErrorLogService
         ]);
     }
 
-    private function insertLog(array $data): void
+    private function insertLog(array $data): ?int
     {
         try {
             $sql = 'INSERT INTO error_logs (error_type, error_message, error_file, error_line, error_time, script_name, client_get, client_post, client_files, client_cookie, client_session, client_server, request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)';
@@ -84,6 +84,8 @@ class ErrorLogService
                 $data['client_server'] ?? null,
                 $data['request_id'] ?? null,
             ]);
+            $id = (int) $this->db->lastInsertId();
+            return $id > 0 ? $id : null;
         } catch (\Throwable $ex) {
             // Fallback to application logger to avoid losing the error entirely
             try {
@@ -93,6 +95,7 @@ class ErrorLogService
             } catch (\Throwable $ignored) {
                 // swallow
             }
+            return null;
         }
     }
 
