@@ -113,6 +113,43 @@ class StatisticsService
                 SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read_messages
                 FROM messages WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
 
+        $messagePriorityRows = [];
+        try {
+            $prioritySql = "SELECT COALESCE(priority, 'normal') AS priority,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
+                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read
+                FROM messages
+                WHERE deleted_at IS NULL
+                GROUP BY COALESCE(priority, 'normal')";
+            $priorityStmt = $this->db->query($prioritySql);
+            if ($priorityStmt) {
+                $messagePriorityRows = $priorityStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            }
+        } catch (\Throwable $ignore) {
+            $messagePriorityRows = [];
+        }
+
+        $messageTrendRows = [];
+        $messageTrendStart = $now->modify('-13 days')->setTime(0, 0, 0);
+        try {
+            $trendSql = "SELECT {$dateExpr} AS day_label,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
+                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read
+                FROM messages
+                WHERE deleted_at IS NULL AND created_at >= :start_date
+                GROUP BY {$dateExpr}
+                ORDER BY {$dateExpr}";
+            $trendStmt = $this->db->prepare($trendSql);
+            if ($trendStmt) {
+                $trendStmt->execute([':start_date' => $messageTrendStart->format('Y-m-d H:i:s')]);
+                $messageTrendRows = $trendStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            }
+        } catch (\Throwable $ignore) {
+            $messageTrendRows = [];
+        }
+
         $activityRecordStatsRaw = $this->db->query("SELECT COUNT(*) AS total_records,
                 SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_records,
                 SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_records,
@@ -270,6 +307,8 @@ class StatisticsService
         $transactions = $this->normalizeTransactionStats($transactionStatsRaw, $txWindowRaw, $carbonStatsRaw, $carbonWindowRaw);
         $exchanges = $this->normalizeExchangeStats($exchangeStatsRaw);
         $messages = $this->normalizeMessageStats($messageStatsRaw);
+        $messages['priority_breakdown'] = $this->normalizeMessagePriorityBreakdown($messagePriorityRows);
+        $messages['daily_counts'] = $this->normalizeMessageDailySeries($messageTrendRows, $messageTrendStart, $now);
         $activities = $this->normalizeActivityStats($activityRecordStatsRaw, $activityCatalogStatsRaw);
         $carbon = $this->normalizeCarbonStats($carbonStatsRaw, $carbonWindowRaw, $trendTotals, $trendCount);
 
@@ -300,6 +339,7 @@ class StatisticsService
         $carbon = $adminData['carbon'] ?? [];
         $activities = $adminData['activities'] ?? [];
         $transactions = $adminData['transactions'] ?? [];
+        $messagesSummary = $adminData['messages'] ?? [];
         $trend = $adminData['trend_summary'] ?? [];
 
         return [
@@ -315,6 +355,16 @@ class StatisticsService
             'carbon_last7' => round($this->toFloat($trend['carbon_last7'] ?? 0.0), 2),
             'total_points_awarded' => round($this->toFloat($transactions['total_points_awarded'] ?? ($carbon['total_points_earned'] ?? 0.0)), 2),
             'transactions_last7' => $this->toInt($trend['transactions_last7'] ?? 0),
+            'total_messages' => $this->toInt($messagesSummary['total_messages'] ?? 0),
+            'unread_messages' => $this->toInt($messagesSummary['unread_messages'] ?? 0),
+            'read_messages' => $this->toInt($messagesSummary['read_messages'] ?? 0),
+            'unread_ratio' => round($this->toFloat($messagesSummary['unread_ratio'] ?? 0.0), 4),
+            'messages' => [
+                'total_messages' => $this->toInt($messagesSummary['total_messages'] ?? 0),
+                'unread_messages' => $this->toInt($messagesSummary['unread_messages'] ?? 0),
+                'read_messages' => $this->toInt($messagesSummary['read_messages'] ?? 0),
+                'unread_ratio' => round($this->toFloat($messagesSummary['unread_ratio'] ?? 0.0), 4),
+            ],
         ];
     }
 
@@ -409,6 +459,97 @@ class StatisticsService
             'read_messages' => $read,
             'unread_ratio' => $this->safeDivide((float) $unread, max($total, 1)),
         ];
+    }
+
+    private function normalizeMessagePriorityBreakdown(array $rows): array
+    {
+        if (empty($rows)) {
+            return [];
+        }
+
+        $orderMap = [
+            'urgent' => 0,
+            'high' => 1,
+            'normal' => 2,
+            'low' => 3,
+        ];
+        $result = [];
+
+        foreach ($rows as $row) {
+            $priorityRaw = (string) ($row['priority'] ?? 'normal');
+            $priority = strtolower(trim($priorityRaw));
+            if ($priority === '') {
+                $priority = 'normal';
+            }
+            $total = $this->toInt($row['total'] ?? 0);
+            $unread = $this->toInt($row['unread'] ?? 0);
+            $read = $this->toInt($row['read'] ?? 0);
+            if ($read === 0 && $total >= $unread) {
+                $read = max(0, $total - $unread);
+            }
+
+            $result[] = [
+                'priority' => $priority,
+                'total' => $total,
+                'unread' => $unread,
+                'read' => $read,
+                'unread_ratio' => $this->safeDivide((float) $unread, max($total, 1)),
+                '_order' => $orderMap[$priority] ?? 99,
+            ];
+        }
+
+        usort($result, static function (array $a, array $b): int {
+            if ($a['_order'] === $b['_order']) {
+                return strcmp((string) $a['priority'], (string) $b['priority']);
+            }
+            return $a['_order'] <=> $b['_order'];
+        });
+
+        return array_map(static function (array $entry): array {
+            unset($entry['_order']);
+            return $entry;
+        }, $result);
+    }
+
+    private function normalizeMessageDailySeries(array $rows, \DateTimeImmutable $start, \DateTimeImmutable $end): array
+    {
+        $map = [];
+        foreach ($rows as $row) {
+            $labelRaw = (string) ($row['day_label'] ?? '');
+            if ($labelRaw === '') {
+                continue;
+            }
+            $label = substr($labelRaw, 0, 10);
+            $total = $this->toInt($row['total'] ?? 0);
+            $unread = $this->toInt($row['unread'] ?? 0);
+            $read = $this->toInt($row['read'] ?? 0);
+            if ($read === 0 && $total >= $unread) {
+                $read = max(0, $total - $unread);
+            }
+            $map[$label] = [
+                'total' => $total,
+                'unread' => $unread,
+                'read' => $read,
+            ];
+        }
+
+        $series = [];
+        $current = $start->setTime(0, 0, 0);
+        $endDate = $end->setTime(0, 0, 0);
+
+        while ($current <= $endDate) {
+            $label = $current->format('Y-m-d');
+            $stats = $map[$label] ?? ['total' => 0, 'unread' => 0, 'read' => 0];
+            $series[] = [
+                'date' => $label,
+                'total' => $stats['total'],
+                'unread' => $stats['unread'],
+                'read' => $stats['read'],
+            ];
+            $current = $current->modify('+1 day');
+        }
+
+        return $series;
     }
 
     private function normalizeActivityStats(array $recordRow, array $catalogRow): array
@@ -620,4 +761,3 @@ class StatisticsService
         return $this->cacheDir . DIRECTORY_SEPARATOR . $sanitized . '_stats.json';
     }
 }
-

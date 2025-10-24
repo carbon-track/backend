@@ -6822,6 +6822,59 @@
                               "type": "number",
                               "format": "float",
                               "example": 0.043
+                            },
+                            "priority_breakdown": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "priority": {
+                                    "type": "string",
+                                    "example": "urgent"
+                                  },
+                                  "total": {
+                                    "type": "integer",
+                                    "example": 120
+                                  },
+                                  "unread": {
+                                    "type": "integer",
+                                    "example": 8
+                                  },
+                                  "read": {
+                                    "type": "integer",
+                                    "example": 112
+                                  },
+                                  "unread_ratio": {
+                                    "type": "number",
+                                    "format": "float",
+                                    "example": 0.066
+                                  }
+                                }
+                              }
+                            },
+                            "daily_counts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "date": {
+                                    "type": "string",
+                                    "example": "2025-10-21"
+                                  },
+                                  "total": {
+                                    "type": "integer",
+                                    "example": 42
+                                  },
+                                  "unread": {
+                                    "type": "integer",
+                                    "example": 5
+                                  },
+                                  "read": {
+                                    "type": "integer",
+                                    "example": 37
+                                  }
+                                }
+                              }
                             }
                           }
                         },
@@ -7245,6 +7298,45 @@
                         "transactions_last7": {
                           "type": "integer",
                           "example": 640
+                        },
+                        "total_messages": {
+                          "type": "integer",
+                          "example": 320
+                        },
+                        "unread_messages": {
+                          "type": "integer",
+                          "example": 14
+                        },
+                        "read_messages": {
+                          "type": "integer",
+                          "example": 306
+                        },
+                        "unread_ratio": {
+                          "type": "number",
+                          "format": "float",
+                          "example": 0.043
+                        },
+                        "messages": {
+                          "type": "object",
+                          "properties": {
+                            "total_messages": {
+                              "type": "integer",
+                              "example": 320
+                            },
+                            "unread_messages": {
+                              "type": "integer",
+                              "example": 14
+                            },
+                            "read_messages": {
+                              "type": "integer",
+                              "example": 306
+                            },
+                            "unread_ratio": {
+                              "type": "number",
+                              "format": "float",
+                              "example": 0.043
+                            }
+                          }
                         }
                       }
                     }

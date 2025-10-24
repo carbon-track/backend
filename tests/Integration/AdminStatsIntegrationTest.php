@@ -51,10 +51,10 @@ class AdminStatsIntegrationTest extends TestCase
         $insertExchange->execute([':id' => 'ex_1', ':user_id' => 2, ':status' => 'completed', ':points_used' => 15, ':created_at' => date('Y-m-d H:i:s', strtotime('-4 day'))]);
         $insertExchange->execute([':id' => 'ex_2', ':user_id' => 3, ':status' => 'pending', ':points_used' => 7, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
 
-        $pdo->exec("INSERT INTO messages (sender_id, receiver_id, title, content, is_read, created_at) VALUES
-            ($adminId, 2, 'Notice', 'Please review', 0, datetime('now','-2 day')),
-            ($adminId, 3, 'Reminder', 'Update profile', 1, datetime('now','-3 day')),
-            ($adminId, 4, 'Alert', 'Pending action', 0, datetime('now','-1 day'))");
+        $pdo->exec("INSERT INTO messages (sender_id, receiver_id, title, content, priority, is_read, created_at) VALUES
+            ($adminId, 2, 'Notice', 'Please review', 'urgent', 0, datetime('now','-2 day')),
+            ($adminId, 3, 'Reminder', 'Update profile', 'normal', 1, datetime('now','-3 day')),
+            ($adminId, 4, 'Alert', 'Pending action', 'high', 0, datetime('now','-1 day'))");
 
         $authService = new class('test-secret', 'HS256', 3600) extends AuthService {
             private array $admin;
@@ -118,6 +118,13 @@ class AdminStatsIntegrationTest extends TestCase
         $this->assertSame(2, $data['messages']['unread_messages']);
         $this->assertSame(1, $data['messages']['read_messages']);
         $this->assertGreaterThan(0, $data['messages']['unread_ratio']);
+        $this->assertArrayHasKey('priority_breakdown', $data['messages']);
+        $this->assertArrayHasKey('daily_counts', $data['messages']);
+        $this->assertGreaterThan(0, count($data['messages']['priority_breakdown']));
+        $priorityTotals = array_sum(array_map(static fn(array $entry): int => (int) ($entry['total'] ?? 0), $data['messages']['priority_breakdown']));
+        $this->assertSame(3, $priorityTotals);
+        $dailyTotals = array_sum(array_map(static fn(array $entry): int => (int) ($entry['total'] ?? 0), $data['messages']['daily_counts']));
+        $this->assertSame(3, $dailyTotals);
 
         $this->assertSame(3, $data['activities']['total_records']);
         $this->assertSame(2, $data['activities']['approved_records']);

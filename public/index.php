@@ -139,13 +139,28 @@ $errorMiddleware->setDefaultErrorHandler(
 
         $response = new \Slim\Psr7\Response();
         $status = 500;
+
+        // Derive an HTTP status code that works across Slim and other frameworks:
+        // 1) Slim HttpException exposes the correct status via getCode()
+        // 2) Some third-party exceptions expose getStatusCode()
+        // 3) Fall back to Exception::getCode()
+        $derivedStatus = null;
         if ($exception instanceof HttpException) {
-            $status = $exception->getStatusCode();
+            $derivedStatus = (int) $exception->getCode();
         } elseif (method_exists($exception, 'getStatusCode')) {
-            $derivedStatus = $exception->getStatusCode();
-            if (is_int($derivedStatus) && $derivedStatus >= 400 && $derivedStatus <= 599) {
-                $status = $derivedStatus;
+            try {
+                $derivedStatus = (int) $exception->getStatusCode();
+            } catch (\Throwable $statusEx) {
+                $derivedStatus = null;
             }
+        }
+
+        if ($derivedStatus === null) {
+            $derivedStatus = (int) $exception->getCode();
+        }
+
+        if ($derivedStatus >= 400 && $derivedStatus <= 599) {
+            $status = $derivedStatus;
         }
         $payload = ErrorResponseBuilder::build($exception, $request, $resolvedAppEnv, $status);
         $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
