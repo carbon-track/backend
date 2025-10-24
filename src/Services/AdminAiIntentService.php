@@ -43,15 +43,15 @@ class AdminAiIntentService
         $this->temperature = isset($config['temperature']) ? (float)$config['temperature'] : 0.2;
         $this->maxTokens = isset($config['max_tokens']) ? (int)$config['max_tokens'] : 800;
         $this->enabled = $client !== null;
-        $this->loadCommandConfig($commandConfig);
+        $this->loadCommandConfig($commandConfig ?? []);
     }
 
-    private function loadCommandConfig(?array $commandConfig): void
+    private function loadCommandConfig(array $commandConfig): void
     {
         $defaults = self::defaultCommandConfig();
 
-        $provided = $commandConfig ?? [];
-
+        $provided = $commandConfig;
+        $provided = $commandConfig;
         $navigationTargets = $provided['navigationTargets'] ?? $defaults['navigationTargets'];
         $quickActions = $provided['quickActions'] ?? $defaults['quickActions'];
         $managementActions = $provided['managementActions'] ?? $defaults['managementActions'];
@@ -365,7 +365,7 @@ class AdminAiIntentService
             return $this->fallbackIntent($query);
         }
 
-        return $this->normalizeResult($decoded, $rawResponse);
+        return $this->normalizeResult($decoded, $rawResponse, $query);
     }
 
     /**
@@ -462,73 +462,103 @@ class AdminAiIntentService
 
     private function buildSystemPrompt(): string
     {
-        $capabilities = [
-            'navigationTargets' => array_values(array_map(
-                fn (array $target) => [
-                    'id' => $target['id'] ?? '',
-                    'label' => $target['label'] ?? ($target['id'] ?? ''),
-                    'route' => $target['route'] ?? null,
-                    'description' => $target['description'] ?? null,
-                    'keywords' => array_values((array)($target['keywords'] ?? [])),
-                ],
-                $this->navigationTargets
-            )),
-            'quickActions' => array_values(array_map(
-                fn (array $action) => [
+        $navigationTargets = array_values(array_map(
+            fn (array $target) => [
+                'id' => $target['id'] ?? '',
+                'label' => $target['label'] ?? ($target['id'] ?? ''),
+                'route' => $target['route'] ?? null,
+                'description' => $target['description'] ?? null,
+                'keywords' => array_values((array)($target['keywords'] ?? [])),
+            ],
+            $this->navigationTargets
+        ));
+
+        $quickActions = array_map(
+            function (array $action): array {
+                $keywords = array_values((array)($action['keywords'] ?? []));
+                $route = $action['route'] ?? null;
+                $routeId = $action['routeId'] ?? ($action['id'] ?? '');
+
+                if ($route) {
+                    $keywords[] = $route;
+                }
+                if ($routeId) {
+                    $keywords[] = $routeId;
+                }
+
+                if (isset($action['query']) && is_array($action['query'])) {
+                    foreach ($action['query'] as $key => $value) {
+                        if (is_scalar($value)) {
+                            $keywords[] = sprintf('%s=%s', $key, (string) $value);
+                        }
+                    }
+                }
+
+                return [
                     'id' => $action['id'] ?? '',
                     'label' => $action['label'] ?? ($action['id'] ?? ''),
-                    'routeId' => $action['routeId'] ?? ($action['id'] ?? ''),
-                    'route' => $action['route'] ?? null,
+                    'routeId' => $routeId,
+                    'route' => $route,
                     'mode' => $action['mode'] ?? 'navigation',
                     'query' => is_array($action['query'] ?? null) ? $action['query'] : [],
                     'description' => $action['description'] ?? null,
-                    'keywords' => array_values((array)($action['keywords'] ?? [])),
-                ],
-                $this->quickActions
-            )),
-            'managementActions' => array_values(array_map(
-                fn (array $definition) => [
-                    'name' => $definition['name'] ?? '',
-                    'label' => $definition['label'] ?? ($definition['name'] ?? ''),
-                    'description' => $definition['description'] ?? null,
-                    'api' => $definition['api'] ?? [],
-                    'requires' => array_values((array)($definition['requires'] ?? [])),
-                    'contextHints' => array_values((array)($definition['contextHints'] ?? [])),
-                    'autoExecute' => (bool)($definition['autoExecute'] ?? false),
-                ],
-                $this->actionDefinitions
-            )),
-            'responseSchema' => [
-                'intent' => [
-                    'type' => 'navigate|quick_action|action|fallback',
-                    'label' => 'human readable title',
-                    'confidence' => 'number 0-1',
-                    'reasoning' => 'short explanation',
-                    'target' => [
-                        'routeId' => 'for navigation/quick actions',
-                        'route' => 'path starting with /admin',
-                        'query' => 'optional query parameters',
-                        'mode' => 'navigation|shortcut',
-                    ],
-                    'action' => [
-                        'name' => 'matches managementActions.name',
-                        'summary' => 'human summary',
-                        'api' => [
-                            'method' => 'HTTP verb',
-                            'path' => 'full API path beginning with /api/v1',
-                            'payload' => 'JSON payload ready for execution',
-                        ],
-                        'autoExecute' => 'boolean default false',
-                    ],
-                    'missing' => [
-                        [
-                            'field' => 'record_ids',
-                            'description' => 'explain what is needed',
-                        ],
-                    ],
-                ],
-                'alternatives' => 'optional array of additional intents following the same shape',
+                    'keywords' => array_values(array_unique($keywords)),
+                ];
+            },
+            array_values($this->quickActions)
+        );
+
+        $managementActions = array_values(array_map(
+            fn (array $definition) => [
+                'name' => $definition['name'] ?? '',
+                'label' => $definition['label'] ?? ($definition['name'] ?? ''),
+                'description' => $definition['description'] ?? null,
+                'api' => $definition['api'] ?? [],
+                'requires' => array_values((array)($definition['requires'] ?? [])),
+                'contextHints' => array_values((array)($definition['contextHints'] ?? [])),
+                'autoExecute' => (bool)($definition['autoExecute'] ?? false),
+                'keywords' => array_values((array)($definition['keywords'] ?? [])),
             ],
+            $this->actionDefinitions
+        ));
+
+        $responseSchema = [
+            'intent' => [
+                'type' => 'navigate|quick_action|action|fallback',
+                'label' => 'human readable title',
+                'confidence' => 'number 0-1',
+                'reasoning' => 'short explanation',
+                'target' => [
+                    'routeId' => 'for navigation/quick actions',
+                    'route' => 'path starting with /admin',
+                    'query' => 'optional query parameters',
+                    'mode' => 'navigation|shortcut',
+                ],
+                'action' => [
+                    'name' => 'matches managementActions.name',
+                    'summary' => 'human summary',
+                    'api' => [
+                        'method' => 'HTTP verb',
+                        'path' => 'full API path beginning with /api/v1',
+                        'payload' => 'JSON payload ready for execution',
+                    ],
+                    'autoExecute' => 'boolean default false',
+                ],
+                'missing' => [
+                    [
+                        'field' => 'record_ids',
+                        'description' => 'explain what is needed',
+                    ],
+                ],
+            ],
+            'alternatives' => 'optional array of additional intents following the same shape',
+        ];
+
+        $capabilities = [
+            'navigationTargets' => $navigationTargets,
+            'quickActions' => array_values($quickActions),
+            'managementActions' => $managementActions,
+            'responseSchema' => $responseSchema,
         ];
 
         $capabilityJson = json_encode($capabilities, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
@@ -563,6 +593,12 @@ PROMPT;
         }
 
         $primary = $this->normalizeIntent($intent);
+        if (($primary['type'] ?? 'fallback') === 'fallback') {
+            $heuristic = $this->guessNavigationIntent($originalQuery);
+            if ($heuristic !== null) {
+                $primary = $heuristic;
+            }
+        }
 
         $alternatives = [];
         if (!empty($decoded['alternatives']) && is_array($decoded['alternatives'])) {
@@ -574,7 +610,7 @@ PROMPT;
             }
         }
 
-        return [
+        $result = [
             'intent' => $primary,
             'alternatives' => $alternatives,
             'metadata' => [
@@ -583,6 +619,13 @@ PROMPT;
                 'finish_reason' => $rawResponse['choices'][0]['finish_reason'] ?? null,
             ],
         ];
+        if ($result['intent']['type'] === 'fallback') {
+            $heuristic = $this->guessNavigationIntent($decoded['query'] ?? $originalQuery);
+            if ($heuristic !== null) {
+                $result['intent'] = $heuristic;
+            }
+        }
+        return $result;
     }
 
     /**
@@ -595,6 +638,23 @@ PROMPT;
         $confidence = $this->normalizeConfidence($intent['confidence'] ?? null);
         $label = is_string($intent['label'] ?? null) ? trim($intent['label']) : 'AI suggestion';
         $reasoning = is_string($intent['reasoning'] ?? null) ? trim($intent['reasoning']) : null;
+
+        // Attempt heuristic mapping when model returns a raw navigation target string, e.g. "activities"
+        if ($type === 'fallback' && isset($intent['target']) && is_array($intent['target'])) {
+            $targetRouteId = $intent['target']['routeId'] ?? $intent['target']['route'] ?? null;
+            if (is_string($targetRouteId) && $targetRouteId !== '') {
+                $matches = $this->matchRouteHeuristically($targetRouteId);
+                if ($matches !== null) {
+                    $intent['type'] = $matches['type'];
+                    $intent['target'] = [
+                        'routeId' => $matches['id'],
+                        'route' => $matches['route'],
+                        'query' => $matches['query'],
+                    ];
+                    $type = $intent['type'];
+                }
+            }
+        }
 
         $normalized = [
             'type' => $type,
@@ -614,6 +674,93 @@ PROMPT;
         }
 
         return $normalized;
+    }
+
+    /**
+     * @return array{type:string,id:string,route:?string,query:array<string,string>}|null
+     */
+    private function matchRouteHeuristically(string $raw): ?array
+    {
+        $needle = strtolower(trim($raw));
+        if ($needle === '') {
+            return null;
+        }
+
+        $candidates = [];
+
+        foreach ($this->navigationTargets as $id => $target) {
+            $score = $this->scoreKeywords($needle, $target['keywords'] ?? [], $target['label'] ?? '', $target['route'] ?? '', $id);
+            if ($score > 0) {
+                $candidates[] = [
+                    'type' => 'navigate',
+                    'id' => $id,
+                    'route' => $target['route'] ?? null,
+                    'query' => [],
+                    'score' => $score,
+                ];
+            }
+        }
+
+        foreach ($this->quickActions as $id => $action) {
+            $score = $this->scoreKeywords($needle, $action['keywords'] ?? [], $action['label'] ?? '', $action['route'] ?? '', $id);
+            if ($score > 0) {
+                $candidates[] = [
+                    'type' => 'quick_action',
+                    'id' => $id,
+                    'route' => $action['route'] ?? null,
+                    'query' => is_array($action['query'] ?? null) ? array_map('strval', $action['query']) : [],
+                    'score' => $score,
+                ];
+            }
+        }
+
+        if (empty($candidates)) {
+            return null;
+        }
+
+        usort($candidates, static fn ($a, $b) => $b['score'] <=> $a['score']);
+
+        $best = $candidates[0];
+        if ($best['score'] < 0.4) {
+            return null;
+        }
+
+        return [
+            'type' => $best['type'],
+            'id' => $best['id'],
+            'route' => $best['route'],
+            'query' => $best['query'],
+        ];
+    }
+
+    /**
+     * @param array<int,string> $keywords
+     */
+    private function scoreKeywords(string $needle, array $keywords, string $label, string $route, string $id): float
+    {
+        $pool = array_filter(array_map('strtolower', array_merge($keywords, [$label, $route, $id])));
+        if (empty($pool)) {
+            return 0.0;
+        }
+
+        $best = 0.0;
+        foreach ($pool as $candidate) {
+            if ($candidate === '') {
+                continue;
+            }
+            if ($needle === $candidate) {
+                return 1.0;
+            }
+            if (str_contains($candidate, $needle) || str_contains($needle, $candidate)) {
+                $best = max($best, 0.8);
+                continue;
+            }
+            $similarity = 0.0;
+            similar_text($needle, $candidate, $similarity);
+            $best = max($best, $similarity / 100);
+        }
+
+        return $best;
     }
 
     /**
@@ -837,6 +984,125 @@ PROMPT;
         return [
             'intent' => [
                 'type' => 'fallback',
+                    {
+                        $normalizedQuery = trim(mb_strtolower($query));
+                        if ($normalizedQuery === '') {
+                            return null;
+                        }
+
+                        $best = null;
+                        $bestScore = 0;
+                        $matchedKeywords = [];
+
+                        foreach ($this->navigationTargets as $id => $definition) {
+                            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
+                            if ($match['score'] > $bestScore) {
+                                $bestScore = $match['score'];
+                                $best = [
+                                    'type' => 'navigate',
+                                    'definition' => $definition,
+                                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
+                                ];
+                                $matchedKeywords = $match['keywords'];
+                            }
+                        }
+
+                        foreach ($this->quickActions as $id => $definition) {
+                            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
+                            if ($match['score'] > $bestScore) {
+                                $bestScore = $match['score'];
+                                $best = [
+                                    'type' => 'quick_action',
+                                    'definition' => $definition,
+                                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
+                                ];
+                                $matchedKeywords = $match['keywords'];
+                            }
+                        }
+
+                        if ($best === null || $bestScore === 0) {
+                            return null;
+                        }
+
+                        $definition = $best['definition'];
+                        $route = $definition['route'] ?? null;
+                        if (!is_string($route) || $route === '') {
+                            return null;
+                        }
+
+                        $mode = $best['type'] === 'quick_action' ? ($definition['mode'] ?? 'shortcut') : 'navigation';
+                        $queryParams = [];
+                        if (isset($definition['query']) && is_array($definition['query'])) {
+                            $queryParams = $definition['query'];
+                        }
+
+                        $confidence = min(0.9, 0.45 + 0.12 * min($bestScore, 6));
+                        $reasoning = 'Matched keywords: ' . implode(', ', array_unique($matchedKeywords));
+
+                        return [
+                            'type' => $best['type'],
+                            'label' => $definition['label'] ?? ($best['routeId'] ?? 'Navigate'),
+                            'confidence' => round($confidence, 2),
+                            'reasoning' => $reasoning,
+                            'target' => [
+                                'routeId' => $best['routeId'],
+                                'route' => $route,
+                                'mode' => $mode,
+                                'query' => $queryParams,
+                            ],
+                            'missing' => [],
+                        ];
+                    }
+
+                    /**
+                     * @return array{score:int,keywords:array<int,string>}
+                     */
+                    private function computeDefinitionMatch(string $normalizedQuery, array $definition): array
+                    {
+                        $score = 0;
+                        $matches = [];
+
+                        foreach ($this->collectDefinitionKeywords($definition) as $keyword) {
+                            $keyword = trim(mb_strtolower($keyword));
+                            if ($keyword === '') {
+                                continue;
+                            }
+                            if (mb_strpos($normalizedQuery, $keyword) !== false) {
+                                $score += max(1, (int) floor(mb_strlen($keyword) / 4));
+                                $matches[] = $keyword;
+                            }
+                        }
+
+                        return ['score' => $score, 'keywords' => $matches];
+                    }
+
+                    /**
+                     * @return array<int,string>
+                     */
+                    private function collectDefinitionKeywords(array $definition): array
+                    {
+                        $keywords = [];
+
+                        if (!empty($definition['keywords']) && is_array($definition['keywords'])) {
+                            foreach ($definition['keywords'] as $keyword) {
+                                if (is_string($keyword)) {
+                                    $keywords[] = $keyword;
+                                }
+                            }
+                        }
+
+                        foreach (['label', 'description'] as $field) {
+                            if (!empty($definition[$field]) && is_string($definition[$field])) {
+                                $keywords[] = $definition[$field];
+                            }
+                        }
+
+                        if (!empty($definition['route']) && is_string($definition['route'])) {
+                            $keywords[] = str_replace(['/admin/', '/'], ' ', $definition['route']);
+                        }
+
+                        return $keywords;
+                    }
                 'label' => '未能理解的指令',
                 'confidence' => 0.0,
                 'reasoning' => '无法从输入中提取明确的管理指令，请改用关键字搜索或再具体一些。',

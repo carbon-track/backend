@@ -58,6 +58,29 @@ class AdminAiIntentServiceTest extends TestCase
         $this->assertSame('test-model', $result['metadata']['model']);
     }
 
+    public function testAnalyzeIntentHeuristicNavigationFallback(): void
+    {
+        $responsePayload = $this->createChatResponse([
+            'intent' => [
+                'type' => 'fallback',
+                'label' => 'Activity Review',
+                'confidence' => 0.7,
+                'reasoning' => 'user asked for carbon record review',
+                'target' => [
+                    'routeId' => 'carbon record review',
+                ],
+            ],
+        ]);
+
+        $client = new FakeLlmClient($responsePayload);
+        $service = new AdminAiIntentService($client, new NullLogger(), ['model' => 'test-model']);
+
+        $result = $service->analyzeIntent('carbon record review', []);
+
+        $this->assertSame('navigate', $result['intent']['type']);
+        $this->assertSame('/admin/activities', $result['intent']['target']['route']);
+    }
+
     public function testAnalyzeIntentDetectsMissingRequirements(): void
     {
         $responsePayload = $this->createChatResponse([
@@ -109,6 +132,25 @@ class AdminAiIntentServiceTest extends TestCase
         $result = $service->analyzeIntent('去未知页面', []);
 
         $this->assertSame('fallback', $result['intent']['type']);
+    }
+
+    public function testFallbackHeuristicSuggestsNavigation(): void
+    {
+        $responsePayload = $this->createChatResponse([
+            'intent' => [
+                'type' => 'fallback',
+                'label' => 'No match',
+                'confidence' => 0.2,
+                'reasoning' => 'Not sure what to do',
+            ],
+        ]);
+
+        $service = new AdminAiIntentService(new FakeLlmClient($responsePayload), new NullLogger());
+
+        $result = $service->analyzeIntent('carbon record review', []);
+
+        $this->assertSame('navigate', $result['intent']['type']);
+        $this->assertSame('/admin/activities', $result['intent']['target']['route']);
     }
 
     public function testCustomConfigurationOverridesDefaults(): void

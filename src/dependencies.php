@@ -44,6 +44,7 @@ use CarbonTrack\Middleware\RequestLoggingMiddleware;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Services\Ai\OpenAiClientAdapter;
 use CarbonTrack\Controllers\AdminAiController;
+use CarbonTrack\Services\AdminAiCommandRepository;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -285,42 +286,31 @@ $__deps_initializer = function (Container $container) {
         return new OpenAiClientAdapter($client);
     });
 
-    $container->set('admin.ai.commands', function () {
-        $defaultPath = dirname(__DIR__) . '/config/admin_ai_commands.php';
-        $configuredPath = trim((string) ($_ENV['ADMIN_AI_COMMANDS_PATH'] ?? ''));
+    $container->set(AdminAiCommandRepository::class, function (ContainerInterface $c) {
+        $baseDir = dirname(__DIR__, 1);
+        $defaultPath = $baseDir . '/config/admin_ai_commands.php';
 
-        $pathsToCheck = [];
+        $configuredPath = trim((string) ($_ENV['ADMIN_AI_COMMANDS_PATH'] ?? ''));
+        $paths = [];
+
         if ($configuredPath !== '') {
             $isAbsolute = false;
-            if (preg_match('/^[A-Za-z]:[\\\\\\/]/', $configuredPath) === 1) {
+            if (preg_match('/^[A-Za-z]:[\\\\\/]/', $configuredPath) === 1) {
                 $isAbsolute = true;
             } elseif ($configuredPath[0] === '/' || $configuredPath[0] === '\\') {
                 $isAbsolute = true;
             }
 
             if ($isAbsolute) {
-                $pathsToCheck[] = $configuredPath;
+                $paths[] = $configuredPath;
             } else {
-                $baseDir = dirname(__DIR__, 1);
-                $pathsToCheck[] = $baseDir . DIRECTORY_SEPARATOR . ltrim($configuredPath, '/\\');
-            }
-        }
-        $pathsToCheck[] = $defaultPath;
-
-        foreach ($pathsToCheck as $path) {
-            if (!is_string($path) || $path === '') {
-                continue;
-            }
-            if (!is_file($path) || !is_readable($path)) {
-                continue;
-            }
-            $data = require $path;
-            if (is_array($data)) {
-                return $data;
+                $paths[] = $baseDir . DIRECTORY_SEPARATOR . ltrim($configuredPath, '/\\');
             }
         }
 
-        return null;
+        $paths[] = $defaultPath;
+
+        return new AdminAiCommandRepository($paths);
     });
 
     $container->set(AdminAiIntentService::class, function (ContainerInterface $c) {
@@ -337,7 +327,7 @@ $__deps_initializer = function (Container $container) {
             $llmClient,
             $c->get(LoggerInterface::class),
             $config,
-            $c->get('admin.ai.commands')
+            $c->get(AdminAiCommandRepository::class)->getConfig()
         );
     });
 
@@ -553,6 +543,7 @@ $__deps_initializer = function (Container $container) {
         return new AdminAiController(
             $c->get(AuthService::class),
             $c->get(AdminAiIntentService::class),
+            $c->get(AdminAiCommandRepository::class),
             $c->get(ErrorLogService::class),
             $c->get(LoggerInterface::class)
         );

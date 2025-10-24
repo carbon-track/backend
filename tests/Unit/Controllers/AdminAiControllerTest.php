@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\AdminAiController;
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
@@ -43,9 +44,15 @@ class AdminAiControllerTest extends TestCase
             ],
         ]);
 
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getFingerprint')->willReturn('test-fingerprint');
+        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getLastModified')->willReturn(1234567890);
+
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $commandRepo,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -71,9 +78,15 @@ class AdminAiControllerTest extends TestCase
         $intentService = $this->createMock(AdminAiIntentService::class);
         $intentService->method('isEnabled')->willReturn(false);
 
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getFingerprint')->willReturn('test');
+        $commandRepo->method('getActivePath')->willReturn(null);
+        $commandRepo->method('getLastModified')->willReturn(null);
+
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $commandRepo,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -96,9 +109,15 @@ class AdminAiControllerTest extends TestCase
         $intentService = $this->createMock(AdminAiIntentService::class);
         $intentService->method('isEnabled')->willReturn(true);
 
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getFingerprint')->willReturn('test');
+        $commandRepo->method('getActivePath')->willReturn(null);
+        $commandRepo->method('getLastModified')->willReturn(null);
+
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $commandRepo,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -128,9 +147,15 @@ class AdminAiControllerTest extends TestCase
                 'connectivity' => ['status' => 'not_checked'],
             ]);
 
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getFingerprint')->willReturn('test');
+        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getLastModified')->willReturn(987654321);
+
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $commandRepo,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -161,9 +186,15 @@ class AdminAiControllerTest extends TestCase
                 'connectivity' => ['status' => 'ok'],
             ]);
 
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getFingerprint')->willReturn('test');
+        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getLastModified')->willReturn(987654321);
+
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $commandRepo,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );

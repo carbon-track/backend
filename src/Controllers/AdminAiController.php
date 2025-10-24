@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -16,6 +17,7 @@ class AdminAiController
     public function __construct(
         private AuthService $authService,
         private AdminAiIntentService $intentService,
+        private AdminAiCommandRepository $commandRepository,
         private ?ErrorLogService $errorLogService = null,
         private ?LoggerInterface $logger = null
     ) {
@@ -72,6 +74,8 @@ class AdminAiController
 
             $result = $this->intentService->analyzeIntent($query, $context);
 
+            $commandsFingerprint = $this->commandRepository->getFingerprint();
+
             $payload = [
                 'success' => true,
                 'intent' => $result['intent'] ?? null,
@@ -79,7 +83,13 @@ class AdminAiController
                 'metadata' => array_merge($result['metadata'] ?? [], [
                     'mode' => $mode,
                     'timestamp' => gmdate(DATE_ATOM),
+                    'commandsFingerprint' => $commandsFingerprint,
                 ]),
+                'capabilities' => [
+                    'fingerprint' => $commandsFingerprint,
+                    'source' => $this->commandRepository->getActivePath(),
+                    'lastModified' => $this->commandRepository->getLastModified(),
+                ],
             ];
 
             return $this->json($response, $payload);
@@ -130,6 +140,9 @@ class AdminAiController
             }
 
             $diagnostics = $this->intentService->getDiagnostics($performCheck);
+            $diagnostics['commands']['fingerprint'] = $this->commandRepository->getFingerprint();
+            $diagnostics['commands']['source'] = $this->commandRepository->getActivePath();
+            $diagnostics['commands']['lastModified'] = $this->commandRepository->getLastModified();
 
             return $this->json($response, [
                 'success' => true,
