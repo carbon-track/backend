@@ -9650,10 +9650,163 @@
           }
         }
       }
+    },
+    "/admin/ai/diagnostics": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "查看管理员 AI 配置诊断信息",
+        "description": "返回 AI 助手当前配置、可用性以及可选的实时连通性检测结果。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "check",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "是否执行实时连通性检测，默认为 false。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "诊断信息返回成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/AdminAiDiagnosticsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AdminAiDiagnosticsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "diagnostics": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "AI 服务是否启用"
+              },
+              "configuration": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "type": "number",
+                    "format": "float"
+                  },
+                  "maxTokens": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "client": {
+                "type": "object",
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "class": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              },
+              "commands": {
+                "type": "object",
+                "properties": {
+                  "navigationTargets": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "quickActions": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "managementActions": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "connectivity": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "description": "ok / error / skipped / not_checked"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "error": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "exception": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "model": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "finish_reason": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "usage": {
+                    "type": "object",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "FilePresignRequest": {
         "type": "object",
         "required": [

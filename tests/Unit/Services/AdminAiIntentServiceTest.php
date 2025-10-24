@@ -145,6 +145,62 @@ class AdminAiIntentServiceTest extends TestCase
         $this->assertSame('/admin/custom-dashboard', $result['intent']['target']['route']);
     }
 
+    public function testDiagnosticsReportsDisabledWhenClientMissing(): void
+    {
+        $service = new AdminAiIntentService(null, new NullLogger());
+
+        $diagnostics = $service->getDiagnostics();
+
+        $this->assertFalse($diagnostics['enabled']);
+        $this->assertSame('skipped', $diagnostics['connectivity']['status']);
+        $this->assertFalse($diagnostics['client']['available']);
+    }
+
+    public function testDiagnosticsConnectivityCheckSuccess(): void
+    {
+        $response = [
+            'model' => 'diag-model',
+            'choices' => [
+                [
+                    'finish_reason' => 'stop',
+                    'message' => [
+                        'role' => 'assistant',
+                        'content' => 'OK',
+                    ],
+                ],
+            ],
+            'usage' => [
+                'prompt_tokens' => 3,
+                'completion_tokens' => 1,
+                'total_tokens' => 4,
+            ],
+        ];
+
+        $client = new FakeLlmClient($response);
+        $service = new AdminAiIntentService($client, new NullLogger(), ['model' => 'diag-model']);
+
+        $diagnostics = $service->getDiagnostics(true);
+
+        $this->assertTrue($diagnostics['enabled']);
+        $this->assertSame('ok', $diagnostics['connectivity']['status']);
+        $this->assertSame('diag-model', $diagnostics['connectivity']['model']);
+        $this->assertNotNull($client->lastPayload);
+        $this->assertSame(1, $client->lastPayload['max_tokens']);
+        $this->assertSame('Ping', $client->lastPayload['messages'][1]['content']);
+    }
+
+    public function testDiagnosticsConnectivityCheckError(): void
+    {
+        $client = new ThrowingLlmClient(new \RuntimeException('bad gateway'));
+        $service = new AdminAiIntentService($client, new NullLogger());
+
+        $diagnostics = $service->getDiagnostics(true);
+
+        $this->assertSame('error', $diagnostics['connectivity']['status']);
+        $this->assertSame('bad gateway', $diagnostics['connectivity']['error']);
+        $this->assertSame(\RuntimeException::class, $diagnostics['connectivity']['exception']);
+    }
+
     /**
      * @param array<string,mixed> $content
      * @return array<string,mixed>
@@ -196,5 +252,21 @@ class FakeLlmClient implements LlmClientInterface
 
     /** @var array<string,mixed>|null */
     public ?array $lastPayload = null;
+}
+
+class ThrowingLlmClient implements LlmClientInterface
+{
+    public function __construct(private \Throwable $throwable)
+    {
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    public function createChatCompletion(array $payload): array
+    {
+        throw $this->throwable;
+    }
 }
 

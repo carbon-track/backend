@@ -111,5 +111,69 @@ class AdminAiControllerTest extends TestCase
         $this->assertFalse($payload['success']);
         $this->assertSame('INVALID_QUERY', $payload['code']);
     }
+
+    public function testDiagnosticsReturnsData(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $intentService
+            ->expects($this->once())
+            ->method('getDiagnostics')
+            ->with(false)
+            ->willReturn([
+                'enabled' => true,
+                'connectivity' => ['status' => 'not_checked'],
+            ]);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $this->createMock(ErrorLogService::class),
+            new NullLogger()
+        );
+
+        $request = makeRequest('GET', '/admin/ai/diagnostics');
+        $response = $controller->diagnostics($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertTrue($payload['diagnostics']['enabled']);
+        $this->assertSame('not_checked', $payload['diagnostics']['connectivity']['status']);
+    }
+
+    public function testDiagnosticsHonorsConnectivityFlag(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $intentService
+            ->expects($this->once())
+            ->method('getDiagnostics')
+            ->with(true)
+            ->willReturn([
+                'enabled' => true,
+                'connectivity' => ['status' => 'ok'],
+            ]);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $this->createMock(ErrorLogService::class),
+            new NullLogger()
+        );
+
+        $request = makeRequest('GET', '/admin/ai/diagnostics', null, ['check' => 'true']);
+        $response = $controller->diagnostics($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertSame('ok', $payload['diagnostics']['connectivity']['status']);
+    }
 }
 

@@ -204,6 +204,7 @@ return function (App $app) {
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
+            $admin->get('/ai/diagnostics', [AdminAiController::class, 'diagnostics']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
             $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);

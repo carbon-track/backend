@@ -109,6 +109,43 @@ class AdminAiController
         }
     }
 
+    public function diagnostics(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Admin access required',
+                ], 403);
+            }
+
+            $queryParams = $request->getQueryParams();
+            $performCheck = false;
+            $flag = $queryParams['check'] ?? $queryParams['connectivity'] ?? $queryParams['ping'] ?? null;
+            if (is_string($flag)) {
+                $performCheck = in_array(strtolower($flag), ['1', 'true', 'yes', 'on'], true);
+            } elseif (is_bool($flag)) {
+                $performCheck = $flag;
+            }
+
+            $diagnostics = $this->intentService->getDiagnostics($performCheck);
+
+            return $this->json($response, [
+                'success' => true,
+                'diagnostics' => $diagnostics,
+            ]);
+        } catch (\Throwable $throwable) {
+            $this->logException($throwable, $request, 'AdminAI diagnostics error');
+
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Failed to gather AI diagnostics',
+                'code' => 'AI_DIAGNOSTICS_ERROR',
+            ], 500);
+        }
+    }
+
     /**
      * @param array<string,mixed> $payload
      */

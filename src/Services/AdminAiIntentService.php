@@ -240,6 +240,86 @@ class AdminAiIntentService
     }
 
     /**
+     * @return array<string,mixed>
+     */
+    public function getDiagnostics(bool $performConnectivityCheck = false): array
+    {
+        $diagnostics = [
+            'enabled' => $this->enabled,
+            'configuration' => [
+                'model' => $this->model,
+                'temperature' => $this->temperature,
+                'maxTokens' => $this->maxTokens,
+            ],
+            'client' => [
+                'available' => $this->client !== null,
+                'class' => $this->client ? $this->client::class : null,
+            ],
+            'commands' => [
+                'navigationTargets' => count($this->navigationTargets),
+                'quickActions' => count($this->quickActions),
+                'managementActions' => count($this->actionDefinitions),
+            ],
+            'connectivity' => [
+                'status' => $this->enabled ? 'not_checked' : 'skipped',
+            ],
+        ];
+
+        if (!$performConnectivityCheck) {
+            return $diagnostics;
+        }
+
+        if (!$this->enabled) {
+            $diagnostics['connectivity'] = [
+                'status' => 'skipped',
+                'reason' => 'LLM client not configured',
+            ];
+
+            return $diagnostics;
+        }
+
+        try {
+            $payload = [
+                'model' => $this->model,
+                'temperature' => 0.0,
+                'max_tokens' => 1,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are a connectivity probe for diagnostics. Respond with OK.',
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => 'Ping',
+                    ],
+                ],
+            ];
+
+            $response = $this->client->createChatCompletion($payload);
+
+            $diagnostics['connectivity'] = [
+                'status' => 'ok',
+                'model' => $response['model'] ?? null,
+                'finish_reason' => $response['choices'][0]['finish_reason'] ?? null,
+                'usage' => $response['usage'] ?? null,
+            ];
+        } catch (\Throwable $exception) {
+            $this->logger->error('Admin AI diagnostics connectivity check failed', [
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
+
+            $diagnostics['connectivity'] = [
+                'status' => 'error',
+                'exception' => $exception::class,
+                'error' => $exception->getMessage(),
+            ];
+        }
+
+        return $diagnostics;
+    }
+
+    /**
      * @param array<string,mixed> $context
      * @return array<string,mixed>
      */
