@@ -45,6 +45,10 @@ use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Services\Ai\OpenAiClientAdapter;
 use CarbonTrack\Controllers\AdminAiController;
 use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Utils;
+use Psr\Http\Message\ResponseInterface;
 use OpenAI\Factory as OpenAiFactory;
 
 $__deps_initializer = function (Container $container) {
@@ -219,9 +223,45 @@ $__deps_initializer = function (Container $container) {
             $factory = new OpenAiFactory();
             $factory = $factory->withApiKey($apiKey);
 
+            $handlerStack = HandlerStack::create();
+
+            $handlerStack->push(Middleware::mapResponse(function (ResponseInterface $response) {
+                $headers = $response->getHeader('x-request-id');
+                if (!empty($headers)) {
+                    return $response;
+                }
+
+                $stream = (string) $response->getBody();
+                $body = json_decode($stream, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($body)) {
+                    $requestId = $body['id'] ?? ($body['metadata']['request_id'] ?? null);
+                    if (!is_string($requestId) || $requestId === '') {
+                        try {
+                            $requestId = 'llm-' . bin2hex(random_bytes(8));
+                        } catch (\Throwable) {
+                            $requestId = 'llm-' . bin2hex(openssl_random_pseudo_bytes(8));
+                        }
+                        if (!isset($body['metadata']) || !is_array($body['metadata'])) {
+                            $body['metadata'] = [];
+                        }
+                        $body['metadata']['request_id'] = $requestId;
+                        $body['id'] = $body['id'] ?? $requestId;
+                        $stream = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: $stream;
+                    }
+
+                    return $response
+                        ->withHeader('x-request-id', $requestId)
+                        ->withoutHeader('Content-Length')
+                        ->withBody(Utils::streamFor($stream));
+                }
+
+                return $response->withBody(Utils::streamFor($stream))->withoutHeader('Content-Length');
+            }));
+
             $httpClient = new GuzzleClient([
                 'timeout' => 15,
                 'connect_timeout' => 5,
+                'handler' => $handlerStack,
             ]);
 
             $factory = $factory->withHttpClient($httpClient);
