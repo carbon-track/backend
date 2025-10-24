@@ -7543,6 +7543,73 @@
         }
       }
     },
+    "/admin/messages/broadcasts/flush": {
+      "post": {
+        "tags": [
+          "Admin",
+          "Message"
+        ],
+        "summary": "����㲥�ʼ��ŶӴ��� (����Ա)",
+        "description": "����Ա��ϵͳ�����ȴ�Ͷ�ʼ�ĵ㲥����ѡ����Ƿǿ�Ƶ��·�����ʼ���",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "description": "�ÿ�ζ�ȡ�����еĹ㲥��������Ĭ�� 10��"
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "����Ϊ true ʱ����ʵ�ʼ�Ͷ�ŷ�������ʹ��̨��ִ�ж�ʧ��Ҳ�������е���䡣��ʹ�ñ�ѡ����Ҫ�ʼ��������ѡ"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "�������ȴ����еĹ㲥�����",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastFlushResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Email service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/users/{id}/points/adjust": {
       "post": {
         "tags": [
@@ -12586,6 +12653,65 @@
           }
         }
       },
+      "BroadcastFlushResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "processed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BroadcastFlushItem"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "BroadcastFlushItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "partial",
+              "failed",
+              "skipped",
+              "queued"
+            ]
+          },
+          "attempted": {
+            "type": "integer"
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "missing_email_user_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "RecentActivityImage": {
         "type": "object",
         "description": "Proof image metadata including optional presigned download URL.",
@@ -12749,6 +12875,14 @@
               "type": "string"
             },
             "description": "Diagnostic messages when delivery was skipped or failed."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timestamp indicating when email handling was completed, if available."
           }
         }
       },

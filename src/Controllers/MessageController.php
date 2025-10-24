@@ -1025,6 +1025,244 @@ $auditPayload = [
         }
     }
 
+    /**
+     * ����Ŀǰ��ŵĹ㲥�ʼ���ҵ����Ա��
+     */
+    public function flushBroadcastEmailQueue(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, ['error' => 'Admin access required'], 403);
+            }
+
+            $query = $request->getQueryParams();
+            $body = $request->getParsedBody();
+            $params = [];
+            if (is_array($query)) {
+                $params = array_merge($params, $query);
+            }
+            if (is_array($body)) {
+                $params = array_merge($params, $body);
+            }
+
+            $limit = isset($params['limit']) ? (int)$params['limit'] : 10;
+            $limit = max(1, min(50, $limit));
+
+            $forceSend = false;
+            if (isset($params['force'])) {
+                $rawForce = $params['force'];
+                if (is_bool($rawForce)) {
+                    $forceSend = $rawForce;
+                } elseif (is_numeric($rawForce)) {
+                    $forceSend = ((int)$rawForce) !== 0;
+                } elseif (is_string($rawForce)) {
+                    $normalized = strtolower(trim($rawForce));
+                    $forceSend = in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+                }
+            }
+
+            if ($forceSend && $this->emailService === null) {
+                return $this->json($response, [
+                    'error' => 'Email service unavailable, cannot force send queued broadcasts',
+                ], 503);
+            }
+
+            $fetchLimit = max($limit * 3, $limit);
+            $stmt = $this->db->prepare('SELECT * FROM message_broadcasts ORDER BY created_at ASC LIMIT :limit');
+            if (!$stmt) {
+                return $this->json($response, ['error' => 'Failed to inspect broadcast queue'], 500);
+            }
+            $stmt->bindValue(':limit', $fetchLimit, PDO::PARAM_INT);
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $processed = [];
+            $skipped = [];
+            $now = date('Y-m-d H:i:s');
+
+            foreach ($rows as $row) {
+                if (count($processed) >= $limit) {
+                    break;
+                }
+
+                $broadcastId = isset($row['id']) ? (int)$row['id'] : 0;
+                if ($broadcastId <= 0) {
+                    continue;
+                }
+
+                $delivery = $this->normalizeEmailDeliveryMeta($row['email_delivery_snapshot'] ?? null);
+                if (!in_array($delivery['status'], ['queued', 'partial'], true)) {
+                    $skipped[] = $broadcastId;
+                    continue;
+                }
+
+                if ($delivery['completed_at'] !== null && !$forceSend) {
+                    $skipped[] = $broadcastId;
+                    continue;
+                }
+
+                $createdAtRaw = $row['created_at'] ?? $now;
+                if ($createdAtRaw instanceof \DateTimeInterface) {
+                    $startTime = $createdAtRaw->format('Y-m-d H:i:s');
+                } else {
+                    $startTime = is_string($createdAtRaw) && $createdAtRaw !== '' ? $createdAtRaw : $now;
+                }
+                $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +90 minutes'));
+
+                $messageIds = $this->decodeIdList($row['message_ids_snapshot'] ?? []);
+                $contentHash = isset($row['content_hash']) && is_string($row['content_hash']) ? $row['content_hash'] : null;
+                $recipients = $this->loadBroadcastRecipients(
+                    (string)($row['title'] ?? ''),
+                    $startTime,
+                    $endTime,
+                    $messageIds,
+                    $contentHash
+                );
+
+                $deliverable = [];
+                $missingEmailUserIds = [];
+                foreach ($recipients as $recipient) {
+                    $receiverId = isset($recipient['receiver_id']) ? (int)$recipient['receiver_id'] : 0;
+                    if ($receiverId <= 0) {
+                        continue;
+                    }
+                    if (isset($deliverable[$receiverId]) || in_array($receiverId, $missingEmailUserIds, true)) {
+                        continue;
+                    }
+                    $email = trim((string)($recipient['email'] ?? ''));
+                    if ($email === '') {
+                        $missingEmailUserIds[] = $receiverId;
+                        continue;
+                    }
+                    $name = (string)($recipient['username'] ?? '');
+                    if ($name === '') {
+                        $name = $email;
+                    }
+                    $deliverable[$receiverId] = [
+                        'email' => $email,
+                        'name' => $name,
+                    ];
+                }
+
+                $deliverableList = array_values($deliverable);
+                $attempted = count($deliverableList);
+
+                $status = $delivery['status'];
+                $errors = $delivery['errors'];
+                $failedChunks = $delivery['failed_chunks'];
+                $successfulChunks = $delivery['successful_chunks'];
+                $failedRecipientIds = $delivery['failed_recipient_ids'];
+
+                $sendResult = true;
+                if ($forceSend && $attempted > 0 && $this->emailService) {
+                    $payload = [];
+                    foreach ($deliverableList as $entry) {
+                        $payload[] = [
+                            'email' => $entry['email'],
+                            'name' => $entry['name'],
+                        ];
+                    }
+
+                    $sendResult = $this->emailService->sendAnnouncementBroadcast(
+                        $payload,
+                        (string)($row['title'] ?? ''),
+                        (string)($row['content'] ?? ''),
+                        (string)($row['priority'] ?? Message::PRIORITY_NORMAL)
+                    );
+
+                    if ($sendResult) {
+                        $status = empty($missingEmailUserIds) ? 'sent' : 'partial';
+                        $successfulChunks = max(1, $successfulChunks);
+                        $failedChunks = 0;
+                        $failedRecipientIds = [];
+                    } else {
+                        $status = 'failed';
+                        $failedChunks = max(1, $failedChunks);
+                        $successfulChunks = max(0, $successfulChunks);
+                        $failedRecipientIds = array_keys($deliverable);
+                        $errorMessage = $this->emailService->getLastError() ?? 'Broadcast email dispatch failed';
+                        if ($errorMessage !== '' && !in_array($errorMessage, $errors, true)) {
+                            $errors[] = $errorMessage;
+                        }
+                    }
+                } else {
+                    if ($attempted > 0) {
+                        $status = empty($missingEmailUserIds) ? 'sent' : 'partial';
+                        $successfulChunks = max(1, $successfulChunks);
+                        $failedChunks = 0;
+                        $failedRecipientIds = [];
+                    } else {
+                        $status = 'skipped';
+                    }
+                }
+
+                $updatedDelivery = [
+                    'triggered' => true,
+                    'attempted_recipients' => $attempted,
+                    'successful_chunks' => $successfulChunks,
+                    'failed_chunks' => $failedChunks,
+                    'failed_recipient_ids' => array_values(array_unique($failedRecipientIds)),
+                    'missing_email_user_ids' => array_values(array_unique(array_merge(
+                        $delivery['missing_email_user_ids'] ?? [],
+                        $missingEmailUserIds
+                    ))),
+                    'status' => $status,
+                    'errors' => array_values(array_unique($errors)),
+                    'completed_at' => $now,
+                ];
+
+                $update = $this->db->prepare('UPDATE message_broadcasts SET email_delivery_snapshot = :snapshot, updated_at = NOW() WHERE id = :id');
+                if ($update) {
+                    $update->execute([
+                        ':snapshot' => $this->encodeJson($updatedDelivery),
+                        ':id' => $broadcastId,
+                    ]);
+                }
+
+                $processed[] = [
+                    'id' => $broadcastId,
+                    'status' => $status,
+                    'attempted' => $attempted,
+                    'force' => $forceSend,
+                    'missing_email_user_ids' => $missingEmailUserIds,
+                    'errors' => $updatedDelivery['errors'],
+                ];
+            }
+
+            if (!empty($processed)) {
+                $auditPayload = [
+                    'action' => 'broadcast_email_flush',
+                    'operation_category' => 'admin_message',
+                    'user_id' => $user['id'],
+                    'actor_type' => 'admin',
+                    'change_type' => 'update',
+                    'data' => [
+                        'requested_limit' => $limit,
+                        'force_send' => $forceSend,
+                        'processed_ids' => array_column($processed, 'id'),
+                        'skipped_ids' => $skipped,
+                    ],
+                ];
+                $this->auditLog->log($auditPayload);
+            }
+
+            return $this->json($response, [
+                'success' => true,
+                'processed' => $processed,
+                'skipped' => $skipped,
+                'count' => count($processed),
+            ]);
+        } catch (\Throwable $e) {
+            try {
+                if ($this->errorLogService) {
+                    $this->errorLogService->logException($e, $request, ['context' => 'flushBroadcastEmailQueue']);
+                }
+            } catch (\Throwable $ignore) {}
+            return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
     private function logBroadcastError(Request $request, string $message, array $context = []): ?int
     {
         if (!$this->errorLogService) {
@@ -1135,7 +1373,7 @@ $auditPayload = [
             $ids = array_values(array_filter(array_map('intval', $messageIds), static fn(int $value): bool => $value > 0));
             if (!empty($ids)) {
                 $placeholders = implode(',', array_fill(0, count($ids), '?'));
-                $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
+                $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username, u.email FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
                 $stmt = $this->db->prepare($sql);
                 if (!$stmt) {
                     return [];
@@ -1147,7 +1385,7 @@ $auditPayload = [
                 return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
             }
 
-            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
+            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username, u.email FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
             $stmt = $this->db->prepare($sql);
             if (!$stmt) {
                 return [];
@@ -1571,6 +1809,7 @@ $auditPayload = [
             'missing_email_user_ids' => [],
             'status' => 'skipped',
             'errors' => [],
+            'completed_at' => null,
         ];
 
         if (is_string($value) && $value !== '') {
@@ -1618,6 +1857,13 @@ $auditPayload = [
             $normalizedErrors[] = $trimmed;
         }
         $result['errors'] = $normalizedErrors;
+        $completedAt = $value['completed_at'] ?? null;
+        if ($completedAt instanceof \DateTimeInterface) {
+            $completedAt = $completedAt->format('Y-m-d H:i:s');
+        } elseif (!is_string($completedAt) || $completedAt === '') {
+            $completedAt = null;
+        }
+        $result['completed_at'] = $completedAt;
 
         return $result;
     }

@@ -9,6 +9,7 @@ use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\EmailService;
 use CarbonTrack\Models\Message;
 
 class MessageControllerTest extends TestCase
@@ -660,6 +661,155 @@ class MessageControllerTest extends TestCase
         $this->assertSame([], $item['email_delivery']['errors']);
     }
 
+    public function testFlushBroadcastQueueMarksQueuedAsSentWithoutForce(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->sqliteCreateFunction('NOW', fn(): string => date('Y-m-d H:i:s'));
+
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            created_at TEXT,
+            email_delivery_snapshot TEXT,
+            message_ids_snapshot TEXT,
+            content_hash TEXT,
+            updated_at TEXT
+        )');
+
+        $title = 'Queue Notice';
+        $content = 'Please review the latest announcement.';
+        $priority = 'urgent';
+        $createdAt = '2025-01-01 10:00:00';
+        $hash = hash('sha256', $title . '||' . $content);
+
+        $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)')
+            ->execute([10, 'QueueUser', 'queue@example.com']);
+
+        $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)')
+            ->execute([501, 10, $title, $content, 0, $createdAt]);
+
+        $snapshot = json_encode([
+            'triggered' => true,
+            'attempted_recipients' => 1,
+            'successful_chunks' => 0,
+            'failed_chunks' => 0,
+            'failed_recipient_ids' => [],
+            'missing_email_user_ids' => [],
+            'status' => 'queued',
+            'errors' => [],
+            'completed_at' => null,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $pdo->prepare('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([1, $title, $content, $priority, $createdAt, $snapshot, json_encode([501]), $hash]);
+
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log');
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 88, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->flushBroadcastEmailQueue($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame(1, $json['count']);
+        $this->assertSame('sent', $json['processed'][0]['status']);
+
+        $snapshotRow = $pdo->query('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 1')->fetchColumn();
+        $this->assertNotFalse($snapshotRow);
+        $decoded = json_decode((string)$snapshotRow, true);
+        $this->assertSame('sent', $decoded['status']);
+        $this->assertNotEmpty($decoded['completed_at']);
+    }
+
+    public function testFlushBroadcastQueueForceSendFailure(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->sqliteCreateFunction('NOW', fn(): string => date('Y-m-d H:i:s'));
+
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            created_at TEXT,
+            email_delivery_snapshot TEXT,
+            message_ids_snapshot TEXT,
+            content_hash TEXT,
+            updated_at TEXT
+        )');
+
+        $title = 'Force Send';
+        $content = 'Force send announcement';
+        $priority = 'high';
+        $createdAt = '2025-02-02 09:00:00';
+        $hash = hash('sha256', $title . '||' . $content);
+
+        $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)')
+            ->execute([20, 'ForceUser', 'force@example.com']);
+
+        $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)')
+            ->execute([701, 20, $title, $content, 0, $createdAt]);
+
+        $snapshot = json_encode([
+            'triggered' => true,
+            'attempted_recipients' => 1,
+            'successful_chunks' => 0,
+            'failed_chunks' => 0,
+            'failed_recipient_ids' => [],
+            'missing_email_user_ids' => [],
+            'status' => 'queued',
+            'errors' => [],
+            'completed_at' => null,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $pdo->prepare('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)')
+            ->execute([2, $title, $content, $priority, $createdAt, $snapshot, json_encode([701]), $hash]);
+
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log');
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 59, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $emailService = $this->createMock(EmailService::class);
+        $emailService->expects($this->once())
+            ->method('sendAnnouncementBroadcast')
+            ->willReturn(false);
+        $emailService->method('getLastError')->willReturn('mailer down');
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth, $emailService);
+        $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5, 'force' => 1]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->flushBroadcastEmailQueue($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('failed', $json['processed'][0]['status']);
+        $this->assertContains('mailer down', $json['processed'][0]['errors']);
+
+        $snapshotRow = $pdo->query('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 2')->fetchColumn();
+        $this->assertNotFalse($snapshotRow);
+        $decoded = json_decode((string)$snapshotRow, true);
+        $this->assertSame('failed', $decoded['status']);
+        $this->assertContains('mailer down', $decoded['errors']);
+    }
 }
 
 
