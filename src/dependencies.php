@@ -216,7 +216,7 @@ $__deps_initializer = function (Container $container) {
             'encryption' => $_ENV['MAIL_ENCRYPTION'] ?? 'tls',
             'from_address' => $_ENV['MAIL_FROM_ADDRESS'] ?? 'noreply@carbontrack.com',
             'from_name' => $_ENV['MAIL_FROM_NAME'] ?? 'CarbonTrack',
-            'debug' => (bool) ($_ENV['APP_DEBUG'] ?? false),
+            'debug' => (strtolower((string) ($_ENV['APP_ENV'] ?? 'development')) !== 'production'),
             'force_simulation' => $_ENV['MAIL_SIMULATE'] ?? false,
             'smtp_debug' => isset($_ENV['MAIL_SMTP_DEBUG']) ? (int) $_ENV['MAIL_SMTP_DEBUG'] : 0,
             'subjects' => [

@@ -21,7 +21,9 @@ use CarbonTrack\Middleware\LoggingMiddleware;
 use CarbonTrack\Middleware\IdempotencyMiddleware;
 use CarbonTrack\Services\DatabaseService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\ErrorResponseBuilder;
 use Slim\Middleware\ErrorMiddleware;
+use Slim\Exception\HttpException;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -30,9 +32,18 @@ try {
     $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');
     $dotenv->load();
 } catch (\Exception $e) {
-    // If .env file doesn't exist, set default values
-    $_ENV['APP_ENV'] = $_ENV['APP_ENV'] ?? 'development';
-    $_ENV['APP_DEBUG'] = $_ENV['APP_DEBUG'] ?? 'true';
+    // If .env file doesn't exist, Dotenv will throw; fall back to defaults below.
+}
+
+$resolvedAppEnv = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?? 'development';
+$resolvedAppEnv = is_string($resolvedAppEnv) ? strtolower($resolvedAppEnv) : 'development';
+$_ENV['APP_ENV'] = $resolvedAppEnv;
+$_SERVER['APP_ENV'] = $resolvedAppEnv;
+putenv('APP_ENV=' . $resolvedAppEnv);
+$isProduction = $resolvedAppEnv === 'production';
+
+if (!defined('CARBONTRACK_NO_EMIT')) {
+    define('CARBONTRACK_NO_EMIT', false);
 }
 
 // Create Container and register dependencies before creating the app
@@ -49,7 +60,7 @@ $app = AppFactory::create();
 
 // 1. Error Middleware - Added first, so it executes last, catching all exceptions.
 $errorMiddleware = $app->addErrorMiddleware(
-    (bool) ($_ENV['APP_DEBUG'] ?? false),
+    !$isProduction,
     true,
     true
 );
@@ -75,10 +86,6 @@ try {
 // 5. CORS Middleware - Added last, so it executes first.
 // This allows it to intercept preflight OPTIONS requests before the router even runs.
 $app->add(new CorsMiddleware());
-
-// Create Request object from globals
-$serverRequestCreator = ServerRequestCreatorFactory::create();
-$request = $serverRequestCreator->createServerRequestFromGlobals();
 
 // Custom error handler for 404 errors
 $errorMiddleware->setErrorHandler(
@@ -108,7 +115,7 @@ $errorMiddleware->setDefaultErrorHandler(
         bool $displayErrorDetails,
         bool $logErrors,
         bool $logErrorDetails
-    ) use ($container) {
+    ) use ($container, $resolvedAppEnv) {
         try {
             $els = $container->get(ErrorLogService::class);
             $els->logException($exception, $request);
@@ -116,17 +123,35 @@ $errorMiddleware->setDefaultErrorHandler(
             error_log('Failed to persist unhandled exception: ' . $e->getMessage());
         }
 
+        try {
+            if ($container->has(LoggerInterface::class)) {
+                $container->get(LoggerInterface::class)->error('Unhandled application exception', [
+                    'exception' => $exception,
+                    'environment' => $resolvedAppEnv,
+                    'display_error_details' => $displayErrorDetails,
+                    'log_errors' => $logErrors,
+                    'log_error_details' => $logErrorDetails,
+                ]);
+            }
+        } catch (Throwable $loggerEx) {
+            error_log('Failed to log exception via logger: ' . $loggerEx->getMessage());
+        }
+
         $response = new \Slim\Psr7\Response();
-        $payload = [
-            'success' => false,
-            'error' => 'Server Error',
-            'message' => $displayErrorDetails ? $exception->getMessage() : 'An internal error has occurred',
-            'timestamp' => date(APP_DATE_FMT),
-            'logged' => $logErrors,
-            'log_details' => $logErrorDetails
-        ];
-        $response->getBody()->write(json_encode($payload));
-        return $response->withStatus(500)->withHeader('Content-Type', APP_JSON);
+        $status = 500;
+        if ($exception instanceof HttpException) {
+            $status = $exception->getStatusCode();
+        } elseif (method_exists($exception, 'getStatusCode')) {
+            $derivedStatus = $exception->getStatusCode();
+            if (is_int($derivedStatus) && $derivedStatus >= 400 && $derivedStatus <= 599) {
+                $status = $derivedStatus;
+            }
+        }
+        $payload = ErrorResponseBuilder::build($exception, $request, $resolvedAppEnv, $status);
+        $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        return $response
+            ->withStatus($status)
+            ->withHeader('Content-Type', APP_JSON);
     }
 );
 
@@ -146,6 +171,19 @@ $app->get('/debug', function ($request, $response) {
 // Register routes
 $routes = require_once __DIR__ . '/../src/routes.php';
 $routes($app);
+
+if (CARBONTRACK_NO_EMIT === true) {
+    return [
+        'app' => $app,
+        'container' => $container,
+        'errorMiddleware' => $errorMiddleware,
+        'environment' => $resolvedAppEnv,
+    ];
+}
+
+// Create Request object from globals
+$serverRequestCreator = ServerRequestCreatorFactory::create();
+$request = $serverRequestCreator->createServerRequestFromGlobals();
 
 // Run App
 $response = $app->handle($request);

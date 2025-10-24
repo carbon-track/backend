@@ -340,13 +340,15 @@ class MessageController
             $stmt->execute(['id' => $messageId]);
 
             // 记录审计日志
-            $this->auditLog->log(
-                $user['id'],
-                'message_deleted',
-                'messages',
-                $messageId,
-                []
-            );
+            $this->auditLog->log([
+                'user_id' => $user['id'],
+                'actor_type' => 'user',
+                'action' => 'message_deleted',
+                'operation_category' => 'message',
+                'affected_table' => 'messages',
+                'affected_id' => $messageId,
+                'data' => ['message_id' => $messageId],
+            ]);
 
             return $this->json($response, [
                 'success' => true,
@@ -403,13 +405,15 @@ class MessageController
             $affectedRows = $stmt->rowCount();
 
             // 记录审计日志
-            $this->auditLog->log(
-                $user['id'],
-                'messages_batch_deleted',
-                'messages',
-                null,
-                ['message_ids' => $messageIds, 'count' => $affectedRows]
-            );
+            $this->auditLog->log([
+                'user_id' => $user['id'],
+                'actor_type' => 'user',
+                'action' => 'messages_batch_deleted',
+                'operation_category' => 'message',
+                'affected_table' => 'messages',
+                'affected_id' => null,
+                'data' => ['message_ids' => $messageIds, 'count' => $affectedRows],
+            ]);
 
             return $this->json($response, [
                 'success' => true,

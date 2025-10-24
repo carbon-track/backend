@@ -7,6 +7,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Services\BadgeService;
+use CarbonTrack\Services\StatisticsService;
 
 class AdminControllerTest extends TestCase
 {
@@ -21,11 +22,12 @@ class AdminControllerTest extends TestCase
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
 
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 0]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = new AdminController($pdo, $auth, $audit, $badgeService);
+        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService);
         $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
         $prop->setAccessible(true);
         $prop->setValue($controller, 'lastlgn');
@@ -41,6 +43,7 @@ class AdminControllerTest extends TestCase
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
 
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => 1]);
         $auth->method('isAdminUser')->willReturn(true);
@@ -80,7 +83,7 @@ class AdminControllerTest extends TestCase
             )
             ->willReturnOnConsecutiveCalls($listStmt, $countStmt);
 
-        $controller = new AdminController($pdo, $auth, $audit, $badgeService);
+        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService);
         $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
         $prop->setAccessible(true);
         $prop->setValue($controller, 'lastlgn');

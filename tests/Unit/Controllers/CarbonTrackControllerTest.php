@@ -129,7 +129,7 @@ class CarbonTrackControllerTest extends TestCase
         $calc = $this->createMock(CarbonCalculatorService::class);
         $calc->method('calculateCarbonSavings')->willReturn(['carbon_savings'=>12.3]);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
-        $msg->expects($this->exactly(3))->method('sendMessage');
+        $msg->expects($this->once())->method('sendMessage');
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $audit->expects($this->once())->method('log');
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -415,8 +415,11 @@ class CarbonTrackControllerTest extends TestCase
 
         // fetch record
         $fetch = $this->createMock(\PDOStatement::class);
+        $fetch->method('bindValue')->willReturn(true);
         $fetch->method('execute')->willReturn(true);
-        $fetch->method('fetch')->willReturn(['id'=>'r1','user_id'=>1,'points_earned'=>20,'status'=>'pending']);
+        $fetch->method('fetchAll')->willReturn([
+            ['id'=>'r1','user_id'=>1,'points_earned'=>20,'status'=>'pending']
+        ]);
         // update record status
         $update = $this->createMock(\PDOStatement::class);
         $update->method('execute')->willReturn(true);
@@ -445,8 +448,11 @@ class CarbonTrackControllerTest extends TestCase
 
         // fetch record
         $fetch = $this->createMock(\PDOStatement::class);
+        $fetch->method('bindValue')->willReturn(true);
         $fetch->method('execute')->willReturn(true);
-        $fetch->method('fetch')->willReturn(['id'=>'r9','user_id'=>1,'points_earned'=>30,'status'=>'pending']);
+        $fetch->method('fetchAll')->willReturn([
+            ['id'=>'r9','user_id'=>1,'points_earned'=>30,'status'=>'pending']
+        ]);
         // update record status
         $update = $this->createMock(\PDOStatement::class);
         $update->method('execute')->willReturn(true);

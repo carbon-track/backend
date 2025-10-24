@@ -291,7 +291,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": [\n                  "email",\n                  "cf_turnstile_response"\n                ],
+                "required": [
+                  "email",
+                  "cf_turnstile_response"
+                ],
                 "properties": {
                   "email": {
                     "type": "string",
@@ -9499,7 +9502,7 @@
             "description": "旧接口错误字段（部分控制器仍返回）"
           }
         },
-        "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。"
+        "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。生产环境仅返回 code；开发/测试环境会附带 message。"
       },
       "RegisterRequest": {
         "type": "object",

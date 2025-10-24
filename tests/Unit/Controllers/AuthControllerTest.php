@@ -186,6 +186,11 @@ class AuthControllerTest extends TestCase
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
 
+        $now = new \DateTimeImmutable('now');
+        $futureExpiry = $now->modify('+30 minutes')->format('Y-m-d H:i:s');
+        $lastSentAt = $now->modify('-30 minutes')->format('Y-m-d H:i:s');
+        $resendAvailableAt = (new \DateTimeImmutable($lastSentAt))->modify('+1 hour')->format('Y-m-d H:i:s');
+
         $selectStmt = $this->createMock(\PDOStatement::class);
         $selectStmt->method('execute')->willReturn(true);
         $selectStmt->method('fetch')->willReturn([
@@ -202,9 +207,9 @@ class AuthControllerTest extends TestCase
             'password_hash' => password_hash('secret', PASSWORD_DEFAULT),
             'email_verified_at' => null,
             'verification_code' => '123456',
-            'verification_code_expires_at' => '2025-01-01 00:30:00',
+            'verification_code_expires_at' => $futureExpiry,
             'verification_send_count' => 1,
-            'verification_last_sent_at' => '2025-01-01 00:00:00'
+            'verification_last_sent_at' => $lastSentAt
         ]);
         $updateStmt = $this->createMock(\PDOStatement::class);
         $updateStmt->method('execute')->willReturn(true);
@@ -239,7 +244,7 @@ class AuthControllerTest extends TestCase
         $this->assertEquals('alice', $json['data']['user']['username']);
         $this->assertTrue($json['data']['email_verification_required']);
         $this->assertFalse($json['data']['email_verification_sent']);
-        $this->assertSame('2025-01-01 00:30:00', $json['data']['verification_expires_at']);
-        $this->assertSame('2025-01-01 01:00:00', $json['data']['verification_resend_available_at']);
+        $this->assertSame($futureExpiry, $json['data']['verification_expires_at']);
+        $this->assertSame($resendAvailableAt, $json['data']['verification_resend_available_at']);
     }
 }
