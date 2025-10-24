@@ -51,7 +51,6 @@ class AdminAiIntentService
         $defaults = self::defaultCommandConfig();
 
         $provided = $commandConfig;
-        $provided = $commandConfig;
         $navigationTargets = $provided['navigationTargets'] ?? $defaults['navigationTargets'];
         $quickActions = $provided['quickActions'] ?? $defaults['quickActions'];
         $managementActions = $provided['managementActions'] ?? $defaults['managementActions'];
@@ -585,7 +584,7 @@ PROMPT;
      * @param array<string,mixed> $rawResponse
      * @return array<string,mixed>
      */
-    private function normalizeResult(array $decoded, array $rawResponse): array
+    private function normalizeResult(array $decoded, array $rawResponse, string $originalQuery): array
     {
         $intent = $decoded['intent'] ?? null;
         if (!is_array($intent)) {
@@ -625,6 +624,7 @@ PROMPT;
                 $result['intent'] = $heuristic;
             }
         }
+
         return $result;
     }
 
@@ -984,125 +984,6 @@ PROMPT;
         return [
             'intent' => [
                 'type' => 'fallback',
-                    {
-                        $normalizedQuery = trim(mb_strtolower($query));
-                        if ($normalizedQuery === '') {
-                            return null;
-                        }
-
-                        $best = null;
-                        $bestScore = 0;
-                        $matchedKeywords = [];
-
-                        foreach ($this->navigationTargets as $id => $definition) {
-                            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
-                            if ($match['score'] > $bestScore) {
-                                $bestScore = $match['score'];
-                                $best = [
-                                    'type' => 'navigate',
-                                    'definition' => $definition,
-                                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
-                                ];
-                                $matchedKeywords = $match['keywords'];
-                            }
-                        }
-
-                        foreach ($this->quickActions as $id => $definition) {
-                            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
-                            if ($match['score'] > $bestScore) {
-                                $bestScore = $match['score'];
-                                $best = [
-                                    'type' => 'quick_action',
-                                    'definition' => $definition,
-                                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
-                                ];
-                                $matchedKeywords = $match['keywords'];
-                            }
-                        }
-
-                        if ($best === null || $bestScore === 0) {
-                            return null;
-                        }
-
-                        $definition = $best['definition'];
-                        $route = $definition['route'] ?? null;
-                        if (!is_string($route) || $route === '') {
-                            return null;
-                        }
-
-                        $mode = $best['type'] === 'quick_action' ? ($definition['mode'] ?? 'shortcut') : 'navigation';
-                        $queryParams = [];
-                        if (isset($definition['query']) && is_array($definition['query'])) {
-                            $queryParams = $definition['query'];
-                        }
-
-                        $confidence = min(0.9, 0.45 + 0.12 * min($bestScore, 6));
-                        $reasoning = 'Matched keywords: ' . implode(', ', array_unique($matchedKeywords));
-
-                        return [
-                            'type' => $best['type'],
-                            'label' => $definition['label'] ?? ($best['routeId'] ?? 'Navigate'),
-                            'confidence' => round($confidence, 2),
-                            'reasoning' => $reasoning,
-                            'target' => [
-                                'routeId' => $best['routeId'],
-                                'route' => $route,
-                                'mode' => $mode,
-                                'query' => $queryParams,
-                            ],
-                            'missing' => [],
-                        ];
-                    }
-
-                    /**
-                     * @return array{score:int,keywords:array<int,string>}
-                     */
-                    private function computeDefinitionMatch(string $normalizedQuery, array $definition): array
-                    {
-                        $score = 0;
-                        $matches = [];
-
-                        foreach ($this->collectDefinitionKeywords($definition) as $keyword) {
-                            $keyword = trim(mb_strtolower($keyword));
-                            if ($keyword === '') {
-                                continue;
-                            }
-                            if (mb_strpos($normalizedQuery, $keyword) !== false) {
-                                $score += max(1, (int) floor(mb_strlen($keyword) / 4));
-                                $matches[] = $keyword;
-                            }
-                        }
-
-                        return ['score' => $score, 'keywords' => $matches];
-                    }
-
-                    /**
-                     * @return array<int,string>
-                     */
-                    private function collectDefinitionKeywords(array $definition): array
-                    {
-                        $keywords = [];
-
-                        if (!empty($definition['keywords']) && is_array($definition['keywords'])) {
-                            foreach ($definition['keywords'] as $keyword) {
-                                if (is_string($keyword)) {
-                                    $keywords[] = $keyword;
-                                }
-                            }
-                        }
-
-                        foreach (['label', 'description'] as $field) {
-                            if (!empty($definition[$field]) && is_string($definition[$field])) {
-                                $keywords[] = $definition[$field];
-                            }
-                        }
-
-                        if (!empty($definition['route']) && is_string($definition['route'])) {
-                            $keywords[] = str_replace(['/admin/', '/'], ' ', $definition['route']);
-                        }
-
-                        return $keywords;
-                    }
                 'label' => '未能理解的指令',
                 'confidence' => 0.0,
                 'reasoning' => '无法从输入中提取明确的管理指令，请改用关键字搜索或再具体一些。',
@@ -1115,6 +996,127 @@ PROMPT;
                 'finish_reason' => 'fallback',
             ],
         ];
+    }
+
+    private function guessNavigationIntent(string $query): ?array
+    {
+        $normalizedQuery = trim(mb_strtolower($query));
+        if ($normalizedQuery === '') {
+            return null;
+        }
+
+        $best = null;
+        $bestScore = 0;
+        $matchedKeywords = [];
+
+        foreach ($this->navigationTargets as $id => $definition) {
+            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
+            if ($match['score'] > $bestScore) {
+                $bestScore = $match['score'];
+                $best = [
+                    'type' => 'navigate',
+                    'definition' => $definition,
+                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
+                ];
+                $matchedKeywords = $match['keywords'];
+            }
+        }
+
+        foreach ($this->quickActions as $id => $definition) {
+            $match = $this->computeDefinitionMatch($normalizedQuery, $definition);
+            if ($match['score'] > $bestScore) {
+                $bestScore = $match['score'];
+                $best = [
+                    'type' => 'quick_action',
+                    'definition' => $definition,
+                    'routeId' => is_string($id) ? $id : ($definition['id'] ?? null),
+                ];
+                $matchedKeywords = $match['keywords'];
+            }
+        }
+
+        if ($best === null || $bestScore === 0) {
+            return null;
+        }
+
+        $definition = $best['definition'];
+        $route = $definition['route'] ?? null;
+        if (!is_string($route) || $route === '') {
+            return null;
+        }
+
+        $mode = $best['type'] === 'quick_action' ? ($definition['mode'] ?? 'shortcut') : 'navigation';
+        $queryParams = [];
+        if (isset($definition['query']) && is_array($definition['query'])) {
+            $queryParams = $definition['query'];
+        }
+
+        $confidence = min(0.9, 0.45 + 0.12 * min($bestScore, 6));
+        $reasoning = 'Matched keywords: ' . implode(', ', array_unique($matchedKeywords));
+
+        return [
+            'type' => $best['type'],
+            'label' => $definition['label'] ?? ($best['routeId'] ?? 'Navigate'),
+            'confidence' => round($confidence, 2),
+            'reasoning' => $reasoning,
+            'target' => [
+                'routeId' => $best['routeId'],
+                'route' => $route,
+                'mode' => $mode,
+                'query' => $queryParams,
+            ],
+            'missing' => [],
+        ];
+    }
+
+    /**
+     * @return array{score:int,keywords:array<int,string>}
+     */
+    private function computeDefinitionMatch(string $normalizedQuery, array $definition): array
+    {
+        $score = 0;
+        $matches = [];
+
+        foreach ($this->collectDefinitionKeywords($definition) as $keyword) {
+            $keyword = trim(mb_strtolower($keyword));
+            if ($keyword === '') {
+                continue;
+            }
+            if (mb_strpos($normalizedQuery, $keyword) !== false) {
+                $score += max(1, (int) floor(mb_strlen($keyword) / 4));
+                $matches[] = $keyword;
+            }
+        }
+
+        return ['score' => $score, 'keywords' => $matches];
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function collectDefinitionKeywords(array $definition): array
+    {
+        $keywords = [];
+
+        if (!empty($definition['keywords']) && is_array($definition['keywords'])) {
+            foreach ($definition['keywords'] as $keyword) {
+                if (is_string($keyword)) {
+                    $keywords[] = $keyword;
+                }
+            }
+        }
+
+        foreach (['label', 'description'] as $field) {
+            if (!empty($definition[$field]) && is_string($definition[$field])) {
+                $keywords[] = $definition[$field];
+            }
+        }
+
+        if (!empty($definition['route']) && is_string($definition['route'])) {
+            $keywords[] = str_replace(['/admin/', '/'], ' ', $definition['route']);
+        }
+
+        return $keywords;
     }
 
     private string $model;
