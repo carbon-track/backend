@@ -9,6 +9,7 @@
         "illuminate/database": "^8.0",
         "illuminate/events": "^8.0",
         "monolog/monolog": "^2.0",
+        "openai-php/client": "0.8",
         "php-di/php-di": "^6.0",
         "phpmailer/phpmailer": "^6.10",
         "psr/container": "^1.0",
@@ -42,7 +43,10 @@
     },
     "config": {
         "optimize-autoloader": true,
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
     },
     "minimum-stability": "stable",
     "prefer-stable": true

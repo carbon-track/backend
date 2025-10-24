@@ -189,8 +189,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": { "type": "boolean", "example": true },
-                    "message": { "type": "string", "example": "Logout successful" }
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Logout successful"
+                    }
                   }
                 }
               }
@@ -223,7 +229,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["email"],
+                "required": [
+                  "email"
+                ],
                 "properties": {
                   "email": {
                     "type": "string",
@@ -247,8 +255,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": { "type": "boolean", "example": true },
-                    "message": { "type": "string", "example": "If the email exists, a password reset link has been sent" }
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "If the email exists, a password reset link has been sent"
+                    }
                   }
                 }
               }
@@ -392,7 +406,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["token", "password", "confirm_password"],
+                "required": [
+                  "token",
+                  "password",
+                  "confirm_password"
+                ],
                 "properties": {
                   "token": {
                     "type": "string",
@@ -421,8 +439,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": { "type": "boolean", "example": true },
-                    "message": { "type": "string", "example": "Password reset successfully" }
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Password reset successfully"
+                    }
                   }
                 }
               }
@@ -480,8 +504,17 @@
                   }
                 },
                 "anyOf": [
-                  { "required": ["token"] },
-                  { "required": ["email", "code"] }
+                  {
+                    "required": [
+                      "token"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "email",
+                      "code"
+                    ]
+                  }
                 ]
               }
             }
@@ -495,8 +528,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": { "type": "boolean", "example": true },
-                    "message": { "type": "string", "example": "Email verified successfully" }
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Email verified successfully"
+                    }
                   }
                 }
               }
@@ -553,7 +592,11 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["current_password", "new_password", "confirm_password"],
+                "required": [
+                  "current_password",
+                  "new_password",
+                  "confirm_password"
+                ],
                 "properties": {
                   "current_password": {
                     "type": "string",
@@ -583,8 +626,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "success": { "type": "boolean", "example": true },
-                    "message": { "type": "string", "example": "Password changed successfully" }
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Password changed successfully"
+                    }
                   }
                 }
               }
@@ -1277,9 +1326,9 @@
               }
             }
           }
+        }
       }
-    }
-  },
+    },
     "/users/me/notification-preferences/test-email": {
       "post": {
         "tags": [
@@ -8283,11 +8332,19 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["action", "record_ids"],
+                "required": [
+                  "action",
+                  "record_ids"
+                ],
                 "properties": {
                   "action": {
                     "type": "string",
-                    "enum": ["approve", "approved", "reject", "rejected"]
+                    "enum": [
+                      "approve",
+                      "approved",
+                      "reject",
+                      "rejected"
+                    ]
                   },
                   "record_ids": {
                     "type": "array",
@@ -9526,6 +9583,73 @@
           }
         }
       }
+    },
+    "/admin/ai/intents": {
+      "post": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "解析管理员指挥面板指令",
+        "description": "根据自然语言输入返回推荐的导航或自动化操作。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "": "#/components/schemas/AdminAiIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "解析成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/AdminAiIntentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI 服务未配置或暂时不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9662,19 +9786,48 @@
               "user": {
                 "type": "object",
                 "properties": {
-                  "id": { "type": "integer" },
-                  "username": { "type": "string" },
-                  "email": { "type": "string", "format": "email" },
-                  "points": { "type": "number" },
-                  "is_admin": { "type": "boolean" },
-                  "email_verified_at": { "type": "string", "format": "date-time", "nullable": true }
+                  "id": {
+                    "type": "integer"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "points": {
+                    "type": "number"
+                  },
+                  "is_admin": {
+                    "type": "boolean"
+                  },
+                  "email_verified_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  }
                 }
               },
-              "token": { "type": "string" },
-              "email_verification_required": { "type": "boolean" },
-              "email_verification_sent": { "type": "boolean" },
-              "verification_expires_at": { "type": "string", "format": "date-time", "nullable": true },
-              "verification_resend_available_at": { "type": "string", "format": "date-time", "nullable": true }
+              "token": {
+                "type": "string"
+              },
+              "email_verification_required": {
+                "type": "boolean"
+              },
+              "email_verification_sent": {
+                "type": "boolean"
+              },
+              "verification_expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "verification_resend_available_at": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
             }
           }
         }
@@ -10141,12 +10294,12 @@
           }
         }
       },
-    "UserStatsResponse": {
-      "type": "object",
-      "required": [
-        "success",
-        "data"
-      ],
+      "UserStatsResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
         "properties": {
           "success": {
             "type": "boolean",
@@ -13102,6 +13255,188 @@
           "product_count"
         ],
         "additionalProperties": false
+      },
+      "AdminAiTarget": {
+        "type": "object",
+        "properties": {
+          "routeId": {
+            "type": "string"
+          },
+          "route": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "navigation",
+              "shortcut"
+            ]
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdminAiActionExecution": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "api": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "method",
+              "path",
+              "payload"
+            ]
+          },
+          "autoExecute": {
+            "type": "boolean"
+          },
+          "requires": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdminAiIntentMissing": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminAiIntent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "navigate",
+              "quick_action",
+              "action",
+              "fallback"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "target": {
+            "": "#/components/schemas/AdminAiTarget"
+          },
+          "action": {
+            "": "#/components/schemas/AdminAiActionExecution"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "": "#/components/schemas/AdminAiIntentMissing"
+            }
+          }
+        }
+      },
+      "AdminAiIntentRequest": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "管理员输入的自然语言指令"
+          },
+          "context": {
+            "type": "object",
+            "description": "可选上下文，例如当前路由、已选中的记录ID列表",
+            "additionalProperties": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "suggest",
+              "analyze"
+            ],
+            "default": "suggest"
+          }
+        }
+      },
+      "AdminAiIntentResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "intent",
+          "metadata"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "intent": {
+            "": "#/components/schemas/AdminAiIntent"
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "": "#/components/schemas/AdminAiIntent"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "usage": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "finish_reason": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
       }
     },
     "/messages": {
@@ -14708,5 +15043,3 @@
     }
   }
 }
-
-

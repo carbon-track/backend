@@ -11,6 +11,8 @@ use PDO;
 
 class StatisticsService
 {
+    private const MESSAGE_TREND_WINDOW_DAYS = 30;
+
     private DateTimeZone $timezone;
 
     public function __construct(
@@ -131,7 +133,9 @@ class StatisticsService
         }
 
         $messageTrendRows = [];
-        $messageTrendStart = $now->modify('-13 days')->setTime(0, 0, 0);
+        $messageTrendStart = $now
+            ->modify('-' . (self::MESSAGE_TREND_WINDOW_DAYS - 1) . ' days')
+            ->setTime(0, 0, 0);
         try {
             $trendSql = "SELECT {$dateExpr} AS day_label,
                     COUNT(*) AS total,
@@ -306,9 +310,13 @@ class StatisticsService
         $users = $this->normalizeUsersStats($userStatsRaw);
         $transactions = $this->normalizeTransactionStats($transactionStatsRaw, $txWindowRaw, $carbonStatsRaw, $carbonWindowRaw);
         $exchanges = $this->normalizeExchangeStats($exchangeStatsRaw);
-        $messages = $this->normalizeMessageStats($messageStatsRaw);
-        $messages['priority_breakdown'] = $this->normalizeMessagePriorityBreakdown($messagePriorityRows);
-        $messages['daily_counts'] = $this->normalizeMessageDailySeries($messageTrendRows, $messageTrendStart, $now);
+        $messagesSummary = $this->normalizeMessageStats($messageStatsRaw);
+        $priorityStats = $this->normalizeMessagePriorityBreakdown($messagePriorityRows, $messagesSummary);
+        $trendSeries = $this->normalizeMessageDailySeries($messageTrendRows, $messageTrendStart, $now, $messagesSummary);
+
+        $messages = $messagesSummary;
+        $messages['priority_breakdown'] = $priorityStats;
+        $messages['daily_counts'] = $trendSeries;
         $activities = $this->normalizeActivityStats($activityRecordStatsRaw, $activityCatalogStatsRaw);
         $carbon = $this->normalizeCarbonStats($carbonStatsRaw, $carbonWindowRaw, $trendTotals, $trendCount);
 
@@ -461,9 +469,9 @@ class StatisticsService
         ];
     }
 
-    private function normalizeMessagePriorityBreakdown(array $rows): array
+    private function normalizeMessagePriorityBreakdown(array $rows, array $summary): array
     {
-        if (empty($rows)) {
+        if (empty($rows) && (($summary['total_messages'] ?? 0) <= 0)) {
             return [];
         }
 
@@ -505,13 +513,34 @@ class StatisticsService
             return $a['_order'] <=> $b['_order'];
         });
 
-        return array_map(static function (array $entry): array {
+        $normalized = array_map(static function (array $entry): array {
             unset($entry['_order']);
             return $entry;
         }, $result);
+
+        if (empty($normalized) && ($summary['total_messages'] ?? 0) > 0) {
+            $total = $this->toInt($summary['total_messages']);
+            $unread = $this->toInt($summary['unread_messages'] ?? 0);
+            $read = $this->toInt($summary['read_messages'] ?? max(0, $total - $unread));
+
+            $normalized[] = [
+                'priority' => 'normal',
+                'total' => $total,
+                'unread' => $unread,
+                'read' => max(0, $total - $unread),
+                'unread_ratio' => $this->safeDivide((float) $unread, max($total, 1)),
+            ];
+        }
+
+        return $normalized;
     }
 
-    private function normalizeMessageDailySeries(array $rows, \DateTimeImmutable $start, \DateTimeImmutable $end): array
+    private function normalizeMessageDailySeries(
+        array $rows,
+        \DateTimeImmutable $start,
+        \DateTimeImmutable $end,
+        array $summary
+    ): array
     {
         $map = [];
         foreach ($rows as $row) {
@@ -536,6 +565,7 @@ class StatisticsService
         $series = [];
         $current = $start->setTime(0, 0, 0);
         $endDate = $end->setTime(0, 0, 0);
+        $hasData = false;
 
         while ($current <= $endDate) {
             $label = $current->format('Y-m-d');
@@ -546,7 +576,23 @@ class StatisticsService
                 'unread' => $stats['unread'],
                 'read' => $stats['read'],
             ];
+            if ($stats['total'] > 0 || $stats['unread'] > 0) {
+                $hasData = true;
+            }
             $current = $current->modify('+1 day');
+        }
+
+        if (!$hasData && ($summary['total_messages'] ?? 0) > 0) {
+            $total = $this->toInt($summary['total_messages']);
+            $unread = $this->toInt($summary['unread_messages'] ?? 0);
+            $read = $this->toInt($summary['read_messages'] ?? max(0, $total - $unread));
+
+            return [[
+                'date' => $endDate->format('Y-m-d'),
+                'total' => $total,
+                'unread' => $unread,
+                'read' => $read,
+            ]];
         }
 
         return $series;

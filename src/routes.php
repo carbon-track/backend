@@ -17,6 +17,7 @@ use CarbonTrack\Controllers\AvatarController;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Controllers\SystemLogController;
+use CarbonTrack\Controllers\AdminAiController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Middleware\AuthMiddleware;
@@ -202,6 +203,7 @@ return function (App $app) {
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
+            $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
             $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);
