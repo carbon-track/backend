@@ -44,6 +44,8 @@ use CarbonTrack\Middleware\RequestLoggingMiddleware;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Services\Ai\OpenAiClientAdapter;
 use CarbonTrack\Controllers\AdminAiController;
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Psr7\HttpFactory;
 use OpenAI\Factory as OpenAiFactory;
 
 $__deps_initializer = function (Container $container) {
@@ -217,6 +219,17 @@ $__deps_initializer = function (Container $container) {
         try {
             $factory = new OpenAiFactory();
             $factory = $factory->withApiKey($apiKey);
+
+            $httpClient = new GuzzleClient([
+                'timeout' => 15,
+                'connect_timeout' => 5,
+            ]);
+            $httpFactory = new HttpFactory();
+
+            $factory = $factory
+                ->withHttpClient($httpClient)
+                ->withRequestFactory($httpFactory)
+                ->withStreamFactory($httpFactory);
 
             $baseUrl = trim((string) ($_ENV['LLM_API_BASE_URL'] ?? ''));
             if ($baseUrl !== '') {
