@@ -2,10 +2,6 @@
 
 declare(strict_types=1);
 
-<?php
-
-declare(strict_types=1);
-
 $path = __DIR__ . '/admin_ai_commands.json';
 
 if (!is_file($path) || !is_readable($path)) {
