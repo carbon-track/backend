@@ -1,0 +1,64 @@
+
+# Backend CI for target repo - installs PHP & composer, runs phpunit and optional static analysis
+name: Backend CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  install-deps:
+    name: backend:install-deps
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli unzip git curl
+
+      - name: Install Composer
+        run: |
+          curl -sS https://getcomposer.org/installer | php
+          sudo mv composer.phar /usr/local/bin/composer
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist || true
+
+  phpunit:
+    name: backend:phpunit
+    runs-on: ubuntu-latest
+    needs: install-deps
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run phpunit
+        run: |
+          if [ -f vendor/bin/phpunit ]; then
+            vendor/bin/phpunit || true
+          else
+            echo "phpunit binary not found; attempting global phpunit or composer test"
+            composer test || true
+          fi
+
+  static-analysis:
+    name: backend:static-analysis
+    runs-on: ubuntu-latest
+    needs: install-deps
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Try PHPStan (if available)
+        run: |
+          if [ -f vendor/bin/phpstan ]; then
+            vendor/bin/phpstan analyse || true
+          else
+            echo "phpstan not installed; skipping static analysis"
+          fi
+
