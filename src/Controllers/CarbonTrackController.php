@@ -1346,8 +1346,10 @@ class CarbonTrackController
             $params[$placeholder] = $id;
         }
 
-        $sql = sprintf(
-            "SELECT r.*,\n                    u.username AS user_username,\n                    u.email AS user_email,\n                    u.full_name AS user_full_name,\n                    a.name_zh AS activity_name_zh,\n                    a.name_en AS activity_name_en,\n                    a.category AS activity_category,\n                    a.unit AS activity_unit\n             FROM carbon_records r\n             LEFT JOIN users u ON r.user_id = u.id\n             LEFT JOIN carbon_activities a ON r.activity_id = a.id\n             WHERE r.id IN (%s) AND r.deleted_at IS NULL",
+            // Some installations do not have a `full_name` column on the `users` table.
+            // Use `username` as a safe fallback to avoid SQL errors.
+            $sql = sprintf(
+            "SELECT r.*,\n                    u.username AS user_username,\n                    u.email AS user_email,\n                    u.username AS user_full_name,\n                    a.name_zh AS activity_name_zh,\n                    a.name_en AS activity_name_en,\n                    a.category AS activity_category,\n                    a.unit AS activity_unit\n             FROM carbon_records r\n             LEFT JOIN users u ON r.user_id = u.id\n             LEFT JOIN carbon_activities a ON r.activity_id = a.id\n             WHERE r.id IN (%s) AND r.deleted_at IS NULL",
             implode(',', $placeholders)
         );
 
