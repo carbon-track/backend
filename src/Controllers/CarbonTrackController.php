@@ -1346,7 +1346,7 @@ class CarbonTrackController
             $params[$placeholder] = $id;
         }
 
-            // Some installations do not have a `full_name` column on the `users` table.
+            // Installations do not have a `full_name` column on the `users` table.
             // Use `username` as a safe fallback to avoid SQL errors.
             $sql = sprintf(
             "SELECT r.*,\n                    u.username AS user_username,\n                    u.email AS user_email,\n                    u.username AS user_full_name,\n                    a.name_zh AS activity_name_zh,\n                    a.name_en AS activity_name_en,\n                    a.category AS activity_category,\n                    a.unit AS activity_unit\n             FROM carbon_records r\n             LEFT JOIN users u ON r.user_id = u.id\n             LEFT JOIN carbon_activities a ON r.activity_id = a.id\n             WHERE r.id IN (%s) AND r.deleted_at IS NULL",
@@ -1382,7 +1382,7 @@ class CarbonTrackController
      */
     private function notifyAdminsNewRecord(string $recordId, array $user, array $activity): void
     {
-        // ��ȡ���й���Ա
+        // 获取管理员列表
         $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute();
@@ -1403,8 +1403,8 @@ class CarbonTrackController
         $this->messageService->sendAdminNotificationBatch(
             $recipients,
             'new_record_pending',
-            '�µ�̼���ż�¼�����',
-            "�û� {$user['username']} �ύ���µ�{$activity['name_zh']}��¼���뼰ʱ��ˡ�",
+            '有新待审核碳减排记录',
+            "用户 {$user['username']} 提交了新的 {$activity['name_zh']} 记录，请及时处理。",
             'high'
         );
     }
@@ -1429,13 +1429,13 @@ class CarbonTrackController
     }
     
     /**
-     * ��һ�� images �ֶ�
-     * ֧��������ʷ��ʽ��
-     * - ��/null -> []
-     * - ["url1","url2"] ���ַ�������
-     * - [{ public_url:..., file_path:..., original_name:... }, ...]
-     * - �����ַ��� "url"
-     * ���ͳһΪ��[{"url": "...", "file_path": "...", "original_name": "...", "mime_type": "...", "size": int|null }]
+     * 规范化 images 字段
+     * 支持多种传入格式并统一输出标准数组：
+     * - null 或 空 -> []
+     * - ["url1","url2"] 字符串数组
+     * - [{ public_url:..., file_path:..., original_name:... }, ...] 对象数组
+     * - 单个字符串 "url"
+     * 最终统一为 [{"url": "...", "file_path": "...", "original_name": "...", "mime_type": "...", "size": int|null }]
      */
     private function normalizeImages($raw): array
     {
@@ -1459,7 +1459,7 @@ class CarbonTrackController
     }
 
     /**
-     * ��һ����ͼ���¼
+     * 规范化单个图片项
      * @param mixed $item
      */
     private function normalizeImageItem($item): ?array

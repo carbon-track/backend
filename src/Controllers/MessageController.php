@@ -1030,7 +1030,7 @@ $auditPayload = [
     }
 
     /**
-     * ����Ŀǰ��ŵĹ㲥�ʼ���ҵ����Ա��
+     * 刷新广播邮件队列并尝试发送（仅限管理员）。
      */
     public function flushBroadcastEmailQueue(Request $request, Response $response): Response
     {

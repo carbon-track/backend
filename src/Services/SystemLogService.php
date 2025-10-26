@@ -64,7 +64,7 @@ class SystemLogService
             $id = (int) $this->db->lastInsertId();
             return $id > 0 ? $id : null;
         } catch (\Throwable $e) {
-            // ����¼��Ӧ����־������Ӱ����ҵ��
+            // 记录系统日志插入失败的警告，不影响主流程
             try {
                 $this->logger->warning('System log insert failed', [
                     'error' => $e->getMessage(),

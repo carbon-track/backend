@@ -35,11 +35,11 @@
       "keywords": [
         "activity",
         "review",
-        "碳减排",
-        "审批",
+        "碳审计",
+        "审核",
         "活动",
-        "carbon record",
-        "activity audit"
+        "碳记录",
+        "活动审查"
       ]
     },
     {
@@ -50,7 +50,8 @@
       "keywords": [
         "store",
         "product",
-        "奖励",
+        "商城",
+        "商品",
         "兑换"
       ]
     },
@@ -61,8 +62,9 @@
       "description": "Create, edit and award achievement badges.",
       "keywords": [
         "badge",
-        "荣誉",
+        "徽章",
         "勋章",
+        "创建徽章",
         "create badge",
         "颁发"
       ]
@@ -74,7 +76,8 @@
       "description": "Manage avatar assets and default selections.",
       "keywords": [
         "avatar",
-        "头像"
+        "头像",
+        "形象库"
       ]
     },
     {
@@ -85,8 +88,9 @@
       "keywords": [
         "order",
         "exchange",
-        "兑换申请",
-        "物流"
+        "兑换订单",
+        "兑换",
+        "履约"
       ]
     },
     {
@@ -96,9 +100,10 @@
       "description": "Compose and send system broadcast messages.",
       "keywords": [
         "broadcast",
-        "通知",
         "announcement",
-        "群发"
+        "通知",
+        "公告",
+        "群发广播"
       ]
     },
     {
@@ -109,8 +114,9 @@
       "keywords": [
         "log",
         "日志",
-        "监控",
-        "审计"
+        "系统日志",
+        "审计",
+        "追踪"
       ]
     },
     {
@@ -142,8 +148,8 @@
       "keywords": [
         "search user",
         "find user",
-        "查找用户",
-        "搜用户"
+        "搜索用户",
+        "查找用户"
       ]
     },
     {
@@ -159,11 +165,12 @@
       "keywords": [
         "new badge",
         "badge builder",
-        "创建徽章"
+        "新建徽章",
+        "徽章创建"
       ]
     },
     {
-      "id": "pending-activities",
+      "id": "review-activities",
       "label": "Review pending activities",
       "description": "Filter activity review list to pending items.",
       "routeId": "activities",
@@ -173,17 +180,17 @@
         "filter": "pending"
       },
       "keywords": [
-        "待审批",
+        "review activities",
+        "pending activities",
         "pending",
         "审核活动",
-        "pending activities",
         "待审核",
-        "待处理碳记录"
+        "碳记录"
       ]
     },
     {
-      "id": "compose-broadcast",
-      "label": "Compose broadcast",
+      "id": "broadcast",
+      "label": "Send broadcast",
       "description": "Open the broadcast composer.",
       "routeId": "broadcast",
       "route": "/admin/broadcast",
@@ -192,9 +199,64 @@
         "compose": "1"
       },
       "keywords": [
-        "广播",
-        "announcement",
-        "new broadcast"
+        "broadcast",
+        "群发通知",
+        "发布公告",
+        "新建广播"
+      ]
+    },
+    {
+      "id": "pending-exchanges",
+      "label": "Review pending exchanges",
+      "description": "Filter reward exchange requests to pending status for fulfillment review.",
+      "routeId": "exchanges",
+      "route": "/admin/exchanges",
+      "mode": "shortcut",
+      "query": {
+        "status": "pending"
+      },
+      "keywords": [
+        "exchange",
+        "pending exchanges",
+        "兑换订单",
+        "待审核兑换",
+        "reward requests"
+      ]
+    },
+    {
+      "id": "system-logs-search",
+      "label": "Search system logs",
+      "description": "Jump directly to the system log search console for trace investigations.",
+      "routeId": "systemLogs",
+      "route": "/admin/system-logs",
+      "mode": "shortcut",
+      "query": {
+        "view": "search"
+      },
+      "keywords": [
+        "logs",
+        "log search",
+        "系统日志",
+        "日志检索",
+        "trace search"
+      ]
+    },
+    {
+      "id": "diagnostics-openapi",
+      "label": "Review API diagnostics",
+      "description": "Open the diagnostics view focused on OpenAPI coverage and endpoint health.",
+      "routeId": "diagnostics",
+      "route": "/admin/diagnostics",
+      "mode": "shortcut",
+      "query": {
+        "panel": "openapi"
+      },
+      "keywords": [
+        "api diagnostics",
+        "openapi coverage",
+        "接口诊断",
+        "接口健康",
+        "spec review"
       ]
     }
   ],
@@ -222,9 +284,9 @@
       "keywords": [
         "approve",
         "通过记录",
+        "批准碳记录",
         "审核通过",
-        "approve carbon records",
-        "记录审批"
+        "approve carbon records"
       ]
     },
     {
@@ -250,8 +312,8 @@
       "keywords": [
         "reject",
         "驳回记录",
-        "拒绝记录",
-        "记录驳回",
+        "拒绝碳记录",
+        "审核拒绝",
         "reject carbon records"
       ]
     }
