@@ -14,6 +14,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\NotificationPreferenceService;
+use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
 use PDO;
@@ -30,6 +31,7 @@ class UserController
     private Logger $logger;
     private PDO $db;
     private NotificationPreferenceService $notificationPreferenceService;
+    private ?TurnstileService $turnstileService;
 
     public function __construct(
         AuthService $authService,
@@ -37,6 +39,7 @@ class UserController
         MessageService $messageService,
         Avatar $avatarModel,
         NotificationPreferenceService $notificationPreferenceService,
+        ?TurnstileService $turnstileService = null,
         ?EmailService $emailService = null,
         Logger $logger,
         PDO $db,
@@ -49,6 +52,7 @@ class UserController
         $this->emailService = $emailService;
         $this->avatarModel = $avatarModel;
         $this->notificationPreferenceService = $notificationPreferenceService;
+        $this->turnstileService = $turnstileService;
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
@@ -472,6 +476,9 @@ class UserController
             }
 
             $data = $request->getParsedBody();
+            if (!is_array($data)) {
+                $data = [];
+            }
 
             // 获取当前用户完整信息
             $stmt = $this->db->prepare("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL");
@@ -485,6 +492,69 @@ class UserController
                     'code' => 'USER_NOT_FOUND'
                 ], 404);
             }
+
+            $currentSchoolId = (int)($currentUser['school_id'] ?? 0);
+            $incomingSchoolId = null;
+            $normalizedNewSchool = null;
+
+            if (array_key_exists('school_id', $data)) {
+                if ($data['school_id'] === null || $data['school_id'] === '') {
+                    $incomingSchoolId = null;
+                } else {
+                    $validatedSchoolId = filter_var($data['school_id'], FILTER_VALIDATE_INT);
+                    if ($validatedSchoolId === false) {
+                        return $this->jsonResponse($response, [
+                            'success' => false,
+                            'message' => 'Invalid school ID',
+                            'code' => 'INVALID_SCHOOL'
+                        ], 400);
+                    }
+                    $incomingSchoolId = $validatedSchoolId;
+                }
+            }
+
+            if (array_key_exists('new_school_name', $data)) {
+                $trimmed = trim((string)$data['new_school_name']);
+                if ($trimmed === '') {
+                    unset($data['new_school_name']);
+                } else {
+                    $normalizedNewSchool = mb_substr($trimmed, 0, 255);
+                    $data['new_school_name'] = $normalizedNewSchool;
+                }
+            }
+
+            $schoolChangeRequested = false;
+            if ($incomingSchoolId !== null && $incomingSchoolId > 0 && $incomingSchoolId !== $currentSchoolId) {
+                $schoolChangeRequested = true;
+            } elseif ($incomingSchoolId === null && $normalizedNewSchool !== null) {
+                $schoolChangeRequested = true;
+            }
+
+            if ($schoolChangeRequested && $this->shouldEnforceTurnstile()) {
+                $token = trim((string)($data['cf_turnstile_response'] ?? ''));
+                if ($token === '') {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Turnstile verification is required',
+                        'code' => 'TURNSTILE_REQUIRED'
+                    ], 400);
+                }
+
+                $verification = $this->turnstileService
+                    ? $this->turnstileService->verify($token, $this->getClientIpAddress($request))
+                    : ['success' => false];
+
+                if (empty($verification['success'])) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => $verification['message'] ?? 'Turnstile verification failed',
+                        'code' => 'TURNSTILE_FAILED',
+                        'error' => $verification['error'] ?? null
+                    ], 400);
+                }
+            }
+
+            unset($data['cf_turnstile_response']);
 
             // 准备更新数据
             $updateData = [];
@@ -514,18 +584,41 @@ class UserController
             }
 
             // 验证学校ID（如果提供）
-            if (isset($data['school_id'])) {
+            if ($incomingSchoolId !== null) {
+                if ($incomingSchoolId <= 0) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Invalid school ID',
+                        'code' => 'INVALID_SCHOOL'
+                    ], 400);
+                }
+
                 $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
-                $stmt->execute([$data['school_id']]);
+                $stmt->execute([$incomingSchoolId]);
                 if ($stmt->fetch()) {
-                    $oldValues['school_id'] = $currentUser['school_id'];
-                    $updateData['school_id'] = $data['school_id'];
+                    if ($incomingSchoolId !== $currentSchoolId) {
+                        $oldValues['school_id'] = $currentUser['school_id'];
+                        $updateData['school_id'] = $incomingSchoolId;
+                    }
                 } else {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Invalid school ID',
                         'code' => 'INVALID_SCHOOL'
                     ], 400);
+                }
+            } elseif ($normalizedNewSchool !== null) {
+                $newSchoolId = $this->findOrCreateSchoolId($normalizedNewSchool);
+                if (!$newSchoolId) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Failed to resolve school',
+                        'code' => 'INVALID_SCHOOL'
+                    ], 400);
+                }
+                if ($newSchoolId !== $currentSchoolId) {
+                    $oldValues['school_id'] = $currentUser['school_id'];
+                    $updateData['school_id'] = $newSchoolId;
                 }
             }
 
@@ -1531,6 +1624,73 @@ class UserController
     /**
      * 返回JSON响应
      */
+    private function findOrCreateSchoolId(string $name): ?int
+    {
+        $normalized = trim(mb_substr($name, 0, 255));
+        if ($normalized === '') {
+            return null;
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT id FROM schools WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$normalized]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row && isset($row['id'])) {
+                return (int)$row['id'];
+            }
+
+            $insert = $this->db->prepare('INSERT INTO schools (name, created_at, updated_at) VALUES (?, ?, ?)');
+            $now = date('Y-m-d H:i:s');
+            $insert->execute([$normalized, $now, $now]);
+
+            $newId = (int)$this->db->lastInsertId();
+            return $newId > 0 ? $newId : null;
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to resolve school name for profile update', [
+                'error' => $e->getMessage(),
+                'school_name' => $normalized
+            ]);
+            return null;
+        }
+    }
+
+    private function shouldEnforceTurnstile(): bool
+    {
+        if (!$this->turnstileService || !$this->turnstileService->isConfigured()) {
+            return false;
+        }
+
+        $environment = strtolower((string)($_ENV['APP_ENV'] ?? 'production'));
+        return $environment !== 'testing';
+    }
+
+    private function getClientIpAddress(Request $request): string
+    {
+        $candidates = [
+            $request->getHeaderLine('CF-Connecting-IP'),
+            $request->getHeaderLine('X-Forwarded-For'),
+            $request->getHeaderLine('X-Real-IP'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (!$candidate) {
+                continue;
+            }
+            $parts = explode(',', $candidate);
+            $ip = trim($parts[0]);
+            if ($ip !== '') {
+                return $ip;
+            }
+        }
+
+        $server = $request->getServerParams();
+        if (!empty($server['REMOTE_ADDR'])) {
+            return (string)$server['REMOTE_ADDR'];
+        }
+
+        return '0.0.0.0';
+    }
+
     private function resolveAvatar(?string $filePath, int $ttlSeconds = 600): array
     {
         $originalPath = $filePath !== null ? trim($filePath) : null;

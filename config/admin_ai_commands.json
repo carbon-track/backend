@@ -5,63 +5,127 @@
       "label": "Admin Dashboard",
       "route": "/admin/dashboard",
       "description": "Overall administration overview with key metrics and quick tasks.",
-      "keywords": ["dashboard", "overview", "summary", "仪表盘", "总览", "首页"]
+      "keywords": [
+        "dashboard",
+        "overview",
+        "summary",
+        "仪表盘",
+        "总览",
+        "首页"
+      ]
     },
     {
       "id": "users",
       "label": "User Management",
       "route": "/admin/users",
       "description": "Manage users, roles, points, and account status.",
-      "keywords": ["user", "account", "用户", "管理用户", "权限"]
+      "keywords": [
+        "user",
+        "account",
+        "用户",
+        "管理用户",
+        "权限"
+      ]
     },
     {
       "id": "activities",
       "label": "Activity Review",
       "route": "/admin/activities",
       "description": "Review and moderate carbon reduction activity submissions.",
-      "keywords": ["activity", "review", "碳减排", "审批", "活动", "carbon record", "activity audit"]
+      "keywords": [
+        "activity",
+        "review",
+        "碳减排",
+        "审批",
+        "活动",
+        "carbon record",
+        "activity audit"
+      ]
     },
     {
       "id": "products",
       "label": "Reward Store",
       "route": "/admin/products",
       "description": "Manage redemption products, inventory and pricing.",
-      "keywords": ["store", "product", "奖励", "兑换"]
+      "keywords": [
+        "store",
+        "product",
+        "奖励",
+        "兑换"
+      ]
     },
     {
       "id": "badges",
       "label": "Badge Management",
       "route": "/admin/badges",
       "description": "Create, edit and award achievement badges.",
-      "keywords": ["badge", "荣誉", "勋章", "create badge", "颁发"]
+      "keywords": [
+        "badge",
+        "荣誉",
+        "勋章",
+        "create badge",
+        "颁发"
+      ]
     },
     {
       "id": "avatars",
       "label": "Avatar Library",
       "route": "/admin/avatars",
       "description": "Manage avatar assets and default selections.",
-      "keywords": ["avatar", "头像"]
+      "keywords": [
+        "avatar",
+        "头像"
+      ]
     },
     {
       "id": "exchanges",
       "label": "Exchange Orders",
       "route": "/admin/exchanges",
       "description": "Review redemption requests and update fulfilment status.",
-      "keywords": ["order", "exchange", "兑换申请", "物流"]
+      "keywords": [
+        "order",
+        "exchange",
+        "兑换申请",
+        "物流"
+      ]
     },
     {
       "id": "broadcast",
       "label": "Broadcast Center",
       "route": "/admin/broadcast",
       "description": "Compose and send system broadcast messages.",
-      "keywords": ["broadcast", "通知", "announcement", "群发"]
+      "keywords": [
+        "broadcast",
+        "通知",
+        "announcement",
+        "群发"
+      ]
     },
     {
       "id": "systemLogs",
       "label": "System Logs",
       "route": "/admin/system-logs",
       "description": "Inspect audit logs and request traces.",
-      "keywords": ["log", "日志", "监控", "审计"]
+      "keywords": [
+        "log",
+        "日志",
+        "监控",
+        "审计"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "label": "API Diagnostics",
+      "route": "/admin/diagnostics",
+      "description": "Inspect the OpenAPI catalog, search endpoints, and review request/response definitions.",
+      "keywords": [
+        "api",
+        "diagnostics",
+        "openapi",
+        "spec",
+        "接口",
+        "诊断"
+      ]
     }
   ],
   "quickActions": [
@@ -72,8 +136,15 @@
       "routeId": "users",
       "route": "/admin/users",
       "mode": "shortcut",
-      "query": {"focus": "search"},
-      "keywords": ["search user", "find user", "查找用户", "搜用户"]
+      "query": {
+        "focus": "search"
+      },
+      "keywords": [
+        "search user",
+        "find user",
+        "查找用户",
+        "搜用户"
+      ]
     },
     {
       "id": "create-badge",
@@ -82,8 +153,14 @@
       "routeId": "badges",
       "route": "/admin/badges",
       "mode": "shortcut",
-      "query": {"create": "1"},
-      "keywords": ["new badge", "badge builder", "创建徽章"]
+      "query": {
+        "create": "1"
+      },
+      "keywords": [
+        "new badge",
+        "badge builder",
+        "创建徽章"
+      ]
     },
     {
       "id": "pending-activities",
@@ -92,8 +169,17 @@
       "routeId": "activities",
       "route": "/admin/activities",
       "mode": "shortcut",
-      "query": {"filter": "pending"},
-      "keywords": ["待审批", "pending", "审核活动", "pending activities", "待审核", "待处理碳记录"]
+      "query": {
+        "filter": "pending"
+      },
+      "keywords": [
+        "待审批",
+        "pending",
+        "审核活动",
+        "pending activities",
+        "待审核",
+        "待处理碳记录"
+      ]
     },
     {
       "id": "compose-broadcast",
@@ -102,8 +188,14 @@
       "routeId": "broadcast",
       "route": "/admin/broadcast",
       "mode": "shortcut",
-      "query": {"compose": "1"},
-      "keywords": ["广播", "announcement", "new broadcast"]
+      "query": {
+        "compose": "1"
+      },
+      "keywords": [
+        "广播",
+        "announcement",
+        "new broadcast"
+      ]
     }
   ],
   "managementActions": [
@@ -120,10 +212,20 @@
           "review_note": null
         }
       },
-      "requires": ["record_ids"],
-      "contextHints": ["selectedRecordIds"],
+      "requires": [
+        "record_ids"
+      ],
+      "contextHints": [
+        "selectedRecordIds"
+      ],
       "autoExecute": true,
-      "keywords": ["approve", "通过记录", "审核通过", "approve carbon records", "记录审批"]
+      "keywords": [
+        "approve",
+        "通过记录",
+        "审核通过",
+        "approve carbon records",
+        "记录审批"
+      ]
     },
     {
       "name": "reject_carbon_records",
@@ -138,10 +240,20 @@
           "review_note": null
         }
       },
-      "requires": ["record_ids"],
-      "contextHints": ["selectedRecordIds"],
+      "requires": [
+        "record_ids"
+      ],
+      "contextHints": [
+        "selectedRecordIds"
+      ],
       "autoExecute": true,
-      "keywords": ["reject", "驳回记录", "拒绝记录", "记录驳回", "reject carbon records"]
+      "keywords": [
+        "reject",
+        "驳回记录",
+        "拒绝记录",
+        "记录驳回",
+        "reject carbon records"
+      ]
     }
   ]
 }

@@ -74,10 +74,11 @@ class UserControllerTest extends TestCase
             $stmtJoined
         );
 
-    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
-    $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
+        $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
 
         try {
@@ -93,6 +94,150 @@ class UserControllerTest extends TestCase
         }
     }
 
+    public function testUpdateProfileRequiresTurnstileForSchoolChange(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+
+        try {
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+            $logger = $this->createMock(\Monolog\Logger::class);
+            $pdo = $this->createMock(\PDO::class);
+
+            $auth->method('getCurrentUser')->willReturn(['id' => 7]);
+
+            $stmtSelectUser = $this->createMock(\PDOStatement::class);
+            $stmtSelectUser->method('execute')->willReturn(true);
+            $stmtSelectUser->method('fetch')->willReturn([
+                'id' => 7,
+                'username' => 'alice',
+                'avatar_id' => null,
+                'school_id' => null
+            ]);
+
+            $pdo->method('prepare')->willReturn($stmtSelectUser);
+
+            $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+            $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+            $turnstile->method('isConfigured')->willReturn(true);
+            $turnstile->expects($this->never())->method('verify');
+
+            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo);
+
+            $request = makeRequest('PUT', '/users/me/profile', ['school_id' => 9]);
+            $response = new \Slim\Psr7\Response();
+            $resp = $controller->updateProfile($request, $response);
+
+            $this->assertSame(400, $resp->getStatusCode());
+            $payload = json_decode((string)$resp->getBody(), true);
+            $this->assertSame('TURNSTILE_REQUIRED', $payload['code']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+        }
+    }
+
+    public function testUpdateProfileCreatesNewSchoolWithTurnstileVerification(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+
+        try {
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+            $logger = $this->createMock(\Monolog\Logger::class);
+
+            $auth->method('getCurrentUser')->willReturn(['id' => 12]);
+            $avatar->method('isAvatarAvailable')->willReturn(true);
+            $audit->expects($this->once())->method('log');
+
+            $stmtSelectUser = $this->createMock(\PDOStatement::class);
+            $stmtSelectUser->method('execute')->willReturn(true);
+            $stmtSelectUser->method('fetch')->willReturn([
+                'id' => 12,
+                'username' => 'bob',
+                'avatar_id' => null,
+                'school_id' => null
+            ]);
+
+            $stmtFindSchool = $this->createMock(\PDOStatement::class);
+            $stmtFindSchool->method('execute')->willReturn(true);
+            $stmtFindSchool->method('fetch')->willReturn(false);
+
+            $stmtInsertSchool = $this->createMock(\PDOStatement::class);
+            $stmtInsertSchool->method('execute')->willReturn(true);
+
+            $stmtUpdate = $this->createMock(\PDOStatement::class);
+            $stmtUpdate->method('execute')->willReturn(true);
+
+            $stmtJoined = $this->createMock(\PDOStatement::class);
+            $stmtJoined->method('execute')->willReturn(true);
+            $stmtJoined->method('fetch')->willReturn([
+                'id' => 12,
+                'uuid' => 'user-12',
+                'username' => 'bob',
+                'email' => 'bob@example.com',
+                'school_id' => 42,
+                'school_name' => 'Climate Academy',
+                'points' => 0,
+                'is_admin' => 0,
+                'avatar_id' => null,
+                'avatar_path' => null,
+                'lastlgn' => null,
+                'updated_at' => '2025-01-02 00:00:00'
+            ]);
+
+            $pdo = $this->createMock(\PDO::class);
+            $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+                $stmtSelectUser,
+                $stmtFindSchool,
+                $stmtInsertSchool,
+                $stmtUpdate,
+                $stmtJoined
+            );
+            $pdo->method('lastInsertId')->willReturn('42');
+
+            $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+
+            $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+            $turnstile->method('isConfigured')->willReturn(true);
+            $turnstile->expects($this->once())
+                ->method('verify')
+                ->with('token-123', $this->anything())
+                ->willReturn(['success' => true]);
+
+            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo);
+
+            $request = makeRequest('PUT', '/users/me/profile', [
+                'new_school_name' => 'Climate Academy',
+                'cf_turnstile_response' => 'token-123'
+            ]);
+            $response = new \Slim\Psr7\Response();
+
+            $resp = $controller->updateProfile($request, $response);
+            $this->assertSame(200, $resp->getStatusCode());
+
+            $payload = json_decode((string)$resp->getBody(), true);
+            $this->assertTrue($payload['success']);
+            $this->assertSame(42, $payload['data']['school_id']);
+            $this->assertSame('Climate Academy', $payload['data']['school_name']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+        }
+    }
+
     public function testSelectAvatarInvalidReturns400(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -105,8 +250,9 @@ class UserControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
         $avatar->method('isAvatarAvailable')->willReturn(false);
 
-    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('PUT', '/users/me/avatar', ['avatar_id' => 999]);
         $response = new \Slim\Psr7\Response();
@@ -142,8 +288,9 @@ class UserControllerTest extends TestCase
         $pdo = $this->createMock(\PDO::class);
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
 
-    $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-    $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
 
         $request = makeRequest('GET', '/users/me/points-history');
         $response = new \Slim\Psr7\Response();
@@ -240,7 +387,8 @@ class UserControllerTest extends TestCase
         });
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -305,7 +453,8 @@ class UserControllerTest extends TestCase
         $r2->method('getPublicUrl')->willReturn('https://cdn.example.com/proofs/a.jpg');
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo, $errorLog, $r2);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $errorLog, $r2);
 
         $request = makeRequest('GET', '/users/me/activities');
         $response = new \Slim\Psr7\Response();
@@ -355,7 +504,8 @@ class UserControllerTest extends TestCase
         $pdo->method('prepare')->willReturn($stmt);
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo);
         $request = makeRequest('GET', '/users/me');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCurrentUser($request, $response);
@@ -421,7 +571,8 @@ class UserControllerTest extends TestCase
         );
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, null, $logger, $pdo);
+        $turnstile = $this->mockTurnstile();
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo);
     $request = makeRequest('PUT', '/users/me', ['avatar_id' => 10]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateCurrentUser($request, $response);
@@ -508,6 +659,7 @@ class UserControllerTest extends TestCase
         $pdo->method('prepare')->willReturn($stmt);
 
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $turnstile = $this->mockTurnstile();
 
         $controller = new UserController(
             $auth,
@@ -515,6 +667,7 @@ class UserControllerTest extends TestCase
             $messageService,
             $avatar,
             $prefs,
+            $turnstile,
             $emailService,
             $logger,
             $pdo,
@@ -599,6 +752,7 @@ class UserControllerTest extends TestCase
         $pdo->method('prepare')->willReturn($stmt);
 
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $turnstile = $this->mockTurnstile();
 
         $controller = new UserController(
             $auth,
@@ -606,6 +760,7 @@ class UserControllerTest extends TestCase
             $messageService,
             $avatar,
             $prefs,
+            $turnstile,
             $emailService,
             $logger,
             $pdo,
@@ -651,6 +806,7 @@ class UserControllerTest extends TestCase
 
         $pdo = $this->createMock(\PDO::class);
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $turnstile = $this->mockTurnstile();
 
         $controller = new UserController(
             $auth,
@@ -658,6 +814,7 @@ class UserControllerTest extends TestCase
             $messageService,
             $avatar,
             $prefs,
+            $turnstile,
             $emailService,
             $logger,
             $pdo,
@@ -672,6 +829,14 @@ class UserControllerTest extends TestCase
         $json = json_decode((string) $resp->getBody(), true);
         $this->assertFalse($json['success']);
         $this->assertSame('INVALID_CATEGORY', $json['code']);
+    }
+
+    private function mockTurnstile(bool $configured = false)
+    {
+        $mock = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+        $mock->method('isConfigured')->willReturn($configured);
+        $mock->method('verify')->willReturn(['success' => true]);
+        return $mock;
     }
 }
 
