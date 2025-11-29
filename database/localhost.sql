@@ -639,6 +639,7 @@ CREATE TABLE `users` (
   `points` decimal(10,2) NOT NULL DEFAULT '0.00',
   `school` varchar(255) DEFAULT NULL,
   `location` varchar(255) DEFAULT NULL,
+  `region_code` varchar(16) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` datetime DEFAULT NULL,
@@ -881,7 +882,8 @@ ALTER TABLE `users`
   ADD KEY `idx_users_deleted_at` (`deleted_at`),
   ADD KEY `idx_users_status` (`status`),
   ADD KEY `idx_users_is_admin` (`is_admin`),
-  ADD KEY `idx_users_created_at` (`created_at`);
+  ADD KEY `idx_users_created_at` (`created_at`),
+  ADD KEY `idx_users_region_code` (`region_code`);
 
 --
 -- 在导出的表使用AUTO_INCREMENT

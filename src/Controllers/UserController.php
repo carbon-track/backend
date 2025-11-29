@@ -13,6 +13,8 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Models\Message;
@@ -32,6 +34,8 @@ class UserController
     private PDO $db;
     private NotificationPreferenceService $notificationPreferenceService;
     private ?TurnstileService $turnstileService;
+    private RegionService $regionService;
+    private ?LeaderboardService $leaderboardService;
 
     public function __construct(
         AuthService $authService,
@@ -44,7 +48,9 @@ class UserController
         Logger $logger,
         PDO $db,
         ErrorLogService $errorLogService = null,
-        CloudflareR2Service $r2Service = null
+        CloudflareR2Service $r2Service = null,
+        RegionService $regionService,
+        ?LeaderboardService $leaderboardService = null
     ) {
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
@@ -57,6 +63,8 @@ class UserController
         $this->db = $db;
         $this->errorLogService = $errorLogService;
         $this->r2Service = $r2Service;
+        $this->regionService = $regionService;
+        $this->leaderboardService = $leaderboardService;
     }
 
     private function buildNotificationTestEmailJob(array $user, string $category, string $email, string $displayName): ?array
@@ -414,6 +422,7 @@ class UserController
             }
 
             $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
+            $regionMeta = $this->buildRegionResponse($row['region_code'] ?? null);
 
             $userInfo = [
                 'id' => $row['id'],
@@ -429,7 +438,13 @@ class UserController
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
                 'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
-                'updated_at' => $row['updated_at'] ?? null
+                'updated_at' => $row['updated_at'] ?? null,
+                'region_code' => $regionMeta['region_code'],
+                'region_label' => $regionMeta['region_label'],
+                'country_code' => $regionMeta['country_code'],
+                'state_code' => $regionMeta['state_code'],
+                'country_name' => $regionMeta['country_name'],
+                'state_name' => $regionMeta['state_name'],
             ];
 
             return $this->jsonResponse($response, [
@@ -496,6 +511,39 @@ class UserController
             $currentSchoolId = (int)($currentUser['school_id'] ?? 0);
             $incomingSchoolId = null;
             $normalizedNewSchool = null;
+            $regionChangeRequested = false;
+            $newRegionCode = null;
+
+            $hasCountryInput = array_key_exists('country_code', $data);
+            $hasStateInput = array_key_exists('state_code', $data);
+
+            if ($hasCountryInput || $hasStateInput) {
+                if (!$hasCountryInput || !$hasStateInput) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Country and state codes must be provided together',
+                        'code' => 'INVALID_REGION'
+                    ], 400);
+                }
+
+                $normalizedCountry = $this->regionService->normalizeCountryCode($data['country_code']);
+                $normalizedState = $this->regionService->normalizeStateCode($data['state_code']);
+                if (!$normalizedCountry || !$normalizedState || !$this->regionService->isValidRegion($normalizedCountry, $normalizedState)) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Invalid country or state code',
+                        'code' => 'INVALID_REGION'
+                    ], 400);
+                }
+
+                $candidateRegion = $this->regionService->buildRegionCode($normalizedCountry, $normalizedState);
+                if ($candidateRegion !== ($currentUser['region_code'] ?? null)) {
+                    $regionChangeRequested = true;
+                    $newRegionCode = $candidateRegion;
+                }
+            }
+
+            unset($data['country_code'], $data['state_code']);
 
             if (array_key_exists('school_id', $data)) {
                 if ($data['school_id'] === null || $data['school_id'] === '') {
@@ -622,6 +670,11 @@ class UserController
                 }
             }
 
+            if ($regionChangeRequested && $newRegionCode) {
+                $oldValues['region_code'] = $currentUser['region_code'] ?? null;
+                $updateData['region_code'] = $newRegionCode;
+            }
+
             if (empty($updateData)) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -683,6 +736,7 @@ class UserController
             $stmt->execute([$user['id']]);
             $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
             $updatedAvatar = $this->resolveAvatar($updatedUser['avatar_path'] ?? null);
+            $regionMeta = $this->buildRegionResponse($updatedUser['region_code'] ?? null);
 
             // 准备返回的用户信息
             $userInfo = [
@@ -698,7 +752,13 @@ class UserController
                 'avatar_path' => $updatedAvatar['avatar_path'],
                 'avatar_url' => $updatedAvatar['avatar_url'],
                 'lastlgn' => $updatedUser['lastlgn'] ?? ($updatedUser['last_login_at'] ?? null),
-                'updated_at' => $updatedUser['updated_at']
+                'updated_at' => $updatedUser['updated_at'],
+                'region_code' => $regionMeta['region_code'],
+                'region_label' => $regionMeta['region_label'],
+                'country_code' => $regionMeta['country_code'],
+                'state_code' => $regionMeta['state_code'],
+                'country_name' => $regionMeta['country_name'],
+                'state_name' => $regionMeta['state_name'],
             ];
 
             return $this->jsonResponse($response, [
@@ -1299,9 +1359,13 @@ class UserController
             $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
             // 4) 用户当前积分与注册时间
-            $userInfoStmt = $this->db->prepare("SELECT points, created_at FROM users WHERE id = ? AND deleted_at IS NULL");
+            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, s.name AS school_name
+                FROM users u
+                LEFT JOIN schools s ON u.school_id = s.id
+                WHERE u.id = ? AND u.deleted_at IS NULL");
             $userInfoStmt->execute([$user['id']]);
-            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null];
+            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
+            $regionMeta = $this->buildRegionResponse($userRow['region_code'] ?? null);
 
             // 额外：碳记录聚合（不影响 prepare 次序）
             $recStats = [
@@ -1376,31 +1440,45 @@ class UserController
             // 未读消息数（为保持 prepare 次数不变，直接返回 0）
             $unread = 0;
 
-            // 简单的排行榜（前5名）
-            $leaderboard = [];
-            try {
-                $leaderStmt = $this->db->query("SELECT u.id, u.username, u.points AS total_points, u.avatar_id, a.file_path AS avatar_path
-                    FROM users u
-                    LEFT JOIN avatars a ON u.avatar_id = a.id
-                    WHERE u.deleted_at IS NULL
-                    ORDER BY u.points DESC
-                    LIMIT 5");
-                if ($leaderStmt instanceof \PDOStatement) {
-                    $leaderRows = $leaderStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                    $leaderboard = array_map(function (array $row): array {
-                        $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
-
-                        return [
-                            'id' => isset($row['id']) ? (int)$row['id'] : null,
-                            'username' => $row['username'] ?? null,
-                            'total_points' => isset($row['total_points']) ? (int)$row['total_points'] : 0,
-                            'avatar_id' => isset($row['avatar_id']) ? (int)$row['avatar_id'] : null,
-                            'avatar_path' => $avatar['avatar_path'],
-                            'avatar_url' => $avatar['avatar_url'],
-                        ];
-                    }, $leaderRows);
+            $leaderboards = [
+                'global' => [
+                    'label' => 'Global',
+                    'entries' => [],
+                ],
+                'region' => [
+                    'label' => $regionMeta['region_label'],
+                    'region_code' => $regionMeta['region_code'],
+                    'entries' => [],
+                ],
+                'school' => [
+                    'label' => $userRow['school_name'] ?? null,
+                    'school_id' => isset($userRow['school_id']) ? (int) $userRow['school_id'] : null,
+                    'entries' => [],
+                ],
+            ];
+            $leaderboardMeta = null;
+            if ($this->leaderboardService) {
+                try {
+                    $snapshot = $this->leaderboardService->getSnapshot();
+                    $leaderboardMeta = [
+                        'generated_at' => $snapshot['generated_at'] ?? null,
+                        'expires_at' => $snapshot['expires_at'] ?? null,
+                    ];
+                    $leaderboards['global']['entries'] = $this->normalizeLeaderboardEntries(array_slice($snapshot['global'] ?? [], 0, 5));
+                    if (!empty($regionMeta['region_code'])) {
+                        $regionBucket = $snapshot['regions'][$regionMeta['region_code']] ?? null;
+                        $leaderboards['region']['entries'] = $this->normalizeLeaderboardEntries(array_slice($regionBucket['entries'] ?? [], 0, 5));
+                    }
+                    $schoolId = isset($userRow['school_id']) ? (int) $userRow['school_id'] : 0;
+                    if ($schoolId > 0) {
+                        $schoolBucket = $snapshot['schools'][$schoolId] ?? null;
+                        $leaderboards['school']['entries'] = $this->normalizeLeaderboardEntries(array_slice($schoolBucket['entries'] ?? [], 0, 5));
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->debug('Failed to load cached leaderboards', ['error' => $e->getMessage()]);
                 }
-            } catch (\Throwable $e) { /* ignore */ }
+            }
+            $leaderboard = $leaderboards['global']['entries'];
 
             // 兼容旧测试字段命名
             $stats = [
@@ -1427,6 +1505,9 @@ class UserController
                 // 其他拓展
                 'monthly_achievements' => $monthly,
                 'leaderboard' => $leaderboard,
+                'leaderboards' => $leaderboards,
+                'leaderboards_meta' => $leaderboardMeta,
+                'region_context' => $regionMeta,
                 'member_since' => $userRow['created_at']
             ];
 
@@ -1724,6 +1805,49 @@ class UserController
             'avatar_path' => $originalPath,
             'avatar_url' => $url,
         ];
+    }
+
+    private function buildRegionResponse(?string $regionCode): array
+    {
+        $context = $this->regionService->getRegionContext($regionCode);
+        if ($context === null) {
+            return [
+                'region_code' => $regionCode,
+                'region_label' => null,
+                'country_code' => null,
+                'state_code' => null,
+                'country_name' => null,
+                'state_name' => null,
+            ];
+        }
+
+        return [
+            'region_code' => $context['region_code'] ?? $regionCode,
+            'region_label' => $context['region_label'] ?? null,
+            'country_code' => $context['country_code'] ?? null,
+            'state_code' => $context['state_code'] ?? null,
+            'country_name' => $context['country_name'] ?? null,
+            'state_name' => $context['state_name'] ?? null,
+        ];
+    }
+
+    private function normalizeLeaderboardEntries(array $entries): array
+    {
+        return array_map(function (array $entry): array {
+            $avatar = $this->resolveAvatar($entry['avatar_path'] ?? null);
+            return [
+                'id' => isset($entry['id']) ? (int) $entry['id'] : null,
+                'username' => $entry['username'] ?? null,
+                'total_points' => isset($entry['total_points']) ? (float) $entry['total_points'] : 0.0,
+                'avatar_id' => isset($entry['avatar_id']) ? (int) $entry['avatar_id'] : null,
+                'avatar_path' => $avatar['avatar_path'],
+                'avatar_url' => $avatar['avatar_url'],
+                'rank' => isset($entry['rank']) ? (int) $entry['rank'] : null,
+                'region_code' => $entry['region_code'] ?? null,
+                'school_id' => isset($entry['school_id']) ? (int) $entry['school_id'] : null,
+                'school_name' => $entry['school_name'] ?? null,
+            ];
+        }, $entries);
     }
 
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

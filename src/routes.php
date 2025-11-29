@@ -12,6 +12,7 @@ use CarbonTrack\Controllers\ProductController;
 use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
+use CarbonTrack\Controllers\LeaderboardController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Controllers\AvatarController;
 use CarbonTrack\Controllers\BadgeController;
@@ -283,6 +284,11 @@ return function (App $app) {
         })->add(AuthMiddleware::class);
     };
 
+    $registerLeaderboardRoutes = function (RouteCollectorProxy $group) {
+        $group->get('/leaderboard/trigger', [LeaderboardController::class, 'triggerRefresh']);
+    };
+    };
+
     // Health check
     $registerHealthCheck($app);
 
@@ -300,7 +306,8 @@ return function (App $app) {
         $registerMessageRoutes,
         $registerSchoolRoutes,
         $registerAdminRoutes,
-        $registerFileRoutes
+        $registerFileRoutes,
+        $registerLeaderboardRoutes
     ) {
         $registerApiV1Root($group);
         $registerAuthRoutes($group);
@@ -315,6 +322,7 @@ return function (App $app) {
         $registerSchoolRoutes($group);
         $registerAdminRoutes($group);
         $registerFileRoutes($group);
+        $registerLeaderboardRoutes($group);
 
         // Admin file management routes (separate prefix)
         $group->group('/admin/files', function (RouteCollectorProxy $adminFiles) {
