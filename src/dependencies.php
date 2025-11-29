@@ -35,8 +35,11 @@ use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Controllers\FileUploadController;
+use CarbonTrack\Controllers\LeaderboardController;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
@@ -211,6 +214,15 @@ $__deps_initializer = function (Container $container) {
     $container->set(StatisticsService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new StatisticsService($db);
+    });
+
+    $container->set(RegionService::class, function (ContainerInterface $c) {
+        return new RegionService(null, $c->get(Logger::class));
+    });
+
+    $container->set(LeaderboardService::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class));
     });
 
     // AI LLM client adapter (optional if API key is not configured)
@@ -446,7 +458,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(Logger::class),
             $db,
             $c->get(ErrorLogService::class),
-            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
+            $c->get(RegionService::class),
+            $c->get(LeaderboardService::class)
         );
     });
 
@@ -461,7 +475,8 @@ $__deps_initializer = function (Container $container) {
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
             $c->get(Logger::class),
             $db,
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(RegionService::class)
         );
     });
 
@@ -495,6 +510,13 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(ErrorLogService::class),
             $c->get(CloudflareR2Service::class)
+        );
+    });
+
+    $container->set(LeaderboardController::class, function (ContainerInterface $c) {
+        return new LeaderboardController(
+            $c->get(LeaderboardService::class),
+            $c->get(Logger::class)
         );
     });
 
