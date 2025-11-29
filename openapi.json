@@ -9708,6 +9708,84 @@
           }
         }
       }
+    },
+    "/leaderboard/trigger": {
+      "get": {
+        "tags": [
+          "Leaderboards"
+        ],
+        "summary": "Trigger leaderboard cache refresh",
+        "description": "Rebuilds the cached leaderboard snapshot using a trigger key.",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Trigger key defined via LEADERBOARD_TRIGGER_KEY."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cache rebuild succeeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "generated_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "expires_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "global_count": {
+                          "type": "integer"
+                        },
+                        "regions_count": {
+                          "type": "integer"
+                        },
+                        "schools_count": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Invalid trigger key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9879,7 +9957,9 @@
           "username",
           "email",
           "password",
-          "confirm_password"
+          "confirm_password",
+          "country_code",
+          "state_code"
         ],
         "properties": {
           "username": {
@@ -9918,6 +9998,20 @@
           "cf_turnstile_response": {
             "type": "string",
             "description": "Cloudflare Turnstile验证令牌（某些部署可选）"
+          },
+          "country_code": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2,
+            "pattern": "^[A-Z]{2}$",
+            "description": "ISO 3166-1 alpha-2 code used to locate the country entry in locales/states.json."
+          },
+          "state_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6,
+            "pattern": "^[A-Z0-9]{1,6}$",
+            "description": "Uppercase subdivision code defined under the selected country in locales/states.json."
           }
         },
         "description": "注册请求。允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
@@ -9959,6 +10053,48 @@
                     "type": "string",
                     "format": "date-time",
                     "nullable": true
+                  },
+                  "region_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Stored region code formatted as COUNTRY-STATE (e.g. CN-GD)."
+                  },
+                  "region_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Human readable region label (e.g. China · Guangdong)."
+                  },
+                  "country_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "ISO alpha-2 country code."
+                  },
+                  "state_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Subdivision/state code as defined in locales/states.json."
+                  },
+                  "country_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Resolved country name from locales/states.json."
+                  },
+                  "state_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Resolved state/province name from locales/states.json."
                   }
                 }
               },
@@ -10159,6 +10295,48 @@
           "days_since_registration": {
             "type": "integer",
             "description": "注册天数"
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stored region code formatted as COUNTRY-STATE (e.g. CN-GD)."
+          },
+          "region_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human readable region label (e.g. China · Guangdong)."
+          },
+          "country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO alpha-2 country code."
+          },
+          "state_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subdivision/state code as defined in locales/states.json."
+          },
+          "country_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved country name from locales/states.json."
+          },
+          "state_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved state/province name from locales/states.json."
           }
         }
       },
@@ -10181,6 +10359,18 @@
           "cf_turnstile_response": {
             "type": "string",
             "description": "Cloudflare Turnstile 验证令牌；修改学校信息时为防止机器人频繁提交需提供"
+          },
+          "country_code": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 2,
+            "description": "ISO 3166-1 alpha-2 code; must be supplied together with state_code when updating region."
+          },
+          "state_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6,
+            "description": "Subdivision/state code paired with country_code when updating region."
           }
         }
       },
@@ -10630,6 +10820,42 @@
                 "format": "date-time",
                 "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
                 "nullable": true
+              },
+              "leaderboards": {
+                "type": "object",
+                "properties": {
+                  "global": {
+                    "": "#/components/schemas/LeaderboardContext"
+                  },
+                  "region": {
+                    "": "#/components/schemas/LeaderboardContext"
+                  },
+                  "school": {
+                    "": "#/components/schemas/LeaderboardContext"
+                  }
+                }
+              },
+              "leaderboards_meta": {
+                "type": "object",
+                "properties": {
+                  "generated_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "expires_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  }
+                }
+              },
+              "region_context": {
+                "": "#/components/schemas/RegionContext"
               }
             }
           }
@@ -13596,6 +13822,144 @@
               }
             },
             "additionalProperties": true
+          }
+        }
+      },
+      "LeaderboardEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_points": {
+            "type": "number"
+          },
+          "avatar_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "avatar_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rank": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "school_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LeaderboardContext": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "": "#/components/schemas/LeaderboardEntry"
+            }
+          }
+        }
+      },
+      "RegionContext": {
+        "type": "object",
+        "properties": {
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stored region code formatted as COUNTRY-STATE (e.g. CN-GD)."
+          },
+          "region_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human readable region label (e.g. China · Guangdong)."
+          },
+          "country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO alpha-2 country code."
+          },
+          "state_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Subdivision/state code as defined in locales/states.json."
+          },
+          "country_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved country name from locales/states.json."
+          },
+          "state_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved state/province name from locales/states.json."
           }
         }
       }
