@@ -13,6 +13,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\RegionService;
 use Monolog\Logger;
 use PDO;
 
@@ -27,6 +28,7 @@ class AuthController
    private ?CloudflareR2Service $r2Service;
    private Logger $logger;
    private PDO $db;
+   private RegionService $regionService;
 
     private const VERIFICATION_RESEND_LIMIT = 3;
     private const VERIFICATION_CODE_TTL_MINUTES = 30;
@@ -41,7 +43,8 @@ class AuthController
         CloudflareR2Service $r2Service = null,
         Logger $logger,
         PDO $db,
-        ErrorLogService $errorLogService = null
+        ErrorLogService $errorLogService = null,
+        RegionService $regionService
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
@@ -52,6 +55,7 @@ class AuthController
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
+        $this->regionService = $regionService;
     }
 
     public function register(Request $request, Response $response): Response
@@ -101,6 +105,17 @@ class AuthController
                     'code' => 'EMAIL_EXISTS'
                 ], 409);
             }
+            $countryCode = $this->regionService->normalizeCountryCode($data['country_code'] ?? null);
+            $stateCode = $this->regionService->normalizeStateCode($data['state_code'] ?? null);
+            if (!$countryCode || !$stateCode || !$this->regionService->isValidRegion($countryCode, $stateCode)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'A valid country and state code are required',
+                    'code' => 'INVALID_REGION'
+                ], 400);
+            }
+            $regionCode = $this->regionService->buildRegionCode($countryCode, $stateCode);
+
             // 允许在注册时通过 new_school_name 创建新学校（防滥用：仅此处自动创建）
             $schoolId = $data['school_id'] ?? null;
             if (!empty($data['new_school_name']) && empty($schoolId)) {
@@ -134,12 +149,13 @@ class AuthController
             // 为兼容旧库，这里优先写入 password 列
             // 不再接受/存储 real_name 或 class_name，保持向后兼容：如果客户端仍发送则忽略
             $now = date('Y-m-d H:i:s');
-            $stmt = $this->db->prepare('INSERT INTO users (username, email, password, school_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
+            $stmt = $this->db->prepare('INSERT INTO users (username, email, password, school_id, region_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
             $stmt->execute([
                 $data['username'],
                 $data['email'],
                 $hashed,
                 $schoolId,
+                $regionCode,
                 $now,
                 $now
             ]);
@@ -149,7 +165,8 @@ class AuthController
                     'username' => $data['username'],
                     'email' => $data['email'],
                     'school_id' => $schoolId,
-                    'new_school_name' => $data['new_school_name'] ?? null
+                    'new_school_name' => $data['new_school_name'] ?? null,
+                    'region_code' => $regionCode
                 ]
             ]);
             try { $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']); } catch (\Throwable $e) { $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]); }
@@ -178,7 +195,11 @@ class AuthController
                         'email' => $data['email'],
                         'points' => 0,
                         'is_admin' => false,
-                        'email_verified_at' => null
+                        'email_verified_at' => null,
+                        'region_code' => $regionCode,
+                        'region_label' => $this->regionService->getRegionLabel($regionCode),
+                        'country_code' => $countryCode,
+                        'state_code' => $stateCode,
                     ],
                     'token' => $token,
                     'email_verification_required' => true,
@@ -1195,6 +1216,8 @@ class AuthController
     private function formatUserPayload(array $row): array
     {
         $avatar = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
+        $regionCode = $row['region_code'] ?? null;
+        $regionContext = $this->regionService->getRegionContext($regionCode);
         return [
             'id' => (int)($row['id'] ?? 0),
             'uuid' => $row['uuid'] ?? null,
@@ -1211,6 +1234,10 @@ class AuthController
             'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
             'status' => $row['status'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
+            'region_code' => $regionContext['region_code'] ?? $regionCode,
+            'region_label' => $regionContext['region_label'] ?? null,
+            'country_code' => $regionContext['country_code'] ?? null,
+            'state_code' => $regionContext['state_code'] ?? null,
         ];
     }
 
