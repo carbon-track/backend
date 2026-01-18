@@ -627,6 +627,31 @@ CREATE TABLE `transactions` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `user_groups`
+--
+
+CREATE TABLE `user_groups` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `code` varchar(50) NOT NULL,
+  `config` longtext COMMENT 'JSON config for quotas',
+  `is_default` tinyint(1) NOT NULL DEFAULT '0',
+  `notes` text,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+--
+-- 转存表中的数据 `user_groups`
+--
+
+INSERT INTO `user_groups` (`id`, `name`, `code`, `config`, `is_default`, `notes`) VALUES
+(1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}}', 1, 'Default free tier'),
+(2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}}', 0, 'Premium tier');
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `users`
 --
 
@@ -639,6 +664,7 @@ CREATE TABLE `users` (
   `points` decimal(10,2) NOT NULL DEFAULT '0.00',
   `school` varchar(255) DEFAULT NULL,
   `location` varchar(255) DEFAULT NULL,
+  `region_code` varchar(16) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `deleted_at` datetime DEFAULT NULL,
@@ -656,8 +682,25 @@ CREATE TABLE `users` (
   `verification_attempts` int(11) NOT NULL DEFAULT '0',
   `verification_send_count` int(11) NOT NULL DEFAULT '0',
   `verification_last_sent_at` datetime DEFAULT NULL,
-  `notification_email_mask` int(11) unsigned NOT NULL DEFAULT '0'
+  `notification_email_mask` int(11) unsigned NOT NULL DEFAULT '0',
+  `group_id` int(11) DEFAULT NULL,
+  `quota_override` longtext COMMENT 'JSON overrides for quotas',
+  `admin_notes` text
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `user_usage_stats`
+--
+
+CREATE TABLE `user_usage_stats` (
+  `user_id` int(11) NOT NULL,
+  `resource_key` varchar(50) NOT NULL COMMENT 'e.g. llm_daily, llm_rate',
+  `counter` decimal(10,4) NOT NULL DEFAULT '0.0000',
+  `last_updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `reset_at` datetime DEFAULT NULL COMMENT 'When the counter should reset (for daily/monthly quotas)'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
 
@@ -869,6 +912,19 @@ ALTER TABLE `transactions`
   ADD KEY `id_3` (`id`);
 
 --
+-- 表的索引 `user_groups`
+--
+ALTER TABLE `user_groups`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_user_groups_code` (`code`);
+
+--
+-- 表的索引 `user_usage_stats`
+--
+ALTER TABLE `user_usage_stats`
+  ADD PRIMARY KEY (`user_id`,`resource_key`);
+
+--
 -- 表的索引 `users`
 --
 ALTER TABLE `users`
@@ -881,7 +937,9 @@ ALTER TABLE `users`
   ADD KEY `idx_users_deleted_at` (`deleted_at`),
   ADD KEY `idx_users_status` (`status`),
   ADD KEY `idx_users_is_admin` (`is_admin`),
-  ADD KEY `idx_users_created_at` (`created_at`);
+  ADD KEY `idx_users_created_at` (`created_at`),
+  ADD KEY `idx_users_region_code` (`region_code`),
+  ADD KEY `idx_users_group_id` (`group_id`);
 
 --
 -- 在导出的表使用AUTO_INCREMENT
@@ -987,6 +1045,12 @@ ALTER TABLE `system_logs`
 -- 使用表AUTO_INCREMENT `transactions`
 --
 ALTER TABLE `transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `user_groups`
+--
+ALTER TABLE `user_groups`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --

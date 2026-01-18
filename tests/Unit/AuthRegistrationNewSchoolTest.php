@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AuthController;
-use CarbonTrack\Services\{AuthService, EmailService, TurnstileService, AuditLogService, ErrorLogService, MessageService, CloudflareR2Service};
+use CarbonTrack\Services\{AuthService, EmailService, TurnstileService, AuditLogService, ErrorLogService, MessageService, CloudflareR2Service, RegionService};
 use Monolog\Logger;
 use Monolog\Handler\StreamHandler;
 use Slim\Psr7\Response;
@@ -14,6 +14,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 final class AuthRegistrationNewSchoolTest extends TestCase
 {
     private PDO $pdo;
+    private RegionService $regionService;
 
     protected function setUp(): void
     {
@@ -21,7 +22,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         // Minimal schema: users & schools
         $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
+        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, points INTEGER DEFAULT 0, region_code TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
+        $this->regionService = new RegionService(null, null);
     }
 
     private function makeController(): AuthController
@@ -49,8 +51,9 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $logger->pushHandler(new StreamHandler('php://stdout', Logger::WARNING));
         /** @var ErrorLogService&PHPUnit\Framework\MockObject\MockObject $err */
         $err = $this->createMock(ErrorLogService::class);
+        $region = $this->regionService;
 
-        return new AuthController($auth, $email, $turnstile, $audit, $msg, $r2, $logger, $this->pdo, $err);
+        return new AuthController($auth, $email, $turnstile, $audit, $msg, $r2, $logger, $this->pdo, $err, $region);
     }
 
     private function makeRequest(array $body): Request
@@ -70,6 +73,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
             'password' => $pwd,
             'confirm_password' => $pwd,
             'new_school_name' => 'Carbon Innovation Institute',
+            'country_code' => 'CN',
+            'state_code' => 'GD',
             'cf_turnstile_response' => 'test_turnstile_token'
         ];
         $resp = new Response();
@@ -104,6 +109,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
             'confirm_password' => $pwd,
             'school_id' => $schoolId,
             'new_school_name' => 'Another New School Name', // should be ignored
+            'country_code' => 'CN',
+            'state_code' => 'GD',
             'cf_turnstile_response' => 'test_turnstile_token'
         ];
         $resp = new Response();
