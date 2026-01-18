@@ -109,8 +109,10 @@ $sql = "
                 SELECT
                     u.id, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
+                    u.group_id, u.quota_override, u.admin_notes,
                     {$lastLoginSelect},
                     s.name as school_name,
+                    g.name as group_name,
                     a.name as avatar_name, a.file_path as avatar_path,
                     COUNT(pt.id) as total_transactions,
                     COALESCE(SUM(CASE WHEN pt.status = 'approved' THEN pt.points ELSE 0 END), 0) as earned_points,
@@ -121,6 +123,7 @@ $sql = "
                     ub.last_badge_awarded_at
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
+                LEFT JOIN user_groups g ON u.group_id = g.id
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 LEFT JOIN points_transactions pt ON u.id = pt.uid AND pt.deleted_at IS NULL
                 LEFT JOIN (
@@ -167,6 +170,7 @@ $sql = "
                 $row['badges_awarded'] = (int) ($row['badges_awarded'] ?? 0);
                 $row['badges_revoked'] = (int) ($row['badges_revoked'] ?? 0);
                 $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
+                $row['quota_override'] = !empty($row['quota_override']) ? json_decode((string)$row['quota_override'], true) : null;
                 $row['days_since_registration'] = 0;
                 if (!empty($row['created_at'])) {
                     try {
@@ -491,15 +495,40 @@ $sql = "
             $payload = $request->getParsedBody() ?? [];
             $isAdmin  = array_key_exists('is_admin', $payload) ? (int)!!$payload['is_admin'] : null;
             $status   = array_key_exists('status', $payload) ? trim((string)$payload['status']) : null;
-
-            if ($isAdmin === null && $status === null) {
-                return $this->jsonResponse($response, ['error' => 'No fields to update'], 400);
-            }
+            $groupId  = array_key_exists('group_id', $payload) ? $payload['group_id'] : null;
+            $quotaOverride = array_key_exists('quota_override', $payload) ? $payload['quota_override'] : null;
+            $adminNotes = array_key_exists('admin_notes', $payload) ? $payload['admin_notes'] : null;
 
             $sets = [];
             $params = ['id' => $userId];
-            if ($isAdmin !== null) { $sets[] = 'is_admin = :is_admin'; $params['is_admin'] = $isAdmin; }
-            if ($status !== null) { $sets[] = 'status = :status'; $params['status'] = $status; }
+
+            if (array_key_exists('is_admin', $payload)) {
+                $sets[] = 'is_admin = :is_admin';
+                $params['is_admin'] = (int)!!$payload['is_admin'];
+            }
+            if (array_key_exists('status', $payload)) {
+                $sets[] = 'status = :status';
+                $params['status'] = trim((string)$payload['status']);
+            }
+            if (array_key_exists('group_id', $payload)) {
+                $sets[] = 'group_id = :group_id';
+                $val = $payload['group_id'];
+                $params['group_id'] = ($val === '' || $val === null) ? null : (int)$val;
+            }
+            if (array_key_exists('quota_override', $payload)) {
+                $sets[] = 'quota_override = :quota_override';
+                $val = $payload['quota_override'];
+                $params['quota_override'] = is_array($val) ? json_encode($val) : $val; // null stays null
+            }
+            if (array_key_exists('admin_notes', $payload)) {
+                $sets[] = 'admin_notes = :admin_notes';
+                $params['admin_notes'] = $payload['admin_notes'];
+            }
+
+            if (empty($sets)) {
+                 return $this->jsonResponse($response, ['error' => 'No fields to update'], 400);
+            }
+
             $sets[] = 'updated_at = :updated_at';
             $params['updated_at'] = date('Y-m-d H:i:s');
 

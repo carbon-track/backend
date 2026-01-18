@@ -7,6 +7,7 @@ namespace CarbonTrack\Models;
 use DateTimeImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use CarbonTrack\Models\UserGroup;
 
 class User extends Model
 {
@@ -26,7 +27,10 @@ class User extends Model
         'location',
         'is_admin',
         'lastlgn',
-        'notification_email_mask'
+        'notification_email_mask',
+        'group_id',
+        'quota_override',
+        'admin_notes'
     ];
 
     protected $hidden = [
@@ -40,7 +44,8 @@ class User extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
-        'notification_email_mask' => 'integer'
+        'notification_email_mask' => 'integer',
+        'quota_override' => 'array'
     ];
 
     protected $dates = ['deleted_at'];
@@ -298,5 +303,13 @@ class User extends Model
             ->where('is_read', false)
             ->whereNull('deleted_at')
             ->count();
+    }
+
+    /**
+     * Get the user's group
+     */
+    public function group()
+    {
+        return $this->belongsTo(UserGroup::class, 'group_id');
     }
 }

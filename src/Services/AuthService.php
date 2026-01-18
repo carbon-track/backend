@@ -120,12 +120,36 @@ class AuthService
     }
 
     /**
+     * Get current user model
+     */
+    public function getCurrentUserModel(Request $request): ?\CarbonTrack\Models\User
+    {
+        $userData = $this->getCurrentUser($request);
+        if (!$userData) {
+            return null;
+        }
+        return \CarbonTrack\Models\User::find($userData['id']);
+    }
+
+    /**
      * 检查用户是否为管理员
      */
     public function isAdmin(Request $request): bool
     {
         $user = $this->getCurrentUser($request);
         return $user && $user['is_admin'];
+    }
+
+    /**
+     * Get user ID from request
+     * 
+     * @param Request $request
+     * @return int|null
+     */
+    public function getUserIdFromRequest(Request $request): ?int
+    {
+        $user = $this->getCurrentUser($request);
+        return $user['id'] ?? null;
     }
 
     /**
