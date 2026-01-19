@@ -51,6 +51,7 @@ class ComprehensiveBusinessDataTest extends TestCase
         $_ENV['JWT_ALGORITHM'] = 'HS256';
         $_ENV['JWT_EXPIRATION'] = '86400';
         $_ENV['TURNSTILE_SECRET_KEY'] = 'test_turnstile_secret';
+        $_ENV['REGION_DATA_PATH'] = realpath(__DIR__ . '/../../../frontend/public/locales/states.json') ?: '';
         $_ENV['R2_ACCESS_KEY_ID'] = 'test_access_key';
         $_ENV['R2_SECRET_ACCESS_KEY'] = 'test_secret_key';
         $_ENV['R2_ENDPOINT'] = 'https://example.com';
@@ -355,6 +356,8 @@ class ComprehensiveBusinessDataTest extends TestCase
             'confirm_password' => 'SecurePassword123!',
             // phone 字段已移除
             'school_id' => 1,
+            'country_code' => 'CN',
+            'state_code' => 'BJ',
             'cf_turnstile_response' => 'test_turnstile_token',
             // 测试环境跳过 Turnstile 验证，省略 cf_turnstile_response
         ];

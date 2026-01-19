@@ -10,6 +10,7 @@ use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\RegionService;
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -75,6 +76,8 @@ final class AuthEmailVerificationTest extends TestCase
         $r2 = $this->createMock(CloudflareR2Service::class);
         /** @var ErrorLogService&MockObject $err */
         $err = $this->createMock(ErrorLogService::class);
+        /** @var RegionService&MockObject $region */
+        $region = $this->createMock(RegionService::class);
 
         $logger = new Logger('test-email-verification');
         $logger->pushHandler(new StreamHandler('php://stdout', Logger::WARNING));
@@ -88,7 +91,8 @@ final class AuthEmailVerificationTest extends TestCase
             $r2,
             $logger,
             $this->pdo,
-            $err
+            $err,
+            $region
         );
 
         return ['controller' => $controller, 'email' => $email];

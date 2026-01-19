@@ -6,7 +6,7 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\User;
 use CarbonTrack\Models\UserUsageStats;
-use DateTime;
+use Illuminate\Support\Carbon;
 
 class QuotaService
 {
@@ -70,25 +70,27 @@ class QuotaService
     private function checkDailyQuota(int $userId, string $resource, int $limit, int $cost): bool
     {
         $key = "{$resource}_daily";
-        $stats = UserUsageStats::firstOrNew(['user_id' => $userId, 'resource_key' => $key]);
+        $stats = UserUsageStats::where('user_id', $userId)
+            ->where('resource_key', $key)
+            ->first();
 
-        $now = new DateTime();
-        $resetAt = $stats->reset_at ? new DateTime($stats->reset_at) : null;
+        $now = Carbon::now();
+        $resetAt = $this->toCarbon($stats?->reset_at);
+        $counter = (float)($stats->counter ?? 0);
 
         // Reset if needed (new day)
         if (!$resetAt || $now >= $resetAt) {
-            $stats->counter = 0;
+            $counter = 0;
             // Set next reset to tomorrow 00:00:00
-            $stats->reset_at = (new DateTime('tomorrow'))->format('Y-m-d H:i:s');
+            $resetAt = $now->copy()->addDay()->startOfDay();
         }
 
-        if (($stats->counter + $cost) > $limit) {
+        if (($counter + $cost) > $limit) {
             return false;
         }
 
-        $stats->counter += $cost;
-        $stats->last_updated_at = $now->format('Y-m-d H:i:s');
-        $stats->save();
+        $counter += $cost;
+        $this->persistUsageStats($userId, $key, $counter, $now, $resetAt);
 
         return true;
     }
@@ -99,40 +101,60 @@ class QuotaService
     private function checkTokenBucket(int $userId, string $resource, float $ratePerMinute, int $cost): bool
     {
         $key = "{$resource}_bucket";
-        $stats = UserUsageStats::firstOrNew(['user_id' => $userId, 'resource_key' => $key]);
+        $stats = UserUsageStats::where('user_id', $userId)
+            ->where('resource_key', $key)
+            ->first();
         
         $capacity = $ratePerMinute; // Bucket size = rate (1 minute burst)
-        $now = new DateTime();
-        
-        // Initialize if new
-        if (!$stats->exists) {
-            $stats->counter = $capacity;
-            $stats->last_updated_at = $now->format('Y-m-d H:i:s');
-            $stats->save();
-        }
+        $now = Carbon::now();
 
-        // Refill
-        $lastUpdate = new DateTime($stats->last_updated_at);
-        $secondsPassed = $now->getTimestamp() - $lastUpdate->getTimestamp();
+        $lastUpdate = $this->toCarbon($stats?->last_updated_at) ?? $now;
+        $secondsPassed = max(0, $now->getTimestamp() - $lastUpdate->getTimestamp());
         $tokensToAdd = ($secondsPassed / 60) * $ratePerMinute;
         
-        $currentTokens = (float)$stats->counter;
+        $currentTokens = $stats ? (float)$stats->counter : $capacity;
         $newTokens = min($capacity, $currentTokens + $tokensToAdd);
 
         if ($newTokens < $cost) {
             // Need to save the refill even if failed? 
             // Yes, to update timestamp so we don't grant "phantom" tokens next time due to long time gap
-             $stats->counter = $newTokens;
-             $stats->last_updated_at = $now->format('Y-m-d H:i:s');
-             $stats->save();
-             return false;
+            $this->persistUsageStats($userId, $key, $newTokens, $now, $stats?->reset_at);
+            return false;
         }
 
         // Consume
-        $stats->counter = $newTokens - $cost;
-        $stats->last_updated_at = $now->format('Y-m-d H:i:s');
-        $stats->save();
+        $this->persistUsageStats($userId, $key, $newTokens - $cost, $now, $stats?->reset_at);
 
         return true;
+    }
+
+    /**
+     * Normalize database date values (string or Carbon) to Carbon instances.
+     */
+    private function toCarbon($value): ?Carbon
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value);
+        }
+
+        if (is_string($value) && $value !== '') {
+            return Carbon::parse($value);
+        }
+
+        return null;
+    }
+
+    private function persistUsageStats(int $userId, string $resourceKey, float $counter, Carbon $timestamp, $resetAt): void
+    {
+        $reset = $this->toCarbon($resetAt);
+
+        UserUsageStats::query()->updateOrInsert(
+            ['user_id' => $userId, 'resource_key' => $resourceKey],
+            [
+                'counter' => $counter,
+                'last_updated_at' => $timestamp->toDateTimeString(),
+                'reset_at' => $reset ? $reset->toDateTimeString() : null,
+            ]
+        );
     }
 }

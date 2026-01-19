@@ -10,6 +10,23 @@ use CarbonTrack\Services\AuthService;
 
 class AdminMiddlewareTest extends TestCase
 {
+    private ?string $previousEnv = null;
+
+    protected function setUp(): void
+    {
+        $this->previousEnv = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->previousEnv === null) {
+            unset($_ENV['APP_ENV']);
+        } else {
+            $_ENV['APP_ENV'] = $this->previousEnv;
+        }
+    }
+
     public function testClassExists(): void
     {
         $this->assertTrue(class_exists(AdminMiddleware::class));

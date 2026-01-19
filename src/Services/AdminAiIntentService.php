@@ -495,12 +495,85 @@ class AdminAiIntentService
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
+    private function extractIntentFromContent(?string $content, string $originalQuery, array $rawResponse): ?array
+    {
+        if (!is_string($content) || trim($content) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($content, true);
+        if (!is_array($decoded) || !isset($decoded['intent']) || !is_array($decoded['intent'])) {
+            return null;
+        }
+
+        $intentData = $decoded['intent'];
+        $intentType = $intentData['type'] ?? null;
+        $intent = null;
+
+        switch ($intentType) {
+            case 'navigate':
+                $destination = $intentData['target']['routeId'] ?? ($intentData['target']['route'] ?? null);
+                $intent = $this->createNavigationIntent([
+                    'destination' => $destination,
+                    'parameters' => $intentData['target']['query'] ?? [],
+                ]);
+                if ($intent === null) {
+                    return $this->fallbackIntent($rawResponse);
+                }
+                break;
+            case 'quick_action':
+                $shortcutId = $intentData['target']['routeId'] ?? ($intentData['target']['id'] ?? null);
+                $intent = $this->createShortcutIntent([
+                    'shortcut_id' => $shortcutId,
+                ]);
+                if ($intent === null) {
+                    return $this->fallbackIntent($rawResponse);
+                }
+                break;
+            case 'action':
+                $actionName = $intentData['action']['name'] ?? null;
+                $payload = $intentData['action']['api']['payload'] ?? [];
+                $intent = $this->createManagementIntent([
+                    'action' => $actionName,
+                    'payload' => $payload,
+                ]);
+                if ($intent === null) {
+                    return $this->fallbackIntent($rawResponse);
+                }
+                break;
+            case 'fallback':
+                $heuristic = $this->guessNavigationIntent($originalQuery);
+                if ($heuristic) {
+                    return [
+                        'intent' => $heuristic,
+                        'alternatives' => [],
+                        'metadata' => $this->extractMetadata($rawResponse),
+                    ];
+                }
+                return $this->fallbackIntent($rawResponse);
+        }
+
+        if ($intent === null) {
+            return null;
+        }
+
+        return [
+            'intent' => $intent,
+            'alternatives' => [],
+            'metadata' => $this->extractMetadata($rawResponse),
+        ];
+    }
+
     private function processResponse(array $rawResponse, string $originalQuery): array
     {
         $choice = $rawResponse['choices'][0] ?? [];
         $message = $choice['message'] ?? [];
         $toolCalls = $message['tool_calls'] ?? [];
         $content = $message['content'] ?? null;
+
+        if ($contentIntent = $this->extractIntentFromContent($content, $originalQuery, $rawResponse)) {
+            return $contentIntent;
+        }
 
         if (empty($toolCalls)) {
             // Try to parse JSON from content if tool_calls is empty

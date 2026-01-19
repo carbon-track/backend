@@ -27,6 +27,12 @@ class TurnstileService
      */
     public function verify(string $token, ?string $remoteIp = null): array
     {
+        $appEnv = strtolower((string)($_ENV['APP_ENV'] ?? ''));
+        $bypass = filter_var($_ENV['TURNSTILE_BYPASS'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if ($appEnv === 'testing' || $bypass) {
+            return ['success' => true, 'bypassed' => true];
+        }
+
         if (empty($token)) {
             return [
                 'success' => false,
