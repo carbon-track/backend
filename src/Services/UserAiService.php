@@ -96,7 +96,8 @@ Instructions:
 2. Return the matched activity_uuid (required). If no match, set activity_uuid to null and confidence 0.
 3. Include activity_name only as a display label (keep the provided name if matched).
 4. Extract the numeric amount and unit. If the unit is missing, infer a standard unit for that activity (e.g., km for transport).
-5. Return confidence score (0-1).
+5. Extract the occurrence date if present; output as ISO date string YYYY-MM-DD. If missing or ambiguous, set to null.
+6. Return confidence score (0-1).
 
 Output Schema (JSON):
 {
@@ -104,6 +105,7 @@ Output Schema (JSON):
     "activity_name": "string (Best match name, optional)",
     "amount": number,
     "unit": "string",
+    "activity_date": "string|null (ISO date YYYY-MM-DD)",
     "notes": "string (Short summary of what was extracted)",
     "confidence": number
 }
@@ -155,6 +157,9 @@ EOT;
 
          if (!array_key_exists('activity_uuid', $data)) {
              $data['activity_uuid'] = null;
+         }
+         if (!array_key_exists('activity_date', $data)) {
+             $data['activity_date'] = null;
          }
 
          if ($data['activity_uuid'] !== null && !is_string($data['activity_uuid'])) {

@@ -55,7 +55,8 @@ class UserAiServiceTest extends TestCase
             'activity_name' => 'Bus',
             'amount' => 10,
             'unit' => 'km',
-            'activity_uuid' => null
+            'activity_uuid' => null,
+            'activity_date' => null
         ];
 
         $rawResponse = [
@@ -89,7 +90,7 @@ class UserAiServiceTest extends TestCase
 
     public function testSuggestActivityHandlesMarkdownJsonBlock(): void
     {
-        $expectedResponse = ['activity' => 'Test', 'activity_uuid' => null];
+        $expectedResponse = ['activity' => 'Test', 'activity_uuid' => null, 'activity_date' => null];
         $jsonString = json_encode($expectedResponse);
         $content = "Here is the result:\n```json\n$jsonString\n```";
 
@@ -112,7 +113,7 @@ class UserAiServiceTest extends TestCase
 
     public function testSuggestActivityHandlesFallbackParsing(): void
     {
-        $expectedResponse = ['activity' => 'Test', 'activity_uuid' => null];
+        $expectedResponse = ['activity' => 'Test', 'activity_uuid' => null, 'activity_date' => null];
         $jsonString = json_encode($expectedResponse);
         $content = "Sure! $jsonString is your result.";
 
