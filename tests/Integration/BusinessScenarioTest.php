@@ -19,6 +19,11 @@ class BusinessScenarioTest extends TestCase
 
     protected function setUp(): void
     {
+        $enabled = $_ENV['RUN_BUSINESS_SCENARIO_TESTS'] ?? $_SERVER['RUN_BUSINESS_SCENARIO_TESTS'] ?? getenv('RUN_BUSINESS_SCENARIO_TESTS');
+        if (!filter_var($enabled, FILTER_VALIDATE_BOOLEAN)) {
+            $this->markTestSkipped('RUN_BUSINESS_SCENARIO_TESTS not enabled; skipping live API journey tests.');
+        }
+
         $configuredBaseUrl = $_ENV['CARBONTRACK_TEST_BASE_URL']
             ?? $_SERVER['CARBONTRACK_TEST_BASE_URL']
             ?? getenv('CARBONTRACK_TEST_BASE_URL')

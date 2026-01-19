@@ -11,6 +11,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\RegionService;
 use PHPUnit\Framework\TestCase;
 
 class AuthControllerTest extends TestCase
@@ -26,6 +27,7 @@ class AuthControllerTest extends TestCase
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
         $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
 
         $authController = new AuthController(
             $mockAuthService,
@@ -36,7 +38,8 @@ class AuthControllerTest extends TestCase
             $mockR2Service,
             $mockLogger,
             $mockPdo,
-            $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
         );
 
         $this->assertInstanceOf(AuthController::class, $authController);
@@ -78,7 +81,7 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(9, $parameters);
+        $this->assertCount(10, $parameters);
 
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -89,7 +92,8 @@ class AuthControllerTest extends TestCase
             'CarbonTrack\Services\CloudflareR2Service',
             'Monolog\Logger',
             'PDO',
-            'CarbonTrack\Services\ErrorLogService'
+            'CarbonTrack\Services\ErrorLogService',
+            'CarbonTrack\Services\RegionService'
         ];
         $nullableIndexes = [5, 8];
 
@@ -116,6 +120,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockRegion = $this->createMock(RegionService::class);
 
         // mock PDO for selecting user and updating last login
         $selectStmt = $this->createMock(\PDOStatement::class);
@@ -159,7 +164,8 @@ class AuthControllerTest extends TestCase
             $mockR2Service,
             $mockLogger,
             $mockPdo,
-            $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
         );
 
         $request = makeRequest('POST', '/login', ['username' => 'john', 'password' => 'secret']);
@@ -185,6 +191,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockRegion = $this->createMock(RegionService::class);
 
         $now = new \DateTimeImmutable('now');
         $futureExpiry = $now->modify('+30 minutes')->format('Y-m-d H:i:s');
@@ -230,7 +237,8 @@ class AuthControllerTest extends TestCase
             $mockR2Service,
             $mockLogger,
             $mockPdo,
-            $this->createMock(\CarbonTrack\Services\ErrorLogService::class)
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
         );
 
         $request = makeRequest('POST', '/login', ['identifier' => 'alice@example.com', 'password' => 'secret']);
