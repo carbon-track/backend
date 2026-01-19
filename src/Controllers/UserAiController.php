@@ -50,17 +50,21 @@ class UserAiController
         }
 
         // Get activities for context
-        // We only send names to save context window and improve matching
         $activities = $this->calculatorService->getAvailableActivities(null, null, false);
         $activityContext = [];
         foreach ($activities as $activity) {
-            // Format: "Category: Name EN / Name ZH"
-            $name = $activity['name_en'] ?? $activity['name_zh'];
+            // Keep UUID/id for precise matching
+            $name = $activity['name_en'] ?? $activity['name_zh'] ?? ($activity['combined_name'] ?? null);
             if (isset($activity['name_en'], $activity['name_zh'])) {
                 $name = "{$activity['name_en']} / {$activity['name_zh']}";
             }
             $cat = $activity['category'] ?? 'General';
-            $activityContext[] = "{$cat}: {$name}";
+            $activityContext[] = [
+                'id' => (string)($activity['id'] ?? ''),
+                'label' => $name ?? $activity['id'] ?? 'Unknown',
+                'category' => $cat,
+                'unit' => $activity['unit'] ?? null,
+            ];
         }
 
         try {
