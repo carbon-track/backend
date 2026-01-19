@@ -98,6 +98,25 @@ class QuotaServiceTest extends TestCase
         $this->assertNotNull($stats->last_updated_at);
     }
 
+    public function testDailyQuotaInitializesWhenMissing(): void
+    {
+        $user = $this->makeUserWithGroup(['daily_limit' => 1]);
+
+        $service = new QuotaService();
+
+        // No existing stats row
+        $this->assertNull(UserUsageStats::where('user_id', $user->id)->where('resource_key', 'llm_daily')->first());
+
+        $this->assertTrue($service->checkAndConsume($user, 'llm', 1));
+
+        $stats = UserUsageStats::where('user_id', $user->id)
+            ->where('resource_key', 'llm_daily')
+            ->firstOrFail();
+
+        $this->assertSame(1, (int) $stats->counter);
+        $this->assertTrue($stats->reset_at->greaterThan(Carbon::now()));
+    }
+
     private static function migrate(): void
     {
         $schema = self::$capsule->schema();

@@ -76,7 +76,7 @@ class QuotaService
 
         $now = Carbon::now();
         $resetAt = $this->toCarbon($stats?->reset_at);
-        $counter = (float)($stats->counter ?? 0);
+        $counter = (float)($stats?->counter ?? 0);
 
         // Reset if needed (new day)
         if (!$resetAt || $now >= $resetAt) {

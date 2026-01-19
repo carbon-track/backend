@@ -34,6 +34,14 @@ class UserAiController
              return $this->json($response, ['success' => false, 'error' => 'Query too long'], 400);
         }
 
+        $clientMeta = [];
+        if (!empty($body['client_time'])) {
+            $clientMeta['client_time'] = (string) $body['client_time'];
+        }
+        if (!empty($body['client_timezone'])) {
+            $clientMeta['client_timezone'] = (string) $body['client_timezone'];
+        }
+
         // Quota Check
         $userModel = $this->authService->getCurrentUserModel($request);
         if ($userModel) {
@@ -68,7 +76,7 @@ class UserAiController
         }
 
         try {
-            $result = $this->aiService->suggestActivity($query, $activityContext);
+            $result = $this->aiService->suggestActivity($query, $activityContext, $clientMeta);
             return $this->json($response, $result);
         } catch (\Throwable $e) {
             $this->logger->error('AI Suggest Error: ' . $e->getMessage());

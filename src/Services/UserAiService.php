@@ -35,13 +35,13 @@ class UserAiService
      * @param array<string> $availableActivities List of activity names/descriptions
      * @return array
      */
-    public function suggestActivity(string $query, array $availableActivities = []): array
+    public function suggestActivity(string $query, array $availableActivities = [], array $clientTimeContext = []): array
     {
         if (!$this->enabled) {
             throw new \RuntimeException('AI service is disabled');
         }
 
-        $messages = $this->buildMessages($query, $availableActivities);
+        $messages = $this->buildMessages($query, $availableActivities, $clientTimeContext);
 
         $payload = [
             'model' => $this->model,
@@ -64,11 +64,24 @@ class UserAiService
         return $this->processResponse($rawResponse, $availableActivities);
     }
 
-    private function buildMessages(string $query, array $activities): array
+    private function buildMessages(string $query, array $activities, array $clientTimeContext = []): array
     {
         $now = new \DateTimeImmutable('now');
         $today = $now->format('Y-m-d');
         $weekday = $now->format('l');
+        $clientTimeLine = '';
+
+        $clientTimeRaw = $clientTimeContext['client_time'] ?? null;
+        $clientTzRaw = $clientTimeContext['client_timezone'] ?? null;
+        if ($clientTimeRaw) {
+            try {
+                $tz = $clientTzRaw ? new \DateTimeZone((string)$clientTzRaw) : null;
+                $clientTime = $tz ? new \DateTimeImmutable((string)$clientTimeRaw, $tz) : new \DateTimeImmutable((string)$clientTimeRaw);
+                $clientTimeLine = "User local time: " . $clientTime->format('Y-m-d H:i:s T');
+            } catch (\Throwable $e) {
+                $clientTimeLine = "User local time: " . (string)$clientTimeRaw . ($clientTzRaw ? " ({$clientTzRaw})" : '');
+            }
+        }
 
         $activityLines = [];
         foreach (array_slice($activities, 0, 500) as $item) {
@@ -92,6 +105,7 @@ class UserAiService
 You are a CarbonTrack assistant. help extract carbon footprint activity data from user input.
 You must return a valid JSON object. Match to the provided activities by UUID.
 Today is {$today} ({$weekday}).
+{$clientTimeLine}
 
 Available Activity Types (Reference):
 {$activityList}
