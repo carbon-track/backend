@@ -66,6 +66,10 @@ class UserAiService
 
     private function buildMessages(string $query, array $activities): array
     {
+        $now = new \DateTimeImmutable('now');
+        $today = $now->format('Y-m-d');
+        $weekday = $now->format('l');
+
         $activityLines = [];
         foreach (array_slice($activities, 0, 500) as $item) {
             if (is_array($item)) {
@@ -87,6 +91,7 @@ class UserAiService
         $systemPrompt = <<<EOT
 You are a CarbonTrack assistant. help extract carbon footprint activity data from user input.
 You must return a valid JSON object. Match to the provided activities by UUID.
+Today is {$today} ({$weekday}).
 
 Available Activity Types (Reference):
 {$activityList}
