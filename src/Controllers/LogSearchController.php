@@ -214,7 +214,7 @@ class LogSearchController
             }
             $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
             $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
-            $error = $this->fetchByRequestId('error_logs', $rid, ['id','error_type','error_message','error_file','error_line','error_time']);
+            $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
             $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
             return $this->json($response, ['success'=>true,'data'=>[
                 'request_id' => $rid,
@@ -305,7 +305,13 @@ class LogSearchController
         if (!empty($filters['method'])) { $conditions[] = 'method = :f_method'; $params['f_method'] = $filters['method']; }
         if (!empty($filters['status_code'])) { $conditions[] = 'status_code = :f_status'; $params['f_status'] = (int)$filters['status_code']; }
         if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :f_user'; $params['f_user'] = (int)$filters['user_id']; }
-        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :f_rid'; $params['f_rid'] = $filters['request_id']; }
+        if (!empty($filters['request_id'])) {
+            $rid = strtolower(trim((string)$filters['request_id']));
+            if ($rid !== '') {
+                $conditions[] = 'request_id = :f_rid';
+                $params['f_rid'] = $rid;
+            }
+        }
         if (!empty($filters['path'])) { $conditions[] = 'path LIKE :f_path'; $params['f_path'] = '%' . $filters['path'] . '%'; }
         if (!empty($filters['min_duration'])) { $conditions[] = 'duration_ms >= :f_min_d'; $params['f_min_d'] = (int)$filters['min_duration']; }
         if (!empty($filters['max_duration'])) { $conditions[] = 'duration_ms <= :f_max_d'; $params['f_max_d'] = (int)$filters['max_duration']; }
@@ -373,10 +379,16 @@ class LogSearchController
         if ($from) { $conditions[] = 'error_time >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'error_time <= :to'; $params['to'] = $this->normalizeEnd($to); }
         if (!empty($filters['error_type'])) { $conditions[] = 'error_type = :e_type'; $params['e_type'] = $filters['error_type']; }
-        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :e_rid'; $params['e_rid'] = $filters['request_id']; }
+        if (!empty($filters['request_id'])) {
+            $rid = trim((string)$filters['request_id']);
+            if ($rid !== '') {
+                $conditions[] = 'request_id = :e_rid';
+                $params['e_rid'] = $rid;
+            }
+        }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
