@@ -7073,7 +7073,7 @@
                         "users": {
                           "type": "array",
                           "items": {
-                            "": "#/components/schemas/UserResponse"
+                            "$ref": "#/components/schemas/UserResponse"
                           }
                         },
                         "pagination": {
@@ -10157,7 +10157,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/BadgeRecipientsResponse"
+                  "$ref": "#/components/schemas/BadgeRecipientsResponse"
                 }
               }
             }
@@ -10199,7 +10199,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/AdminUserOverviewResponse"
+                  "$ref": "#/components/schemas/AdminUserOverviewResponse"
                 }
               }
             }
@@ -10248,7 +10248,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/AdminUserBadgesResponse"
+                  "$ref": "#/components/schemas/AdminUserBadgesResponse"
                 }
               }
             }
@@ -10357,7 +10357,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/BroadcastRecipientSearchResponse"
+                  "$ref": "#/components/schemas/BroadcastRecipientSearchResponse"
                 }
               }
             }
@@ -10367,7 +10367,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10396,7 +10396,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "": "#/components/schemas/AdminAiIntentRequest"
+                "$ref": "#/components/schemas/AdminAiIntentRequest"
               }
             }
           }
@@ -10407,7 +10407,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/AdminAiIntentResponse"
+                  "$ref": "#/components/schemas/AdminAiIntentResponse"
                 }
               }
             }
@@ -10417,7 +10417,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10427,7 +10427,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10437,7 +10437,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10475,7 +10475,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/AdminAiDiagnosticsResponse"
+                  "$ref": "#/components/schemas/AdminAiDiagnosticsResponse"
                 }
               }
             }
@@ -10485,7 +10485,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10495,7 +10495,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -10573,7 +10573,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -11962,13 +11962,13 @@
                 "type": "object",
                 "properties": {
                   "global": {
-                    "": "#/components/schemas/LeaderboardContext"
+                    "$ref": "#/components/schemas/LeaderboardContext"
                   },
                   "region": {
-                    "": "#/components/schemas/LeaderboardContext"
+                    "$ref": "#/components/schemas/LeaderboardContext"
                   },
                   "school": {
-                    "": "#/components/schemas/LeaderboardContext"
+                    "$ref": "#/components/schemas/LeaderboardContext"
                   }
                 }
               },
@@ -11992,16 +11992,16 @@
                 }
               },
               "streak_stats": {
-                "": "#/components/schemas/StreakStats"
+                "$ref": "#/components/schemas/StreakStats"
               },
               "streak_leaderboards": {
-                "": "#/components/schemas/StreakLeaderboards"
+                "$ref": "#/components/schemas/StreakLeaderboards"
               },
               "streak_leaderboards_meta": {
-                "": "#/components/schemas/StreakLeaderboardsMeta"
+                "$ref": "#/components/schemas/StreakLeaderboardsMeta"
               },
               "region_context": {
-                "": "#/components/schemas/RegionContext"
+                "$ref": "#/components/schemas/RegionContext"
               }
             }
           }
@@ -12063,7 +12063,7 @@
             "type": "boolean"
           },
           "ranks": {
-            "": "#/components/schemas/StreakRanks"
+            "$ref": "#/components/schemas/StreakRanks"
           }
         }
       },
@@ -12166,7 +12166,7 @@
           "entries": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/StreakLeaderboardEntry"
+              "$ref": "#/components/schemas/StreakLeaderboardEntry"
             }
           }
         }
@@ -12175,13 +12175,13 @@
         "type": "object",
         "properties": {
           "global": {
-            "": "#/components/schemas/StreakLeaderboardContext"
+            "$ref": "#/components/schemas/StreakLeaderboardContext"
           },
           "region": {
-            "": "#/components/schemas/StreakLeaderboardContext"
+            "$ref": "#/components/schemas/StreakLeaderboardContext"
           },
           "school": {
-            "": "#/components/schemas/StreakLeaderboardContext"
+            "$ref": "#/components/schemas/StreakLeaderboardContext"
           }
         }
       },
@@ -12305,22 +12305,22 @@
             "type": "object",
             "properties": {
               "range": {
-                "": "#/components/schemas/CheckinRange"
+                "$ref": "#/components/schemas/CheckinRange"
               },
               "checkins": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/CheckinEntry"
+                  "$ref": "#/components/schemas/CheckinEntry"
                 }
               },
               "stats": {
-                "": "#/components/schemas/StreakStats"
+                "$ref": "#/components/schemas/StreakStats"
               },
               "makeup_quota": {
-                "": "#/components/schemas/MakeupQuotaSummary"
+                "$ref": "#/components/schemas/MakeupQuotaSummary"
               },
               "meta": {
-                "": "#/components/schemas/CheckinMeta"
+                "$ref": "#/components/schemas/CheckinMeta"
               }
             }
           }
@@ -12362,10 +12362,10 @@
                 "format": "date"
               },
               "stats": {
-                "": "#/components/schemas/StreakStats"
+                "$ref": "#/components/schemas/StreakStats"
               },
               "makeup_quota": {
-                "": "#/components/schemas/MakeupQuotaSummary"
+                "$ref": "#/components/schemas/MakeupQuotaSummary"
               }
             }
           }
@@ -13977,7 +13977,7 @@
           "data": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/AdminBadgeSummary"
+              "$ref": "#/components/schemas/AdminBadgeSummary"
             }
           }
         }
@@ -13989,7 +13989,7 @@
             "type": "boolean"
           },
           "data": {
-            "": "#/components/schemas/AdminBadgeDetail"
+            "$ref": "#/components/schemas/AdminBadgeDetail"
           }
         }
       },
@@ -14307,12 +14307,12 @@
                 "type": "null"
               },
               {
-                "": "#/components/schemas/BadgeRecipientUser"
+                "$ref": "#/components/schemas/BadgeRecipientUser"
               }
             ]
           },
           "user_badge": {
-            "": "#/components/schemas/UserBadgeRecord"
+            "$ref": "#/components/schemas/UserBadgeRecord"
           }
         }
       },
@@ -14356,13 +14356,13 @@
       "AdminBadgeSummary": {
         "allOf": [
           {
-            "": "#/components/schemas/AchievementBadge"
+            "$ref": "#/components/schemas/AchievementBadge"
           },
           {
             "type": "object",
             "properties": {
               "stats": {
-                "": "#/components/schemas/BadgeStats"
+                "$ref": "#/components/schemas/BadgeStats"
               }
             }
           }
@@ -14371,7 +14371,7 @@
       "AdminBadgeDetail": {
         "allOf": [
           {
-            "": "#/components/schemas/AdminBadgeSummary"
+            "$ref": "#/components/schemas/AdminBadgeSummary"
           },
           {
             "type": "object",
@@ -14379,7 +14379,7 @@
               "recent_awards": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/BadgeRecipientItem"
+                  "$ref": "#/components/schemas/BadgeRecipientItem"
                 }
               },
               "recent_awards_pagination": {
@@ -14415,7 +14415,7 @@
               "items": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/BadgeRecipientItem"
+                  "$ref": "#/components/schemas/BadgeRecipientItem"
                 }
               },
               "pagination": {
@@ -14441,7 +14441,7 @@
                     "type": "null"
                   },
                   {
-                    "": "#/components/schemas/AdminBadgeSummary"
+                    "$ref": "#/components/schemas/AdminBadgeSummary"
                   }
                 ]
               }
@@ -14461,19 +14461,19 @@
               "badges": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/BadgeRecipientItem"
+                  "$ref": "#/components/schemas/BadgeRecipientItem"
                 }
               },
               "summary": {
-                "": "#/components/schemas/BadgeSummary"
+                "$ref": "#/components/schemas/BadgeSummary"
               },
               "metrics": {
-                "": "#/components/schemas/UserMetricsSnapshot"
+                "$ref": "#/components/schemas/UserMetricsSnapshot"
               },
               "items": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/BadgeRecipientItem"
+                  "$ref": "#/components/schemas/BadgeRecipientItem"
                 }
               }
             }
@@ -14490,22 +14490,22 @@
             "type": "object",
             "properties": {
               "user": {
-                "": "#/components/schemas/UserResponse"
+                "$ref": "#/components/schemas/UserResponse"
               },
               "metrics": {
-                "": "#/components/schemas/UserMetricsSnapshot"
+                "$ref": "#/components/schemas/UserMetricsSnapshot"
               },
               "badge_summary": {
-                "": "#/components/schemas/BadgeSummary"
+                "$ref": "#/components/schemas/BadgeSummary"
               },
               "recent_badges": {
                 "type": "array",
                 "items": {
-                  "": "#/components/schemas/BadgeRecipientItem"
+                  "$ref": "#/components/schemas/BadgeRecipientItem"
                 }
               },
               "checkin_stats": {
-                "": "#/components/schemas/StreakStats"
+                "$ref": "#/components/schemas/StreakStats"
               }
             }
           }
@@ -14549,7 +14549,7 @@
             "type": "array",
             "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
             "items": {
-              "": "#/components/schemas/BroadcastRecipientFilter"
+              "$ref": "#/components/schemas/BroadcastRecipientFilter"
             }
           }
         }
@@ -15101,7 +15101,7 @@
           "data": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/BroadcastRecipient"
+              "$ref": "#/components/schemas/BroadcastRecipient"
             }
           },
           "pagination": {
@@ -15263,15 +15263,15 @@
             "type": "string"
           },
           "target": {
-            "": "#/components/schemas/AdminAiTarget"
+            "$ref": "#/components/schemas/AdminAiTarget"
           },
           "action": {
-            "": "#/components/schemas/AdminAiActionExecution"
+            "$ref": "#/components/schemas/AdminAiActionExecution"
           },
           "missing": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/AdminAiIntentMissing"
+              "$ref": "#/components/schemas/AdminAiIntentMissing"
             }
           }
         }
@@ -15317,12 +15317,12 @@
             "type": "boolean"
           },
           "intent": {
-            "": "#/components/schemas/AdminAiIntent"
+            "$ref": "#/components/schemas/AdminAiIntent"
           },
           "alternatives": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/AdminAiIntent"
+              "$ref": "#/components/schemas/AdminAiIntent"
             }
           },
           "metadata": {
@@ -15436,7 +15436,7 @@
           "entries": {
             "type": "array",
             "items": {
-              "": "#/components/schemas/LeaderboardEntry"
+              "$ref": "#/components/schemas/LeaderboardEntry"
             }
           }
         }
@@ -16666,7 +16666,7 @@
                         "users": {
                           "type": "array",
                           "items": {
-                            "": "#/components/schemas/UserResponse"
+                            "$ref": "#/components/schemas/UserResponse"
                           }
                         },
                         "pagination": {
@@ -17093,3 +17093,4 @@
     }
   }
 }
+
