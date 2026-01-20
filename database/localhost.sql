@@ -295,6 +295,22 @@ CREATE TABLE `carbon_records` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `user_checkins`
+--
+
+CREATE TABLE `user_checkins` (
+  `id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `checkin_date` date NOT NULL,
+  `source` enum('record','makeup','system') NOT NULL DEFAULT 'record',
+  `record_id` char(36) DEFAULT NULL,
+  `notes` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `error_logs`
 --
 
@@ -673,8 +689,8 @@ CREATE TABLE `user_groups` (
 --
 
 INSERT INTO `user_groups` (`id`, `name`, `code`, `config`, `is_default`, `notes`) VALUES
-(1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}}', 1, 'Default free tier'),
-(2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}}', 0, 'Premium tier');
+(1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 2}}', 1, 'Default free tier'),
+(2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 5}}', 0, 'Premium tier');
 
 -- --------------------------------------------------------
 
@@ -792,6 +808,15 @@ ALTER TABLE `carbon_records`
   ADD KEY `idx_carbon_records_activity` (`activity_id`),
   ADD KEY `idx_carbon_records_status` (`status`),
   ADD KEY `idx_carbon_records_date` (`date`);
+
+--
+-- 表的索引 `user_checkins`
+--
+ALTER TABLE `user_checkins`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_user_checkin_date` (`user_id`,`checkin_date`),
+  ADD KEY `idx_user_checkins_user` (`user_id`),
+  ADD KEY `idx_user_checkins_date` (`checkin_date`);
 
 --
 -- 表的索引 `error_logs`
@@ -1029,6 +1054,12 @@ ALTER TABLE `messages`
 -- 使用表AUTO_INCREMENT `message_broadcasts`
 --
 ALTER TABLE `message_broadcasts`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `user_checkins`
+--
+ALTER TABLE `user_checkins`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --

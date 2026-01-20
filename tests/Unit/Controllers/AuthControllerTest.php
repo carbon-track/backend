@@ -12,6 +12,7 @@ use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\CheckinService;
 use PHPUnit\Framework\TestCase;
 
 class AuthControllerTest extends TestCase
@@ -81,7 +82,7 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(10, $parameters);
+        $this->assertCount(11, $parameters);
 
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -93,9 +94,10 @@ class AuthControllerTest extends TestCase
             'Monolog\Logger',
             'PDO',
             'CarbonTrack\Services\ErrorLogService',
-            'CarbonTrack\Services\RegionService'
+            'CarbonTrack\Services\RegionService',
+            'CarbonTrack\Services\CheckinService'
         ];
-        $nullableIndexes = [5, 8];
+        $nullableIndexes = [5, 8, 10];
 
         foreach ($parameters as $index => $parameter) {
             $type = $parameter->getType();

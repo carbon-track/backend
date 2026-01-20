@@ -8,6 +8,7 @@ use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\BadgeService;
+use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StatisticsService;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Response;
@@ -77,7 +78,9 @@ class AdminStatsIntegrationTest extends TestCase
         $statsCacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'carbontrack_stats_cache_' . uniqid();
         $statsService = new StatisticsService($pdo, $statsCacheDir, 0, 0);
 
-        return new AdminController($pdo, $authService, $auditLog, $badgeService, $statsService);
+        $checkinService = new CheckinService($pdo, null, 'UTC');
+
+        return new AdminController($pdo, $authService, $auditLog, $badgeService, $statsService, $checkinService);
     }
 
     public function testGetStatsReturnsTypedAggregates(): void

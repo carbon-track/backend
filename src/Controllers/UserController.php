@@ -15,6 +15,8 @@ use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\LeaderboardService;
+use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Models\Message;
@@ -36,6 +38,8 @@ class UserController
     private ?TurnstileService $turnstileService;
     private RegionService $regionService;
     private ?LeaderboardService $leaderboardService;
+    private ?CheckinService $checkinService;
+    private ?StreakLeaderboardService $streakLeaderboardService;
 
     public function __construct(
         AuthService $authService,
@@ -50,7 +54,9 @@ class UserController
         ErrorLogService $errorLogService = null,
         CloudflareR2Service $r2Service = null,
         RegionService $regionService,
-        ?LeaderboardService $leaderboardService = null
+        ?LeaderboardService $leaderboardService = null,
+        ?CheckinService $checkinService = null,
+        ?StreakLeaderboardService $streakLeaderboardService = null
     ) {
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
@@ -65,6 +71,8 @@ class UserController
         $this->r2Service = $r2Service;
         $this->regionService = $regionService;
         $this->leaderboardService = $leaderboardService;
+        $this->checkinService = $checkinService;
+        $this->streakLeaderboardService = $streakLeaderboardService;
     }
 
     private function buildNotificationTestEmailJob(array $user, string $category, string $email, string $displayName): ?array
@@ -1480,6 +1488,74 @@ class UserController
             }
             $leaderboard = $leaderboards['global']['entries'];
 
+            $streakLeaderboards = [
+                'global' => [
+                    'label' => 'Global',
+                    'entries' => [],
+                ],
+                'region' => [
+                    'label' => $regionMeta['region_label'],
+                    'region_code' => $regionMeta['region_code'],
+                    'entries' => [],
+                ],
+                'school' => [
+                    'label' => $userRow['school_name'] ?? null,
+                    'school_id' => isset($userRow['school_id']) ? (int) $userRow['school_id'] : null,
+                    'entries' => [],
+                ],
+            ];
+            $streakMeta = null;
+            $streakRanks = [
+                'global' => null,
+                'region' => null,
+                'school' => null,
+            ];
+            $streakStats = [
+                'current_streak' => 0,
+                'longest_streak' => 0,
+                'total_days' => 0,
+                'makeup_days' => 0,
+                'last_checkin_date' => null,
+                'last_active_date' => null,
+                'active_today' => false,
+                'ranks' => $streakRanks,
+            ];
+
+            if ($this->checkinService) {
+                try {
+                    $streakStats = array_merge($streakStats, $this->checkinService->getUserStreakStats((int) $user['id']));
+                } catch (\Throwable $e) {
+                    $this->logger->debug('Failed to load streak stats', ['error' => $e->getMessage()]);
+                }
+            }
+
+            if ($this->streakLeaderboardService) {
+                try {
+                    $snapshot = $this->streakLeaderboardService->getSnapshot();
+                    $streakMeta = [
+                        'generated_at' => $snapshot['generated_at'] ?? null,
+                        'expires_at' => $snapshot['expires_at'] ?? null,
+                    ];
+                    $streakLeaderboards['global']['entries'] = $this->normalizeStreakEntries(array_slice($snapshot['global'] ?? [], 0, 5));
+                    if (!empty($regionMeta['region_code'])) {
+                        $regionBucket = $snapshot['regions'][$regionMeta['region_code']] ?? null;
+                        $streakLeaderboards['region']['entries'] = $this->normalizeStreakEntries(array_slice($regionBucket['entries'] ?? [], 0, 5));
+                        $streakRanks['region'] = $snapshot['ranks']['regions'][$regionMeta['region_code']][$user['id']] ?? null;
+                    }
+                    $schoolId = isset($userRow['school_id']) ? (int) $userRow['school_id'] : 0;
+                    if ($schoolId > 0) {
+                        $schoolBucket = $snapshot['schools'][$schoolId] ?? null;
+                        $streakLeaderboards['school']['entries'] = $this->normalizeStreakEntries(array_slice($schoolBucket['entries'] ?? [], 0, 5));
+                        $streakRanks['school'] = $snapshot['ranks']['schools'][$schoolId][$user['id']] ?? null;
+                    }
+                    $streakRanks['global'] = $snapshot['ranks']['global'][$user['id']] ?? null;
+                } catch (\Throwable $e) {
+                    $this->logger->debug('Failed to load cached streak leaderboards', ['error' => $e->getMessage()]);
+                }
+            }
+
+            $streakStats['ranks'] = $streakRanks;
+
             // 兼容旧测试字段命名
             $stats = [
                 'current_points' => (int)$userRow['points'],
@@ -1507,6 +1583,9 @@ class UserController
                 'leaderboard' => $leaderboard,
                 'leaderboards' => $leaderboards,
                 'leaderboards_meta' => $leaderboardMeta,
+                'streak_stats' => $streakStats,
+                'streak_leaderboards' => $streakLeaderboards,
+                'streak_leaderboards_meta' => $streakMeta,
                 'region_context' => $regionMeta,
                 'member_since' => $userRow['created_at']
             ];
@@ -1839,6 +1918,28 @@ class UserController
                 'id' => isset($entry['id']) ? (int) $entry['id'] : null,
                 'username' => $entry['username'] ?? null,
                 'total_points' => isset($entry['total_points']) ? (float) $entry['total_points'] : 0.0,
+                'avatar_id' => isset($entry['avatar_id']) ? (int) $entry['avatar_id'] : null,
+                'avatar_path' => $avatar['avatar_path'],
+                'avatar_url' => $avatar['avatar_url'],
+                'rank' => isset($entry['rank']) ? (int) $entry['rank'] : null,
+                'region_code' => $entry['region_code'] ?? null,
+                'school_id' => isset($entry['school_id']) ? (int) $entry['school_id'] : null,
+                'school_name' => $entry['school_name'] ?? null,
+            ];
+        }, $entries);
+    }
+
+    private function normalizeStreakEntries(array $entries): array
+    {
+        return array_map(function (array $entry): array {
+            $avatar = $this->resolveAvatar($entry['avatar_path'] ?? null);
+            return [
+                'id' => isset($entry['id']) ? (int) $entry['id'] : null,
+                'username' => $entry['username'] ?? null,
+                'current_streak' => isset($entry['current_streak']) ? (int) $entry['current_streak'] : 0,
+                'longest_streak' => isset($entry['longest_streak']) ? (int) $entry['longest_streak'] : 0,
+                'total_checkins' => isset($entry['total_checkins']) ? (int) $entry['total_checkins'] : 0,
+                'last_checkin_date' => $entry['last_checkin_date'] ?? null,
                 'avatar_id' => isset($entry['avatar_id']) ? (int) $entry['avatar_id'] : null,
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
