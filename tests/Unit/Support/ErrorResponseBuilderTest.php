@@ -48,6 +48,17 @@ class ErrorResponseBuilderTest extends TestCase
         $this->assertSame('403', $payload['code']);
     }
 
+    public function testRequestAttributeTakesPriorityAndNormalizesUuid(): void
+    {
+        $exception = new \RuntimeException('boom');
+        $request = $this->makeRequest(['REQUEST_ID' => 'server-id'], ['X-Request-ID' => ['REQ-001']]);
+        $request = $request->withAttribute('request_id', '550E8400-E29B-41D4-A716-446655440001');
+
+        $payload = ErrorResponseBuilder::build($exception, $request, 'production', 500);
+
+        $this->assertSame('550e8400-e29b-41d4-a716-446655440001', $payload['request_id']);
+    }
+
     private function makeRequest(array $serverParams = [], array $headers = []): Request
     {
         $uri = new Uri('https', 'example.com', null, '/test');

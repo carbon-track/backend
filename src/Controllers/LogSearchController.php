@@ -208,8 +208,8 @@ class LogSearchController
         public function related(Request $request, Response $response): Response
         {
             $q = $request->getQueryParams();
-            $rid = trim((string)($q['request_id'] ?? ''));
-            if ($rid === '') {
+            $rid = $this->normalizeRequestId($q['request_id'] ?? null);
+            if ($rid === null) {
                 return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
             }
             $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
@@ -305,12 +305,10 @@ class LogSearchController
         if (!empty($filters['method'])) { $conditions[] = 'method = :f_method'; $params['f_method'] = $filters['method']; }
         if (!empty($filters['status_code'])) { $conditions[] = 'status_code = :f_status'; $params['f_status'] = (int)$filters['status_code']; }
         if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :f_user'; $params['f_user'] = (int)$filters['user_id']; }
-        if (!empty($filters['request_id'])) {
-            $rid = strtolower(trim((string)$filters['request_id']));
-            if ($rid !== '') {
-                $conditions[] = 'request_id = :f_rid';
-                $params['f_rid'] = $rid;
-            }
+        $rid = $this->normalizeRequestId($filters['request_id'] ?? null);
+        if ($rid !== null) {
+            $conditions[] = 'request_id = :f_rid';
+            $params['f_rid'] = $rid;
         }
         if (!empty($filters['path'])) { $conditions[] = 'path LIKE :f_path'; $params['f_path'] = '%' . $filters['path'] . '%'; }
         if (!empty($filters['min_duration'])) { $conditions[] = 'duration_ms >= :f_min_d'; $params['f_min_d'] = (int)$filters['min_duration']; }
@@ -347,7 +345,11 @@ class LogSearchController
         if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :a_user'; $params['a_user'] = (int)$filters['user_id']; }
         if (!empty($filters['action'])) { $conditions[] = 'action = :a_action'; $params['a_action'] = $filters['action']; }
         if (!empty($filters['status'])) { $conditions[] = 'status = :a_status'; $params['a_status'] = $filters['status']; }
-        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :a_rid'; $params['a_rid'] = $filters['request_id']; }
+        $rid = $this->normalizeRequestId($filters['request_id'] ?? null);
+        if ($rid !== null) {
+            $conditions[] = 'request_id = :a_rid';
+            $params['a_rid'] = $rid;
+        }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
     // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
@@ -379,12 +381,10 @@ class LogSearchController
         if ($from) { $conditions[] = 'error_time >= :from'; $params['from'] = $this->normalizeStart($from); }
         if ($to) { $conditions[] = 'error_time <= :to'; $params['to'] = $this->normalizeEnd($to); }
         if (!empty($filters['error_type'])) { $conditions[] = 'error_type = :e_type'; $params['e_type'] = $filters['error_type']; }
-        if (!empty($filters['request_id'])) {
-            $rid = trim((string)$filters['request_id']);
-            if ($rid !== '') {
-                $conditions[] = 'request_id = :e_rid';
-                $params['e_rid'] = $rid;
-            }
+        $rid = $this->normalizeRequestId($filters['request_id'] ?? null);
+        if ($rid !== null) {
+            $conditions[] = 'request_id = :e_rid';
+            $params['e_rid'] = $rid;
         }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
@@ -420,7 +420,11 @@ class LogSearchController
         if (!empty($filters['status'])) { $conditions[] = 'status = :l_status'; $params['l_status'] = $filters['status']; }
         if (!empty($filters['model'])) { $conditions[] = 'model LIKE :l_model'; $params['l_model'] = '%' . $filters['model'] . '%'; }
         if (!empty($filters['source'])) { $conditions[] = 'source LIKE :l_source'; $params['l_source'] = '%' . $filters['source'] . '%'; }
-        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :l_rid'; $params['l_rid'] = $filters['request_id']; }
+        $rid = $this->normalizeRequestId($filters['request_id'] ?? null);
+        if ($rid !== null) {
+            $conditions[] = 'request_id = :l_rid';
+            $params['l_rid'] = $rid;
+        }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
         $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, actor_type, actor_id, source, model, status, response_id, total_tokens, latency_ms, created_at, prompt, error_message
@@ -434,6 +438,18 @@ class LogSearchController
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
+    }
+
+    private function normalizeRequestId($value): ?string
+    {
+        $rid = trim((string)$value);
+        if ($rid === '') {
+            return null;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $rid) === 1) {
+            return strtolower($rid);
+        }
+        return $rid;
     }
 
     private function normalizeStart(string $d): string

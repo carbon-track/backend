@@ -51,12 +51,12 @@ class ErrorResponseBuilder
     {
         $attribute = $request->getAttribute('request_id');
         if (is_string($attribute) && trim($attribute) !== '') {
-            return $attribute;
+            return self::normalizeRequestId($attribute);
         }
 
         $headerRequestId = $request->getHeaderLine('X-Request-ID');
         if ($headerRequestId !== '') {
-            return $headerRequestId;
+            return self::normalizeRequestId($headerRequestId);
         }
 
         $serverParams = $request->getServerParams();
@@ -64,10 +64,22 @@ class ErrorResponseBuilder
 
         foreach ($candidateKeys as $key) {
             if (!empty($serverParams[$key])) {
-                return $serverParams[$key];
+                return self::normalizeRequestId((string)$serverParams[$key]);
             }
         }
 
         return null;
+    }
+
+    private static function normalizeRequestId(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return $trimmed;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $trimmed) === 1) {
+            return strtolower($trimmed);
+        }
+        return $trimmed;
     }
 }
