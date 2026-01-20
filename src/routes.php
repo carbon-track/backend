@@ -24,6 +24,7 @@ use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\StatsController;
+use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
@@ -111,6 +112,8 @@ return function (App $app) {
             $users->put('/me/notification-preferences', [UserController::class, 'updateNotificationPreferences']);
             $users->post('/me/notification-preferences/test-email', [UserController::class, 'sendNotificationTestEmail']);
             $users->get('/me/badges', [BadgeController::class, 'myBadges']);
+            $users->get('/me/checkins', [CheckinController::class, 'list']);
+            $users->post('/me/checkins/makeup', [CheckinController::class, 'makeup']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);

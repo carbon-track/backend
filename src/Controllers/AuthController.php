@@ -14,6 +14,7 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\CheckinService;
 use Monolog\Logger;
 use PDO;
 
@@ -29,6 +30,7 @@ class AuthController
    private Logger $logger;
    private PDO $db;
    private RegionService $regionService;
+    private ?CheckinService $checkinService;
 
     private const VERIFICATION_RESEND_LIMIT = 3;
     private const VERIFICATION_CODE_TTL_MINUTES = 30;
@@ -44,7 +46,8 @@ class AuthController
         Logger $logger,
         PDO $db,
         ErrorLogService $errorLogService = null,
-        RegionService $regionService
+        RegionService $regionService,
+        ?CheckinService $checkinService = null
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
@@ -56,6 +59,7 @@ class AuthController
         $this->db = $db;
         $this->errorLogService = $errorLogService;
         $this->regionService = $regionService;
+        $this->checkinService = $checkinService;
     }
 
     public function register(Request $request, Response $response): Response
@@ -275,6 +279,23 @@ class AuthController
                     $upd->execute([$user['id']]);
                 } catch (\Throwable $e2) {
                     // ignore
+                }
+            }
+            if ($this->checkinService) {
+                try {
+                    $this->checkinService->syncUserCheckinsFromRecords((int) $user['id']);
+                } catch (\Throwable $e) {
+                    $this->logger->debug('Failed to sync user checkins on login', [
+                        'error' => $e->getMessage(),
+                        'user_id' => $user['id'],
+                    ]);
+                }
+            }
+            if ($this->checkinService) {
+                try {
+                    $this->checkinService->syncUserCheckinsFromRecords((int) $user['id']);
+                } catch (\Throwable $e) {
+                    $this->logger->debug('Login checkin sync failed', ['error' => $e->getMessage()]);
                 }
             }
             $token = $this->authService->generateToken($user);

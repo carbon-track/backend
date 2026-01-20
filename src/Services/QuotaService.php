@@ -39,6 +39,14 @@ class QuotaService
             }
         }
 
+        // 2b. Check Monthly Limit (Quota)
+        if (isset($config['monthly_limit'])) {
+            $maxMonthly = (int)$config['monthly_limit'];
+            if (!$this->checkMonthlyQuota($user->id, $resource, $maxMonthly, $cost)) {
+                return false;
+            }
+        }
+
         // 3. Check Rate Limit (Token Bucket)
         // 'rate_limit' represents tokens added per minute, or capacity.
         // Let's assume 'rate_limit' = max burst capacity AND refill rate per minute for simplicity,
@@ -83,6 +91,33 @@ class QuotaService
             $counter = 0;
             // Set next reset to tomorrow 00:00:00
             $resetAt = $now->copy()->addDay()->startOfDay();
+        }
+
+        if (($counter + $cost) > $limit) {
+            return false;
+        }
+
+        $counter += $cost;
+        $this->persistUsageStats($userId, $key, $counter, $now, $resetAt);
+
+        return true;
+    }
+
+    private function checkMonthlyQuota(int $userId, string $resource, int $limit, int $cost): bool
+    {
+        $key = "{$resource}_monthly";
+        $stats = UserUsageStats::where('user_id', $userId)
+            ->where('resource_key', $key)
+            ->first();
+
+        $now = Carbon::now();
+        $resetAt = $this->toCarbon($stats?->reset_at);
+        $counter = (float)($stats?->counter ?? 0);
+
+        // Reset if needed (new month)
+        if (!$resetAt || $now >= $resetAt) {
+            $counter = 0;
+            $resetAt = $now->copy()->addMonthNoOverflow()->startOfMonth();
         }
 
         if (($counter + $cost) > $limit) {

@@ -42,6 +42,8 @@ use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\LeaderboardService;
+use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
@@ -55,6 +57,7 @@ use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\UserGroupService;
 use CarbonTrack\Controllers\AdminUserGroupController;
+use CarbonTrack\Controllers\CheckinController;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -230,6 +233,16 @@ $__deps_initializer = function (Container $container) {
     $container->set(LeaderboardService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class));
+    });
+
+    $container->set(CheckinService::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new CheckinService($db, $c->get(Logger::class));
+    });
+
+    $container->set(StreakLeaderboardService::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new StreakLeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class));
     });
 
     // AI LLM client adapter (optional if API key is not configured)
@@ -521,7 +534,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
             $c->get(RegionService::class),
-            $c->get(LeaderboardService::class)
+            $c->get(LeaderboardService::class),
+            $c->get(CheckinService::class),
+            $c->get(StreakLeaderboardService::class)
         );
     });
 
@@ -537,7 +552,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(Logger::class),
             $db,
             $c->get(ErrorLogService::class),
-            $c->get(RegionService::class)
+            $c->get(RegionService::class),
+            $c->get(CheckinService::class)
         );
     });
 
@@ -550,7 +566,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(AuthService::class),
             $c->get(ErrorLogService::class),
-            $c->get(CloudflareR2Service::class)
+            $c->get(CloudflareR2Service::class),
+            $c->get(CheckinService::class),
+            $c->get(QuotaService::class)
         );
     });
 
@@ -559,6 +577,20 @@ $__deps_initializer = function (Container $container) {
             $c->get(CarbonCalculatorService::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(AdminController::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new AdminController(
+            $db,
+            $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
+            $c->get(BadgeService::class),
+            $c->get(StatisticsService::class),
+            $c->get(CheckinService::class),
+            $c->get(ErrorLogService::class),
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
         );
     });
 
@@ -578,6 +610,17 @@ $__deps_initializer = function (Container $container) {
         return new LeaderboardController(
             $c->get(LeaderboardService::class),
             $c->get(Logger::class)
+        );
+    });
+
+    $container->set(CheckinController::class, function (ContainerInterface $c) {
+        return new CheckinController(
+            $c->get(AuthService::class),
+            $c->get(CheckinService::class),
+            $c->get(QuotaService::class),
+            $c->get(AuditLogService::class),
+            $c->get(Logger::class),
+            $c->get(ErrorLogService::class)
         );
     });
 

@@ -10,6 +10,8 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -22,6 +24,8 @@ class CarbonTrackController
     private AuthService $authService;
     private ?ErrorLogService $errorLogService;
     private ?CloudflareR2Service $r2Service;
+    private ?CheckinService $checkinService;
+    private ?QuotaService $quotaService;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -33,7 +37,9 @@ class CarbonTrackController
         $auditLog,
         $authService,
         $errorLogService = null,
-        $r2Service = null
+        $r2Service = null,
+        $checkinService = null,
+        $quotaService = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -42,6 +48,8 @@ class CarbonTrackController
         $this->authService = $authService;
         $this->errorLogService = $errorLogService;
         $this->r2Service = $r2Service;
+        $this->checkinService = $checkinService;
+        $this->quotaService = $quotaService;
     }
 
     /**
@@ -69,7 +77,9 @@ class CarbonTrackController
                 // 图片数组
                 'images' => ['proof_images', 'image_urls', 'files', 'attachments', 'photos'],
                 // 单位
-                'unit' => ['activity_unit']
+                'unit' => ['activity_unit'],
+                // 打卡日期（补打卡）
+                'checkin_date' => ['makeup_date', 'checkinDate', 'makeupDate', 'check_in_date']
             ];
             foreach ($synonyms as $primary => $alts) {
                 if (!array_key_exists($primary, $data) || $data[$primary] === '' || $data[$primary] === null) {
@@ -111,6 +121,59 @@ class CarbonTrackController
                     return $this->json($response, [
                         'error' => "Missing required field: {$field}"
                     ], 400);
+                }
+            }
+
+            $checkinDate = null;
+            $isMakeup = false;
+            if (!empty($data['checkin_date'])) {
+                $checkinDate = $this->normalizeCheckinDate((string) $data['checkin_date']);
+                if (!$checkinDate) {
+                    return $this->json($response, [
+                        'error' => 'Invalid checkin date',
+                        'code' => 'INVALID_CHECKIN_DATE'
+                    ], 400);
+                }
+
+                $todayStr = (new \DateTimeImmutable('now'))->format('Y-m-d');
+                if ($checkinDate > $todayStr) {
+                    return $this->json($response, [
+                        'error' => 'Cannot check in for future dates',
+                        'code' => 'CHECKIN_DATE_IN_FUTURE'
+                    ], 400);
+                }
+
+                $isMakeup = ($checkinDate !== $todayStr);
+                if ($isMakeup) {
+                    if (!$this->checkinService || !$this->quotaService) {
+                        return $this->json($response, [
+                            'error' => 'Checkin service unavailable',
+                            'code' => 'CHECKIN_UNAVAILABLE'
+                        ], 500);
+                    }
+
+                    if ($this->checkinService->hasCheckin((int) $user['id'], $checkinDate)) {
+                        return $this->json($response, [
+                            'error' => 'Already checked in for this date',
+                            'code' => 'ALREADY_CHECKED_IN'
+                        ], 409);
+                    }
+
+                    $userModel = $this->authService->getCurrentUserModel($request);
+                    if (!$userModel) {
+                        return $this->json($response, [
+                            'error' => 'Unauthorized',
+                            'code' => 'UNAUTHORIZED'
+                        ], 401);
+                    }
+
+                    if (!$this->quotaService->checkAndConsume($userModel, 'checkin_makeup', 1)) {
+                        return $this->json($response, [
+                            'error' => 'Makeup quota exceeded',
+                            'code' => 'QUOTA_EXCEEDED',
+                            'translation_key' => 'error.quota.exceeded'
+                        ], 429);
+                    }
                 }
             }
 
@@ -253,18 +316,64 @@ class CarbonTrackController
                 }
             }
 
-            $recordId = $this->createCarbonRecord([
-                'user_id' => $user['id'],
-                'activity_id' => $data['activity_id'],
-                'amount' => $amountValue,
-                'unit' => $data['unit'] ?? $activity['unit'],
-                'carbon_saved' => $carbonSaved,
-                'points_earned' => $pointsEarned,
-                'date' => $data['date'],
-                'description' => $data['description'] ?? null,
-                'images' => $finalImages,
-                'status' => 'pending'
-            ]);
+            $recordId = null;
+            $submittedAt = new \DateTimeImmutable('now');
+            if ($isMakeup) {
+                $this->db->beginTransaction();
+            }
+
+            try {
+                $recordId = $this->createCarbonRecord([
+                    'user_id' => $user['id'],
+                    'activity_id' => $data['activity_id'],
+                    'amount' => $amountValue,
+                    'unit' => $data['unit'] ?? $activity['unit'],
+                    'carbon_saved' => $carbonSaved,
+                    'points_earned' => $pointsEarned,
+                    'date' => $data['date'],
+                    'description' => $data['description'] ?? null,
+                    'images' => $finalImages,
+                    'status' => 'pending'
+                ]);
+
+                if ($this->checkinService) {
+                    try {
+                        if ($checkinDate && $isMakeup) {
+                            $checkinAdded = $this->checkinService->createMakeupCheckin((int) $user['id'], $checkinDate, null, $recordId, $submittedAt);
+                            if (!$checkinAdded) {
+                                throw new \RuntimeException('Failed to apply makeup checkin');
+                            }
+                            $this->auditLog->logUserAction((int) $user['id'], 'checkin_makeup_recorded', [
+                                'checkin_date' => $checkinDate,
+                                'record_id' => $recordId,
+                            ]);
+                        } else {
+                            $checkinDateValue = $checkinDate ?: $submittedAt->format('Y-m-d');
+                            $checkinAdded = $this->checkinService->recordCheckinForDate((int) $user['id'], $checkinDateValue, 'record', $recordId, $submittedAt);
+                            if ($checkinAdded) {
+                                $this->auditLog->logUserAction((int) $user['id'], 'checkin_recorded', [
+                                    'checkin_date' => $checkinDateValue,
+                                    'record_id' => $recordId,
+                                ]);
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        if ($isMakeup) {
+                            throw $e;
+                        }
+                        $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord checkin error: ' . $e->getMessage());
+                    }
+                }
+
+                if ($isMakeup && $this->db->inTransaction()) {
+                    $this->db->commit();
+                }
+            } catch (\Throwable $e) {
+                if ($isMakeup && $this->db->inTransaction()) {
+                    $this->db->rollBack();
+                }
+                throw $e;
+            }
 
             // 记录审计日志（使用向后兼容的 log()，方便测试 mock）
             $this->auditLog->log([
@@ -1522,6 +1631,26 @@ class CarbonTrackController
     {
         $response->getBody()->write(json_encode($data));
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
+    }
+
+    private function normalizeCheckinDate(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+
+        $candidate = \DateTimeImmutable::createFromFormat('Y-m-d', $raw);
+        if ($candidate instanceof \DateTimeImmutable && $candidate->format('Y-m-d') === $raw) {
+            return $candidate->format('Y-m-d');
+        }
+
+        try {
+            $fallback = new \DateTimeImmutable($raw);
+            return $fallback->format('Y-m-d');
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
 

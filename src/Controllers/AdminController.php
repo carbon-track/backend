@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\CloudflareR2Service;
+use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use PDO;
@@ -20,7 +21,8 @@ class AdminController
 {
     private const QUOTA_DEFINITIONS = [
         'llm.daily_limit',
-        'llm.rate_limit'
+        'llm.rate_limit',
+        'checkin_makeup.monthly_limit'
     ];
 
     public function __construct(
@@ -29,6 +31,7 @@ class AdminController
         private AuditLogService $auditLog,
         private BadgeService $badgeService,
         private StatisticsService $statisticsService,
+        private CheckinService $checkinService,
         private ?ErrorLogService $errorLogService = null,
         private ?CloudflareR2Service $r2Service = null
     ) {}
@@ -122,6 +125,9 @@ $sql = "
                     COUNT(pt.id) as total_transactions,
                     COALESCE(SUM(CASE WHEN pt.status = 'approved' THEN pt.points ELSE 0 END), 0) as earned_points,
                     COALESCE(cr.total_carbon_saved, 0) as total_carbon_saved,
+                    COALESCE(uc.checkin_days, 0) as checkin_days,
+                    COALESCE(uc.makeup_checkins, 0) as makeup_checkins,
+                    uc.last_checkin_date,
                     COALESCE(ub.badges_awarded, 0) as badges_awarded,
                     COALESCE(ub.badges_revoked, 0) as badges_revoked,
                     COALESCE(ub.active_badges, 0) as active_badges,
@@ -137,6 +143,14 @@ $sql = "
                     WHERE status = 'approved' AND deleted_at IS NULL
                     GROUP BY user_id
                 ) cr ON u.id = cr.user_id
+                LEFT JOIN (
+                    SELECT user_id,
+                        COUNT(*) AS checkin_days,
+                        SUM(CASE WHEN source = 'makeup' THEN 1 ELSE 0 END) AS makeup_checkins,
+                        MAX(checkin_date) AS last_checkin_date
+                    FROM user_checkins
+                    GROUP BY user_id
+                ) uc ON u.id = uc.user_id
                 LEFT JOIN (
                     SELECT user_id,
                         COUNT(*) AS badge_records,
@@ -172,6 +186,8 @@ $sql = "
                 $row['total_transactions'] = (int) ($row['total_transactions'] ?? 0);
                 $row['earned_points'] = (float) ($row['earned_points'] ?? 0);
                 $row['total_carbon_saved'] = (float) ($row['total_carbon_saved'] ?? 0);
+                $row['checkin_days'] = (int) ($row['checkin_days'] ?? 0);
+                $row['makeup_checkins'] = (int) ($row['makeup_checkins'] ?? 0);
                 $row['badges_awarded'] = (int) ($row['badges_awarded'] ?? 0);
                 $row['badges_revoked'] = (int) ($row['badges_revoked'] ?? 0);
                 $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
@@ -286,11 +302,13 @@ $sql = "
 
             $metrics = $this->badgeService->compileUserMetrics($userId);
             $badgePayload = $this->buildUserBadgePayload($userId, true);
+            $checkinStats = $this->checkinService->getUserStreakStats($userId);
             $payload = [
                 'user' => $userRow,
                 'metrics' => $metrics,
                 'badge_summary' => $badgePayload['summary'],
                 'recent_badges' => array_slice($badgePayload['items'], 0, 5),
+                'checkin_stats' => $checkinStats,
             ];
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);

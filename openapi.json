@@ -942,6 +942,26 @@
               }
             }
           },
+          "409": {
+            "description": "指定日期已打卡",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "补打卡额度不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
             "content": {
@@ -1141,6 +1161,26 @@
           },
           "404": {
             "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "指定日期已打卡",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "补打卡额度不足",
             "content": {
               "application/json": {
                 "schema": {
@@ -1361,6 +1401,26 @@
           },
           "404": {
             "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "补打卡日期已存在打卡记录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "补打卡额度不足",
             "content": {
               "application/json": {
                 "schema": {
@@ -1746,6 +1806,186 @@
         }
       }
     },
+    "/users/me/checkins": {
+      "get": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Get Checkin Calendar",
+        "description": "获取当前用户的打卡日历与连击统计（日期基于服务器时区）。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "description": "月份筛选（YYYY-MM）",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "description": "开始日期（YYYY-MM-DD）",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "description": "结束日期（YYYY-MM-DD）",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "返回打卡日历数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckinListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "无效的日期范围",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/checkins/makeup": {
+      "post": {
+        "tags": [
+          "User"
+        ],
+        "summary": "Makeup Checkin",
+        "description": "为指定日期补打卡。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckinMakeupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "补打卡成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckinMakeupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "无效日期或参数缺失",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未授权",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "关联记录不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "日期已打卡",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "补打卡额度不足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/users/me/chart-data": {
       "get": {
         "tags": [
@@ -2024,6 +2264,26 @@
           },
           "404": {
             "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "补打卡日期已存在打卡记录",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "补打卡额度不足",
             "content": {
               "application/json": {
                 "schema": {
@@ -11041,6 +11301,24 @@
             "type": "integer",
             "description": "累计积分记录数"
           },
+          "checkin_days": {
+            "type": "integer",
+            "nullable": true,
+            "description": "累计打卡天数"
+          },
+          "makeup_checkins": {
+            "type": "integer",
+            "nullable": true,
+            "description": "补打卡次数"
+          },
+          "last_checkin_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "最近打卡日期"
+          },
           "earned_points": {
             "type": "number",
             "description": "累计获取积分"
@@ -11296,6 +11574,12 @@
             "type": "string",
             "format": "date",
             "description": "活动发生日期"
+          },
+          "checkin_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true,
+            "description": "可选，补打卡日期（不影响活动日期，非今日会消耗补打卡额度）"
           },
           "description": {
             "type": "string",
@@ -11707,8 +11991,381 @@
                   }
                 }
               },
+              "streak_stats": {
+                "": "#/components/schemas/StreakStats"
+              },
+              "streak_leaderboards": {
+                "": "#/components/schemas/StreakLeaderboards"
+              },
+              "streak_leaderboards_meta": {
+                "": "#/components/schemas/StreakLeaderboardsMeta"
+              },
               "region_context": {
                 "": "#/components/schemas/RegionContext"
+              }
+            }
+          }
+        }
+      },
+      "StreakRanks": {
+        "type": "object",
+        "properties": {
+          "global": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "school": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "StreakStats": {
+        "type": "object",
+        "properties": {
+          "current_streak": {
+            "type": "integer"
+          },
+          "longest_streak": {
+            "type": "integer"
+          },
+          "total_days": {
+            "type": "integer"
+          },
+          "makeup_days": {
+            "type": "integer"
+          },
+          "last_checkin_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "last_active_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "active_today": {
+            "type": "boolean"
+          },
+          "ranks": {
+            "": "#/components/schemas/StreakRanks"
+          }
+        }
+      },
+      "StreakLeaderboardEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_streak": {
+            "type": "integer"
+          },
+          "longest_streak": {
+            "type": "integer"
+          },
+          "total_checkins": {
+            "type": "integer"
+          },
+          "last_checkin_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "avatar_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "avatar_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rank": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "school_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StreakLeaderboardContext": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "": "#/components/schemas/StreakLeaderboardEntry"
+            }
+          }
+        }
+      },
+      "StreakLeaderboards": {
+        "type": "object",
+        "properties": {
+          "global": {
+            "": "#/components/schemas/StreakLeaderboardContext"
+          },
+          "region": {
+            "": "#/components/schemas/StreakLeaderboardContext"
+          },
+          "school": {
+            "": "#/components/schemas/StreakLeaderboardContext"
+          }
+        }
+      },
+      "StreakLeaderboardsMeta": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CheckinEntry": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "打卡日期（服务器时区，基于提交日而非活动发生日）"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "record",
+              "makeup",
+              "system"
+            ]
+          },
+          "record_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CheckinRange": {
+        "type": "object",
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "CheckinMeta": {
+        "type": "object",
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "description": "服务端打卡统计使用的时区"
+          },
+          "server_today": {
+            "type": "string",
+            "format": "date",
+            "description": "服务端当前日期（基于打卡时区）"
+          }
+        }
+      },
+      "MakeupQuotaSummary": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "used": {
+            "type": "integer"
+          },
+          "remaining": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reset_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CheckinListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "range": {
+                "": "#/components/schemas/CheckinRange"
+              },
+              "checkins": {
+                "type": "array",
+                "items": {
+                  "": "#/components/schemas/CheckinEntry"
+                }
+              },
+              "stats": {
+                "": "#/components/schemas/StreakStats"
+              },
+              "makeup_quota": {
+                "": "#/components/schemas/MakeupQuotaSummary"
+              },
+              "meta": {
+                "": "#/components/schemas/CheckinMeta"
+              }
+            }
+          }
+        }
+      },
+      "CheckinMakeupRequest": {
+        "type": "object",
+        "required": [
+          "date",
+          "record_id"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "补打卡日期（服务器时区）"
+          },
+          "record_id": {
+            "type": "string",
+            "description": "关联的碳减排记录ID (UUID)"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "CheckinMakeupResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "checkin_date": {
+                "type": "string",
+                "format": "date"
+              },
+              "stats": {
+                "": "#/components/schemas/StreakStats"
+              },
+              "makeup_quota": {
+                "": "#/components/schemas/MakeupQuotaSummary"
               }
             }
           }
@@ -13846,6 +14503,9 @@
                 "items": {
                   "": "#/components/schemas/BadgeRecipientItem"
                 }
+              },
+              "checkin_stats": {
+                "": "#/components/schemas/StreakStats"
               }
             }
           }
