@@ -1681,6 +1681,7 @@ class ComposerStaticInitb0a5952653a4f33403aa273cd7543b80
         'CarbonTrack\\Tests\\Unit\\Services\\CloudflareR2ServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/CloudflareR2ServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\DatabaseServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/DatabaseServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\EmailServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/EmailServiceTest.php',
+        'CarbonTrack\\Tests\\Unit\\Services\\ErrorLogServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/ErrorLogServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\MessageServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/MessageServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\NotificationPreferenceServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/NotificationPreferenceServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\QuotaServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/QuotaServiceTest.php',

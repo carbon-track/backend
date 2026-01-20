@@ -1278,6 +1278,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\CloudflareR2ServiceTest' => $baseDir . '/tests/Unit/Services/CloudflareR2ServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\DatabaseServiceTest' => $baseDir . '/tests/Unit/Services/DatabaseServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\EmailServiceTest' => $baseDir . '/tests/Unit/Services/EmailServiceTest.php',
+    'CarbonTrack\\Tests\\Unit\\Services\\ErrorLogServiceTest' => $baseDir . '/tests/Unit/Services/ErrorLogServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\MessageServiceTest' => $baseDir . '/tests/Unit/Services/MessageServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\NotificationPreferenceServiceTest' => $baseDir . '/tests/Unit/Services/NotificationPreferenceServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\QuotaServiceTest' => $baseDir . '/tests/Unit/Services/QuotaServiceTest.php',

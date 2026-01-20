@@ -49,6 +49,11 @@ class ErrorResponseBuilder
 
     private static function extractRequestId(ServerRequestInterface $request): ?string
     {
+        $attribute = $request->getAttribute('request_id');
+        if (is_string($attribute) && trim($attribute) !== '') {
+            return $attribute;
+        }
+
         $headerRequestId = $request->getHeaderLine('X-Request-ID');
         if ($headerRequestId !== '') {
             return $headerRequestId;

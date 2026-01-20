@@ -38,7 +38,7 @@ class ErrorLogService
             'client_cookie' => $this->safeJson($request->getCookieParams()),
             'client_session' => $this->safeJson($_SESSION ?? []),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $extra)),
-            'request_id' => $request->getHeaderLine('X-Request-ID') ?: ($request->getServerParams()['HTTP_X_REQUEST_ID'] ?? null),
+            'request_id' => $this->resolveRequestId($request, $extra),
         ]);
     }
 
@@ -60,7 +60,7 @@ class ErrorLogService
             'client_cookie' => $this->safeJson($request->getCookieParams()),
             'client_session' => $this->safeJson($_SESSION ?? []),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $context)),
-            'request_id' => $request->getHeaderLine('X-Request-ID') ?: ($request->getServerParams()['HTTP_X_REQUEST_ID'] ?? null),
+            'request_id' => $this->resolveRequestId($request, $context),
         ]);
     }
 
@@ -103,6 +103,48 @@ class ErrorLogService
     {
         $server = $request->getServerParams();
         return $server['SCRIPT_NAME'] ?? $server['PHP_SELF'] ?? (string)$request->getUri()->getPath();
+    }
+
+    private function resolveRequestId(Request $request, array $extra = []): ?string
+    {
+        $attribute = $request->getAttribute('request_id');
+        if (is_string($attribute) && trim($attribute) !== '') {
+            return $this->normalizeRequestId($attribute);
+        }
+
+        $header = $request->getHeaderLine('X-Request-ID');
+        if ($header !== '') {
+            return $this->normalizeRequestId($header);
+        }
+
+        $server = $request->getServerParams();
+        $serverId = $server['HTTP_X_REQUEST_ID'] ?? $server['REQUEST_ID'] ?? $server['HTTP_REQUEST_ID'] ?? null;
+        if (is_string($serverId) && trim($serverId) !== '') {
+            return $this->normalizeRequestId($serverId);
+        }
+
+        if (!empty($extra['request_id']) && is_string($extra['request_id'])) {
+            return $this->normalizeRequestId($extra['request_id']);
+        }
+
+        $global = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['REQUEST_ID'] ?? $_SERVER['HTTP_REQUEST_ID'] ?? null;
+        if (is_string($global) && trim($global) !== '') {
+            return $this->normalizeRequestId($global);
+        }
+
+        return null;
+    }
+
+    private function normalizeRequestId(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return $trimmed;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $trimmed) === 1) {
+            return strtolower($trimmed);
+        }
+        return $trimmed;
     }
 
     private function safeJson($data): string

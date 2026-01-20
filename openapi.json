@@ -8031,7 +8031,7 @@
             "description": "成功",
             "content": {
               "application/json": {
-                "schema": { "type": "object" }
+                "schema": { "$ref": "#/components/schemas/UnifiedLogSearchResponse" }
               }
             }
           }
@@ -8065,7 +8065,7 @@
             "description": "成功",
             "content": {
               "application/json": {
-                "schema": { "type": "object" }
+                "schema": { "$ref": "#/components/schemas/RelatedLogsResponse" }
               }
             }
           }
@@ -12978,6 +12978,10 @@
                           "type": "integer",
                           "nullable": true
                         },
+                        "request_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "error_time": {
                           "type": "string",
                           "format": "date-time"
@@ -13060,6 +13064,10 @@
                     },
                     "error_line": {
                       "type": "integer",
+                      "nullable": true
+                    },
+                    "request_id": {
+                      "type": "string",
                       "nullable": true
                     },
                     "error_time": {
