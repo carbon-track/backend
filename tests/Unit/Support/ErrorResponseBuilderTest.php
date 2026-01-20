@@ -59,6 +59,30 @@ class ErrorResponseBuilderTest extends TestCase
         $this->assertSame('550e8400-e29b-41d4-a716-446655440001', $payload['request_id']);
     }
 
+    public function testRequestIdFallsBackToHeaderWhenAttributeBlank(): void
+    {
+        $exception = new \RuntimeException('boom');
+        $request = $this->makeRequest([], ['X-Request-ID' => ['REQ-001']]);
+        $request = $request->withAttribute('request_id', '   ');
+
+        $payload = ErrorResponseBuilder::build($exception, $request, 'production', 500);
+
+        $this->assertSame('REQ-001', $payload['request_id']);
+    }
+
+    public function testRequestIdFallsBackToServerParamWhenHeaderBlank(): void
+    {
+        $exception = new \RuntimeException('boom');
+        $request = $this->makeRequest(
+            ['HTTP_X_REQUEST_ID' => '550E8400-E29B-61D4-A716-446655440001'],
+            ['X-Request-ID' => ['   ']]
+        );
+
+        $payload = ErrorResponseBuilder::build($exception, $request, 'production', 500);
+
+        $this->assertSame('550E8400-E29B-61D4-A716-446655440001', $payload['request_id']);
+    }
+
     private function makeRequest(array $serverParams = [], array $headers = []): Request
     {
         $uri = new Uri('https', 'example.com', null, '/test');
