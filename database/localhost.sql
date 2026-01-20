@@ -594,7 +594,7 @@ CREATE TABLE `spec_points_transactions` (
 
 CREATE TABLE `system_logs` (
   `id` int(11) NOT NULL,
-  `request_id` varchar(32) DEFAULT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
   `method` varchar(10) DEFAULT NULL,
   `path` varchar(255) DEFAULT NULL,
   `status_code` int(11) DEFAULT NULL,
@@ -605,6 +605,33 @@ CREATE TABLE `system_logs` (
   `request_body` mediumtext,
   `response_body` mediumtext,
   `server_meta` mediumtext,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `llm_logs`
+--
+
+CREATE TABLE `llm_logs` (
+  `id` int(11) NOT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
+  `actor_type` varchar(20) NOT NULL,
+  `actor_id` int(11) DEFAULT NULL,
+  `source` varchar(120) DEFAULT NULL,
+  `model` varchar(120) DEFAULT NULL,
+  `prompt` mediumtext,
+  `response_raw` mediumtext,
+  `response_id` varchar(64) DEFAULT NULL,
+  `status` varchar(20) DEFAULT NULL,
+  `error_message` text,
+  `prompt_tokens` int(11) DEFAULT NULL,
+  `completion_tokens` int(11) DEFAULT NULL,
+  `total_tokens` int(11) DEFAULT NULL,
+  `latency_ms` decimal(10,2) DEFAULT NULL,
+  `usage_json` mediumtext,
+  `context_json` mediumtext,
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -891,6 +918,17 @@ ALTER TABLE `spec_points_transactions`
   ADD KEY `id_7` (`id`);
 
 --
+-- 表的索引 `llm_logs`
+--
+ALTER TABLE `llm_logs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_llm_logs_request_id` (`request_id`),
+  ADD KEY `idx_llm_logs_actor` (`actor_type`,`actor_id`),
+  ADD KEY `idx_llm_logs_created_at` (`created_at`),
+  ADD KEY `idx_llm_logs_status` (`status`),
+  ADD KEY `idx_llm_logs_model` (`model`(50));
+
+--
 -- 表的索引 `system_logs`
 --
 ALTER TABLE `system_logs`
@@ -1033,6 +1071,12 @@ ALTER TABLE `school_classes`
 -- 使用表AUTO_INCREMENT `spec_points_transactions`
 --
 ALTER TABLE `spec_points_transactions`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `llm_logs`
+--
+ALTER TABLE `llm_logs`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --

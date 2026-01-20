@@ -48,12 +48,13 @@ class LogSearchController
 
             $q = $request->getQueryParams();
             $keyword = trim((string)($q['q'] ?? ''));
-            $types = isset($q['types']) ? array_filter(array_map('trim', explode(',', (string)$q['types']))) : ['system','audit','error'];
-            if (!$types) { $types = ['system','audit','error']; }
+            $types = isset($q['types']) ? array_filter(array_map('trim', explode(',', (string)$q['types']))) : ['system','audit','error','llm'];
+            if (!$types) { $types = ['system','audit','error','llm']; }
             $limit = (int)($q['limit_per_type'] ?? 50); $limit = max(1, min(200, $limit));
             $systemPage = max(1, (int)($q['system_page'] ?? 1));
             $auditPage = max(1, (int)($q['audit_page'] ?? 1));
             $errorPage = max(1, (int)($q['error_page'] ?? 1));
+            $llmPage = max(1, (int)($q['llm_page'] ?? 1));
             $dateFrom = $q['date_from'] ?? null;
             $dateTo = $q['date_to'] ?? null;
 
@@ -77,6 +78,14 @@ class LogSearchController
                 'error_type' => $q['error_type'] ?? null,
                 'request_id' => $q['request_id'] ?? null,
             ];
+            $llmFilters = [
+                'actor_type' => $q['actor_type'] ?? null,
+                'actor_id' => $q['actor_id'] ?? ($q['user_id'] ?? null),
+                'status' => $q['llm_status'] ?? null,
+                'model' => $q['model'] ?? null,
+                'source' => $q['source'] ?? null,
+                'request_id' => $q['request_id'] ?? null,
+            ];
 
             $result = [];
             if (in_array('system', $types, true)) {
@@ -87,6 +96,9 @@ class LogSearchController
             }
             if (in_array('error', $types, true)) {
                 $result['error'] = $this->searchError($keyword, $limit, $dateFrom, $dateTo, $errorPage, $errorFilters);
+            }
+            if (in_array('llm', $types, true)) {
+                $result['llm'] = $this->searchLlm($keyword, $limit, $dateFrom, $dateTo, $llmPage, $llmFilters);
             }
 
             return $this->json($response, ['success' => true, 'data' => $result]);
@@ -109,10 +121,10 @@ class LogSearchController
             $keyword = trim((string)($q['q'] ?? ''));
             $dateFrom = $q['date_from'] ?? null;
             $dateTo = $q['date_to'] ?? null;
-            $types = isset($q['types']) && $q['types'] !== '' ? array_values(array_filter(array_map('trim', explode(',', $q['types'])))) : ['system','audit','error'];
-            $allowed = ['system','audit','error'];
+            $types = isset($q['types']) && $q['types'] !== '' ? array_values(array_filter(array_map('trim', explode(',', $q['types'])))) : ['system','audit','error','llm'];
+            $allowed = ['system','audit','error','llm'];
             $types = array_values(array_intersect($types, $allowed));
-            if (!$types) { $types = ['system','audit','error']; }
+            if (!$types) { $types = ['system','audit','error','llm']; }
             $max = (int)($q['max'] ?? 1000); $max = max(1, min(10000, $max));
 
             // 收集每类记录（最多 max / count(types) 各自抓取 或 统一累积直到总数达到）
@@ -128,8 +140,13 @@ class LogSearchController
                 $response = $response->withHeader('Content-Type', 'text/csv; charset=UTF-8')
                                      ->withHeader('Content-Disposition', 'attachment; filename="' . $filename . '"');
                 $fh = fopen('php://temp','w+');
-                // 统一列: type,id,request_id,method,path,status_code,user_id,duration_ms,created_at,action,operation_category,actor_type,audit_status,error_type,error_message,error_file,error_line,error_time
-                $header = ['type','id','request_id','method','path','status_code','user_id','duration_ms','created_at','action','operation_category','actor_type','audit_status','error_type','error_message','error_file','error_line','error_time'];
+                // 统一列: type,id,request_id,method,path,status_code,user_id,duration_ms,created_at,action,operation_category,actor_type,audit_status,error_type,error_message,error_file,error_line,error_time,actor_id,source,model,llm_status,prompt,response_id,prompt_tokens,completion_tokens,total_tokens,latency_ms
+                $header = [
+                    'type','id','request_id','method','path','status_code','user_id','duration_ms','created_at',
+                    'action','operation_category','actor_type','audit_status','error_type','error_message','error_file',
+                    'error_line','error_time','actor_id','source','model','llm_status','prompt','response_id',
+                    'prompt_tokens','completion_tokens','total_tokens','latency_ms'
+                ];
                 fputcsv($fh, $header);
                 foreach ($datasets as $type => $rows) {
                     foreach ($rows as $r) {
@@ -152,6 +169,16 @@ class LogSearchController
                             $r['error_file'] ?? null,
                             $r['error_line'] ?? null,
                             $r['error_time'] ?? null,
+                            $r['actor_id'] ?? null,
+                            $r['source'] ?? null,
+                            $r['model'] ?? null,
+                            $r['status'] ?? null,
+                            $r['prompt'] ?? null,
+                            $r['response_id'] ?? null,
+                            $r['prompt_tokens'] ?? null,
+                            $r['completion_tokens'] ?? null,
+                            $r['total_tokens'] ?? null,
+                            $r['latency_ms'] ?? null,
                         ]);
                     }
                 }
@@ -185,12 +212,16 @@ class LogSearchController
             if ($rid === '') {
                 return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
             }
+            $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
             $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
             $error = $this->fetchByRequestId('error_logs', $rid, ['id','error_type','error_message','error_file','error_line','error_time']);
+            $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
             return $this->json($response, ['success'=>true,'data'=>[
                 'request_id' => $rid,
+                'system' => $system,
                 'audit' => $audit,
-                'error' => $error
+                'error' => $error,
+                'llm' => $llm
             ]]);
         }
 
@@ -213,6 +244,15 @@ class LogSearchController
                     return $this->rawFetch('audit_logs', ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at','request_id'], ['action','operation_category','details_raw','summary','old_data','new_data'], $kw, $limit, ['from'=>$from,'to'=>$to,'date'=>'created_at']);
                 case 'error':
                     return $this->rawFetch('error_logs', ['id','error_type','error_message','error_file','error_line','error_time','request_id'], ['error_type','error_message','error_file','stack_trace'], $kw, $limit, ['from'=>$from,'to'=>$to,'date'=>'error_time']);
+                case 'llm':
+                    return $this->rawFetch(
+                        'llm_logs',
+                        ['id','request_id','actor_type','actor_id','source','model','status','prompt','response_id','prompt_tokens','completion_tokens','total_tokens','latency_ms','created_at'],
+                        ['prompt','response_raw','source','model','error_message','request_id'],
+                        $kw,
+                        $limit,
+                        ['from'=>$from,'to'=>$to,'date'=>'created_at']
+                    );
                 default:
                     return [];
             }
@@ -337,6 +377,43 @@ class LogSearchController
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
         $sql = "SELECT SQL_CALC_FOUND_ROWS id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
+        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
+        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
+    }
+
+    private function searchLlm(string $kw, int $limit, ?string $from, ?string $to, int $page, array $filters = []): array
+    {
+        $conditions = [];
+        $params = [];
+        if ($kw !== '') {
+            $likeCols = ['prompt','response_raw','source','model','error_message','request_id'];
+            $likeParts = [];
+            foreach ($likeCols as $i => $col) {
+                $ph = ':kw_l_' . $i;
+                $likeParts[] = "$col LIKE $ph";
+                $params['kw_l_' . $i] = '%' . $kw . '%';
+            }
+            $conditions[] = '(' . implode(' OR ', $likeParts) . ')';
+        }
+        if ($from) { $conditions[] = 'created_at >= :from'; $params['from'] = $this->normalizeStart($from); }
+        if ($to) { $conditions[] = 'created_at <= :to'; $params['to'] = $this->normalizeEnd($to); }
+        if (!empty($filters['actor_type'])) { $conditions[] = 'actor_type = :l_actor_type'; $params['l_actor_type'] = $filters['actor_type']; }
+        if (!empty($filters['actor_id'])) { $conditions[] = 'actor_id = :l_actor_id'; $params['l_actor_id'] = (int)$filters['actor_id']; }
+        if (!empty($filters['status'])) { $conditions[] = 'status = :l_status'; $params['l_status'] = $filters['status']; }
+        if (!empty($filters['model'])) { $conditions[] = 'model LIKE :l_model'; $params['l_model'] = '%' . $filters['model'] . '%'; }
+        if (!empty($filters['source'])) { $conditions[] = 'source LIKE :l_source'; $params['l_source'] = '%' . $filters['source'] . '%'; }
+        if (!empty($filters['request_id'])) { $conditions[] = 'request_id = :l_rid'; $params['l_rid'] = $filters['request_id']; }
+        $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
+        $offset = ($page - 1) * $limit;
+        $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, actor_type, actor_id, source, model, status, response_id, total_tokens, latency_ms, created_at, prompt, error_message
+                FROM llm_logs {$where}
+                ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);

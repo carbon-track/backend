@@ -61,6 +61,16 @@ class AdminAiController
                 $context = $data['context'];
             }
 
+            $source = null;
+            if (isset($data['source']) && is_string($data['source'])) {
+                $source = trim($data['source']);
+            } elseif (isset($context['activeRoute']) && is_string($context['activeRoute'])) {
+                $source = trim($context['activeRoute']);
+            }
+            if ($source === '') {
+                $source = null;
+            }
+
             $mode = isset($data['mode']) && is_string($data['mode'])
                 ? strtolower($data['mode'])
                 : 'suggest';
@@ -72,7 +82,13 @@ class AdminAiController
                 ], 422);
             }
 
-            $result = $this->intentService->analyzeIntent($query, $context);
+            $logContext = [
+                'request_id' => $request->getAttribute('request_id'),
+                'actor_type' => 'admin',
+                'actor_id' => $user['id'] ?? null,
+                'source' => $source ?? $request->getUri()->getPath(),
+            ];
+            $result = $this->intentService->analyzeIntent($query, $context, $logContext);
 
             $commandsFingerprint = $this->commandRepository->getFingerprint();
 

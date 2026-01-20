@@ -22,6 +22,7 @@ use CarbonTrack\Controllers\AdminAiController;
 use CarbonTrack\Controllers\UserAiController;
 use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\LogSearchController;
+use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
@@ -231,6 +232,9 @@ return function (App $app) {
             // 系统请求日志
             $admin->get('/system-logs', [SystemLogController::class, 'list']);
             $admin->get('/system-logs/{id:[0-9]+}', [SystemLogController::class, 'detail']);
+            $admin->get('/llm-usage', [AdminLlmUsageController::class, 'summary']);
+            $admin->get('/llm-usage/analytics', [AdminLlmUsageController::class, 'analytics']);
+            $admin->get('/llm-usage/logs/{id:[0-9]+}', [AdminLlmUsageController::class, 'logDetail']);
             $admin->get('/logs/search', [LogSearchController::class, 'search']);
             // Unified logs export & related (previously missing, causing 404 in frontend)
             $admin->get('/logs/export', [LogSearchController::class, 'export']);

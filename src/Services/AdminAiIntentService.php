@@ -37,7 +37,8 @@ class AdminAiIntentService
         private ?LlmClientInterface $client,
         private LoggerInterface $logger,
         array $config = [],
-        ?array $commandConfig = null
+        ?array $commandConfig = null,
+        private ?LlmLogService $llmLogService = null
     ) {
         $this->model = (string)($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float)$config['temperature'] : 0.2;
@@ -143,6 +144,13 @@ class AdminAiIntentService
                     'route' => '/admin/system-logs',
                     'description' => 'Inspect audit logs and request traces.',
                     'keywords' => ['log', '日志', '监控', '审计'],
+                ],
+                [
+                    'id' => 'llmUsage',
+                    'label' => 'LLM Usage',
+                    'route' => '/admin/llm-usage',
+                    'description' => 'Monitor LLM quota usage, tokens, and prompt audits.',
+                    'keywords' => ['llm', 'ai usage', 'quota', '额度', '调用', '模型', '日志'],
                 ],
             ],
             'quickActions' => [
@@ -308,7 +316,7 @@ class AdminAiIntentService
         return $diagnostics;
     }
 
-    public function analyzeIntent(string $query, array $context = []): array
+    public function analyzeIntent(string $query, array $context = [], array $logContext = []): array
     {
         if (!$this->enabled) {
             throw new \RuntimeException('AI intent service is disabled');
@@ -325,13 +333,16 @@ class AdminAiIntentService
             'tool_choice' => 'auto',
         ];
 
+        $startedAt = microtime(true);
         try {
             $rawResponse = $this->client->createChatCompletion($payload);
+            $this->logLlmCall($query, $rawResponse, $logContext, $context, $startedAt);
         } catch (\Throwable $e) {
             $this->logger->error('Admin AI intent call failed', [
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
             ]);
+            $this->logLlmFailure($query, $logContext, $context, $startedAt, $e);
             throw new \RuntimeException('LLM_UNAVAILABLE', 0, $e);
         }
 
@@ -493,6 +504,78 @@ class AdminAiIntentService
             'query' => $query,
             'context' => $filteredContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function logLlmCall(string $prompt, array $rawResponse, array $logContext, array $context, float $startedAt): void
+    {
+        if (!$this->llmLogService) {
+            return;
+        }
+
+        $durationMs = (microtime(true) - $startedAt) * 1000.0;
+        $responseId = $rawResponse['id'] ?? ($rawResponse['metadata']['request_id'] ?? null);
+        $contextPayload = $this->filterContextForLogging($context);
+
+        $this->llmLogService->log([
+            'request_id' => $logContext['request_id'] ?? null,
+            'actor_type' => $logContext['actor_type'] ?? 'admin',
+            'actor_id' => $logContext['actor_id'] ?? null,
+            'source' => $logContext['source'] ?? null,
+            'model' => $rawResponse['model'] ?? $this->model,
+            'prompt' => $prompt,
+            'response_raw' => $rawResponse,
+            'response_id' => $responseId,
+            'status' => 'success',
+            'error_message' => null,
+            'usage' => $rawResponse['usage'] ?? null,
+            'latency_ms' => round($durationMs, 2),
+            'context' => $contextPayload ?: null,
+        ]);
+    }
+
+    private function logLlmFailure(string $prompt, array $logContext, array $context, float $startedAt, \Throwable $error): void
+    {
+        if (!$this->llmLogService) {
+            return;
+        }
+
+        $durationMs = (microtime(true) - $startedAt) * 1000.0;
+        $contextPayload = $this->filterContextForLogging($context);
+
+        $this->llmLogService->log([
+            'request_id' => $logContext['request_id'] ?? null,
+            'actor_type' => $logContext['actor_type'] ?? 'admin',
+            'actor_id' => $logContext['actor_id'] ?? null,
+            'source' => $logContext['source'] ?? null,
+            'model' => $this->model,
+            'prompt' => $prompt,
+            'response_raw' => null,
+            'response_id' => null,
+            'status' => 'failed',
+            'error_message' => $error->getMessage(),
+            'usage' => null,
+            'latency_ms' => round($durationMs, 2),
+            'context' => $contextPayload ?: null,
+        ]);
+    }
+
+    private function filterContextForLogging(array $context): array
+    {
+        if (empty($context)) {
+            return [];
+        }
+
+        $filtered = array_intersect_key($context, array_flip(self::ALLOWED_CONTEXT_KEYS));
+        if (isset($filtered['selectedRecordIds']) && is_array($filtered['selectedRecordIds'])) {
+            $ids = array_values(array_filter($filtered['selectedRecordIds'], fn ($item) => $item !== null && $item !== ''));
+            $filtered['selectedRecordIds'] = array_slice($ids, 0, 20);
+            if (count($ids) > 20) {
+                $filtered['selectedRecordIds_truncated'] = true;
+                $filtered['selectedRecordIds_total'] = count($ids);
+            }
+        }
+
+        return $filtered;
     }
 
     private function extractIntentFromContent(?string $content, string $originalQuery, array $rawResponse): ?array
