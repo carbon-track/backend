@@ -46,9 +46,9 @@ class AdminLlmUsageController
             $whereClause = implode(' AND ', $where);
 
             $sortMap = [
-                'llm_used_desc' => 'COALESCE(usage.counter, 0) DESC',
-                'llm_used_asc' => 'COALESCE(usage.counter, 0) ASC',
-                'last_used_desc' => 'usage.last_updated_at DESC',
+                'llm_used_desc' => 'COALESCE(usage_stats.counter, 0) DESC',
+                'llm_used_asc' => 'COALESCE(usage_stats.counter, 0) ASC',
+                'last_used_desc' => 'usage_stats.last_updated_at DESC',
                 'username_asc' => 'u.username ASC',
                 'username_desc' => 'u.username DESC',
             ];
@@ -63,14 +63,14 @@ class AdminLlmUsageController
                         u.quota_override,
                         g.name AS group_name,
                         g.config AS group_config,
-                        usage.counter AS llm_daily_used,
-                        usage.reset_at AS llm_reset_at,
-                        usage.last_updated_at AS llm_last_used_at
+                        usage_stats.counter AS llm_daily_used,
+                        usage_stats.reset_at AS llm_reset_at,
+                        usage_stats.last_updated_at AS llm_last_used_at
                     FROM users u
                     LEFT JOIN user_groups g ON u.group_id = g.id
-                    LEFT JOIN user_usage_stats usage
-                        ON usage.user_id = u.id
-                        AND usage.resource_key = 'llm_daily'
+                    LEFT JOIN user_usage_stats usage_stats
+                        ON usage_stats.user_id = u.id
+                        AND usage_stats.resource_key = 'llm_daily'
                     WHERE {$whereClause}
                     ORDER BY {$orderBy}
                     LIMIT :limit OFFSET :offset";
@@ -253,18 +253,22 @@ class AdminLlmUsageController
                     COUNT(*) AS total_calls,
                     SUM(CASE WHEN created_at >= :since1d THEN 1 ELSE 0 END) AS calls_24h,
                     SUM(CASE WHEN created_at >= :since7d THEN 1 ELSE 0 END) AS calls_7d,
-                    SUM(CASE WHEN created_at >= :since30d THEN 1 ELSE 0 END) AS calls_30d,
-                    SUM(CASE WHEN created_at >= :since30d AND actor_type = 'admin' THEN 1 ELSE 0 END) AS admin_calls_30d,
-                    SUM(CASE WHEN created_at >= :since30d AND actor_type = 'user' THEN 1 ELSE 0 END) AS user_calls_30d,
-                    SUM(CASE WHEN created_at >= :since30d THEN COALESCE(total_tokens, 0) ELSE 0 END) AS tokens_30d,
-                    SUM(CASE WHEN created_at >= :since30d AND status = 'failed' THEN 1 ELSE 0 END) AS failed_calls_30d,
+                    SUM(CASE WHEN created_at >= :since30d_calls THEN 1 ELSE 0 END) AS calls_30d,
+                    SUM(CASE WHEN created_at >= :since30d_admin AND actor_type = 'admin' THEN 1 ELSE 0 END) AS admin_calls_30d,
+                    SUM(CASE WHEN created_at >= :since30d_user AND actor_type = 'user' THEN 1 ELSE 0 END) AS user_calls_30d,
+                    SUM(CASE WHEN created_at >= :since30d_tokens THEN COALESCE(total_tokens, 0) ELSE 0 END) AS tokens_30d,
+                    SUM(CASE WHEN created_at >= :since30d_failed AND status = 'failed' THEN 1 ELSE 0 END) AS failed_calls_30d,
                     MAX(created_at) AS last_call_at
                 FROM llm_logs";
 
         $stmt = $this->db->prepare($sql);
         $stmt->bindValue(':since1d', $since1d);
         $stmt->bindValue(':since7d', $since7d);
-        $stmt->bindValue(':since30d', $since30d);
+        $stmt->bindValue(':since30d_calls', $since30d);
+        $stmt->bindValue(':since30d_admin', $since30d);
+        $stmt->bindValue(':since30d_user', $since30d);
+        $stmt->bindValue(':since30d_tokens', $since30d);
+        $stmt->bindValue(':since30d_failed', $since30d);
         $stmt->execute();
         $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
