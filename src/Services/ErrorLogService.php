@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\RequestIdNormalizer;
 use PDO;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -108,43 +109,43 @@ class ErrorLogService
     private function resolveRequestId(Request $request, array $extra = []): ?string
     {
         $attribute = $request->getAttribute('request_id');
-        if (is_string($attribute) && trim($attribute) !== '') {
-            return $this->normalizeRequestId($attribute);
+        if (is_string($attribute)) {
+            $normalized = RequestIdNormalizer::normalize($attribute);
+            if ($normalized !== null) {
+                return $normalized;
+            }
         }
 
-        $header = $request->getHeaderLine('X-Request-ID');
-        if ($header !== '') {
-            return $this->normalizeRequestId($header);
+        $header = RequestIdNormalizer::normalize($request->getHeaderLine('X-Request-ID'));
+        if ($header !== null) {
+            return $header;
         }
 
         $server = $request->getServerParams();
         $serverId = $server['HTTP_X_REQUEST_ID'] ?? $server['REQUEST_ID'] ?? $server['HTTP_REQUEST_ID'] ?? null;
-        if (is_string($serverId) && trim($serverId) !== '') {
-            return $this->normalizeRequestId($serverId);
+        if (is_string($serverId)) {
+            $normalized = RequestIdNormalizer::normalize($serverId);
+            if ($normalized !== null) {
+                return $normalized;
+            }
         }
 
         if (!empty($extra['request_id']) && is_string($extra['request_id'])) {
-            return $this->normalizeRequestId($extra['request_id']);
+            $normalized = RequestIdNormalizer::normalize($extra['request_id']);
+            if ($normalized !== null) {
+                return $normalized;
+            }
         }
 
         $global = $_SERVER['HTTP_X_REQUEST_ID'] ?? $_SERVER['REQUEST_ID'] ?? $_SERVER['HTTP_REQUEST_ID'] ?? null;
-        if (is_string($global) && trim($global) !== '') {
-            return $this->normalizeRequestId($global);
+        if (is_string($global)) {
+            $normalized = RequestIdNormalizer::normalize($global);
+            if ($normalized !== null) {
+                return $normalized;
+            }
         }
 
         return null;
-    }
-
-    private function normalizeRequestId(string $value): string
-    {
-        $trimmed = trim($value);
-        if ($trimmed === '') {
-            return $trimmed;
-        }
-        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $trimmed) === 1) {
-            return strtolower($trimmed);
-        }
-        return $trimmed;
     }
 
     private function safeJson($data): string
