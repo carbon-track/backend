@@ -135,7 +135,11 @@ class CarbonTrackController
                     ], 400);
                 }
 
-                $todayStr = (new \DateTimeImmutable('now'))->format('Y-m-d');
+                $tzName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+                if (!$tzName) {
+                    $tzName = 'UTC';
+                }
+                $todayStr = (new \DateTimeImmutable('now', new \DateTimeZone($tzName)))->format('Y-m-d');
                 if ($checkinDate > $todayStr) {
                     return $this->json($response, [
                         'error' => 'Cannot check in for future dates',

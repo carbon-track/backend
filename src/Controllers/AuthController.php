@@ -291,13 +291,6 @@ class AuthController
                     ]);
                 }
             }
-            if ($this->checkinService) {
-                try {
-                    $this->checkinService->syncUserCheckinsFromRecords((int) $user['id']);
-                } catch (\Throwable $e) {
-                    $this->logger->debug('Login checkin sync failed', ['error' => $e->getMessage()]);
-                }
-            }
             $token = $this->authService->generateToken($user);
             // Use legacy log() for backward compatibility with existing tests expecting log() instead of logAuthOperation()
             $this->auditLogService->log([
