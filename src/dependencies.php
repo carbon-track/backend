@@ -20,6 +20,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\SystemLogService;
+use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
@@ -34,6 +35,7 @@ use CarbonTrack\Controllers\ProductController;
 use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Controllers\SchoolController;
 use CarbonTrack\Controllers\AdminController;
+use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\FileUploadController;
 use CarbonTrack\Controllers\LeaderboardController;
 use CarbonTrack\Services\BadgeService;
@@ -344,7 +346,8 @@ $__deps_initializer = function (Container $container) {
             $llmClient,
             $c->get(LoggerInterface::class),
             $config,
-            $c->get(AdminAiCommandRepository::class)->getConfig()
+            $c->get(AdminAiCommandRepository::class)->getConfig(),
+            $c->get(LlmLogService::class)
         );
     });
 
@@ -361,7 +364,8 @@ $__deps_initializer = function (Container $container) {
         return new UserAiService(
             $llmClient,
             $c->get(LoggerInterface::class),
-            $config
+            $config,
+            $c->get(LlmLogService::class)
         );
     });
 
@@ -464,6 +468,14 @@ $__deps_initializer = function (Container $container) {
     // System Log Service
     $container->set(SystemLogService::class, function (ContainerInterface $c) {
         return new SystemLogService(
+            $c->get(PDO::class),
+            $c->get(Logger::class)
+        );
+    });
+
+    // LLM Log Service
+    $container->set(LlmLogService::class, function (ContainerInterface $c) {
+        return new LlmLogService(
             $c->get(PDO::class),
             $c->get(Logger::class)
         );
@@ -583,6 +595,16 @@ $__deps_initializer = function (Container $container) {
     $container->set(LogSearchController::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new LogSearchController(
+            $db,
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    // Admin LLM Usage Controller
+    $container->set(AdminLlmUsageController::class, function (ContainerInterface $c) {
+        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        return new AdminLlmUsageController(
             $db,
             $c->get(AuthService::class),
             $c->get(ErrorLogService::class)

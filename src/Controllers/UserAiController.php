@@ -42,6 +42,18 @@ class UserAiController
             $clientMeta['client_timezone'] = (string) $body['client_timezone'];
         }
 
+        $source = null;
+        if (!empty($body['entry'])) {
+            $source = trim((string) $body['entry']);
+        } elseif (!empty($body['source'])) {
+            $source = trim((string) $body['source']);
+        } elseif (!empty($body['entry_point'])) {
+            $source = trim((string) $body['entry_point']);
+        }
+        if ($source === '') {
+            $source = null;
+        }
+
         // Quota Check
         $userModel = $this->authService->getCurrentUserModel($request);
         if ($userModel) {
@@ -76,7 +88,13 @@ class UserAiController
         }
 
         try {
-            $result = $this->aiService->suggestActivity($query, $activityContext, $clientMeta);
+            $logContext = [
+                'request_id' => $request->getAttribute('request_id'),
+                'actor_type' => 'user',
+                'actor_id' => $userModel?->id,
+                'source' => $source ?? $request->getUri()->getPath(),
+            ];
+            $result = $this->aiService->suggestActivity($query, $activityContext, $clientMeta, $logContext);
             return $this->json($response, $result);
         } catch (\Throwable $e) {
             $this->logger->error('AI Suggest Error: ' . $e->getMessage());

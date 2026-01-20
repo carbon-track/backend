@@ -120,6 +120,21 @@
       ]
     },
     {
+      "id": "llmUsage",
+      "label": "LLM Usage",
+      "route": "/admin/llm-usage",
+      "description": "Monitor LLM quota usage, tokens, and prompt audits.",
+      "keywords": [
+        "llm",
+        "ai usage",
+        "quota",
+        "额度",
+        "调用",
+        "模型",
+        "日志"
+      ]
+    },
+    {
       "id": "diagnostics",
       "label": "API Diagnostics",
       "route": "/admin/diagnostics",

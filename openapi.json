@@ -699,6 +699,19 @@
                     "maxLength": 500,
                     "example": "I took a 5km bus ride",
                     "description": "User's natural language description"
+                  },
+                  "client_time": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Client local time for contextual hints."
+                  },
+                  "client_timezone": {
+                    "type": "string",
+                    "description": "Client timezone identifier (IANA format)."
+                  },
+                  "entry": {
+                    "type": "string",
+                    "description": "Access entry/source identifier (e.g., smart-activity-input)."
                   }
                 }
               }
@@ -7798,6 +7811,299 @@
         }
       }
     },
+    "/admin/llm-usage": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "LLM 使用额度统计",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按用户名或邮箱筛选"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "排序字段 (llm_used_desc / llm_used_asc / last_used_desc / username_asc / username_desc)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmUsageResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/llm-usage/analytics": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "LLM 使用统计趋势与洞察",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "minimum": 7,
+              "maximum": 90
+            },
+            "description": "趋势分析天数"
+          },
+          {
+            "name": "recent_limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 8,
+              "minimum": 5,
+              "maximum": 30
+            },
+            "description": "最近对话数量"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmUsageAnalyticsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/llm-usage/logs/{id}": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "LLM 调用日志详情",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LlmLogDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/logs/search": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Logs"
+        ],
+        "summary": "统一日志检索",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } },
+          { "name": "types", "in": "query", "schema": { "type": "string" }, "description": "system,audit,error,llm" },
+          { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 200 } },
+          { "name": "system_page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "audit_page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "error_page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "llm_page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "method", "in": "query", "schema": { "type": "string" } },
+          { "name": "status_code", "in": "query", "schema": { "type": "integer" } },
+          { "name": "user_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "request_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "path", "in": "query", "schema": { "type": "string" } },
+          { "name": "min_duration", "in": "query", "schema": { "type": "integer" } },
+          { "name": "max_duration", "in": "query", "schema": { "type": "integer" } },
+          { "name": "action", "in": "query", "schema": { "type": "string" } },
+          { "name": "audit_status", "in": "query", "schema": { "type": "string" } },
+          { "name": "error_type", "in": "query", "schema": { "type": "string" } },
+          { "name": "model", "in": "query", "schema": { "type": "string" } },
+          { "name": "source", "in": "query", "schema": { "type": "string" } },
+          { "name": "actor_type", "in": "query", "schema": { "type": "string" } },
+          { "name": "actor_id", "in": "query", "schema": { "type": "integer" } },
+          { "name": "llm_status", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/logs/related": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Logs"
+        ],
+        "summary": "按 request_id 查询关联日志",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/logs/export": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Logs"
+        ],
+        "summary": "导出日志",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "ndjson"], "default": "csv" } },
+          { "name": "types", "in": "query", "schema": { "type": "string" }, "description": "system,audit,error,llm" },
+          { "name": "max", "in": "query", "schema": { "type": "integer", "default": 1000 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "导出文件",
+            "content": {
+              "text/csv": {
+                "schema": { "type": "string" }
+              },
+              "application/x-ndjson": {
+                "schema": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/messages/broadcast": {
       "post": {
         "tags": [
@@ -10018,6 +10324,233 @@
   },
   "components": {
     "schemas": {
+      "LlmUsageSummary": {
+        "type": "object",
+        "properties": {
+          "total_calls": { "type": "integer" },
+          "calls_24h": { "type": "integer" },
+          "calls_7d": { "type": "integer" },
+          "calls_30d": { "type": "integer" },
+          "admin_calls_30d": { "type": "integer" },
+          "user_calls_30d": { "type": "integer" },
+          "tokens_30d": { "type": "integer" },
+          "failed_calls_30d": { "type": "integer" },
+          "last_call_at": { "type": "string", "nullable": true }
+        }
+      },
+      "LlmUsageUser": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "username": { "type": "string" },
+          "email": { "type": "string" },
+          "is_admin": { "type": "boolean" },
+          "group_id": { "type": "integer", "nullable": true },
+          "group_name": { "type": "string", "nullable": true },
+          "daily_used": { "type": "integer" },
+          "daily_limit": { "type": "integer", "nullable": true },
+          "daily_remaining": { "type": "integer", "nullable": true },
+          "rate_limit": { "type": "integer", "nullable": true },
+          "reset_at": { "type": "string", "nullable": true },
+          "last_used_at": { "type": "string", "nullable": true }
+        }
+      },
+      "LlmUsageResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": {
+            "type": "object",
+            "properties": {
+              "summary": { "$ref": "#/components/schemas/LlmUsageSummary" },
+              "users": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/LlmUsageUser" }
+              },
+              "pagination": {
+                "type": "object",
+                "properties": {
+                  "current_page": { "type": "integer" },
+                  "per_page": { "type": "integer" },
+                  "total_items": { "type": "integer" },
+                  "total_pages": { "type": "integer" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "LlmUsageTrendPoint": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string" },
+          "calls": { "type": "integer" },
+          "tokens": { "type": "integer" },
+          "success_calls": { "type": "integer" },
+          "failed_calls": { "type": "integer" },
+          "avg_latency_ms": { "type": "number", "format": "float", "nullable": true }
+        }
+      },
+      "LlmUsageModelStat": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string" },
+          "calls": { "type": "integer" },
+          "tokens": { "type": "integer" }
+        }
+      },
+      "LlmUsageSourceStat": {
+        "type": "object",
+        "properties": {
+          "source": { "type": "string" },
+          "calls": { "type": "integer" },
+          "tokens": { "type": "integer" }
+        }
+      },
+      "LlmUsageActorStat": {
+        "type": "object",
+        "properties": {
+          "actor_type": { "type": "string" },
+          "calls": { "type": "integer" },
+          "tokens": { "type": "integer" }
+        }
+      },
+      "LlmUsageStatusStat": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "calls": { "type": "integer" },
+          "tokens": { "type": "integer" }
+        }
+      },
+      "LlmUsageInsights": {
+        "type": "object",
+        "properties": {
+          "success_rate": { "type": "number", "format": "float", "nullable": true },
+          "avg_latency_ms": { "type": "number", "format": "float", "nullable": true },
+          "p95_latency_ms": { "type": "number", "format": "float", "nullable": true },
+          "avg_tokens_per_call": { "type": "number", "format": "float", "nullable": true },
+          "total_calls": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "calls_last_7d": { "type": "integer" },
+          "calls_prev_7d": { "type": "integer" },
+          "calls_delta": { "type": "integer" },
+          "calls_delta_rate": { "type": "number", "format": "float", "nullable": true },
+          "tokens_last_7d": { "type": "integer" },
+          "tokens_prev_7d": { "type": "integer" },
+          "tokens_delta": { "type": "integer" },
+          "tokens_delta_rate": { "type": "number", "format": "float", "nullable": true },
+          "top_model": { "type": "string", "nullable": true },
+          "top_source": { "type": "string", "nullable": true },
+          "admin_share": { "type": "number", "format": "float", "nullable": true },
+          "user_share": { "type": "number", "format": "float", "nullable": true }
+        }
+      },
+      "LlmUsageRecentConversation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "created_at": { "type": "string", "nullable": true },
+          "actor_type": { "type": "string" },
+          "actor_id": { "type": "integer", "nullable": true },
+          "actor_name": { "type": "string", "nullable": true },
+          "actor_email": { "type": "string", "nullable": true },
+          "source": { "type": "string", "nullable": true },
+          "model": { "type": "string", "nullable": true },
+          "status": { "type": "string", "nullable": true },
+          "request_id": { "type": "string", "nullable": true },
+          "response_id": { "type": "string", "nullable": true },
+          "total_tokens": { "type": "integer", "nullable": true },
+          "latency_ms": { "type": "number", "format": "float", "nullable": true },
+          "prompt_preview": { "type": "string", "nullable": true },
+          "response_preview": { "type": "string", "nullable": true },
+          "context": { "type": "object", "additionalProperties": true },
+          "system_path": { "type": "string", "nullable": true },
+          "system_status_code": { "type": "integer", "nullable": true },
+          "related": {
+            "type": "object",
+            "properties": {
+              "system": { "type": "integer" },
+              "audit": { "type": "integer" },
+              "error": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "LlmUsageAnalytics": {
+        "type": "object",
+        "properties": {
+          "summary": { "$ref": "#/components/schemas/LlmUsageSummary" },
+          "range_days": { "type": "integer" },
+          "trends": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LlmUsageTrendPoint" }
+          },
+          "distributions": {
+            "type": "object",
+            "properties": {
+              "models": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/LlmUsageModelStat" }
+              },
+              "sources": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/LlmUsageSourceStat" }
+              },
+              "actors": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/LlmUsageActorStat" }
+              },
+              "status": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/LlmUsageStatusStat" }
+              }
+            }
+          },
+          "insights": { "$ref": "#/components/schemas/LlmUsageInsights" },
+          "recent_conversations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/LlmUsageRecentConversation" }
+          }
+        }
+      },
+      "LlmUsageAnalyticsResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": { "$ref": "#/components/schemas/LlmUsageAnalytics" }
+        }
+      },
+      "LlmLogDetail": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "request_id": { "type": "string", "nullable": true },
+          "actor_type": { "type": "string" },
+          "actor_id": { "type": "integer", "nullable": true },
+          "source": { "type": "string", "nullable": true },
+          "model": { "type": "string", "nullable": true },
+          "prompt": { "type": "string", "nullable": true },
+          "response_raw": { "type": "string", "nullable": true },
+          "response_id": { "type": "string", "nullable": true },
+          "status": { "type": "string", "nullable": true },
+          "error_message": { "type": "string", "nullable": true },
+          "prompt_tokens": { "type": "integer", "nullable": true },
+          "completion_tokens": { "type": "integer", "nullable": true },
+          "total_tokens": { "type": "integer", "nullable": true },
+          "latency_ms": { "type": "number", "format": "float", "nullable": true },
+          "usage": { "type": "object", "additionalProperties": true },
+          "context": { "type": "object", "additionalProperties": true },
+          "created_at": { "type": "string", "nullable": true }
+        }
+      },
+      "LlmLogDetailResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "data": { "$ref": "#/components/schemas/LlmLogDetail" }
+        }
+      },
       "AdminAiDiagnosticsResponse": {
         "type": "object",
         "properties": {
@@ -14084,6 +14617,10 @@
           "query": {
             "type": "string",
             "description": "管理员输入的自然语言指令"
+          },
+          "source": {
+            "type": "string",
+            "description": "调用入口或来源标识（例如 admin:/admin/users）。"
           },
           "context": {
             "type": "object",

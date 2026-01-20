@@ -72,6 +72,11 @@ class TestSchemaBuilder
             ,
             // System logs table for request logging middleware
             "CREATE TABLE IF NOT EXISTS system_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                method TEXT,\n                path TEXT,\n                status_code INTEGER,\n                user_id INTEGER,\n                ip_address TEXT,\n                user_agent TEXT,\n                duration_ms REAL,\n                request_body TEXT,\n                response_body TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )"
+            ,
+            // LLM logs table for audit trails
+            "CREATE TABLE IF NOT EXISTS llm_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                actor_type TEXT,\n                actor_id INTEGER,\n                source TEXT,\n                model TEXT,\n                prompt TEXT,\n                response_raw TEXT,\n                response_id TEXT,\n                status TEXT,\n                error_message TEXT,\n                prompt_tokens INTEGER,\n                completion_tokens INTEGER,\n                total_tokens INTEGER,\n                latency_ms REAL,\n                usage_json TEXT,\n                context_json TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            // User usage stats for quota tracking
+            "CREATE TABLE IF NOT EXISTS user_usage_stats (\n                user_id INTEGER,\n                resource_key TEXT,\n                counter REAL,\n                last_updated_at TEXT,\n                reset_at TEXT,\n                PRIMARY KEY (user_id, resource_key)\n            )"
         ];
 
         foreach ($tables as $sql) {
@@ -103,6 +108,7 @@ class TestSchemaBuilder
         ]);
         self::ensureColumns($pdo, 'system_logs', ['server_meta TEXT']);
         self::ensureColumns($pdo, 'error_logs', ['request_id TEXT']);
+        self::ensureColumns($pdo, 'llm_logs', ['context_json TEXT']);
         self::ensureColumns($pdo, 'points_transactions', [
             'uid INTEGER', 'raw REAL', 'act TEXT', 'description TEXT', 'status TEXT', 'img TEXT', 'notes TEXT', 'activity_id TEXT',
             'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',

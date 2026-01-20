@@ -17,7 +17,8 @@ class UserAiService
     public function __construct(
         private ?LlmClientInterface $client,
         private LoggerInterface $logger,
-        array $config = []
+        array $config = [],
+        private ?LlmLogService $llmLogService = null
     ) {
         $this->model = (string)($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float)$config['temperature'] : 0.1;
@@ -33,9 +34,15 @@ class UserAiService
     /**
      * @param string $query
      * @param array<string> $availableActivities List of activity names/descriptions
+     * @param array<string,mixed> $logContext LLM logging context (request_id, actor_type, actor_id, source)
      * @return array
      */
-    public function suggestActivity(string $query, array $availableActivities = [], array $clientTimeContext = []): array
+    public function suggestActivity(
+        string $query,
+        array $availableActivities = [],
+        array $clientTimeContext = [],
+        array $logContext = []
+    ): array
     {
         if (!$this->enabled) {
             throw new \RuntimeException('AI service is disabled');
@@ -51,17 +58,71 @@ class UserAiService
             'response_format' => ['type' => 'json_object'] // JSON mode if supported
         ];
 
+        $startedAt = microtime(true);
         try {
             $rawResponse = $this->client->createChatCompletion($payload);
+            $this->logLlmCall($query, $rawResponse, $logContext, $clientTimeContext, $startedAt);
         } catch (\Throwable $e) {
             $this->logger->error('User AI suggest call failed', [
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
             ]);
+            $this->logLlmFailure($query, $logContext, $clientTimeContext, $startedAt, $e);
             throw new \RuntimeException('LLM_UNAVAILABLE', 0, $e);
         }
 
         return $this->processResponse($rawResponse, $availableActivities);
+    }
+
+    private function logLlmCall(string $prompt, array $rawResponse, array $logContext, array $context, float $startedAt): void
+    {
+        if (!$this->llmLogService) {
+            return;
+        }
+
+        $durationMs = (microtime(true) - $startedAt) * 1000.0;
+        $responseId = $rawResponse['id'] ?? ($rawResponse['metadata']['request_id'] ?? null);
+
+        $this->llmLogService->log([
+            'request_id' => $logContext['request_id'] ?? null,
+            'actor_type' => $logContext['actor_type'] ?? 'user',
+            'actor_id' => $logContext['actor_id'] ?? null,
+            'source' => $logContext['source'] ?? null,
+            'model' => $rawResponse['model'] ?? $this->model,
+            'prompt' => $prompt,
+            'response_raw' => $rawResponse,
+            'response_id' => $responseId,
+            'status' => 'success',
+            'error_message' => null,
+            'usage' => $rawResponse['usage'] ?? null,
+            'latency_ms' => round($durationMs, 2),
+            'context' => $context ?: null,
+        ]);
+    }
+
+    private function logLlmFailure(string $prompt, array $logContext, array $context, float $startedAt, \Throwable $error): void
+    {
+        if (!$this->llmLogService) {
+            return;
+        }
+
+        $durationMs = (microtime(true) - $startedAt) * 1000.0;
+
+        $this->llmLogService->log([
+            'request_id' => $logContext['request_id'] ?? null,
+            'actor_type' => $logContext['actor_type'] ?? 'user',
+            'actor_id' => $logContext['actor_id'] ?? null,
+            'source' => $logContext['source'] ?? null,
+            'model' => $this->model,
+            'prompt' => $prompt,
+            'response_raw' => null,
+            'response_id' => null,
+            'status' => 'failed',
+            'error_message' => $error->getMessage(),
+            'usage' => null,
+            'latency_ms' => round($durationMs, 2),
+            'context' => $context ?: null,
+        ]);
     }
 
     private function buildMessages(string $query, array $activities, array $clientTimeContext = []): array
