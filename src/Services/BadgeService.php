@@ -11,6 +11,7 @@ use Illuminate\Database\ConnectionInterface;
 use PDO;
 use DateTimeImmutable;
 use DateTimeZone;
+use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Models\Message;
@@ -25,6 +26,7 @@ class BadgeService
     private MessageService $messageService;
     private AuditLogService $auditLogService;
     private Logger $logger;
+    private ?CheckinService $checkinService;
 
     /** @var array<string,bool> */
     private array $supportedOperators = ['>=' => true, '>' => true, '<=' => true, '<' => true, '==' => true, '!=' => true];
@@ -33,12 +35,14 @@ class BadgeService
         ConnectionInterface $connection,
         MessageService $messageService,
         AuditLogService $auditLogService,
-        Logger $logger
+        Logger $logger,
+        ?CheckinService $checkinService = null
     ) {
         $this->connection = $connection;
         $this->messageService = $messageService;
         $this->auditLogService = $auditLogService;
         $this->logger = $logger;
+        $this->checkinService = $checkinService;
     }
 
     /**
@@ -295,6 +299,8 @@ class BadgeService
             'total_records' => 0,
             'total_points_balance' => 0.0,
             'days_since_registration' => 0,
+            'current_streak' => 0,
+            'longest_streak' => 0,
         ];
 
         try {
@@ -313,6 +319,17 @@ class BadgeService
             $metrics['total_points_earned'] = (float) ($row['points_earned'] ?? 0);
         } catch (\Throwable $e) {
             $this->logger->warning('Failed to compile carbon metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
+        }
+        
+        // Compute Checkin Streaks
+        if ($this->checkinService) {
+            try {
+                $streakStats = $this->checkinService->getUserStreakStats($userId);
+                $metrics['current_streak'] = (int) ($streakStats['current_streak_days'] ?? 0);
+                $metrics['longest_streak'] = (int) ($streakStats['longest_streak_days'] ?? 0);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to get streak stats for metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            }
         }
 
         $daysFromSql = null;

@@ -12,6 +12,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\QuotaService;
+use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -26,6 +27,7 @@ class CarbonTrackController
     private ?CloudflareR2Service $r2Service;
     private ?CheckinService $checkinService;
     private ?QuotaService $quotaService;
+    private ?BadgeService $badgeService;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -39,7 +41,8 @@ class CarbonTrackController
         $errorLogService = null,
         $r2Service = null,
         $checkinService = null,
-        $quotaService = null
+        $quotaService = null,
+        ?BadgeService $badgeService = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -50,6 +53,7 @@ class CarbonTrackController
         $this->r2Service = $r2Service;
         $this->checkinService = $checkinService;
         $this->quotaService = $quotaService;
+        $this->badgeService = $badgeService;
     }
 
     /**
@@ -406,6 +410,29 @@ class CarbonTrackController
             // 通知管理员
             $this->notifyAdminsNewRecord($recordId, $user, $activity);
 
+            // 触发自动徽章授予（基于新数据可能解锁徽章）
+            if ($this->badgeService) {
+                try {
+                    // 仅对当前用户运行，以减少性能开销
+                    $this->badgeService->runAutoGrant(null, (int) $user['id']);
+                } catch (\Throwable $e) {
+                    // 徽章授予失败不应阻塞主流程
+                    $this->logControllerException($e, $request, 'Auto badge grant failed after submission');
+                }
+            }
+            
+            // 获取最新的打卡连续天数（Gamification）
+            $checkinStats = ['current_streak' => 0, 'longest_streak' => 0];
+            if ($this->checkinService) {
+                try {
+                    $streakData = $this->checkinService->getUserStreakStats((int) $user['id']);
+                    $checkinStats['current_streak'] = (int)($streakData['current_streak_days'] ?? 0);
+                    $checkinStats['longest_streak'] = (int)($streakData['longest_streak_days'] ?? 0);
+                } catch (\Throwable $e) {
+                     // 忽略错误，以免影响主要返回
+                }
+            }
+
             $monthlyAchievements = [];
             try {
                 $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -470,7 +497,8 @@ class CarbonTrackController
                     'points_earned' => $pointsEarned,
                     'status' => 'pending',
                     'images' => $returnImages,
-                    'monthly_achievements' => $monthlyAchievements
+                    'monthly_achievements' => $monthlyAchievements,
+                    'checkin_stats' => $checkinStats,
                 ]
             ]);
 
