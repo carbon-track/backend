@@ -13,18 +13,13 @@ use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
+use CarbonTrack\Services\QuotaConfigService;
 use PDO;
 use DateTimeImmutable;
 use DateTimeZone;
 
 class AdminController
 {
-    private const QUOTA_DEFINITIONS = [
-        'llm.daily_limit',
-        'llm.rate_limit',
-        'checkin_makeup.monthly_limit'
-    ];
-
     public function __construct(
         private PDO $db,
         private AuthService $authService,
@@ -32,6 +27,7 @@ class AdminController
         private BadgeService $badgeService,
         private StatisticsService $statisticsService,
         private CheckinService $checkinService,
+        private QuotaConfigService $quotaConfigService,
         private ?ErrorLogService $errorLogService = null,
         private ?CloudflareR2Service $r2Service = null
     ) {}
@@ -191,8 +187,9 @@ $sql = "
                 $row['badges_awarded'] = (int) ($row['badges_awarded'] ?? 0);
                 $row['badges_revoked'] = (int) ($row['badges_revoked'] ?? 0);
                 $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
-                $row['quota_override'] = !empty($row['quota_override']) ? json_decode((string)$row['quota_override'], true) : null;
-                $row['quota_flat'] = $this->flattenQuotas($row['quota_override']);
+                $override = $this->quotaConfigService->decodeJsonToArray($row['quota_override'] ?? null);
+                $row['quota_override'] = $override === null ? null : $this->quotaConfigService->normalizeQuotaConfig($override);
+                $row['quota_flat'] = $this->quotaConfigService->flattenQuotas($row['quota_override']);
                 $row['days_since_registration'] = 0;
                 if (!empty($row['created_at'])) {
                     try {
@@ -542,6 +539,9 @@ $sql = "
             if (array_key_exists('quota_override', $payload)) {
                 $sets[] = 'quota_override = :quota_override';
                 $val = $payload['quota_override'];
+                if (is_array($val)) {
+                    $val = $this->quotaConfigService->normalizeQuotaConfig($val);
+                }
                 $params['quota_override'] = is_array($val) ? json_encode($val) : $val; // null stays null
             }
             if (array_key_exists('quota_flat', $payload) && is_array($payload['quota_flat'])) {
@@ -551,13 +551,13 @@ $sql = "
                      $currStmt = $this->db->prepare("SELECT quota_override FROM users WHERE id = :id");
                      $currStmt->execute(['id' => $userId]);
                      $currRaw = $currStmt->fetchColumn();
-                     $currentJson = $currRaw ? json_decode($currRaw, true) : [];
+                     $currentJson = $this->quotaConfigService->decodeJsonToArray($currRaw) ?? [];
                 } else {
                     // If we are also updating quota_override directly, use that as base (unlikely but safe)
-                    $currentJson = is_string($params['quota_override']) ? json_decode($params['quota_override'], true) : [];
+                    $currentJson = $this->quotaConfigService->decodeJsonToArray($params['quota_override']) ?? [];
                 }
 
-                $newJson = $this->unflattenQuotas($payload['quota_flat'], $currentJson);
+                $newJson = $this->quotaConfigService->unflattenQuotas($payload['quota_flat'], $currentJson);
                 
                 // If quota_override was already in sets, update it; otherwise add it
                 $jsonStr = json_encode($newJson);
@@ -775,59 +775,6 @@ $sql = "
         }
     }
 
-    private function flattenQuotas(?array $json): array
-    {
-        $flat = [];
-        foreach (self::QUOTA_DEFINITIONS as $key) {
-            $parts = explode('.', $key);
-            $value = $json;
-            foreach ($parts as $part) {
-                if (is_array($value) && isset($value[$part])) {
-                    $value = $value[$part];
-                } else {
-                    $value = null;
-                    break;
-                }
-            }
-            $flat[$key] = $value;
-        }
-        return $flat;
-    }
-
-    private function unflattenQuotas(array $flat, ?array $currentJson): array
-    {
-        $result = $currentJson ?? [];
-        
-        foreach ($flat as $dotKey => $value) {
-            // Only process keys we know about to prevent pollution
-            if (!in_array($dotKey, self::QUOTA_DEFINITIONS)) {
-                continue;
-            }
-
-            $parts = explode('.', $dotKey);
-            $temp = &$result;
-            
-            foreach ($parts as $i => $part) {
-                if ($i === count($parts) - 1) {
-                    // Leaf node
-                    if ($value === '' || $value === null) {
-                        unset($temp[$part]);
-                    } else {
-                        // Cast to int if it looks like a number
-                        $temp[$part] = is_numeric($value) ? (int)$value : $value;
-                    }
-                } else {
-                    // Intermediate node
-                    if (!isset($temp[$part]) || !is_array($temp[$part])) {
-                        $temp[$part] = [];
-                    }
-                    $temp = &$temp[$part];
-                }
-            }
-        }
-        
-        return $result;
-    }
 }
 
 

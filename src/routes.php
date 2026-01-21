@@ -202,6 +202,7 @@ return function (App $app) {
         $group->group('/admin', function (RouteCollectorProxy $admin) {
             $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
             $admin->get(PATH_USERS . '/groups', [AdminUserGroupController::class, 'list']);
+            $admin->get(PATH_USERS . '/groups/meta', [AdminUserGroupController::class, 'meta']);
             $admin->post(PATH_USERS . '/groups', [AdminUserGroupController::class, 'create']);
             $admin->put(PATH_USERS . '/groups/{id:[0-9]+}', [AdminUserGroupController::class, 'update']);
             $admin->delete(PATH_USERS . '/groups/{id:[0-9]+}', [AdminUserGroupController::class, 'delete']);

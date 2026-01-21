@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StatisticsService;
+use CarbonTrack\Services\QuotaConfigService;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Response;
 
@@ -80,7 +81,17 @@ class AdminStatsIntegrationTest extends TestCase
 
         $checkinService = new CheckinService($pdo, null, 'UTC');
 
-        return new AdminController($pdo, $authService, $auditLog, $badgeService, $statsService, $checkinService);
+        $quotaConfigService = new QuotaConfigService();
+
+        return new AdminController(
+            $pdo,
+            $authService,
+            $auditLog,
+            $badgeService,
+            $statsService,
+            $checkinService,
+            $quotaConfigService
+        );
     }
 
     public function testGetStatsReturnsTypedAggregates(): void
