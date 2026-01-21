@@ -218,7 +218,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(DatabaseService::class)->getConnection(),
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(CheckinService::class)
         );
     });
 
@@ -573,7 +574,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(CloudflareR2Service::class),
             $c->get(CheckinService::class),
-            $c->get(QuotaService::class)
+            $c->get(QuotaService::class),
+            $c->get(BadgeService::class)
         );
     });
 
