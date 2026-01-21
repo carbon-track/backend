@@ -11720,8 +11720,27 @@
                   "$ref": "#/components/schemas/MonthlyAchievement"
                 },
                 "default": []
+              },
+              "checkin_stats": {
+                "$ref": "#/components/schemas/CheckinStats"
               }
             }
+          }
+        }
+      },
+      "CheckinStats": {
+        "type": "object",
+        "description": "即时返回的用户打卡连胜统计，用于前端 Gamification 反馈",
+        "properties": {
+          "current_streak": {
+            "type": "integer",
+            "description": "当前连续打卡天数（包含本次提交）",
+            "example": 5
+          },
+          "longest_streak": {
+            "type": "integer",
+            "description": "历史最长连续打卡天数（可能是本次刷新）",
+            "example": 12
           }
         }
       },
