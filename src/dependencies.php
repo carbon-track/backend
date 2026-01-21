@@ -55,6 +55,7 @@ use CarbonTrack\Controllers\UserAiController;
 use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\QuotaService;
+use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserGroupService;
 use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\CheckinController;
@@ -434,6 +435,10 @@ $__deps_initializer = function (Container $container) {
         return new QuotaService();
     });
 
+    $container->set(QuotaConfigService::class, function () {
+        return new QuotaConfigService();
+    });
+
     $container->set(UserAiController::class, function (ContainerInterface $c) {
         return new UserAiController(
             $c->get(UserAiService::class),
@@ -445,7 +450,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(UserGroupService::class, function (ContainerInterface $c) {
-        return new UserGroupService();
+        return new UserGroupService($c->get(QuotaConfigService::class));
     });
 
     $container->set(AdminUserGroupController::class, function (ContainerInterface $c) {
@@ -589,6 +594,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(BadgeService::class),
             $c->get(StatisticsService::class),
             $c->get(CheckinService::class),
+            $c->get(QuotaConfigService::class),
             $c->get(ErrorLogService::class),
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
         );

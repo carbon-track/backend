@@ -42,6 +42,17 @@ class AdminUserGroupController
         return $this->json($response, ['success' => true]);
     }
 
+    public function meta(Request $request, Response $response): Response
+    {
+        $definitions = $this->groupService->getQuotaDefinitions();
+        return $this->json($response, [
+            'success' => true,
+            'data' => [
+                'quota_definitions' => $definitions,
+            ],
+        ]);
+    }
+
     private function json(Response $response, array $data, int $status = 200): Response
     {
         $response->getBody()->write(json_encode($data));
