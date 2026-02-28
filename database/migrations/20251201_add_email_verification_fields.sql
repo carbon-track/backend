@@ -1,6 +1,6 @@
 -- Add email verification metadata columns and password reset helpers to users table
 ALTER TABLE `users`
-    ADD COLUMN IF NOT EXISTS `reset_token` varchar(255) DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS `reset_token` varchar(192) DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS `reset_token_expires_at` datetime DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS `email_verified_at` datetime DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS `verification_code` varchar(32) DEFAULT NULL,

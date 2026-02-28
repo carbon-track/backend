@@ -398,6 +398,7 @@ CREATE TABLE `messages` (
   `receiver_id` int(11) NOT NULL,
   `title` varchar(255) NOT NULL DEFAULT '',
   `content` text NOT NULL,
+  `priority` varchar(20) NOT NULL DEFAULT 'normal',
   `is_read` tinyint(1) NOT NULL DEFAULT '0',
   `created_at` datetime DEFAULT NULL,
   `updated_at` datetime DEFAULT NULL,
@@ -497,7 +498,7 @@ CREATE TABLE `product_tags` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_product_tags_slug` (`slug`),
   KEY `idx_product_tags_name` (`name`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
 
@@ -512,7 +513,7 @@ CREATE TABLE `product_tag_map` (
   UNIQUE KEY `uniq_product_tag` (`product_id`,`tag_id`),
   KEY `idx_product_tag_tag_id` (`tag_id`),
   KEY `idx_product_tag_product_id` (`product_id`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
 
@@ -530,7 +531,7 @@ CREATE TABLE `product_categories` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `idx_product_categories_slug` (`slug`),
   KEY `idx_product_categories_name` (`name`)
-) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
 
@@ -716,7 +717,7 @@ CREATE TABLE `users` (
   `class_name` varchar(100) DEFAULT NULL,
   `school_id` int(11) DEFAULT NULL,
   `avatar_id` int(11) DEFAULT NULL,
-  `reset_token` varchar(191) DEFAULT NULL,
+  `reset_token` varchar(192) DEFAULT NULL,
   `reset_token_expires_at` datetime DEFAULT NULL,
   `email_verified_at` datetime DEFAULT NULL,
   `verification_code` varchar(32) DEFAULT NULL,
@@ -726,7 +727,7 @@ CREATE TABLE `users` (
   `verification_send_count` int(11) NOT NULL DEFAULT '0',
   `verification_last_sent_at` datetime DEFAULT NULL,
   `notification_email_mask` int(11) unsigned NOT NULL DEFAULT '0',
-  `group_id` int(11) DEFAULT NULL,
+  `group_id` int(11) DEFAULT '1',
   `quota_override` longtext COMMENT 'JSON overrides for quotas',
   `admin_notes` text
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;
@@ -854,7 +855,8 @@ ALTER TABLE `login_attempts`
 -- 表的索引 `messages`
 --
 ALTER TABLE `messages`
-  ADD PRIMARY KEY (`id`);
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_messages_priority` (`priority`);
 
 --
 -- 表的索引 `message_broadcasts`
@@ -1002,7 +1004,7 @@ ALTER TABLE `users`
   ADD KEY `idx_users_is_admin` (`is_admin`),
   ADD KEY `idx_users_created_at` (`created_at`),
   ADD KEY `idx_users_region_code` (`region_code`),
-  ADD KEY `idx_users_group_id` (`group_id`);
+  ADD KEY `fk_users_group` (`group_id`);
 
 --
 -- 在导出的表使用AUTO_INCREMENT
@@ -1133,4 +1135,5 @@ ALTER TABLE `user_groups`
 --
 ALTER TABLE `users`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
 COMMIT;
