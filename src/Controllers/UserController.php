@@ -1896,7 +1896,7 @@ class UserController
         return '0.0.0.0';
     }
 
-    private function resolveAvatar(?string $filePath, int $ttlSeconds = 600): array
+    private function resolveAvatar(?string $filePath): array
     {
         $originalPath = $filePath !== null ? trim($filePath) : null;
         if ($originalPath === '') {
@@ -1904,26 +1904,7 @@ class UserController
         }
 
         $normalized = $originalPath ? ltrim($originalPath, '/') : null;
-
-        $url = null;
-        if ($normalized && $this->r2Service) {
-            try {
-                $url = $this->r2Service->getPublicUrl($normalized);
-            } catch (\Throwable $e) {
-                try {
-                    $url = $this->r2Service->generatePresignedUrl($normalized, $ttlSeconds);
-                } catch (\Throwable $inner) {
-                    try {
-                        $this->logger->debug('Failed to build avatar URL', [
-                            'path' => $normalized,
-                            'error' => $inner->getMessage()
-                        ]);
-                    } catch (\Throwable $logError) {
-                        // ignore logging failures
-                    }
-                }
-            }
-        }
+        $url = ($normalized && $this->r2Service) ? $this->r2Service->getPublicUrl($normalized) : null;
 
         return [
             'avatar_path' => $originalPath,

@@ -13,7 +13,7 @@ class RegionService
 {
     private const DEFAULT_SEPARATOR = ' · ';
     private const COUNTRY_CODE_PATTERN = '/^[A-Z]{2}$/';
-    private const STATE_CODE_PATTERN = '/^[A-Z0-9-]{1,10}$/';
+    private const STATE_CODE_PATTERN = '/^(?=.{1,10}$)[A-Z0-9]+(?:-[A-Z0-9]+)*$/';
 
     private array $countries = [];
     private ?Logger $logger;
