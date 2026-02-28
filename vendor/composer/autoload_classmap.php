@@ -1290,6 +1290,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\MessageServiceTest' => $baseDir . '/tests/Unit/Services/MessageServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\NotificationPreferenceServiceTest' => $baseDir . '/tests/Unit/Services/NotificationPreferenceServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\QuotaServiceTest' => $baseDir . '/tests/Unit/Services/QuotaServiceTest.php',
+    'CarbonTrack\\Tests\\Unit\\Services\\RegionServiceTest' => $baseDir . '/tests/Unit/Services/RegionServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\SystemLogServiceTest' => $baseDir . '/tests/Unit/Services/SystemLogServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\TurnstileServiceTest' => $baseDir . '/tests/Unit/Services/TurnstileServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\UserAiServiceTest' => $baseDir . '/tests/Unit/Services/UserAiServiceTest.php',

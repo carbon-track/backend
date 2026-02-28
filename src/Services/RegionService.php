@@ -12,6 +12,8 @@ use Monolog\Logger;
 class RegionService
 {
     private const DEFAULT_SEPARATOR = ' · ';
+    private const COUNTRY_CODE_PATTERN = '/^[A-Z]{2}$/';
+    private const STATE_CODE_PATTERN = '/^[A-Z0-9-]{1,10}$/';
 
     private array $countries = [];
     private ?Logger $logger;
@@ -47,7 +49,14 @@ class RegionService
             return null;
         }
         $code = strtoupper(trim($code));
-        return $code !== '' && isset($this->countries[$code]) ? $code : null;
+        if ($code === '') {
+            return null;
+        }
+        if (!empty($this->countries)) {
+            return isset($this->countries[$code]) ? $code : null;
+        }
+
+        return preg_match(self::COUNTRY_CODE_PATTERN, $code) === 1 ? $code : null;
     }
 
     public function normalizeStateCode(?string $code): ?string
@@ -56,7 +65,11 @@ class RegionService
             return null;
         }
         $code = strtoupper(trim(str_replace([' ', '.'], '', $code)));
-        return $code === '' ? null : $code;
+        if ($code === '') {
+            return null;
+        }
+
+        return preg_match(self::STATE_CODE_PATTERN, $code) === 1 ? $code : null;
     }
 
     public function buildRegionCode(string $countryCode, string $stateCode): string
@@ -89,6 +102,9 @@ class RegionService
         $state = $this->normalizeStateCode($stateCode);
         if ($state === null) {
             return false;
+        }
+        if (empty($this->countries)) {
+            return true;
         }
         return isset($this->countries[$country]['states'][$state]);
     }

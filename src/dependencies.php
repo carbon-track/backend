@@ -587,6 +587,14 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(SchoolController::class, function (ContainerInterface $c) {
+        return new SchoolController(
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(PDO::class)
+        );
+    });
+
     $container->set(AdminController::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new AdminController(

@@ -20,12 +20,15 @@ class SchoolController extends BaseController
     private const ERR_SCHOOL_NOT_FOUND = 'School not found';
     private const CODE_SCHOOL_NOT_FOUND = 'SCHOOL_NOT_FOUND';
 
-    public function __construct($container)
+    public function __construct(
+        AuditLogService $auditLogService,
+        ErrorLogService $errorLogService,
+        PDO $db
+    )
     {
-        $this->auditLogService = $container->get(AuditLogService::class);
-        $this->errorLogService = $container->get(ErrorLogService::class);
-        // 获取 PDO 以便处理班级相关的原生查询
-        $this->db = $container->get(PDO::class);
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
+        $this->db = $db;
     }
 
     // Get schools with optional fuzzy search and pagination (public)

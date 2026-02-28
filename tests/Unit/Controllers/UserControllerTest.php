@@ -363,6 +363,13 @@ class UserControllerTest extends TestCase
         $stmtTotalUsers = $this->createMock(\PDOStatement::class);
         $stmtTotalUsers->expects($this->once())->method('fetch')->willReturn(['total' => 200]);
 
+        $stmtStoreStats = $this->createMock(\PDOStatement::class);
+        $stmtStoreStats->expects($this->once())->method('execute')->with(['current_points' => 200])->willReturn(true);
+        $stmtStoreStats->expects($this->once())->method('fetch')->willReturn([
+            'available_products' => 2,
+            'min_exchange_points' => 80,
+        ]);
+
         $stmtLeaderboard = $this->createMock(\PDOStatement::class);
         $stmtLeaderboard->method('fetchAll')->willReturn([
             ['id' => 99, 'username' => 'alice', 'total_points' => 520, 'avatar_id' => null, 'avatar_path' => null],
@@ -375,6 +382,7 @@ class UserControllerTest extends TestCase
             $stmtMonthly,
             $stmtRecent,
             $stmtUserInfo,
+            $stmtStoreStats,
             $stmtRecords,
             $stmtRank
         );
@@ -421,6 +429,8 @@ class UserControllerTest extends TestCase
         $this->assertEquals(300, $json['data']['total_earned']);
         $this->assertEquals(7, $json['data']['rank']);
         $this->assertEquals(200, $json['data']['total_users']);
+        $this->assertEquals(2, $json['data']['available_products']);
+        $this->assertEquals(80, $json['data']['min_exchange_points']);
         $this->assertEquals('2024-01-01', $json['data']['member_since']);
         $this->assertCount(1, $json['data']['leaderboard']);
     }
