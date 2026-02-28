@@ -1375,6 +1375,50 @@ class UserController
             $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
             $regionMeta = $this->buildRegionResponse($userRow['region_code'] ?? null);
 
+            $storeStats = [
+                'available_products' => 0,
+                'min_exchange_points' => null,
+            ];
+            try {
+                $currentPoints = (int) ($userRow['points'] ?? 0);
+                $storeStatsStmt = $this->db->prepare("
+                    SELECT
+                        COALESCE(SUM(
+                            CASE
+                                WHEN deleted_at IS NULL
+                                    AND status = 'active'
+                                    AND (stock = -1 OR stock > 0)
+                                    AND points_required <= :current_points
+                                THEN 1
+                                ELSE 0
+                            END
+                        ), 0) AS available_products,
+                        MIN(
+                            CASE
+                                WHEN deleted_at IS NULL
+                                    AND status = 'active'
+                                    AND (stock = -1 OR stock > 0)
+                                THEN points_required
+                                ELSE NULL
+                            END
+                        ) AS min_exchange_points
+                    FROM products
+                ");
+                $storeStatsStmt->execute(['current_points' => $currentPoints]);
+                if ($storeStatsStmt instanceof \PDOStatement) {
+                    $storeRow = $storeStatsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                    $minExchangePoints = isset($storeRow['min_exchange_points']) && $storeRow['min_exchange_points'] !== null
+                        ? (int) $storeRow['min_exchange_points']
+                        : null;
+                    $storeStats = [
+                        'available_products' => (int) ($storeRow['available_products'] ?? 0),
+                        'min_exchange_points' => $minExchangePoints,
+                    ];
+                }
+            } catch (\Throwable $e) {
+                $this->logger->debug('Failed to load store quick stats', ['error' => $e->getMessage()]);
+            }
+
             // 额外：碳记录聚合（不影响 prepare 次序）
             $recStats = [
                 'total_activities' => 0,
@@ -1576,7 +1620,8 @@ class UserController
                 // 快捷入口相关
                 'unread_messages' => $unread,
                 'pending_reviews' => 0,
-                'available_products' => 0,
+                'available_products' => $storeStats['available_products'],
+                'min_exchange_points' => $storeStats['min_exchange_points'],
                 'new_achievements' => 0,
                 // 其他拓展
                 'monthly_achievements' => $monthly,

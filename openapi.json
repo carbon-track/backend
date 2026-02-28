@@ -11967,6 +11967,11 @@
                 "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
                 "nullable": true
               },
+              "min_exchange_points": {
+                "type": "integer",
+                "description": "当前可兑换商品中所需的最低积分；若暂无可兑换商品则为 null。",
+                "nullable": true
+              },
               "new_achievements": {
                 "type": "integer",
                 "description": "更新当前认证用户的个人资料信息。支持提交 school_id 或 new_school_name 来修改学校信息。在修改学校时，需要提供 cf_turnstile_response 通过 Cloudflare Turnstile 验证，同时支持更新头像 ID。",
@@ -17177,4 +17182,3 @@
     }
   }
 }
-
