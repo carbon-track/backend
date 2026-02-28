@@ -11,25 +11,50 @@ class RegionServiceTest extends TestCase
 {
     public function testUsesDatasetWhenAvailable(): void
     {
-        $datasetPath = realpath(__DIR__ . '/../../../../frontend/public/locales/states.json');
-        $this->assertNotFalse($datasetPath);
+        $previousRegionDataPath = $_ENV['REGION_DATA_PATH'] ?? null;
+        unset($_ENV['REGION_DATA_PATH']);
 
-        $service = new RegionService($datasetPath ?: null, null);
+        try {
+            $datasetPath = realpath(__DIR__ . '/../../../storage/data/states.json');
+            $this->assertNotFalse($datasetPath);
 
-        $this->assertSame('CN', $service->normalizeCountryCode('cn'));
-        $this->assertSame('GD', $service->normalizeStateCode('gd'));
-        $this->assertTrue($service->isValidRegion('CN', 'GD'));
-        $this->assertFalse($service->isValidRegion('CN', 'INVALID'));
+            $service = new RegionService($datasetPath, null);
+
+            $this->assertSame('CN', $service->normalizeCountryCode('cn'));
+            $this->assertSame('GD', $service->normalizeStateCode('gd'));
+            $this->assertTrue($service->isValidRegion('CN', 'GD'));
+            $this->assertFalse($service->isValidRegion('CN', 'INVALID'));
+        } finally {
+            if ($previousRegionDataPath !== null) {
+                $_ENV['REGION_DATA_PATH'] = $previousRegionDataPath;
+            } else {
+                unset($_ENV['REGION_DATA_PATH']);
+            }
+        }
     }
 
     public function testFallsBackToCodeFormatWhenDatasetMissing(): void
     {
-        $service = new RegionService('__missing__/states.json', null);
+        $previousRegionDataPath = $_ENV['REGION_DATA_PATH'] ?? null;
+        unset($_ENV['REGION_DATA_PATH']);
 
-        $this->assertSame('CN', $service->normalizeCountryCode('cn'));
-        $this->assertSame('GD', $service->normalizeStateCode('gd'));
-        $this->assertTrue($service->isValidRegion('CN', 'GD'));
-        $this->assertFalse($service->isValidRegion('C', 'GD'));
-        $this->assertFalse($service->isValidRegion('CN', ''));
+        try {
+            $service = new RegionService('__missing__/states.json', null);
+
+            $this->assertSame('CN', $service->normalizeCountryCode('cn'));
+            $this->assertSame('GD', $service->normalizeStateCode('gd'));
+            $this->assertTrue($service->isValidRegion('CN', 'GD'));
+            $this->assertFalse($service->isValidRegion('C', 'GD'));
+            $this->assertFalse($service->isValidRegion('CN', ''));
+            $this->assertFalse($service->isValidRegion('CN', '-'));
+            $this->assertFalse($service->isValidRegion('CN', 'GD-'));
+            $this->assertFalse($service->isValidRegion('CN', '-GD'));
+        } finally {
+            if ($previousRegionDataPath !== null) {
+                $_ENV['REGION_DATA_PATH'] = $previousRegionDataPath;
+            } else {
+                unset($_ENV['REGION_DATA_PATH']);
+            }
+        }
     }
 }
