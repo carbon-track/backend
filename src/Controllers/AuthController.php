@@ -1267,10 +1267,10 @@ class AuthController
         $url = null;
         if ($normalized && $this->r2Service) {
             try {
-                $url = $this->r2Service->generatePresignedUrl($normalized, $ttlSeconds);
+                $url = $this->r2Service->getPublicUrl($normalized);
             } catch (\Throwable $e) {
                 try {
-                    $url = $this->r2Service->getPublicUrl($normalized);
+                    $url = $this->r2Service->generatePresignedUrl($normalized, $ttlSeconds);
                 } catch (\Throwable $inner) {
                     try {
                         $this->logger->debug('Failed to build avatar URL', [

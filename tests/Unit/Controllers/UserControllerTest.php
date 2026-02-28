@@ -873,6 +873,49 @@ class UserControllerTest extends TestCase
         $this->assertSame('INVALID_CATEGORY', $json['code']);
     }
 
+    public function testResolveAvatarPrefersPublicUrl(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $pdo = $this->createMock(\PDO::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+        $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
+
+        $r2->expects($this->once())
+            ->method('getPublicUrl')
+            ->with('avatars/default/avatar_01.png')
+            ->willReturn('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png');
+        $r2->expects($this->never())->method('generatePresignedUrl');
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            null,
+            $logger,
+            $pdo,
+            $errorLog,
+            $r2,
+            $region
+        );
+
+        $method = new \ReflectionMethod(UserController::class, 'resolveAvatar');
+        $method->setAccessible(true);
+        $result = $method->invoke($controller, '/avatars/default/avatar_01.png');
+
+        $this->assertSame('/avatars/default/avatar_01.png', $result['avatar_path']);
+        $this->assertSame('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png', $result['avatar_url']);
+    }
+
     private function mockTurnstile(bool $configured = false)
     {
         $mock = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
