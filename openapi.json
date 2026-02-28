@@ -11332,7 +11332,7 @@
           "avatar_url": {
             "type": "string",
             "nullable": true,
-            "description": "头像URL"
+            "description": "头像URL，优先返回公共访问地址"
           },
           "lastlgn": {
             "type": "string",

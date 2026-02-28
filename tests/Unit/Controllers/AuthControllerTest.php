@@ -257,4 +257,43 @@ class AuthControllerTest extends TestCase
         $this->assertSame($futureExpiry, $json['data']['verification_expires_at']);
         $this->assertSame($resendAvailableAt, $json['data']['verification_resend_available_at']);
     }
+
+    public function testResolveAvatarPrefersPublicUrl(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockR2Service->expects($this->once())
+            ->method('getPublicUrl')
+            ->with('avatars/default/avatar_01.png')
+            ->willReturn('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png');
+        $mockR2Service->expects($this->never())->method('generatePresignedUrl');
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $method = new \ReflectionMethod(AuthController::class, 'resolveAvatar');
+        $method->setAccessible(true);
+        $result = $method->invoke($controller, '/avatars/default/avatar_01.png');
+
+        $this->assertSame('/avatars/default/avatar_01.png', $result['avatar_path']);
+        $this->assertSame('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png', $result['avatar_url']);
+    }
 }
