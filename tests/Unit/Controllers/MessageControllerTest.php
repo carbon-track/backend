@@ -618,6 +618,135 @@ class MessageControllerTest extends TestCase
         $this->assertSame('admin_broadcast', $meta['source_kind']);
     }
 
+    public function testBroadcastSanitizerRemovesBlockedTagsNestedInsideUnsupportedWrappers(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $pdo->exec('CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            email TEXT,
+            school TEXT,
+            school_id INTEGER,
+            location TEXT,
+            is_admin INTEGER,
+            status TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            audit_log_id INTEGER,
+            system_log_id INTEGER,
+            error_log_ids TEXT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            scope TEXT,
+            target_count INTEGER,
+            sent_count INTEGER,
+            invalid_user_ids TEXT,
+            failed_user_ids TEXT,
+            message_ids_snapshot TEXT,
+            message_map_snapshot TEXT,
+            message_id_count INTEGER,
+            content_hash TEXT,
+            email_delivery_snapshot TEXT,
+            filters_snapshot TEXT,
+            meta TEXT,
+            created_by INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )');
+
+        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
+            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 7, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $svc->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with(
+                5,
+                'Alert',
+                $this->callback(static function (string $content): bool {
+                    return str_contains($content, '<p>Safe body</p>')
+                        && !str_contains($content, '<script')
+                        && !str_contains($content, 'alert(1)')
+                        && !str_contains($content, '<svg')
+                        && !str_contains($content, '<span');
+                }),
+                Message::TYPE_SYSTEM,
+                'high'
+            )
+            ->willReturn($this->createMock(Message::class));
+
+        $svc->expects($this->once())
+            ->method('queueBroadcastEmail')
+            ->with(
+                $this->anything(),
+                'Alert',
+                $this->callback(static function (string $content): bool {
+                    return str_contains($content, '<p>Safe body</p>')
+                        && !str_contains($content, '<script')
+                        && !str_contains($content, 'alert(1)')
+                        && !str_contains($content, '<svg')
+                        && !str_contains($content, '<span');
+                }),
+                'high',
+                $this->callback(static function (array $context): bool {
+                    return ($context['content_format'] ?? null) === 'html'
+                        && ($context['render_profile'] ?? null) === 'announcement_html_v1'
+                        && ($context['render_version'] ?? null) === 1
+                        && ($context['source_kind'] ?? null) === 'admin_broadcast';
+                })
+            )
+            ->willReturn(['queued' => true, 'recipient_count' => 1]);
+
+        $audit->expects($this->once())->method('log');
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcast', [
+            'title' => 'Alert',
+            'content' => '<span><script>alert(1)</script></span><svg><script>alert(1)</script></svg><p>Safe body</p>',
+            'content_format' => 'html',
+            'render_profile' => 'announcement_html_v1',
+            'priority' => 'high',
+            'target_users' => [5]
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('html', $json['content_format']);
+        $this->assertSame(1, $json['render_version']);
+
+        $row = $pdo->query('SELECT content, meta FROM message_broadcasts ORDER BY id DESC LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $this->assertIsArray($row);
+        $this->assertStringContainsString('<p>Safe body</p>', (string)$row['content']);
+        $this->assertStringNotContainsString('<script', (string)$row['content']);
+        $this->assertStringNotContainsString('alert(1)', (string)$row['content']);
+        $this->assertStringNotContainsString('<svg', (string)$row['content']);
+        $this->assertStringNotContainsString('<span', (string)$row['content']);
+
+        $meta = json_decode((string)$row['meta'], true);
+        $this->assertSame(1, $meta['render_version']);
+    }
+
 
     public function testSearchBroadcastRecipientsReturnsData(): void
     {

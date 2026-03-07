@@ -1228,6 +1228,7 @@ return array(
     'CarbonTrack\\Services\\EmailService' => $baseDir . '/src/Services/EmailService.php',
     'CarbonTrack\\Services\\ErrorLogService' => $baseDir . '/src/Services/ErrorLogService.php',
     'CarbonTrack\\Services\\FileMetadataService' => $baseDir . '/src/Services/FileMetadataService.php',
+    'CarbonTrack\\Services\\FileOwnershipConflictException' => $baseDir . '/src/Services/FileOwnershipConflictException.php',
     'CarbonTrack\\Services\\LeaderboardService' => $baseDir . '/src/Services/LeaderboardService.php',
     'CarbonTrack\\Services\\LlmLogService' => $baseDir . '/src/Services/LlmLogService.php',
     'CarbonTrack\\Services\\MessageService' => $baseDir . '/src/Services/MessageService.php',

@@ -11,8 +11,10 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\FileMetadataService;
+use CarbonTrack\Services\FileOwnershipConflictException;
 use CarbonTrack\Services\MultipartUploadService;
 use Monolog\Logger;
+use CarbonTrack\Models\File;
 
 class FileUploadController
 {
@@ -825,9 +827,40 @@ class FileUploadController
                 return $multipartError;
             }
             $result = $this->r2Service->completeMultipartUpload($filePath, $uploadId, $parts);
+            $fileInfo = $this->r2Service->getFileInfo($filePath);
+            $ownershipPersisted = $this->persistMultipartOwnership($filePath, (int) $user['id'], $fileInfo);
             $this->multipartUploadService->clearUpload($uploadId);
+
+            $this->auditLogService->log([
+                'user_id' => (int) $user['id'],
+                'action' => 'multipart_upload_completed',
+                'operation_category' => 'file_management',
+                'affected_table' => 'files',
+                'status' => 'success',
+                'data' => [
+                    'upload_id' => $uploadId,
+                    'file_path' => $filePath,
+                    'ownership_persisted' => $ownershipPersisted,
+                ],
+            ]);
+
+            $result['ownership_persisted'] = $ownershipPersisted;
+
             return $this->jsonResponse($response, ['success' => true, 'data' => $result]);
         } catch (\Exception $e) {
+            $userId = isset($user['id']) ? (int) $user['id'] : null;
+            $this->auditLogService->log([
+                'user_id' => $userId,
+                'action' => 'multipart_upload_completed',
+                'operation_category' => 'file_management',
+                'affected_table' => 'files',
+                'status' => 'failed',
+                'data' => [
+                    'file_path' => $body['file_path'] ?? null,
+                    'upload_id' => $body['upload_id'] ?? null,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['success' => false, 'message' => 'Failed to complete multipart'], 500);
         }
@@ -946,6 +979,56 @@ class FileUploadController
     private function isAdminUser(array $user): bool
     {
         return !empty($user['is_admin']);
+    }
+
+    private function persistMultipartOwnership(string $filePath, int $userId, ?array $fileInfo = null): bool
+    {
+        if ($userId <= 0) {
+            return false;
+        }
+
+        $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
+        if ($fileRecord) {
+            return $this->syncExistingMultipartOwnership($fileRecord, $filePath, $userId, $fileInfo);
+        }
+
+        $this->fileMetadataService->createRecord($this->buildMultipartFileRecordData($filePath, $userId, $fileInfo));
+
+        return true;
+    }
+
+    private function syncExistingMultipartOwnership(File $fileRecord, string $filePath, int $userId, ?array $fileInfo = null): bool
+    {
+        $existingOwnerId = (int) ($fileRecord->user_id ?? 0);
+        if ($existingOwnerId > 0 && $existingOwnerId !== $userId) {
+            throw new FileOwnershipConflictException('File ownership conflict detected for multipart upload');
+        }
+
+        if ($existingOwnerId === $userId) {
+            return true;
+        }
+
+        $recordData = $this->buildMultipartFileRecordData($filePath, $userId, $fileInfo);
+        $fileRecord->user_id = $userId;
+        $fileRecord->original_name = $fileRecord->original_name ?: $recordData['original_name'];
+        $fileRecord->mime_type = $fileRecord->mime_type ?: $recordData['mime_type'];
+        $fileRecord->size = (int) ($fileRecord->size ?? 0) > 0 ? $fileRecord->size : $recordData['size'];
+        $fileRecord->reference_count = (int) ($fileRecord->reference_count ?? 0) > 0 ? $fileRecord->reference_count : 1;
+        $fileRecord->save();
+
+        return true;
+    }
+
+    private function buildMultipartFileRecordData(string $filePath, int $userId, ?array $fileInfo = null): array
+    {
+        return [
+            'file_path' => $filePath,
+            'mime_type' => $fileInfo['mime_type'] ?? null,
+            'size' => isset($fileInfo['size']) ? (int) $fileInfo['size'] : 0,
+            'original_name' => (string) ($fileInfo['metadata']['original_name'] ?? basename($filePath)),
+            'user_id' => $userId,
+            'reference_count' => 1,
+        ];
     }
 
     private function authorizeMultipartUpload(Response $response, array $user, string $uploadId, string $filePath): ?Response

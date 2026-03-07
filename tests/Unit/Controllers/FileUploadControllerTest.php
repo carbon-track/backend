@@ -19,6 +19,7 @@ class FileUploadControllerTest extends TestCase
     private const ROUTE_CONFIRM = '/files/confirm';
     private const PRIVATE_ACTIVITY_PATH = 'activities/2026/03/proof.jpg';
     private const PRIVATE_UPLOAD_PATH = 'uploads/2026/03/doc.png';
+    private const PRIVATE_UPLOAD_ENCODED_PATH = 'uploads%2F2026%2F03%2Fdoc.png';
     private const MULTIPART_FILE_PATH = 'uploads/2026/03/big.jpg';
     private const EXISTING_OK_PATH = 'uploads/ok.jpg';
 
@@ -134,7 +135,7 @@ class FileUploadControllerTest extends TestCase
             ]);
         }, $fileMeta);
 
-        $resp = $c->generatePresignedUrl(makeRequest('GET', '/files/uploads/presigned-url'), new \Slim\Psr7\Response(), ['path' => 'uploads%2F2026%2F03%2Fdoc.png']);
+        $resp = $c->generatePresignedUrl(makeRequest('GET', '/files/uploads/presigned-url'), new \Slim\Psr7\Response(), ['path' => self::PRIVATE_UPLOAD_ENCODED_PATH]);
         $this->assertSame(403, $resp->getStatusCode());
     }
 
@@ -373,6 +374,22 @@ class FileUploadControllerTest extends TestCase
         $upload->file_path = self::MULTIPART_FILE_PATH;
         $upload->user_id = 42;
 
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::MULTIPART_FILE_PATH)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data): bool {
+                return ($data['file_path'] ?? null) === self::MULTIPART_FILE_PATH
+                    && ($data['user_id'] ?? null) === 42
+                    && ($data['mime_type'] ?? null) === self::MIME_JPEG
+                    && ($data['size'] ?? null) === 98765
+                    && ($data['reference_count'] ?? null) === 1;
+            }))
+            ->willReturn(new File());
+
         $multipart = $this->createMock(MultipartUploadService::class);
         $multipart->method('findActiveUpload')->with('up-3')->willReturn($upload);
         $multipart->expects($this->once())->method('clearUpload')->with('up-3');
@@ -382,7 +399,13 @@ class FileUploadControllerTest extends TestCase
                 'success' => true,
                 'file_path' => self::MULTIPART_FILE_PATH
             ]);
-        }, null, $multipart);
+            $r2->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willReturn([
+                'file_path' => self::MULTIPART_FILE_PATH,
+                'size' => 98765,
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => ['original_name' => 'big.jpg']
+            ]);
+        }, $fileMeta, $multipart);
 
         $resp = $c->completeMultipartUpload(makeRequest('POST', '/files/multipart/complete', [
             'file_path' => self::MULTIPART_FILE_PATH,
@@ -390,6 +413,48 @@ class FileUploadControllerTest extends TestCase
             'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
         ]), new \Slim\Psr7\Response());
 
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testGetPrivateInfoAllowedForPersistedOwnerRecord(): void
+    {
+        $ownedFile = new File();
+        $ownedFile->file_path = self::PRIVATE_UPLOAD_PATH;
+        $ownedFile->user_id = 42;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->method('isPubliclyReadablePath')->with(self::PRIVATE_UPLOAD_PATH)->willReturn(false);
+        $fileMeta->method('findByFilePath')->with(self::PRIVATE_UPLOAD_PATH)->willReturn($ownedFile);
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('getFileInfo')->willReturn([
+                'file_path' => self::PRIVATE_UPLOAD_PATH,
+                'metadata' => []
+            ]);
+        }, $fileMeta);
+
+        $resp = $c->getFileInfo(makeRequest('GET', '/files/uploads/info'), new \Slim\Psr7\Response(), ['path' => self::PRIVATE_UPLOAD_ENCODED_PATH]);
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testDeletePrivateFileAllowedForPersistedOwnerRecord(): void
+    {
+        $ownedFile = new File();
+        $ownedFile->file_path = self::PRIVATE_UPLOAD_PATH;
+        $ownedFile->user_id = 42;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->method('findByFilePath')->with(self::PRIVATE_UPLOAD_PATH)->willReturn($ownedFile);
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('getFileInfo')->willReturn([
+                'file_path' => self::PRIVATE_UPLOAD_PATH,
+                'metadata' => []
+            ]);
+            $r2->method('deleteFile')->with(self::PRIVATE_UPLOAD_PATH, 42)->willReturn(true);
+        }, $fileMeta);
+
+        $resp = $c->deleteFile(makeRequest('DELETE', '/files/uploads/delete'), new \Slim\Psr7\Response(), ['path' => self::PRIVATE_UPLOAD_ENCODED_PATH]);
         $this->assertSame(200, $resp->getStatusCode());
     }
 }

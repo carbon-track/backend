@@ -1631,6 +1631,7 @@ class ComposerStaticInitb0a5952653a4f33403aa273cd7543b80
         'CarbonTrack\\Services\\EmailService' => __DIR__ . '/../..' . '/src/Services/EmailService.php',
         'CarbonTrack\\Services\\ErrorLogService' => __DIR__ . '/../..' . '/src/Services/ErrorLogService.php',
         'CarbonTrack\\Services\\FileMetadataService' => __DIR__ . '/../..' . '/src/Services/FileMetadataService.php',
+        'CarbonTrack\\Services\\FileOwnershipConflictException' => __DIR__ . '/../..' . '/src/Services/FileOwnershipConflictException.php',
         'CarbonTrack\\Services\\LeaderboardService' => __DIR__ . '/../..' . '/src/Services/LeaderboardService.php',
         'CarbonTrack\\Services\\LlmLogService' => __DIR__ . '/../..' . '/src/Services/LlmLogService.php',
         'CarbonTrack\\Services\\MessageService' => __DIR__ . '/../..' . '/src/Services/MessageService.php',
