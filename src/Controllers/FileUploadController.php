@@ -135,7 +135,12 @@ class FileUploadController
 
             // 生成对象 key 与预签名
             $keyInfo = $this->r2Service->generateDirectUploadKey($originalName, $directory);
-            $presign = $this->r2Service->generateUploadPresignedUrl($keyInfo['file_path'], $mimeType, $expiresIn);
+            $presign = $this->r2Service->generateUploadPresignedUrl(
+                $keyInfo['file_path'],
+                $mimeType,
+                $expiresIn,
+                $this->buildDirectUploadMetadata($user, $originalName, $entityType, $entityId)
+            );
 
             $data = array_merge($keyInfo, $presign, [
                 'max_file_size' => $this->r2Service->getMaxFileSize(),
@@ -214,25 +219,13 @@ class FileUploadController
             }
 
             // 持久化元数据（如果 sha256 提供，则去重引用计数）
-            $fileRecord = null;
-            $duplicated = false;
-            if ($sha256) {
-                $existing = $this->fileMetadataService->findBySha256($sha256);
-                if ($existing && $existing->file_path === $filePath) {
-                    $fileRecord = $this->fileMetadataService->incrementReference($existing);
-                    $duplicated = true;
-                } else {
-                    $fileRecord = $this->fileMetadataService->createRecord([
-                        'sha256' => $sha256,
-                        'file_path' => $filePath,
-                        'mime_type' => $info['mime_type'] ?? null,
-                        'size' => (int)($info['size'] ?? 0),
-                        'original_name' => $originalName,
-                        'user_id' => $user['id'],
-                        'reference_count' => 1
-                    ]);
-                }
-            }
+            ['file' => $fileRecord, 'duplicate' => $duplicated] = $this->persistDirectUploadOwnership(
+                $filePath,
+                (int) $user['id'],
+                $originalName,
+                $info,
+                $sha256
+            );
 
             // 记录审计日志
             $this->r2Service->logDirectUploadAudit($user['id'], $entityType, $entityId, $info, $originalName);
@@ -249,6 +242,24 @@ class FileUploadController
                 'message' => 'Upload confirmed',
                 'data' => $payload
             ]);
+        } catch (FileOwnershipConflictException $e) {
+            $this->auditLogService->log([
+                'user_id' => isset($user['id']) ? (int) $user['id'] : null,
+                'action' => 'direct_upload_confirmed',
+                'operation_category' => 'file_management',
+                'affected_table' => 'files',
+                'status' => 'failed',
+                'data' => [
+                    'file_path' => $body['file_path'] ?? null,
+                    'error' => $e->getMessage(),
+                    'error_code' => 'FILE_OWNERSHIP_CONFLICT',
+                ],
+            ]);
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'File ownership conflict detected',
+                'code' => 'FILE_OWNERSHIP_CONFLICT'
+            ], 409);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             $this->logger->error('Confirm direct upload failed', ['error' => $e->getMessage()]);
@@ -757,8 +768,12 @@ class FileUploadController
             $originalName = trim($body['original_name'] ?? '');
             $directory = $body['directory'] ?? 'uploads';
             $mimeType = trim($body['mime_type'] ?? 'application/octet-stream');
+            $sha256 = isset($body['sha256']) ? strtolower(trim($body['sha256'])) : null;
             if ($originalName === '' || !$this->isValidDirectory($directory)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
+            }
+            if (!$sha256 || !preg_match('/^[a-f0-9]{64}$/', $sha256)) {
+                return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid sha256'], 400);
             }
             if (!in_array($mimeType, $this->r2Service->getAllowedMimeTypes(), true)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'MIME type not allowed'], 400);
@@ -767,7 +782,8 @@ class FileUploadController
             $this->multipartUploadService->registerUpload(
                 $init['upload_id'],
                 $init['file_path'],
-                (int) $user['id']
+                (int) $user['id'],
+                $sha256
             );
             return $this->jsonResponse($response, ['success' => true, 'data' => $init]);
         } catch (\Exception $e) {
@@ -810,6 +826,8 @@ class FileUploadController
      */
     public function completeMultipartUpload(Request $request, Response $response): Response
     {
+        $user = null;
+        $body = [];
         try {
             $user = $this->authService->getCurrentUser($request);
             if (!$user) {
@@ -819,6 +837,7 @@ class FileUploadController
             $filePath = $body['file_path'] ?? '';
             $uploadId = $body['upload_id'] ?? '';
             $parts = $body['parts'] ?? [];
+            $sha256 = isset($body['sha256']) ? strtolower(trim($body['sha256'])) : null;
             if ($filePath === '' || $uploadId === '' || !is_array($parts) || empty($parts)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
             }
@@ -826,10 +845,22 @@ class FileUploadController
             if ($multipartError instanceof Response) {
                 return $multipartError;
             }
+            $upload = $this->multipartUploadService->findActiveUpload($uploadId);
+            $effectiveSha256 = $upload && !empty($upload->sha256) ? strtolower((string) $upload->sha256) : $sha256;
+            if (!$effectiveSha256 || !preg_match('/^[a-f0-9]{64}$/', $effectiveSha256)) {
+                if (!$this->fileMetadataService->findByFilePath($filePath)) {
+                    return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid sha256'], 400);
+                }
+                $effectiveSha256 = null;
+            }
             $result = $this->r2Service->completeMultipartUpload($filePath, $uploadId, $parts);
             $fileInfo = $this->r2Service->getFileInfo($filePath);
-            $ownershipPersisted = $this->persistMultipartOwnership($filePath, (int) $user['id'], $fileInfo);
-            $this->multipartUploadService->clearUpload($uploadId);
+            $ownershipPersisted = false;
+            try {
+                $ownershipPersisted = $this->persistMultipartOwnership($filePath, (int) $user['id'], $fileInfo, $effectiveSha256);
+            } finally {
+                $this->multipartUploadService->clearUpload($uploadId);
+            }
 
             $this->auditLogService->log([
                 'user_id' => (int) $user['id'],
@@ -847,6 +878,26 @@ class FileUploadController
             $result['ownership_persisted'] = $ownershipPersisted;
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $result]);
+        } catch (FileOwnershipConflictException $e) {
+            $userId = isset($user['id']) ? (int) $user['id'] : null;
+            $this->auditLogService->log([
+                'user_id' => $userId,
+                'action' => 'multipart_upload_completed',
+                'operation_category' => 'file_management',
+                'affected_table' => 'files',
+                'status' => 'failed',
+                'data' => [
+                    'file_path' => $body['file_path'] ?? null,
+                    'upload_id' => $body['upload_id'] ?? null,
+                    'error' => $e->getMessage(),
+                    'error_code' => 'FILE_OWNERSHIP_CONFLICT',
+                ],
+            ]);
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'File ownership conflict detected',
+                'code' => 'FILE_OWNERSHIP_CONFLICT'
+            ], 409);
         } catch (\Exception $e) {
             $userId = isset($user['id']) ? (int) $user['id'] : null;
             $this->auditLogService->log([
@@ -981,7 +1032,83 @@ class FileUploadController
         return !empty($user['is_admin']);
     }
 
-    private function persistMultipartOwnership(string $filePath, int $userId, ?array $fileInfo = null): bool
+    private function buildDirectUploadMetadata(array $user, string $originalName, ?string $entityType, ?int $entityId): array
+    {
+        return [
+            'original_name' => $originalName,
+            'uploaded_by' => (string) ((int) ($user['id'] ?? 0)),
+            'entity_type' => $entityType ?: 'unknown',
+            'entity_id' => $entityId !== null ? (string) $entityId : '',
+            'upload_time' => date('Y-m-d H:i:s'),
+        ];
+    }
+
+    private function persistDirectUploadOwnership(string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): array
+    {
+        $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
+        if ($fileRecord) {
+            $updated = $this->syncDirectUploadFileRecord($fileRecord, $filePath, $userId, $originalName, $fileInfo, $sha256);
+            return ['file' => $updated, 'duplicate' => false];
+        }
+
+        $duplicated = false;
+        if ($sha256) {
+            $existing = $this->fileMetadataService->findBySha256($sha256);
+            if ($existing && $existing->file_path === $filePath) {
+                return [
+                    'file' => $this->fileMetadataService->incrementReference($existing),
+                    'duplicate' => true,
+                ];
+            }
+        }
+
+        $fileRecord = $this->fileMetadataService->createRecord(
+            $this->buildDirectUploadFileRecordData($filePath, $userId, $originalName, $fileInfo, $sha256)
+        );
+
+        return ['file' => $fileRecord, 'duplicate' => $duplicated];
+    }
+
+    private function syncDirectUploadFileRecord(File $fileRecord, string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): File
+    {
+        $existingOwnerId = (int) ($fileRecord->user_id ?? 0);
+        if ($existingOwnerId > 0 && $existingOwnerId !== $userId) {
+            throw new FileOwnershipConflictException('File ownership conflict detected for direct upload');
+        }
+
+        $recordData = $this->buildDirectUploadFileRecordData($filePath, $userId, $originalName, $fileInfo, $sha256);
+        $fileRecord->user_id = $userId;
+        $fileRecord->original_name = $fileRecord->original_name ?: $recordData['original_name'];
+        $fileRecord->mime_type = $fileRecord->mime_type ?: $recordData['mime_type'];
+        $fileRecord->size = (int) ($fileRecord->size ?? 0) > 0 ? $fileRecord->size : $recordData['size'];
+        $fileRecord->reference_count = (int) ($fileRecord->reference_count ?? 0) > 0 ? $fileRecord->reference_count : 1;
+        if (!empty($recordData['sha256']) && empty($fileRecord->sha256)) {
+            $fileRecord->sha256 = $recordData['sha256'];
+        }
+        $fileRecord->save();
+
+        return $fileRecord;
+    }
+
+    private function buildDirectUploadFileRecordData(string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): array
+    {
+        $recordData = [
+            'file_path' => $filePath,
+            'mime_type' => $fileInfo['mime_type'] ?? null,
+            'size' => (int) ($fileInfo['size'] ?? 0),
+            'original_name' => $originalName,
+            'user_id' => $userId,
+            'reference_count' => 1,
+        ];
+
+        if ($sha256) {
+            $recordData['sha256'] = $sha256;
+        }
+
+        return $recordData;
+    }
+
+    private function persistMultipartOwnership(string $filePath, int $userId, ?array $fileInfo = null, ?string $sha256 = null): bool
     {
         if ($userId <= 0) {
             return false;
@@ -989,15 +1116,19 @@ class FileUploadController
 
         $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
         if ($fileRecord) {
-            return $this->syncExistingMultipartOwnership($fileRecord, $filePath, $userId, $fileInfo);
+            return $this->syncExistingMultipartOwnership($fileRecord, $filePath, $userId, $fileInfo, $sha256);
         }
 
-        $this->fileMetadataService->createRecord($this->buildMultipartFileRecordData($filePath, $userId, $fileInfo));
+        if (!$sha256) {
+            throw new \InvalidArgumentException('Missing sha256 for multipart upload ownership persistence');
+        }
+
+        $this->fileMetadataService->createRecord($this->buildMultipartFileRecordData($filePath, $userId, $fileInfo, $sha256));
 
         return true;
     }
 
-    private function syncExistingMultipartOwnership(File $fileRecord, string $filePath, int $userId, ?array $fileInfo = null): bool
+    private function syncExistingMultipartOwnership(File $fileRecord, string $filePath, int $userId, ?array $fileInfo = null, ?string $sha256 = null): bool
     {
         $existingOwnerId = (int) ($fileRecord->user_id ?? 0);
         if ($existingOwnerId > 0 && $existingOwnerId !== $userId) {
@@ -1008,20 +1139,23 @@ class FileUploadController
             return true;
         }
 
-        $recordData = $this->buildMultipartFileRecordData($filePath, $userId, $fileInfo);
+        $recordData = $this->buildMultipartFileRecordData($filePath, $userId, $fileInfo, $sha256);
         $fileRecord->user_id = $userId;
         $fileRecord->original_name = $fileRecord->original_name ?: $recordData['original_name'];
         $fileRecord->mime_type = $fileRecord->mime_type ?: $recordData['mime_type'];
         $fileRecord->size = (int) ($fileRecord->size ?? 0) > 0 ? $fileRecord->size : $recordData['size'];
         $fileRecord->reference_count = (int) ($fileRecord->reference_count ?? 0) > 0 ? $fileRecord->reference_count : 1;
+        if (!empty($recordData['sha256']) && empty($fileRecord->sha256)) {
+            $fileRecord->sha256 = $recordData['sha256'];
+        }
         $fileRecord->save();
 
         return true;
     }
 
-    private function buildMultipartFileRecordData(string $filePath, int $userId, ?array $fileInfo = null): array
+    private function buildMultipartFileRecordData(string $filePath, int $userId, ?array $fileInfo = null, ?string $sha256 = null): array
     {
-        return [
+        $recordData = [
             'file_path' => $filePath,
             'mime_type' => $fileInfo['mime_type'] ?? null,
             'size' => isset($fileInfo['size']) ? (int) $fileInfo['size'] : 0,
@@ -1029,6 +1163,12 @@ class FileUploadController
             'user_id' => $userId,
             'reference_count' => 1,
         ];
+
+        if ($sha256) {
+            $recordData['sha256'] = $sha256;
+        }
+
+        return $recordData;
     }
 
     private function authorizeMultipartUpload(Response $response, array $user, string $uploadId, string $filePath): ?Response

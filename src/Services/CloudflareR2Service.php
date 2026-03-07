@@ -181,23 +181,34 @@ class CloudflareR2Service
      * @param int $expiresIn 过期秒数（默认 600，最大 3600）
      * @return array{url:string,method:string,headers:array,expires_in:int,expires_at:string}
      */
-    public function generateUploadPresignedUrl(string $filePath, string $contentType, int $expiresIn = 600): array
+    public function generateUploadPresignedUrl(string $filePath, string $contentType, int $expiresIn = 600, array $metadata = []): array
     {
         $expiresIn = max(60, min($expiresIn, 3600));
         try {
-            $command = $this->s3Client->getCommand('PutObject', [
+            $normalizedMetadata = $this->normalizeObjectMetadata($metadata);
+            $commandParams = [
                 'Bucket' => $this->bucketName,
                 'Key' => $filePath,
                 'ContentType' => $contentType
-            ]);
+            ];
+            if ($normalizedMetadata !== []) {
+                $commandParams['Metadata'] = $normalizedMetadata;
+            }
+
+            $command = $this->s3Client->getCommand('PutObject', $commandParams);
             $request = $this->s3Client->createPresignedRequest($command, "+{$expiresIn} seconds");
+            $headers = [
+                // 预签名请求必须保持与签名时一致的 Content-Type
+                'Content-Type' => $contentType
+            ];
+            foreach ($normalizedMetadata as $key => $value) {
+                $headers['x-amz-meta-' . $key] = $value;
+            }
+
             return [
                 'url' => (string)$request->getUri(),
                 'method' => 'PUT',
-                'headers' => [
-                    // 预签名请求必须保持与签名时一致的 Content-Type
-                    'Content-Type' => $contentType
-                ],
+                'headers' => $headers,
                 'expires_in' => $expiresIn,
                 'expires_at' => date('Y-m-d H:i:s', time() + $expiresIn)
             ];
@@ -625,6 +636,27 @@ class CloudflareR2Service
         }
 
         return rtrim($base, '/');
+    }
+
+    private function normalizeObjectMetadata(array $metadata): array
+    {
+        $normalized = [];
+        foreach ($metadata as $key => $value) {
+            if (!is_scalar($value) || $value === '') {
+                continue;
+            }
+
+            $normalizedKey = strtolower((string) $key);
+            $normalizedKey = preg_replace('/[^a-z0-9_-]/', '_', $normalizedKey) ?? '';
+            $normalizedKey = trim($normalizedKey, '_');
+            if ($normalizedKey === '') {
+                continue;
+            }
+
+            $normalized[$normalizedKey] = (string) $value;
+        }
+
+        return $normalized;
     }
 
     /**

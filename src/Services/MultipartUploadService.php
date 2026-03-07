@@ -16,12 +16,13 @@ class MultipartUploadService
         private ?ErrorLogService $errorLogService = null
     ) {}
 
-    public function registerUpload(string $uploadId, string $filePath, int $userId, int $ttlSeconds = 86400): MultipartUpload
+    public function registerUpload(string $uploadId, string $filePath, int $userId, ?string $sha256 = null, int $ttlSeconds = 86400): MultipartUpload
     {
         $upload = MultipartUpload::updateOrCreate(
             ['upload_id' => $uploadId],
             [
                 'file_path' => $filePath,
+                'sha256' => $sha256,
                 'user_id' => $userId,
                 'expires_at' => date('Y-m-d H:i:s', time() + max(60, $ttlSeconds)),
             ]
@@ -30,6 +31,7 @@ class MultipartUploadService
         $this->logAudit('multipart_upload_registered', [
             'upload_id' => $uploadId,
             'file_path' => $filePath,
+            'sha256' => $sha256,
             'user_id' => $userId,
             'ttl_seconds' => max(60, $ttlSeconds),
         ]);
