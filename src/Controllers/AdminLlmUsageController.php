@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use PDO;
@@ -15,6 +16,7 @@ class AdminLlmUsageController
     public function __construct(
         private PDO $db,
         private AuthService $authService,
+        private AuditLogService $auditLogService,
         private ?ErrorLogService $errorLogService = null
     ) {
     }
@@ -124,6 +126,15 @@ class AdminLlmUsageController
 
             $summary = $this->fetchSummary();
 
+            $this->logAudit('admin_llm_usage_summary_viewed', $admin, $request, [
+                'data' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'search' => $search !== '',
+                    'sort' => $sort,
+                ],
+            ]);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => [
@@ -139,6 +150,9 @@ class AdminLlmUsageController
             ]);
         } catch (\Throwable $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* ignore */ }
+            $this->logAudit('admin_llm_usage_summary_failed', $admin ?? null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -174,6 +188,13 @@ class AdminLlmUsageController
             $insights = $this->buildInsights($trends, $distributions, $rangeStats);
             $recent = $this->fetchRecentConversations($recentLimit);
 
+            $this->logAudit('admin_llm_usage_analytics_viewed', $admin, $request, [
+                'data' => [
+                    'days' => $days,
+                    'recent_limit' => $recentLimit,
+                ],
+            ]);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => [
@@ -187,6 +208,9 @@ class AdminLlmUsageController
             ]);
         } catch (\Throwable $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* ignore */ }
+            $this->logAudit('admin_llm_usage_analytics_failed', $admin ?? null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -223,12 +247,20 @@ class AdminLlmUsageController
             $log['response_raw'] = $this->decodeMaybeJson($log['response_raw'] ?? null);
             $log['prompt'] = $this->decodeMaybeJson($log['prompt'] ?? null);
 
+            $this->logAudit('admin_llm_usage_log_viewed', $admin, $request, [
+                'record_id' => $id,
+                'data' => ['request_id' => $log['request_id'] ?? null],
+            ]);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $log,
             ]);
         } catch (\Throwable $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* ignore */ }
+            $this->logAudit('admin_llm_usage_log_view_failed', $admin ?? null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -240,6 +272,23 @@ class AdminLlmUsageController
     {
         $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE));
         return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+    }
+
+    private function logAudit(string $action, ?array $admin, Request $request, array $context = [], string $status = 'success'): void
+    {
+        try {
+            $adminId = isset($admin['id']) && is_numeric((string)$admin['id']) ? (int)$admin['id'] : null;
+            $this->auditLogService->logAdminOperation($action, $adminId, 'admin_llm_usage', array_merge([
+                'record_id' => $context['record_id'] ?? null,
+                'request_id' => $request->getAttribute('request_id'),
+                'request_method' => $request->getMethod(),
+                'endpoint' => (string)$request->getUri()->getPath(),
+                'status' => $status,
+                'request_data' => $context['data'] ?? null,
+            ], $context));
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
+        }
     }
 
     private function fetchSummary(): array

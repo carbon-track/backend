@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Integration;
 
 use CarbonTrack\Controllers\AdminLlmUsageController;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use PHPUnit\Framework\TestCase;
 use PDO;
@@ -26,7 +27,11 @@ class AdminLlmUsageIntegrationTest extends TestCase
             }
         };
 
-        return new AdminLlmUsageController($pdo, $authService);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->method('log')->willReturn(true);
+        $auditLogService->method('logAdminOperation')->willReturn(true);
+
+        return new AdminLlmUsageController($pdo, $authService, $auditLogService);
     }
 
     public function testSummaryReturnsUsageAndUsers(): void

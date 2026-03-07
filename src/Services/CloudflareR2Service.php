@@ -6,6 +6,7 @@ namespace CarbonTrack\Services;
 
 use Aws\S3\S3Client;
 use Aws\Exception\AwsException;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 use Psr\Http\Message\UploadedFileInterface;
 
@@ -17,6 +18,7 @@ class CloudflareR2Service
     private string $publicUrl;
     private string $endpoint;
     private AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
     // 允许的图片类型
     private const ALLOWED_MIME_TYPES = [
@@ -42,11 +44,13 @@ class CloudflareR2Service
         string $bucketName,
         ?string $publicUrl,
         Logger $logger,
-        AuditLogService $auditLogService
+        AuditLogService $auditLogService,
+        ?ErrorLogService $errorLogService = null
     ) {
         $this->bucketName = $bucketName;
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $this->endpoint = rtrim($endpoint, "/");
 
     // 是否禁用 TLS 校验（仅用于开发/诊断）
@@ -88,6 +92,10 @@ class CloudflareR2Service
                 ]);
                 $this->logger->warning('R2 TLS certificate verification DISABLED (R2_DISABLE_TLS_VERIFY=1). Do not use in production.');
             } catch (\Throwable $e) {
+                $this->logFailure('r2_client_recreate_failed', $e, [
+                    'endpoint' => $endpoint,
+                    'bucket_name' => $bucketName,
+                ], '/internal/r2/client');
                 $this->logger->error('Failed to recreate S3Client with verify=false', ['error' => $e->getMessage()]);
             }
         }
@@ -194,6 +202,10 @@ class CloudflareR2Service
                 'expires_at' => date('Y-m-d H:i:s', time() + $expiresIn)
             ];
         } catch (AwsException $e) {
+            $this->logFailure('r2_upload_presigned_url_failed', $e, [
+                'file_path' => $filePath,
+                'content_type' => $contentType,
+            ], '/internal/r2/presign-upload');
             $this->logger->error('Failed to generate upload presigned URL', [
                 'error' => $e->getMessage(),
                 'file_path' => $filePath
@@ -228,6 +240,12 @@ class CloudflareR2Service
                 'notes' => 'Direct file upload to Cloudflare R2 (presigned PUT)'
             ]);
         } catch (\Throwable $e) {
+            $this->logFailure('r2_direct_upload_audit_failed', $e, [
+                'user_id' => $userId,
+                'entity_type' => $entityType,
+                'entity_id' => $entityId,
+                'file_path' => $fileInfo['file_path'] ?? '',
+            ], '/internal/r2/direct-upload-audit');
             $this->logger->error('Failed to log direct upload audit', [
                 'error' => $e->getMessage(),
                 'file_path' => $fileInfo['file_path'] ?? ''
@@ -318,6 +336,11 @@ class CloudflareR2Service
             ];
 
         } catch (\Exception $e) {
+            $this->logFailure('r2_file_upload_failed', $e, [
+                'file_name' => $file->getClientFilename(),
+                'file_size' => $file->getSize(),
+                'user_id' => $userId,
+            ], '/internal/r2/upload');
             $this->logger->error('Failed to upload file to R2', [
                 'error' => $e->getMessage(),
                 'file_name' => $file->getClientFilename(),
@@ -359,6 +382,10 @@ class CloudflareR2Service
             return true;
 
         } catch (AwsException $e) {
+            $this->logFailure('r2_file_delete_failed', $e, [
+                'file_path' => $filePath,
+                'user_id' => $userId,
+            ], '/internal/r2/delete');
             $this->logger->error('Failed to delete file from R2', [
                 'error' => $e->getMessage(),
                 'file_path' => $filePath,
@@ -417,6 +444,9 @@ class CloudflareR2Service
             ];
 
         } catch (AwsException $e) {
+            $this->logFailure('r2_file_info_failed', $e, [
+                'file_path' => $filePath,
+            ], '/internal/r2/file-info');
             $this->logger->error('Failed to get file info from R2', [
                 'error' => $e->getMessage(),
                 'file_path' => $filePath
@@ -442,6 +472,10 @@ class CloudflareR2Service
             return (string) $request->getUri();
 
         } catch (AwsException $e) {
+            $this->logFailure('r2_presigned_url_failed', $e, [
+                'file_path' => $filePath,
+                'expires_in' => $expiresIn,
+            ], '/internal/r2/presign-get');
             $this->logger->error('Failed to generate presigned URL', [
                 'error' => $e->getMessage(),
                 'file_path' => $filePath
@@ -753,6 +787,10 @@ class CloudflareR2Service
             return $deletedCount;
 
         } catch (AwsException $e) {
+            $this->logFailure('r2_cleanup_expired_files_failed', $e, [
+                'directory' => $directory,
+                'days_old' => $daysOld,
+            ], '/internal/r2/cleanup');
             $this->logger->error('Failed to cleanup expired files', [
                 'error' => $e->getMessage(),
                 'directory' => $directory
@@ -795,6 +833,7 @@ class CloudflareR2Service
             ];
 
         } catch (AwsException $e) {
+            $this->logFailure('r2_storage_stats_failed', $e, [], '/internal/r2/stats');
             $this->logger->error('Failed to get storage stats', [
                 'error' => $e->getMessage()
             ]);
@@ -847,6 +886,10 @@ class CloudflareR2Service
                 'count' => count($files)
             ];
         } catch (AwsException $e) {
+            $this->logFailure('r2_list_files_failed', $e, [
+                'prefix' => $prefix,
+                'limit' => $limit,
+            ], '/internal/r2/list');
             $this->logger->error('Failed to list files', ['error' => $e->getMessage(), 'prefix' => $prefix]);
             return [
                 'success' => false,
@@ -875,6 +918,11 @@ class CloudflareR2Service
                 'public_url' => $keyInfo['public_url']
             ];
         } catch (AwsException $e) {
+            $this->logFailure('r2_init_multipart_upload_failed', $e, [
+                'original_name' => $originalName,
+                'directory' => $directory,
+                'content_type' => $contentType,
+            ], '/internal/r2/multipart/init');
             $this->logger->error('Failed to init multipart upload', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Failed to init multipart upload: ' . $e->getMessage());
         }
@@ -902,6 +950,11 @@ class CloudflareR2Service
                 'headers' => []
             ];
         } catch (AwsException $e) {
+            $this->logFailure('r2_generate_multipart_part_url_failed', $e, [
+                'file_path' => $filePath,
+                'upload_id' => $uploadId,
+                'part_number' => $partNumber,
+            ], '/internal/r2/multipart/part-url');
             $this->logger->error('Failed to generate multipart part URL', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Failed to generate multipart part URL: ' . $e->getMessage());
         }
@@ -938,6 +991,11 @@ class CloudflareR2Service
                 'etag' => $result['ETag'] ?? null
             ];
         } catch (AwsException $e) {
+            $this->logFailure('r2_complete_multipart_upload_failed', $e, [
+                'file_path' => $filePath,
+                'upload_id' => $uploadId,
+                'part_count' => count($normalized),
+            ], '/internal/r2/multipart/complete');
             $this->logger->error('Failed to complete multipart upload', ['error' => $e->getMessage()]);
             throw new \RuntimeException('Failed to complete multipart upload: ' . $e->getMessage());
         }
@@ -956,6 +1014,10 @@ class CloudflareR2Service
             ]);
             return true;
         } catch (AwsException $e) {
+            $this->logFailure('r2_abort_multipart_upload_failed', $e, [
+                'file_path' => $filePath,
+                'upload_id' => $uploadId,
+            ], '/internal/r2/multipart/abort');
             $this->logger->error('Failed to abort multipart upload', ['error' => $e->getMessage()]);
             return false;
         }
@@ -976,6 +1038,7 @@ class CloudflareR2Service
             ]);
             $checks['list_objects'] = true;
         } catch (\Throwable $e) {
+            $this->logFailure('r2_diagnostics_list_objects_failed', $e, [], '/internal/r2/diagnostics/list');
             $checks['list_objects'] = false;
             $errors[] = 'ListObjects failed: ' . $e->getMessage();
         }
@@ -989,6 +1052,7 @@ class CloudflareR2Service
                 'url_length' => strlen($put['url'])
             ];
         } catch (\Throwable $e) {
+            $this->logFailure('r2_diagnostics_presign_failed', $e, [], '/internal/r2/diagnostics/presign');
             $checks['presign_put'] = false;
             $errors[] = 'Presign failed: ' . $e->getMessage();
         }
@@ -1015,6 +1079,32 @@ class CloudflareR2Service
             'errors' => $errors,
             'timestamp' => date('c')
         ];
+    }
+
+    private function logFailure(string $action, \Throwable $e, array $context, string $path): void
+    {
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'file_management',
+                'actor_type' => 'system',
+                'status' => 'failed',
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures in R2 service
+        }
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures in R2 service
+        }
     }
 }
 

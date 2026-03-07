@@ -11,6 +11,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\FileMetadataService;
+use CarbonTrack\Services\MultipartUploadService;
 use Monolog\Logger;
 
 class FileUploadController
@@ -21,6 +22,7 @@ class FileUploadController
     private Logger $logger;
     private ErrorLogService $errorLogService;
     private FileMetadataService $fileMetadataService;
+    private MultipartUploadService $multipartUploadService;
 
     public function __construct(
         CloudflareR2Service $r2Service,
@@ -28,7 +30,8 @@ class FileUploadController
         AuditLogService $auditLogService,
         Logger $logger,
     ErrorLogService $errorLogService,
-    FileMetadataService $fileMetadataService
+    FileMetadataService $fileMetadataService,
+    MultipartUploadService $multipartUploadService
     ) {
         $this->r2Service = $r2Service;
         $this->authService = $authService;
@@ -36,6 +39,7 @@ class FileUploadController
         $this->logger = $logger;
         $this->errorLogService = $errorLogService;
     $this->fileMetadataService = $fileMetadataService;
+    $this->multipartUploadService = $multipartUploadService;
     }
 
     /**
@@ -444,12 +448,20 @@ class FileUploadController
             // URL解码文件路径
             $filePath = urldecode($filePath);
 
-            // 检查文件是否存在
-            if (!$this->r2Service->fileExists($filePath)) {
+            $fileInfo = $this->r2Service->getFileInfo($filePath);
+            if (!$fileInfo) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'File not found'
                 ], 404);
+            }
+
+            if (!$this->canDeleteFile($user, $filePath, $fileInfo)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'You do not have permission to delete this file',
+                    'code' => 'FILE_ACCESS_DENIED'
+                ], 403);
             }
 
             // 删除文件
@@ -511,17 +523,25 @@ class FileUploadController
             // 获取文件信息
             $fileInfo = $this->r2Service->getFileInfo($filePath);
 
-            if ($fileInfo) {
-                return $this->jsonResponse($response, [
-                    'success' => true,
-                    'data' => $fileInfo
-                ]);
-            } else {
+            if (!$fileInfo) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'File not found'
                 ], 404);
             }
+
+            if (!$this->canReadFile($user, $filePath, $fileInfo)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'You do not have permission to access this file',
+                    'code' => 'FILE_ACCESS_DENIED'
+                ], 403);
+            }
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $fileInfo
+            ]);
 
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
@@ -563,6 +583,22 @@ class FileUploadController
 
             // URL解码文件路径
             $filePath = urldecode($filePath);
+
+            $fileInfo = $this->r2Service->getFileInfo($filePath);
+            if (!$fileInfo) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'File not found'
+                ], 404);
+            }
+
+            if (!$this->canReadFile($user, $filePath, $fileInfo)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'You do not have permission to access this file',
+                    'code' => 'FILE_ACCESS_DENIED'
+                ], 403);
+            }
 
             // 获取过期时间（默认10分钟）
             $queryParams = $request->getQueryParams();
@@ -726,6 +762,11 @@ class FileUploadController
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'MIME type not allowed'], 400);
             }
             $init = $this->r2Service->initMultipartUpload($originalName, $directory, $mimeType);
+            $this->multipartUploadService->registerUpload(
+                $init['upload_id'],
+                $init['file_path'],
+                (int) $user['id']
+            );
             return $this->jsonResponse($response, ['success' => true, 'data' => $init]);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
@@ -749,6 +790,10 @@ class FileUploadController
             $partNumber = isset($query['part_number']) ? (int)$query['part_number'] : 0;
             if ($filePath === '' || $uploadId === '' || $partNumber < 1) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
+            }
+            $multipartError = $this->authorizeMultipartUpload($response, $user, $uploadId, $filePath);
+            if ($multipartError instanceof Response) {
+                return $multipartError;
             }
             $part = $this->r2Service->generateMultipartPartUrl($filePath, $uploadId, $partNumber);
             return $this->jsonResponse($response, ['success' => true, 'data' => $part]);
@@ -775,7 +820,12 @@ class FileUploadController
             if ($filePath === '' || $uploadId === '' || !is_array($parts) || empty($parts)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
             }
+            $multipartError = $this->authorizeMultipartUpload($response, $user, $uploadId, $filePath);
+            if ($multipartError instanceof Response) {
+                return $multipartError;
+            }
             $result = $this->r2Service->completeMultipartUpload($filePath, $uploadId, $parts);
+            $this->multipartUploadService->clearUpload($uploadId);
             return $this->jsonResponse($response, ['success' => true, 'data' => $result]);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
@@ -799,7 +849,14 @@ class FileUploadController
             if ($filePath === '' || $uploadId === '') {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
             }
+            $multipartError = $this->authorizeMultipartUpload($response, $user, $uploadId, $filePath);
+            if ($multipartError instanceof Response) {
+                return $multipartError;
+            }
             $ok = $this->r2Service->abortMultipartUpload($filePath, $uploadId);
+            if ($ok) {
+                $this->multipartUploadService->clearUpload($uploadId);
+            }
             return $this->jsonResponse($response, ['success' => $ok, 'message' => $ok ? 'Aborted' : 'Abort failed']);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
@@ -848,6 +905,77 @@ class FileUploadController
         }
 
         return true;
+    }
+
+    private function canReadFile(array $user, string $filePath, ?array $fileInfo = null): bool
+    {
+        if ($this->isAdminUser($user) || $this->fileMetadataService->isPubliclyReadablePath($filePath)) {
+            return true;
+        }
+
+        return $this->isFileOwner($user, $filePath, $fileInfo);
+    }
+
+    private function canDeleteFile(array $user, string $filePath, ?array $fileInfo = null): bool
+    {
+        if ($this->isAdminUser($user)) {
+            return true;
+        }
+
+        return $this->isFileOwner($user, $filePath, $fileInfo);
+    }
+
+    private function isFileOwner(array $user, string $filePath, ?array $fileInfo = null): bool
+    {
+        $userId = isset($user['id']) ? (int) $user['id'] : 0;
+        if ($userId <= 0) {
+            return false;
+        }
+
+        $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
+        if ($fileRecord && (int) ($fileRecord->user_id ?? 0) === $userId) {
+            return true;
+        }
+
+        $fileInfo ??= $this->r2Service->getFileInfo($filePath);
+        $ownerId = (int) ($fileInfo['metadata']['uploaded_by'] ?? 0);
+
+        return $ownerId > 0 && $ownerId === $userId;
+    }
+
+    private function isAdminUser(array $user): bool
+    {
+        return !empty($user['is_admin']);
+    }
+
+    private function authorizeMultipartUpload(Response $response, array $user, string $uploadId, string $filePath): ?Response
+    {
+        $upload = $this->multipartUploadService->findActiveUpload($uploadId);
+        if (!$upload) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Multipart upload not found',
+                'code' => 'MULTIPART_UPLOAD_NOT_FOUND'
+            ], 404);
+        }
+
+        if ($upload->file_path !== $filePath) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'You do not have permission to access this multipart upload',
+                'code' => 'MULTIPART_ACCESS_DENIED'
+            ], 403);
+        }
+
+        if (!$this->isAdminUser($user) && (int) $upload->user_id !== (int) ($user['id'] ?? 0)) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'You do not have permission to access this multipart upload',
+                'code' => 'MULTIPART_ACCESS_DENIED'
+            ], 403);
+        }
+
+        return null;
     }
 
     /**

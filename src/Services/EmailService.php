@@ -3,6 +3,7 @@
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\Message;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 use PHPMailer\PHPMailer\PHPMailer;
 
@@ -20,6 +21,8 @@ class EmailService
     private string $supportEmail;
     private ?string $frontendUrl = null;
     private ?NotificationPreferenceService $preferenceService = null;
+    private ?AuditLogService $auditLogService = null;
+    private ?ErrorLogService $errorLogService = null;
 
     private const TAG_ACTIVITY_NAME = '{{activity_name}}';
     private const TAG_POINTS_EARNED = '{{points_earned}}';
@@ -29,6 +32,9 @@ class EmailService
     private const TAG_TOTAL_POINTS = '{{total_points}}';
     private const TAG_STATUS = '{{status}}';
     private const TAG_ADMIN_NOTES = '{{admin_notes}}';
+    private const BROADCAST_CONTENT_FORMAT_TEXT = 'text';
+    private const BROADCAST_CONTENT_FORMAT_HTML = 'html';
+    private const BROADCAST_RENDER_PROFILE_HTML = 'announcement_html_v1';
     private const DEFAULT_LAYOUT_TEMPLATE = <<<HTML
 <!DOCTYPE html>
 <html lang="en">
@@ -52,11 +58,19 @@ class EmailService
 HTML;
     private const DEFAULT_BUTTON_COLOR = '#0ea5e9';
 
-    public function __construct(array $config, Logger $logger, ?NotificationPreferenceService $preferenceService = null)
+    public function __construct(
+        array $config,
+        Logger $logger,
+        ?NotificationPreferenceService $preferenceService = null,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $this->config = $config;
         $this->logger = $logger;
         $this->preferenceService = $preferenceService;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $this->forceSimulation = $this->normalizeForceSimulation($config['force_simulation'] ?? false);
 
         // Initialize identity fields from environment first, then config, then sane defaults
@@ -167,6 +181,14 @@ HTML;
             $this->mailer->CharSet = 'UTF-8';
         } catch (\Throwable $e) {
             $this->logger->error("Mailer configuration error: {$e->getMessage()}");
+            $this->logAudit('email_service_configuration_failed', [
+                'host' => $this->config['host'] ?? null,
+                'port' => $this->config['port'] ?? null,
+            ], 'failed');
+            $this->logError($e, '/internal/email/configure', 'Mailer configuration error', [
+                'host' => $this->config['host'] ?? null,
+                'port' => $this->config['port'] ?? null,
+            ]);
             $this->mailer = null;
         }
     }
@@ -193,14 +215,32 @@ HTML;
 
                 $mailer->send();
                 $this->logger->info('Email sent successfully', ['to' => $toEmail, 'subject' => $subject]);
+                $this->logAudit('email_sent', [
+                    'to' => $toEmail,
+                    'subject' => $subject,
+                    'delivery_mode' => 'smtp',
+                ]);
                 return true;
             }
 
             $reason = $this->forceSimulation ? 'force_simulation' : 'mailer_unavailable';
             $this->logger->info('Simulated email send', ['to' => $toEmail, 'subject' => $subject, 'reason' => $reason]);
+            $this->logAudit('email_simulated', [
+                'to' => $toEmail,
+                'subject' => $subject,
+                'reason' => $reason,
+            ]);
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Message could not be sent.', ['to' => $toEmail, 'subject' => $subject, 'error' => $e->getMessage()]);
+            $this->logAudit('email_send_failed', [
+                'to' => $toEmail,
+                'subject' => $subject,
+            ], 'failed');
+            $this->logError($e, '/internal/email/send', 'Email send failed', [
+                'to' => $toEmail,
+                'subject' => $subject,
+            ]);
             $this->lastError = $e->getMessage();
             return false;
         }
@@ -229,6 +269,11 @@ HTML;
 
         if (empty($cleaned)) {
             $this->lastError = 'No deliverable email recipients provided';
+            $this->logAudit('broadcast_email_skipped_no_recipients', [
+                'subject' => $subject,
+                'category' => $category,
+                'requested_recipient_count' => count($recipients),
+            ], 'skipped');
             return false;
         }
 
@@ -261,6 +306,12 @@ HTML;
                     'subject' => $subject,
                     'category' => $category,
                 ]);
+                $this->logAudit('broadcast_email_sent', [
+                    'recipient_count' => count($cleaned),
+                    'subject' => $subject,
+                    'category' => $category,
+                    'delivery_mode' => 'smtp',
+                ]);
                 return true;
             }
 
@@ -271,11 +322,27 @@ HTML;
                 'reason' => $reason,
                 'category' => $category,
             ]);
+            $this->logAudit('broadcast_email_simulated', [
+                'recipient_count' => count($cleaned),
+                'subject' => $subject,
+                'reason' => $reason,
+                'category' => $category,
+            ]);
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Broadcast email could not be sent.', [
                 'subject' => $subject,
                 'error' => $e->getMessage()
+            ]);
+            $this->logAudit('broadcast_email_failed', [
+                'subject' => $subject,
+                'category' => $category,
+                'requested_recipient_count' => count($recipients),
+            ], 'failed');
+            $this->logError($e, '/internal/email/broadcast', 'Broadcast email send failed', [
+                'subject' => $subject,
+                'category' => $category,
+                'requested_recipient_count' => count($recipients),
             ]);
             $this->lastError = $e->getMessage();
             return false;
@@ -329,7 +396,11 @@ HTML;
         array $recipients,
         string $title,
         string $content,
-        string $priority = Message::PRIORITY_NORMAL
+        string $priority = Message::PRIORITY_NORMAL,
+        string $contentFormat = self::BROADCAST_CONTENT_FORMAT_TEXT,
+        ?string $renderProfile = null,
+        ?int $renderVersion = null,
+        ?string $sourceKind = null
     ): bool {
         if (empty($recipients)) {
             $this->lastError = 'No deliverable email recipients provided';
@@ -347,13 +418,14 @@ HTML;
             $contentHtml .= '<p style="margin:0 0 16px 0;color:#dc2626;font-weight:600;">' . $this->esc($priorityNotice) . '</p>';
         }
 
+        $leadIn = $this->esc($this->appName) . ' has published a new announcement';
         $contentHtml .= '<p style="margin:0 0 12px 0;">'
-            . $this->esc($this->appName)
-            . ' has published a new announcement:</p>';
+            . $leadIn
+            . ':</p>';
 
         $contentHtml .= '<div style="margin:16px 0;padding:16px;background:#f8fafc;border-radius:12px;">'
             . '<h2 style="margin:0 0 12px 0;font-size:18px;color:#0f172a;">' . $this->esc($title) . '</h2>'
-            . $this->renderMessageContentHtml($content)
+            . $this->renderAnnouncementContentHtml($content, $contentFormat, $renderProfile)
             . '</div>';
 
         $contentHtml .= '<p style="margin:12px 0 0 0;">You can review the announcement in your inbox at any time.</p>';
@@ -544,6 +616,37 @@ HTML;
         return implode('', $htmlSegments);
     }
 
+    private function renderAnnouncementContentHtml(
+        string $content,
+        string $contentFormat = self::BROADCAST_CONTENT_FORMAT_TEXT,
+        ?string $renderProfile = null
+    ): string {
+        $normalizedFormat = $this->normalizeBroadcastContentFormat($contentFormat);
+        if ($normalizedFormat !== self::BROADCAST_CONTENT_FORMAT_HTML) {
+            return $this->renderMessageContentHtml($content);
+        }
+
+        $normalizedProfile = trim((string) ($renderProfile ?? self::BROADCAST_RENDER_PROFILE_HTML));
+        if ($normalizedProfile !== self::BROADCAST_RENDER_PROFILE_HTML) {
+            return $this->renderMessageContentHtml(strip_tags($content));
+        }
+
+        $normalizedContent = trim($content);
+        if ($normalizedContent === '') {
+            return $this->renderMessageContentHtml('');
+        }
+
+        return $normalizedContent;
+    }
+
+    private function normalizeBroadcastContentFormat(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        return $normalized === self::BROADCAST_CONTENT_FORMAT_HTML
+            ? self::BROADCAST_CONTENT_FORMAT_HTML
+            : self::BROADCAST_CONTENT_FORMAT_TEXT;
+    }
+
     private function buildPriorityNoticeText(string $priority): string
     {
         $normalized = strtolower(trim($priority));
@@ -674,6 +777,12 @@ HTML;
                     } catch (\Throwable $logError) {
                         // ignore logging issues in shutdown context
                     }
+                    $this->logAudit('async_email_callback_failed', $context + [
+                        'execution_mode' => 'shutdown',
+                    ], 'failed');
+                    $this->logError($e, '/internal/email/async-callback', 'Async email callback failed', $context + [
+                        'execution_mode' => 'shutdown',
+                    ]);
                 }
             });
 
@@ -687,6 +796,9 @@ HTML;
             } catch (\Throwable $logError) {
                 // ignore
             }
+
+            $this->logAudit('async_email_callback_registration_failed', $context, 'failed');
+            $this->logError($e, '/internal/email/async-register', 'Failed to register async email callback', $context);
 
             return (bool) $callback(false);
         }
@@ -705,6 +817,15 @@ HTML;
                 'email' => $email,
                 'category' => $category,
                 'error' => $e->getMessage(),
+            ]);
+
+            $this->logAudit('email_preference_lookup_failed', [
+                'email' => $email,
+                'category' => $category,
+            ], 'failed');
+            $this->logError($e, '/internal/email/preferences', 'Failed to resolve notification preference', [
+                'email' => $email,
+                'category' => $category,
             ]);
 
             return true;
@@ -1138,6 +1259,39 @@ HTML;
         }
 
         return $this->sendPasswordResetLink($toEmail, $toName, $link);
+    }
+
+    private function logAudit(string $action, array $context = [], string $status = 'success'): void
+    {
+        if ($this->auditLogService === null) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'notification',
+                'actor_type' => 'system',
+                'status' => $status,
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit logging failures inside email service
+        }
+    }
+
+    private function logError(\Throwable $e, string $path, string $message, array $context = []): void
+    {
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $message] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error logging failures inside email service
+        }
     }
 }
 

@@ -102,13 +102,20 @@
       "id": "broadcast",
       "label": "Broadcast Center",
       "route": "/admin/broadcast",
-      "description": "Compose and send system broadcast messages.",
+      "description": "Compose and send system broadcast messages with plain text or safe HTML announcement previews, plus built-in AI draft assistance.",
       "keywords": [
         "broadcast",
         "announcement",
+        "html broadcast",
+        "preview announcement",
+        "ai draft",
+        "announcement ai",
         "通知",
         "公告",
-        "群发广播"
+        "群发广播",
+        "ai生成公告",
+        "html公告",
+        "预览公告"
       ]
     },
     {
@@ -231,7 +238,7 @@
     {
       "id": "broadcast",
       "label": "Send broadcast",
-      "description": "Open the broadcast composer.",
+      "description": "Open the broadcast composer with HTML-safe preview support and built-in AI drafting.",
       "routeId": "broadcast",
       "route": "/admin/broadcast",
       "mode": "shortcut",
@@ -242,7 +249,11 @@
         "broadcast",
         "群发通知",
         "发布公告",
-        "新建广播"
+        "新建广播",
+        "ai公告",
+        "ai草稿",
+        "html公告",
+        "公告预览"
       ]
     },
     {

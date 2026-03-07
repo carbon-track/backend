@@ -296,4 +296,78 @@ class AuthControllerTest extends TestCase
         $this->assertSame('/avatars/default/avatar_01.png', $result['avatar_path']);
         $this->assertSame('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png', $result['avatar_url']);
     }
+
+    public function testForgotPasswordRequiresTurnstile(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockTurnstileService->expects($this->never())->method('verify');
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $request = makeRequest('POST', '/auth/forgot-password', ['email' => 'john@example.com']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->forgotPassword($request, $response);
+        $this->assertEquals(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
+
+    public function testSendVerificationCodeRequiresTurnstile(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockTurnstileService->expects($this->never())->method('verify');
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $request = makeRequest('POST', '/auth/send-verification-code', ['email' => 'john@example.com']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->sendVerificationCode($request, $response);
+        $this->assertEquals(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
 }

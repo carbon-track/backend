@@ -113,7 +113,10 @@ final class AuthEmailVerificationTest extends TestCase
             ->method('sendVerificationCode')
             ->willReturn(true);
 
-        $request = makeRequest('POST', '/auth/send-verification-code', ['email' => 'alice@example.com']);
+        $request = makeRequest('POST', '/auth/send-verification-code', [
+            'email' => 'alice@example.com',
+            'cf_turnstile_response' => 'valid-turnstile-token'
+        ]);
         $response = $controller->sendVerificationCode($request, new Response());
 
         $this->assertSame(200, $response->getStatusCode());

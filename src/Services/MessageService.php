@@ -15,6 +15,7 @@ class MessageService
 {
     private Logger $logger;
     private AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
     private ?EmailService $emailService;
     /** @var callable|null */
     private $userResolver;
@@ -58,11 +59,12 @@ class MessageService
         'record_rejected',
     ];
 
-    public function __construct(Logger $logger, AuditLogService $auditLogService, ?EmailService $emailService = null)
+    public function __construct(Logger $logger, AuditLogService $auditLogService, ?EmailService $emailService = null, ?ErrorLogService $errorLogService = null)
     {
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
         $this->emailService = $emailService;
+        $this->errorLogService = $errorLogService;
         $this->userResolver = null;
         $scriptPath = realpath(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'email_dispatcher.php');
         $this->emailDispatcherScript = $scriptPath !== false ? $scriptPath : null;
@@ -864,6 +866,18 @@ class MessageService
 
         if (!empty($context)) {
             $payload['context'] = $context;
+            if (!empty($context['content_format'])) {
+                $payload['content_format'] = (string) $context['content_format'];
+            }
+            if (!empty($context['render_profile'])) {
+                $payload['render_profile'] = (string) $context['render_profile'];
+            }
+            if (array_key_exists('render_version', $context) && $context['render_version'] !== null) {
+                $payload['render_version'] = (int) $context['render_version'];
+            }
+            if (!empty($context['source_kind'])) {
+                $payload['source_kind'] = (string) $context['source_kind'];
+            }
         }
 
         $this->dispatchEmail('broadcast_announcement', $payload);
@@ -881,7 +895,7 @@ class MessageService
         }
 
         if (PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg') {
-            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload);
+            EmailJobRunner::run($this->emailService, $this->logger, $jobType, $payload, $this->auditLogService, $this->errorLogService);
             return;
         }
 
@@ -923,7 +937,9 @@ class MessageService
                     $this->emailService,
                     $this->logger,
                     $job['job_type'],
-                    $job['payload']
+                    $job['payload'],
+                    $this->auditLogService,
+                    $this->errorLogService
                 );
             }
             return;
@@ -943,7 +959,7 @@ class MessageService
 
         if ($this->emailDispatcherScript === null || !is_file($this->emailDispatcherScript)) {
             foreach ($jobs as $job) {
-                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload']);
+                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload'], $this->auditLogService, $this->errorLogService);
             }
             return;
         }
@@ -998,7 +1014,7 @@ class MessageService
             }
 
             foreach ($jobs as $job) {
-                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload']);
+                EmailJobRunner::run($this->emailService, $this->logger, $job['job_type'], $job['payload'], $this->auditLogService, $this->errorLogService);
             }
         }
     }

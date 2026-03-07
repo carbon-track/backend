@@ -353,6 +353,22 @@ CREATE TABLE `files` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `multipart_uploads`
+--
+
+CREATE TABLE `multipart_uploads` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `upload_id` varchar(191) NOT NULL,
+  `file_path` varchar(191) NOT NULL,
+  `user_id` bigint(20) UNSIGNED NOT NULL,
+  `expires_at` datetime DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `idempotency_records`
 --
 
@@ -833,7 +849,18 @@ ALTER TABLE `files`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `files_file_path_unique` (`file_path`),
   ADD UNIQUE KEY `uniq_files_sha256` (`sha256`),
-  ADD KEY `files_sha256_index` (`sha256`);
+  ADD KEY `files_sha256_index` (`sha256`),
+  ADD KEY `idx_files_user_id` (`user_id`);
+
+--
+-- 表的索引 `multipart_uploads`
+--
+ALTER TABLE `multipart_uploads`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_multipart_uploads_upload_id` (`upload_id`),
+  ADD KEY `idx_multipart_uploads_user_id` (`user_id`),
+  ADD KEY `idx_multipart_uploads_file_path` (`file_path`),
+  ADD KEY `idx_multipart_uploads_expires_at` (`expires_at`);
 
 --
 -- 表的索引 `idempotency_records`
@@ -1032,6 +1059,12 @@ ALTER TABLE `error_logs`
 -- 使用表AUTO_INCREMENT `files`
 --
 ALTER TABLE `files`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `multipart_uploads`
+--
+ALTER TABLE `multipart_uploads`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --

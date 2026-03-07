@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\AdminUserGroupController;
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\UserGroupService;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Response;
@@ -14,10 +16,14 @@ class AdminUserGroupControllerTest extends TestCase
     public function testMetaReturnsQuotaDefinitions(): void
     {
         $service = $this->createMock(UserGroupService::class);
-        $service->method('getQuotaDefinitions')->willReturn(['llm.daily_limit', 'llm.rate_limit']);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $errorLogService = $this->createMock(ErrorLogService::class);
 
-        $controller = new AdminUserGroupController($service);
-        $request = makeRequest('GET', '/admin/users/groups/meta');
+        $service->method('getQuotaDefinitions')->willReturn(['llm.daily_limit', 'llm.rate_limit']);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+
+        $controller = new AdminUserGroupController($service, $auditLogService, $errorLogService);
+        $request = makeRequest('GET', '/admin/users/groups/meta')->withAttribute('user_id', 1);
         $response = new Response();
 
         $result = $controller->meta($request, $response);

@@ -5,6 +5,7 @@ namespace CarbonTrack\Controllers;
 
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Message\ResponseInterface as Response;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\RequestIdNormalizer;
@@ -25,6 +26,7 @@ class LogSearchController
 {
     private PDO $db;
     private AuthService $authService;
+    private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
     private const SEP_AND = ' AND ';
     private const KW_WHERE = 'WHERE ';
@@ -32,10 +34,11 @@ class LogSearchController
     private const OFFSET_PARAM = ':offset';
     private const FOUND_ROWS_SQL = 'SELECT FOUND_ROWS()';
 
-    public function __construct(PDO $db, AuthService $authService, ErrorLogService $errorLogService = null)
+    public function __construct(PDO $db, AuthService $authService, AuditLogService $auditLogService, ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->authService = $authService;
+        $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
     }
 
@@ -102,9 +105,20 @@ class LogSearchController
                 $result['llm'] = $this->searchLlm($keyword, $limit, $dateFrom, $dateTo, $llmPage, $llmFilters);
             }
 
+            $this->logAudit('admin_logs_search_viewed', $admin, $request, [
+                'data' => [
+                    'keyword_present' => $keyword !== '',
+                    'types' => $types,
+                    'limit' => $limit,
+                ],
+            ]);
+
             return $this->json($response, ['success' => true, 'data' => $result]);
         } catch (\Exception $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
+            $this->logAudit('admin_logs_search_failed', null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -114,93 +128,114 @@ class LogSearchController
          */
         public function export(Request $request, Response $response): Response
         {
-            $q = $request->getQueryParams();
-            $format = strtolower($q['format'] ?? 'csv');
-            if (!in_array($format, ['csv','ndjson'], true)) {
-                return $this->json($response, ['success'=>false,'message'=>'format must be csv or ndjson'], 400);
-            }
-            $keyword = trim((string)($q['q'] ?? ''));
-            $dateFrom = $q['date_from'] ?? null;
-            $dateTo = $q['date_to'] ?? null;
-            $types = isset($q['types']) && $q['types'] !== '' ? array_values(array_filter(array_map('trim', explode(',', $q['types'])))) : ['system','audit','error','llm'];
-            $allowed = ['system','audit','error','llm'];
-            $types = array_values(array_intersect($types, $allowed));
-            if (!$types) { $types = ['system','audit','error','llm']; }
-            $max = (int)($q['max'] ?? 1000); $max = max(1, min(10000, $max));
+            try {
+                $admin = $this->authService->getCurrentUser($request);
+                if (!$admin || !$this->authService->isAdminUser($admin)) {
+                    return $this->json($response, ['error' => 'Access denied'], 403);
+                }
 
-            // 收集每类记录（最多 max / count(types) 各自抓取 或 统一累积直到总数达到）
-            $perTypeCap = (int)ceil($max / max(1,count($types)));
+                $q = $request->getQueryParams();
+                $format = strtolower($q['format'] ?? 'csv');
+                if (!in_array($format, ['csv','ndjson'], true)) {
+                    return $this->json($response, ['success'=>false,'message'=>'format must be csv or ndjson'], 400);
+                }
+                $keyword = trim((string)($q['q'] ?? ''));
+                $dateFrom = $q['date_from'] ?? null;
+                $dateTo = $q['date_to'] ?? null;
+                $types = isset($q['types']) && $q['types'] !== '' ? array_values(array_filter(array_map('trim', explode(',', $q['types'])))) : ['system','audit','error','llm'];
+                $allowed = ['system','audit','error','llm'];
+                $types = array_values(array_intersect($types, $allowed));
+                if (!$types) { $types = ['system','audit','error','llm']; }
+                $max = (int)($q['max'] ?? 1000); $max = max(1, min(10000, $max));
 
-            $datasets = [];
-            foreach ($types as $t) {
-                $datasets[$t] = $this->exportFetch($t, $keyword, $dateFrom, $dateTo, $perTypeCap);
-            }
+                // 收集每类记录（最多 max / count(types) 各自抓取 或 统一累积直到总数达到）
+                $perTypeCap = (int)ceil($max / max(1,count($types)));
 
-            if ($format === 'csv') {
-                $filename = 'logs_export_' . date('Ymd_His') . '.csv';
-                $response = $response->withHeader('Content-Type', 'text/csv; charset=UTF-8')
-                                     ->withHeader('Content-Disposition', 'attachment; filename="' . $filename . '"');
-                $fh = fopen('php://temp','w+');
-                // 统一列: type,id,request_id,method,path,status_code,user_id,duration_ms,created_at,action,operation_category,actor_type,audit_status,error_type,error_message,error_file,error_line,error_time,actor_id,source,model,llm_status,prompt,response_id,prompt_tokens,completion_tokens,total_tokens,latency_ms
-                $header = [
-                    'type','id','request_id','method','path','status_code','user_id','duration_ms','created_at',
-                    'action','operation_category','actor_type','audit_status','error_type','error_message','error_file',
-                    'error_line','error_time','actor_id','source','model','llm_status','prompt','response_id',
-                    'prompt_tokens','completion_tokens','total_tokens','latency_ms'
-                ];
-                fputcsv($fh, $header);
+                $datasets = [];
+                foreach ($types as $t) {
+                    $datasets[$t] = $this->exportFetch($t, $keyword, $dateFrom, $dateTo, $perTypeCap);
+                }
+
+                $this->logAudit('admin_logs_exported', $admin, $request, [
+                    'data' => [
+                        'format' => $format,
+                        'types' => $types,
+                        'max' => $max,
+                    ],
+                ]);
+
+                if ($format === 'csv') {
+                    $filename = 'logs_export_' . date('Ymd_His') . '.csv';
+                    $response = $response->withHeader('Content-Type', 'text/csv; charset=UTF-8')
+                                         ->withHeader('Content-Disposition', 'attachment; filename="' . $filename . '"');
+                    $fh = fopen('php://temp','w+');
+                    // 统一列: type,id,request_id,method,path,status_code,user_id,duration_ms,created_at,action,operation_category,actor_type,audit_status,error_type,error_message,error_file,error_line,error_time,actor_id,source,model,llm_status,prompt,response_id,prompt_tokens,completion_tokens,total_tokens,latency_ms
+                    $header = [
+                        'type','id','request_id','method','path','status_code','user_id','duration_ms','created_at',
+                        'action','operation_category','actor_type','audit_status','error_type','error_message','error_file',
+                        'error_line','error_time','actor_id','source','model','llm_status','prompt','response_id',
+                        'prompt_tokens','completion_tokens','total_tokens','latency_ms'
+                    ];
+                    fputcsv($fh, $header);
+                    foreach ($datasets as $type => $rows) {
+                        foreach ($rows as $r) {
+                            fputcsv($fh, [
+                                $type,
+                                $r['id'] ?? null,
+                                $r['request_id'] ?? null,
+                                $r['method'] ?? null,
+                                $r['path'] ?? null,
+                                $r['status_code'] ?? null,
+                                $r['user_id'] ?? null,
+                                $r['duration_ms'] ?? null,
+                                $r['created_at'] ?? null,
+                                $r['action'] ?? null,
+                                $r['operation_category'] ?? null,
+                                $r['actor_type'] ?? null,
+                                $r['status'] ?? null,
+                                $r['error_type'] ?? null,
+                                $r['error_message'] ?? null,
+                                $r['error_file'] ?? null,
+                                $r['error_line'] ?? null,
+                                $r['error_time'] ?? null,
+                                $r['actor_id'] ?? null,
+                                $r['source'] ?? null,
+                                $r['model'] ?? null,
+                                $r['status'] ?? null,
+                                $r['prompt'] ?? null,
+                                $r['response_id'] ?? null,
+                                $r['prompt_tokens'] ?? null,
+                                $r['completion_tokens'] ?? null,
+                                $r['total_tokens'] ?? null,
+                                $r['latency_ms'] ?? null,
+                            ]);
+                        }
+                    }
+                    rewind($fh);
+                    $csv = stream_get_contents($fh) ?: '';
+                    fclose($fh);
+                    $response->getBody()->write($csv);
+                    return $response;
+                }
+
+                // NDJSON
+                $response = $response->withHeader('Content-Type', 'application/x-ndjson')
+                                     ->withHeader('Content-Disposition', 'attachment; filename="logs_export_' . date('Ymd_His') . '.ndjson"');
+                $body = $response->getBody();
                 foreach ($datasets as $type => $rows) {
                     foreach ($rows as $r) {
-                        fputcsv($fh, [
-                            $type,
-                            $r['id'] ?? null,
-                            $r['request_id'] ?? null,
-                            $r['method'] ?? null,
-                            $r['path'] ?? null,
-                            $r['status_code'] ?? null,
-                            $r['user_id'] ?? null,
-                            $r['duration_ms'] ?? null,
-                            $r['created_at'] ?? null,
-                            $r['action'] ?? null,
-                            $r['operation_category'] ?? null,
-                            $r['actor_type'] ?? null,
-                            $r['status'] ?? null,
-                            $r['error_type'] ?? null,
-                            $r['error_message'] ?? null,
-                            $r['error_file'] ?? null,
-                            $r['error_line'] ?? null,
-                            $r['error_time'] ?? null,
-                            $r['actor_id'] ?? null,
-                            $r['source'] ?? null,
-                            $r['model'] ?? null,
-                            $r['status'] ?? null,
-                            $r['prompt'] ?? null,
-                            $r['response_id'] ?? null,
-                            $r['prompt_tokens'] ?? null,
-                            $r['completion_tokens'] ?? null,
-                            $r['total_tokens'] ?? null,
-                            $r['latency_ms'] ?? null,
-                        ]);
+                        $r['type'] = $type;
+                        $body->write(json_encode($r, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
                     }
                 }
-                rewind($fh);
-                $csv = stream_get_contents($fh) ?: '';
-                fclose($fh);
-                $response->getBody()->write($csv);
                 return $response;
+            } catch (\Throwable $e) {
+                try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
+                $this->logAudit('admin_logs_export_failed', null, $request, [
+                    'data' => ['error' => $e->getMessage()],
+                ], 'failed');
+                return $this->json($response, ['error' => 'Internal server error'], 500);
             }
-
-            // NDJSON
-            $response = $response->withHeader('Content-Type', 'application/x-ndjson')
-                                 ->withHeader('Content-Disposition', 'attachment; filename="logs_export_' . date('Ymd_His') . '.ndjson"');
-            $body = $response->getBody();
-            foreach ($datasets as $type => $rows) {
-                foreach ($rows as $r) {
-                    $r['type'] = $type;
-                    $body->write(json_encode($r, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
-                }
-            }
-            return $response;
         }
 
         /**
@@ -208,22 +243,56 @@ class LogSearchController
          */
         public function related(Request $request, Response $response): Response
         {
-            $q = $request->getQueryParams();
-            $rid = RequestIdNormalizer::normalize($q['request_id'] ?? null);
-            if ($rid === null) {
-                return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
+            try {
+                $admin = $this->authService->getCurrentUser($request);
+                if (!$admin || !$this->authService->isAdminUser($admin)) {
+                    return $this->json($response, ['error' => 'Access denied'], 403);
+                }
+
+                $q = $request->getQueryParams();
+                $rid = RequestIdNormalizer::normalize($q['request_id'] ?? null);
+                if ($rid === null) {
+                    return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
+                }
+                $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
+                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
+                $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
+                $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
+
+                $this->logAudit('admin_logs_related_viewed', $admin, $request, [
+                    'data' => ['request_id' => $rid],
+                ]);
+
+                return $this->json($response, ['success'=>true,'data'=>[
+                    'request_id' => $rid,
+                    'system' => $system,
+                    'audit' => $audit,
+                    'error' => $error,
+                    'llm' => $llm
+                ]]);
+            } catch (\Throwable $e) {
+                try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
+                $this->logAudit('admin_logs_related_failed', null, $request, [
+                    'data' => ['error' => $e->getMessage()],
+                ], 'failed');
+                return $this->json($response, ['error' => 'Internal server error'], 500);
             }
-            $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
-            $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
-            $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
-            $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
-            return $this->json($response, ['success'=>true,'data'=>[
-                'request_id' => $rid,
-                'system' => $system,
-                'audit' => $audit,
-                'error' => $error,
-                'llm' => $llm
-            ]]);
+        }
+
+        private function logAudit(string $action, ?array $admin, Request $request, array $context = [], string $status = 'success'): void
+        {
+            try {
+                $adminId = isset($admin['id']) && is_numeric((string)$admin['id']) ? (int)$admin['id'] : null;
+                $this->auditLogService->logAdminOperation($action, $adminId, 'log_search', array_merge([
+                    'request_id' => $request->getAttribute('request_id'),
+                    'request_method' => $request->getMethod(),
+                    'endpoint' => (string)$request->getUri()->getPath(),
+                    'status' => $status,
+                    'request_data' => $context['data'] ?? null,
+                ], $context));
+            } catch (\Throwable $ignore) {
+                // 审计日志失败不阻断主流程
+            }
         }
 
         private function fetchByRequestId(string $table, string $rid, array $columns): array

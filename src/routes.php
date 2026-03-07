@@ -118,9 +118,6 @@ return function (App $app) {
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);
             $users->get('/me/activities', [UserController::class, 'getRecentActivities']);
-            $users->get(PATTERN_ID_NUMERIC, [UserController::class, 'getUser']);
-            $users->put(PATTERN_ID_NUMERIC, [UserController::class, 'updateUser']);
-            $users->delete(PATTERN_ID_NUMERIC, [UserController::class, 'deleteUser']);
         })->add(AuthMiddleware::class);
     };
 
@@ -217,6 +214,7 @@ return function (App $app) {
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
+            $admin->post('/ai/announcement-drafts', [AdminAiController::class, 'generateAnnouncementDraft']);
             $admin->get('/ai/diagnostics', [AdminAiController::class, 'diagnostics']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);

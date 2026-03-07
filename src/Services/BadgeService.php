@@ -7,6 +7,7 @@ namespace CarbonTrack\Services;
 use CarbonTrack\Models\AchievementBadge;
 use CarbonTrack\Models\UserBadge;
 use CarbonTrack\Models\User;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Illuminate\Database\ConnectionInterface;
 use PDO;
 use DateTimeImmutable;
@@ -27,6 +28,7 @@ class BadgeService
     private AuditLogService $auditLogService;
     private Logger $logger;
     private ?CheckinService $checkinService;
+    private ?ErrorLogService $errorLogService;
 
     /** @var array<string,bool> */
     private array $supportedOperators = ['>=' => true, '>' => true, '<=' => true, '<' => true, '==' => true, '!=' => true];
@@ -36,13 +38,15 @@ class BadgeService
         MessageService $messageService,
         AuditLogService $auditLogService,
         Logger $logger,
-        ?CheckinService $checkinService = null
+        ?CheckinService $checkinService = null,
+        ?ErrorLogService $errorLogService = null
     ) {
         $this->connection = $connection;
         $this->messageService = $messageService;
         $this->auditLogService = $auditLogService;
         $this->logger = $logger;
         $this->checkinService = $checkinService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -318,6 +322,7 @@ class BadgeService
             $metrics['total_carbon_saved'] = (float) ($row['carbon_saved'] ?? 0);
             $metrics['total_points_earned'] = (float) ($row['points_earned'] ?? 0);
         } catch (\Throwable $e) {
+            $this->logFailure('badge_metrics_compile_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/carbon');
             $this->logger->warning('Failed to compile carbon metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
         
@@ -328,6 +333,7 @@ class BadgeService
                 $metrics['current_streak'] = (int) ($streakStats['current_streak_days'] ?? 0);
                 $metrics['longest_streak'] = (int) ($streakStats['longest_streak_days'] ?? 0);
             } catch (\Throwable $e) {
+                $this->logFailure('badge_metrics_streak_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/streak');
                 $this->logger->warning('Failed to get streak stats for metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
             }
         }
@@ -344,6 +350,7 @@ class BadgeService
                 }
             }
         } catch (\Throwable $e) {
+            $this->logFailure('badge_metrics_registration_days_sql_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/registration-days-sql');
             $this->logger->debug('Failed to compute registration days via SQL', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
 
@@ -370,11 +377,13 @@ class BadgeService
                             $metrics['days_since_registration'] = $phpDays;
                         }
                     } catch (\Throwable $dtEx) {
+                        $this->logFailure('badge_metrics_registration_days_php_failed', $dtEx, ['user_id' => $userId], '/internal/badges/metrics/registration-days-php');
                         $this->logger->debug('Failed to compute registration days via PHP fallback', ['user_id' => $userId, 'error' => $dtEx->getMessage()]);
                     }
                 }
             }
         } catch (\Throwable $e) {
+            $this->logFailure('badge_metrics_user_profile_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/user-profile');
             $this->logger->warning('Failed to read user profile for metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
         }
 
@@ -575,6 +584,11 @@ class BadgeService
                 relatedEntityId: (int) $badge->id
             );
         } catch (\Throwable $e) {
+            $this->logFailure('badge_message_send_failed', $e, [
+                'user_id' => (int) $user->id,
+                'badge_id' => (int) $badge->id,
+                'source' => $source,
+            ], '/internal/badges/messages');
             $this->logger->error('Failed to send badge message', ['user_id' => $user->id, 'badge_id' => $badge->id, 'error' => $e->getMessage()]);
         }
     }
@@ -621,5 +635,31 @@ class BadgeService
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
+    }
+
+    private function logFailure(string $action, \Throwable $e, array $context, string $path): void
+    {
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'badge_management',
+                'actor_type' => 'system',
+                'status' => 'failed',
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures in badge service
+        }
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures in badge service
+        }
     }
 }

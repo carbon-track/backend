@@ -379,14 +379,13 @@ class AuthController
                 ], 400);
             }
 
-            if (!empty($data['cf_turnstile_response'])) {
-                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
-                    return $this->jsonResponse($response, [
-                        'success' => false,
-                        'message' => 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED'
-                    ], 400);
-                }
+            if (empty($data['cf_turnstile_response'])
+                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Turnstile verification failed',
+                    'code' => 'TURNSTILE_FAILED'
+                ], 400);
             }
 
             $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_last_sent_at, verification_send_count FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1');
@@ -642,7 +641,7 @@ class AuthController
     public function forgotPassword(Request $request, Response $response): Response
     {
         try {
-            $data = $request->getParsedBody();
+            $data = $request->getParsedBody() ?? [];
             if (empty($data['email'])) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -650,14 +649,13 @@ class AuthController
                     'code' => 'MISSING_EMAIL'
                 ], 400);
             }
-            if (!empty($data['cf_turnstile_response'])) {
-                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
-                    return $this->jsonResponse($response, [
-                        'success' => false,
-                        'message' => 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED'
-                    ], 400);
-                }
+            if (empty($data['cf_turnstile_response'])
+                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Turnstile verification failed',
+                    'code' => 'TURNSTILE_FAILED'
+                ], 400);
             }
             $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL');
             $stmt->execute([$data['email']]);

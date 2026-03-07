@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -15,12 +16,22 @@ class AuthService
     private string $jwtAlgorithm;
     private int $jwtExpiration;
     private PDO $db;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(string $jwtSecret, string $jwtAlgorithm = 'HS256', int $jwtExpiration = 86400)
+    public function __construct(
+        string $jwtSecret,
+        string $jwtAlgorithm = 'HS256',
+        int $jwtExpiration = 86400,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $this->jwtSecret = $jwtSecret;
         $this->jwtAlgorithm = $jwtAlgorithm;
         $this->jwtExpiration = $jwtExpiration;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
     }
 
     public function setDatabase(PDO $db): void
@@ -364,6 +375,16 @@ class AuthService
             ");
             $stmt->execute([$username, $ip, $success ? 1 : 0]);
         } catch (\Exception $e) {
+            $this->logAudit('auth_login_attempt_record_failed', [
+                'username' => $username,
+                'ip_address' => $ip,
+                'success' => $success,
+            ], 'failed');
+            $this->logError($e, '/internal/auth/login-attempts', 'Failed to record login attempt', [
+                'username' => $username,
+                'ip_address' => $ip,
+                'success' => $success,
+            ]);
             // 记录失败不应该影响主要流程
         }
     }
@@ -391,8 +412,26 @@ class AuthService
             $failedAttempts = $stmt->fetchColumn();
             
             // 超过5次失败尝试则锁定
-            return $failedAttempts >= 5;
+            $isLocked = $failedAttempts >= 5;
+            if ($isLocked) {
+                $this->logAudit('auth_account_locked', [
+                    'username' => $username,
+                    'ip_address' => $ip,
+                    'failed_attempts' => (int) $failedAttempts,
+                    'window_minutes' => 15,
+                ]);
+            }
+
+            return $isLocked;
         } catch (\Exception $e) {
+            $this->logAudit('auth_lock_status_check_failed', [
+                'username' => $username,
+                'ip_address' => $ip,
+            ], 'failed');
+            $this->logError($e, '/internal/auth/lock-status', 'Failed to check account lock status', [
+                'username' => $username,
+                'ip_address' => $ip,
+            ]);
             return false;
         }
     }
@@ -412,7 +451,20 @@ class AuthService
                 WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)
             ");
             $stmt->execute();
+            $deletedCount = $stmt->rowCount();
+            if ($deletedCount > 0) {
+                $this->logAudit('auth_login_attempts_cleanup_completed', [
+                    'deleted_count' => $deletedCount,
+                    'retention_hours' => 24,
+                ]);
+            }
         } catch (\Exception $e) {
+            $this->logAudit('auth_login_attempts_cleanup_failed', [
+                'retention_hours' => 24,
+            ], 'failed');
+            $this->logError($e, '/internal/auth/login-attempts/cleanup', 'Failed to cleanup login attempts', [
+                'retention_hours' => 24,
+            ]);
             // 清理失败不应该影响主要流程
         }
     }
@@ -455,6 +507,39 @@ class AuthService
         }
         
         return false;
+    }
+
+    private function logAudit(string $action, array $context = [], string $status = 'success'): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'authentication',
+                'actor_type' => 'system',
+                'status' => $status,
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures in auth helper service
+        }
+    }
+
+    private function logError(\Throwable $e, string $path, string $message, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $message] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures in auth helper service
+        }
     }
 }
 

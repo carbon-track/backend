@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
@@ -305,6 +307,61 @@ class EmailServiceTest extends TestCase
         );
     }
 
+    public function testSendAnnouncementBroadcastDoesNotExposeInternalMetadataInVisibleCopy(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'CarbonTrack',
+            'force_simulation' => true,
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $handler = new TestHandler();
+        $logger = new Logger('email-service-announcement-visible-copy');
+        $logger->pushHandler($handler);
+
+        $service = new class($config, $logger, null) extends EmailService {
+            public ?array $capturedBroadcast = null;
+
+            public function sendBroadcastEmail(array $recipients, string $subject, string $bodyHtml, string $bodyText = '', ?string $category = null): bool
+            {
+                $this->capturedBroadcast = [
+                    'recipients' => $recipients,
+                    'subject' => $subject,
+                    'bodyHtml' => $bodyHtml,
+                    'bodyText' => $bodyText,
+                    'category' => $category,
+                ];
+
+                return true;
+            }
+        };
+
+        $result = $service->sendAnnouncementBroadcast(
+            [['email' => 'allowed@example.com', 'name' => 'Allowed User']],
+            'Planned maintenance',
+            '<p>Systems will undergo maintenance tonight.</p>',
+            'high',
+            'html',
+            'announcement_html_v1',
+            1,
+            'admin_broadcast'
+        );
+
+        $this->assertTrue($result);
+        $this->assertNotNull($service->capturedBroadcast);
+        $this->assertStringContainsString('has published a new announcement', $service->capturedBroadcast['bodyHtml']);
+        $this->assertStringNotContainsString('admin_broadcast', $service->capturedBroadcast['bodyHtml']);
+        $this->assertStringNotContainsString('render v1', $service->capturedBroadcast['bodyHtml']);
+        $this->assertStringNotContainsString('admin_broadcast', $service->capturedBroadcast['bodyText']);
+        $this->assertStringNotContainsString('render v1', $service->capturedBroadcast['bodyText']);
+    }
+
     public function testTemplateWrappersReturnSuccess(): void
     {
         $dir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ct_email_tpl_' . uniqid();
@@ -375,5 +432,95 @@ class EmailServiceTest extends TestCase
             @unlink($f);
         }
         @rmdir($dir);
+    }
+
+    public function testSendEmailSimulationWritesAuditLog(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'force_simulation' => true,
+        ];
+
+        $logger = new Logger('email-service-audit');
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                return ($payload['action'] ?? null) === 'email_simulated'
+                    && ($payload['operation_category'] ?? null) === 'notification'
+                    && ($payload['data']['to'] ?? null) === 'audit@example.com';
+            }))
+            ->willReturn(true);
+
+        $service = new EmailService($config, $logger, null, $audit, null);
+
+        $this->assertTrue($service->sendEmail('audit@example.com', 'Audit', 'Audit Subject', '<p>Body</p>', 'Body'));
+    }
+
+    public function testPreferenceLookupFailureWritesAuditAndErrorLog(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'force_simulation' => true,
+            'app_name' => 'CarbonTrack QA',
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $logger = new Logger('email-service-pref-failure');
+        $preference = new class($logger) extends NotificationPreferenceService {
+            public function __construct(Logger $logger)
+            {
+                parent::__construct($logger);
+            }
+
+            public function shouldSendEmailByEmail(string $email, string $category): bool
+            {
+                throw new \RuntimeException('preference lookup failed');
+            }
+        };
+
+        $actions = [];
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->exactly(2))
+            ->method('log')
+            ->willReturnCallback(function (array $payload) use (&$actions): bool {
+                $actions[] = $payload['action'] ?? null;
+                return true;
+            });
+
+        $error = $this->createMock(ErrorLogService::class);
+        $error->expects($this->once())
+            ->method('logException')
+            ->with(
+                $this->isInstanceOf(\Throwable::class),
+                $this->anything(),
+                $this->arrayHasKey('context_message')
+            )
+            ->willReturn(1);
+
+        $service = new EmailService($config, $logger, $preference, $audit, $error);
+
+        $this->assertTrue($service->sendMessageNotification(
+            'fallback@example.com',
+            'Fallback',
+            'Subject',
+            'Body',
+            'system'
+        ));
+
+        $this->assertContains('email_preference_lookup_failed', $actions);
+        $this->assertContains('email_simulated', $actions);
     }
 }

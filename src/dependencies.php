@@ -22,6 +22,7 @@ use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
+use CarbonTrack\Services\MultipartUploadService;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Services\FileMetadataService;
@@ -45,6 +46,7 @@ use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
@@ -184,7 +186,9 @@ $__deps_initializer = function (Container $container) {
         $authService = new AuthService(
             $_ENV['JWT_SECRET'],
             $_ENV['JWT_ALGORITHM'] ?? 'HS256',
-            (int) $jwtTtl
+            (int) $jwtTtl,
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
         
         // 设置数据库连接
@@ -195,8 +199,12 @@ $__deps_initializer = function (Container $container) {
     });
 
     // Carbon Calculator Service
-    $container->set(CarbonCalculatorService::class, function () {
-        return new CarbonCalculatorService();
+    $container->set(CarbonCalculatorService::class, function (ContainerInterface $c) {
+        return new CarbonCalculatorService(
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
     });
 
     // Cloudflare R2 Service
@@ -208,7 +216,8 @@ $__deps_initializer = function (Container $container) {
             $_ENV['R2_BUCKET_NAME'],
             $_ENV['R2_PUBLIC_URL'],
             $c->get(Logger::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -219,32 +228,47 @@ $__deps_initializer = function (Container $container) {
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
             $c->get(Logger::class),
-            $c->get(CheckinService::class)
+            $c->get(CheckinService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
     $container->set(StatisticsService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new StatisticsService($db);
+        return new StatisticsService($db, null, null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
     });
 
     $container->set(RegionService::class, function (ContainerInterface $c) {
-        return new RegionService(null, $c->get(Logger::class));
+        return new RegionService(null, $c->get(Logger::class), $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
     });
 
     $container->set(LeaderboardService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class));
+        return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class), null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
     });
 
     $container->set(CheckinService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new CheckinService($db, $c->get(Logger::class));
+        return new CheckinService(
+            $db,
+            $c->get(Logger::class),
+            null,
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
     });
 
     $container->set(StreakLeaderboardService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new StreakLeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class));
+        return new StreakLeaderboardService(
+            $db,
+            $c->get(RegionService::class),
+            $c->get(Logger::class),
+            null,
+            null,
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
     });
 
     // AI LLM client adapter (optional if API key is not configured)
@@ -362,7 +386,29 @@ $__deps_initializer = function (Container $container) {
             $c->get(LoggerInterface::class),
             $config,
             $c->get(AdminAiCommandRepository::class)->getConfig(),
-            $c->get(LlmLogService::class)
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(AdminAnnouncementAiService::class, function (ContainerInterface $c) {
+        /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
+        $llmClient = $c->get('ai.llmClient');
+
+        $config = [
+            'model' => $_ENV['LLM_API_MODEL'] ?? null,
+            'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
+            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+        ];
+
+        return new AdminAnnouncementAiService(
+            $llmClient,
+            $c->get(LoggerInterface::class),
+            $config,
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -380,7 +426,9 @@ $__deps_initializer = function (Container $container) {
             $llmClient,
             $c->get(LoggerInterface::class),
             $config,
-            $c->get(LlmLogService::class)
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -411,7 +459,7 @@ $__deps_initializer = function (Container $container) {
             'support_email' => $supportEmail,
             'frontend_url' => $frontendUrl,
             'reset_link_base' => $frontendUrl,
-        ], $c->get(Logger::class), $c->get(NotificationPreferenceService::class));
+        ], $c->get(Logger::class), $c->get(NotificationPreferenceService::class), $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
     });
 
     // Audit Log Service
@@ -446,7 +494,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(CarbonCalculatorService::class),
             $c->get(QuotaService::class),
             $c->get(LoggerInterface::class),
-            $c->get(AuthService::class)
+            $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -456,7 +506,9 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminUserGroupController::class, function (ContainerInterface $c) {
         return new AdminUserGroupController(
-            $c->get(UserGroupService::class)
+            $c->get(UserGroupService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -465,14 +517,17 @@ $__deps_initializer = function (Container $container) {
         return new MessageService(
             $c->get(Logger::class),
             $c->get(AuditLogService::class),
-            $c->get(EmailService::class)
+            $c->get(EmailService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
     // Notification preferences
     $container->set(NotificationPreferenceService::class, function (ContainerInterface $c) {
         return new NotificationPreferenceService(
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -480,7 +535,9 @@ $__deps_initializer = function (Container $container) {
     $container->set(TurnstileService::class, function (ContainerInterface $c) {
         return new TurnstileService(
             $_ENV['TURNSTILE_SECRET_KEY'] ?? '',
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -502,8 +559,14 @@ $__deps_initializer = function (Container $container) {
 
     // File Metadata Service (for deduplication)
     $container->set(FileMetadataService::class, function (ContainerInterface $c) {
-        return new FileMetadataService(
-            $c->get(Logger::class)
+        return new FileMetadataService();
+    });
+
+    $container->set(MultipartUploadService::class, function (ContainerInterface $c) {
+        return new MultipartUploadService(
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -625,7 +688,9 @@ $__deps_initializer = function (Container $container) {
     $container->set(LeaderboardController::class, function (ContainerInterface $c) {
         return new LeaderboardController(
             $c->get(LeaderboardService::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -646,6 +711,7 @@ $__deps_initializer = function (Container $container) {
         return new SystemLogController(
             $db,
             $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
         );
     });
@@ -656,6 +722,7 @@ $__deps_initializer = function (Container $container) {
         return new LogSearchController(
             $db,
             $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
         );
     });
@@ -666,6 +733,15 @@ $__deps_initializer = function (Container $container) {
         return new AdminLlmUsageController(
             $db,
             $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(StatsController::class, function (ContainerInterface $c) {
+        return new StatsController(
+            $c->get(StatisticsService::class),
+            $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
         );
     });
@@ -677,7 +753,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(Logger::class),
             $c->get(ErrorLogService::class),
-            $c->get(FileMetadataService::class)
+            $c->get(FileMetadataService::class),
+            $c->get(MultipartUploadService::class)
         );
     });
 

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Jobs;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\ErrorLogService;
 use Monolog\Logger;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Models\Message;
@@ -16,10 +19,18 @@ class EmailJobRunner
      *
      * @param array<string,mixed> $payload
      */
-    public static function run(EmailService $emailService, Logger $logger, string $jobType, array $payload): void
+    public static function run(
+        EmailService $emailService,
+        Logger $logger,
+        string $jobType,
+        array $payload,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    ): void
     {
         if ($jobType === '') {
             $logger->warning('Email job received without a job type.');
+            self::logAudit($auditLogService, 'email_job_missing_type', $jobType, $payload, 'failed');
             return;
         }
 
@@ -59,13 +70,68 @@ class EmailJobRunner
 
                 default:
                     $logger->warning('Unknown email job type received', ['job_type' => $jobType]);
+                    self::logAudit($auditLogService, 'email_job_unknown_type', $jobType, $payload, 'failed');
                     break;
             }
+
+            self::logAudit($auditLogService, 'email_job_processed', $jobType, $payload);
         } catch (\Throwable $e) {
             $logger->error('Unhandled exception while executing email job', [
                 'job_type' => $jobType,
                 'error' => $e->getMessage(),
             ]);
+            self::logAudit($auditLogService, 'email_job_failed', $jobType, $payload, 'failed', ['error' => $e->getMessage()]);
+            self::logError($errorLogService, $e, $jobType, $payload);
+        }
+    }
+
+    private static function logAudit(
+        ?AuditLogService $auditLogService,
+        string $action,
+        string $jobType,
+        array $payload,
+        string $status = 'success',
+        array $extra = []
+    ): void {
+        if (!$auditLogService) {
+            return;
+        }
+
+        try {
+            $auditLogService->logSystemEvent($action, 'email_job', [
+                'status' => $status,
+                'request_method' => 'CLI',
+                'endpoint' => '/jobs/email/' . ($jobType !== '' ? $jobType : 'unknown'),
+                'request_data' => array_merge([
+                    'job_type' => $jobType,
+                    'payload_keys' => array_keys($payload),
+                ], $extra),
+            ]);
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断任务
+        }
+    }
+
+    private static function logError(?ErrorLogService $errorLogService, \Throwable $exception, string $jobType, array $payload): void
+    {
+        if (!$errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext(
+                '/jobs/email/' . ($jobType !== '' ? $jobType : 'unknown'),
+                'CLI',
+                null,
+                [],
+                ['job_type' => $jobType, 'payload' => $payload],
+                ['PHP_SAPI' => PHP_SAPI]
+            );
+            $errorLogService->logException($exception, $request, [
+                'job_type' => $jobType,
+            ]);
+        } catch (\Throwable $ignore) {
+            // swallow secondary logging failure
         }
     }
 
@@ -213,6 +279,11 @@ class EmailJobRunner
         $title = (string) ($payload['title'] ?? '');
         $content = (string) ($payload['content'] ?? '');
         $priority = (string) ($payload['priority'] ?? Message::PRIORITY_NORMAL);
+        $context = isset($payload['context']) && is_array($payload['context']) ? $payload['context'] : [];
+        $contentFormat = (string) ($payload['content_format'] ?? ($context['content_format'] ?? 'text'));
+        $renderProfile = $payload['render_profile'] ?? ($context['render_profile'] ?? null);
+        $renderVersion = isset($payload['render_version']) ? (int) $payload['render_version'] : (($context['render_version'] ?? null) !== null ? (int) $context['render_version'] : null);
+        $sourceKind = $payload['source_kind'] ?? ($context['source_kind'] ?? null);
 
         $cleanedRecipients = [];
         foreach ($recipients as $entry) {
@@ -242,7 +313,11 @@ class EmailJobRunner
                 $cleanedRecipients,
                 $title,
                 $content,
-                $priority
+                $priority,
+                $contentFormat,
+                is_string($renderProfile) ? $renderProfile : null,
+                $renderVersion,
+                is_string($sourceKind) ? $sourceKind : null
             );
 
             if (!$sent) {

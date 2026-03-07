@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 
 class TurnstileService
@@ -11,11 +12,20 @@ class TurnstileService
     private string $secretKey;
     private Logger $logger;
     private string $verifyUrl = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(string $secretKey, Logger $logger)
+    public function __construct(
+        string $secretKey,
+        Logger $logger,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $this->secretKey = $secretKey;
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -34,6 +44,7 @@ class TurnstileService
         }
 
         if (empty($token)) {
+            $this->logAudit('turnstile_verification_missing_token', ['remote_ip' => $remoteIp], 'failed');
             return [
                 'success' => false,
                 'error' => 'missing-input-response',
@@ -73,6 +84,7 @@ class TurnstileService
             curl_close($ch);
 
             if ($curlError) {
+                $this->logFailure('turnstile_verification_network_failed', new \RuntimeException($curlError), ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
                 $this->logger->error('Turnstile verification cURL error', [
                     'error' => $curlError,
                     'token' => substr($token, 0, 20) . '...',
@@ -87,6 +99,10 @@ class TurnstileService
             }
 
             if ($httpCode !== 200) {
+                $this->logFailure('turnstile_verification_http_failed', new \RuntimeException('Unexpected HTTP status: ' . $httpCode), [
+                    'http_code' => $httpCode,
+                    'remote_ip' => $remoteIp,
+                ], '/internal/turnstile/verify');
                 $this->logger->error('Turnstile verification HTTP error', [
                     'http_code' => $httpCode,
                     'response' => $response,
@@ -104,6 +120,7 @@ class TurnstileService
             $result = json_decode($response, true);
 
             if (json_last_error() !== JSON_ERROR_NONE) {
+                $this->logFailure('turnstile_verification_decode_failed', new \RuntimeException(json_last_error_msg()), ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
                 $this->logger->error('Turnstile verification JSON decode error', [
                     'json_error' => json_last_error_msg(),
                     'response' => $response,
@@ -119,6 +136,10 @@ class TurnstileService
             }
 
             if ($result['success']) {
+                $this->logAudit('turnstile_verification_succeeded', [
+                    'remote_ip' => $remoteIp,
+                    'hostname' => $result['hostname'] ?? null,
+                ]);
                 $this->logger->info('Turnstile verification successful', [
                     'token' => substr($token, 0, 20) . '...',
                     'ip' => $remoteIp,
@@ -135,6 +156,10 @@ class TurnstileService
                 ];
             } else {
                 $errorCodes = $result['error-codes'] ?? ['unknown-error'];
+                $this->logAudit('turnstile_verification_failed', [
+                    'remote_ip' => $remoteIp,
+                    'error_codes' => $errorCodes,
+                ], 'failed');
                 $this->logger->warning('Turnstile verification failed', [
                     'error_codes' => $errorCodes,
                     'token' => substr($token, 0, 20) . '...',
@@ -150,6 +175,7 @@ class TurnstileService
             }
 
         } catch (\Exception $e) {
+            $this->logFailure('turnstile_verification_exception', $e, ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
             $this->logger->error('Turnstile verification exception', [
                 'error' => $e->getMessage(),
                 'token' => substr($token, 0, 20) . '...',
@@ -189,6 +215,41 @@ class TurnstileService
     public function isConfigured(): bool
     {
         return !empty($this->secretKey);
+    }
+
+    private function logAudit(string $action, array $context = [], string $status = 'success'): void
+    {
+        if ($this->auditLogService === null) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'security',
+                'actor_type' => 'system',
+                'status' => $status,
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures for turnstile service
+        }
+    }
+
+    private function logFailure(string $action, \Throwable $e, array $context, string $path): void
+    {
+        $this->logAudit($action, $context, 'failed');
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures for turnstile service
+        }
     }
 }
 

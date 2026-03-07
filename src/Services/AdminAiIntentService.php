@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use CarbonTrack\Services\Ai\LlmClientInterface;
 use JsonException;
 use Psr\Log\LoggerInterface;
@@ -38,7 +39,9 @@ class AdminAiIntentService
         private LoggerInterface $logger,
         array $config = [],
         ?array $commandConfig = null,
-        private ?LlmLogService $llmLogService = null
+        private ?LlmLogService $llmLogService = null,
+        private ?AuditLogService $auditLogService = null,
+        private ?ErrorLogService $errorLogService = null
     ) {
         $this->model = (string)($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float)$config['temperature'] : 0.2;
@@ -300,10 +303,32 @@ class AdminAiIntentService
                 'finish_reason' => $response['choices'][0]['finish_reason'] ?? null,
                 'usage' => $response['usage'] ?? null,
             ];
+            $this->logAudit('admin_ai_diagnostics_connectivity_checked', [
+                'actor_type' => 'admin',
+                'source' => '/admin/ai/diagnostics',
+            ], [
+                'request_data' => [
+                    'status' => 'ok',
+                    'model' => $response['model'] ?? null,
+                ],
+            ]);
         } catch (\Throwable $exception) {
             $this->logger->error('Admin AI diagnostics connectivity check failed', [
                 'exception' => $exception::class,
                 'message' => $exception->getMessage(),
+            ]);
+            $this->logAudit('admin_ai_diagnostics_connectivity_failed', [
+                'actor_type' => 'admin',
+                'source' => '/admin/ai/diagnostics',
+            ], [
+                'status' => 'failed',
+                'request_data' => ['error' => $exception->getMessage()],
+            ]);
+            $this->logError($exception, [
+                'actor_type' => 'admin',
+                'source' => '/admin/ai/diagnostics',
+            ], [
+                'perform_check' => true,
             ]);
 
             $diagnostics['connectivity'] = [
@@ -343,10 +368,32 @@ class AdminAiIntentService
                 'message' => $e->getMessage(),
             ]);
             $this->logLlmFailure($query, $logContext, $context, $startedAt, $e);
+            $this->logAudit('admin_ai_intent_service_failed', $logContext, [
+                'status' => 'failed',
+                'request_data' => [
+                    'query_length' => mb_strlen($query),
+                    'source' => $logContext['source'] ?? null,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
+            $this->logError($e, $logContext, [
+                'query' => $query,
+                'context' => $this->filterContextForLogging($context),
+            ]);
             throw new \RuntimeException('LLM_UNAVAILABLE', 0, $e);
         }
 
-        return $this->processResponse($rawResponse, $query);
+        $result = $this->processResponse($rawResponse, $query);
+        $this->logAudit('admin_ai_intent_service_succeeded', $logContext, [
+            'request_data' => [
+                'query_length' => mb_strlen($query),
+                'source' => $logContext['source'] ?? null,
+                'intent_type' => $result['intent']['type'] ?? null,
+                'model' => $rawResponse['model'] ?? $this->model,
+            ],
+        ]);
+
+        return $result;
     }
 
     private function buildTools(): array
@@ -999,6 +1046,63 @@ class AdminAiIntentService
         }
 
         return $keywords;
+    }
+
+    private function logAudit(string $action, array $logContext, array $context = []): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $actorType = $logContext['actor_type'] ?? 'admin';
+            $actorId = isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id'])
+                ? (int) $logContext['actor_id']
+                : null;
+            $payload = array_merge([
+                'request_id' => $logContext['request_id'] ?? null,
+                'endpoint' => $logContext['source'] ?? '/admin/ai/intents',
+                'request_method' => 'POST',
+                'status' => 'success',
+            ], $context);
+
+            if ($actorType === 'admin') {
+                $this->auditLogService->logAdminOperation($action, $actorId, 'admin_ai_service', $payload);
+                return;
+            }
+
+            if ($actorType === 'user') {
+                $this->auditLogService->logUserAction($actorId, $action, $payload);
+                return;
+            }
+
+            $this->auditLogService->logSystemEvent($action, 'admin_ai_service', $payload);
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
+        }
+    }
+
+    private function logError(\Throwable $exception, array $logContext, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext(
+                $logContext['source'] ?? '/admin/ai/intents',
+                'POST',
+                $logContext['request_id'] ?? null,
+                [],
+                $context
+            );
+            $this->errorLogService->logException($exception, $request, [
+                'request_id' => $logContext['request_id'] ?? null,
+                'actor_type' => $logContext['actor_type'] ?? 'admin',
+            ]);
+        } catch (\Throwable $ignore) {
+            // swallow secondary logging failure
+        }
     }
 
     private string $model;

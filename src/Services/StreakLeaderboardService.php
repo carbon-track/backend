@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeZone;
 use Monolog\Logger;
@@ -22,12 +23,24 @@ class StreakLeaderboardService
     private string $cacheFile;
     private int $ttlSeconds;
     private DateTimeZone $timezone;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null)
+    public function __construct(
+        PDO $db,
+        RegionService $regionService,
+        ?Logger $logger = null,
+        ?string $cacheDir = null,
+        ?int $ttlSeconds = null,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $this->db = $db;
         $this->regionService = $regionService;
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $baseDir = $cacheDir ?? (dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache');
         if (!is_dir($baseDir)) {
             @mkdir($baseDir, 0755, true);
@@ -47,6 +60,9 @@ class StreakLeaderboardService
         if (!$forceRefresh) {
             $cached = $this->readCache();
             if ($cached !== null) {
+                $this->logAudit('streak_leaderboard_cache_hit', [
+                    'cache_file' => $this->cacheFile,
+                ]);
                 return $cached;
             }
         }
@@ -59,8 +75,18 @@ class StreakLeaderboardService
         try {
             $data = $this->generateSnapshot();
             $this->writeCache($data, $reason);
+            $this->logAudit('streak_leaderboard_cache_rebuilt', [
+                'reason' => $reason,
+                'global_entries' => count($data['global'] ?? []),
+            ]);
             return $data;
         } catch (\Throwable $e) {
+            $this->logAudit('streak_leaderboard_cache_rebuild_failed', [
+                'reason' => $reason,
+            ], 'failed');
+            $this->logError($e, '/internal/streak-leaderboard/rebuild', 'Failed to rebuild streak leaderboard cache', [
+                'reason' => $reason,
+            ]);
             $this->log('error', 'Failed to rebuild streak leaderboard cache', [
                 'error' => $e->getMessage(),
                 'reason' => $reason,
@@ -371,6 +397,11 @@ class StreakLeaderboardService
             return;
         }
         @file_put_contents($this->cacheFile, $payload, LOCK_EX);
+        $this->logAudit('streak_leaderboard_cache_written', [
+            'reason' => $reason,
+            'entries_global' => count($data['global'] ?? []),
+            'cache_file' => $this->cacheFile,
+        ]);
         $this->log('info', 'Streak leaderboard cache written', [
             'reason' => $reason,
             'entries_global' => count($data['global'] ?? []),
@@ -391,6 +422,39 @@ class StreakLeaderboardService
             $this->logger->log($level, $message, $context);
         } catch (\Throwable $ignore) {
             // swallow logger failures
+        }
+    }
+
+    private function logAudit(string $action, array $context = [], string $status = 'success'): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'leaderboard',
+                'actor_type' => 'system',
+                'status' => $status,
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures for streak leaderboard
+        }
+    }
+
+    private function logError(\Throwable $e, string $path, string $message, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $message] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures for streak leaderboard
         }
     }
 }

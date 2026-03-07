@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\UserAiController;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\CarbonCalculatorService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 use Slim\Psr7\Response;
@@ -23,6 +25,8 @@ class UserAiControllerTest extends TestCase
     private $quotaService;
     private $authService;
     private $logger;
+    private $auditLogService;
+    private $errorLogService;
 
     protected function setUp(): void
     {
@@ -31,6 +35,8 @@ class UserAiControllerTest extends TestCase
         $this->quotaService = $this->createMock(QuotaService::class);
         $this->authService = $this->createMock(AuthService::class);
         $this->logger = new NullLogger();
+        $this->auditLogService = $this->createMock(AuditLogService::class);
+        $this->errorLogService = $this->createMock(ErrorLogService::class);
 
         // Default quota check pass
         $this->quotaService->method('checkAndConsume')->willReturn(true);
@@ -47,12 +53,16 @@ class UserAiControllerTest extends TestCase
             $this->calculatorService,
             $this->quotaService,
             $this->logger,
-            $this->authService
+            $this->authService,
+            $this->auditLogService,
+            $this->errorLogService
         );
     }
 
     public function testSuggestActivityReturnsPrediction(): void
     {
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
+
         $this->aiService->method('suggestActivity')->willReturn([
             'success' => true,
             'prediction' => [
@@ -85,6 +95,8 @@ class UserAiControllerTest extends TestCase
 
     public function testSuggestActivityValidatesEmptyQuery(): void
     {
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
+
         $controller = $this->createController();
 
         $request = makeRequest('POST', '/ai/suggest-activity', ['query' => '   ']);
@@ -98,6 +110,9 @@ class UserAiControllerTest extends TestCase
 
     public function testSuggestActivityHandlesServiceException(): void
     {
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
+        $this->errorLogService->expects($this->once())->method('logException');
+
         $this->aiService->method('suggestActivity')->willThrowException(new \RuntimeException('Service unavailable'));
         $this->calculatorService->method('getAvailableActivities')->willReturn([]);
 
@@ -116,6 +131,8 @@ class UserAiControllerTest extends TestCase
         // Re-configure the stub for this specific test
         $this->quotaService = $this->createMock(QuotaService::class);
         $this->quotaService->method('checkAndConsume')->willReturn(false);
+        $this->auditLogService = $this->createMock(AuditLogService::class);
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
         
         $this->authService = $this->createMock(AuthService::class);
         $this->authService->method('getCurrentUserModel')->willReturn($this->createMock(\CarbonTrack\Models\User::class));

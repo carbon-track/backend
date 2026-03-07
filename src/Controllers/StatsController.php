@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\StatisticsService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -11,7 +13,9 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 class StatsController
 {
     public function __construct(
-        private StatisticsService $statisticsService
+        private StatisticsService $statisticsService,
+        private AuditLogService $auditLogService,
+        private ErrorLogService $errorLogService
     ) {}
 
     public function getPublicSummary(Request $request, Response $response): Response
@@ -29,11 +33,28 @@ class StatsController
 
             $data = $this->statisticsService->getPublicStats($forceRefresh);
 
+            $this->logSystemAudit('public_stats_summary_viewed', $request, [
+                'data' => [
+                    'force_refresh' => $forceRefresh,
+                    'keys' => array_keys($data),
+                ],
+            ]);
+
             return $this->jsonResponse($response, [
                 'success' => true,
                 'data' => $data,
             ]);
         } catch (\Throwable $e) {
+            try {
+                $this->errorLogService->logException($e, $request, ['context' => 'public_stats_summary_failed']);
+            } catch (\Throwable $ignore) {
+                // swallow
+            }
+
+            $this->logSystemAudit('public_stats_summary_failed', $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
+
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
                 throw $e;
             }
@@ -41,6 +62,21 @@ class StatsController
                 'success' => false,
                 'error' => 'Unable to load statistics',
             ], 500);
+        }
+    }
+
+    private function logSystemAudit(string $action, Request $request, array $context = [], string $status = 'success'): void
+    {
+        try {
+            $this->auditLogService->logSystemEvent($action, 'statistics', array_merge([
+                'request_id' => $request->getAttribute('request_id'),
+                'request_method' => $request->getMethod(),
+                'endpoint' => (string)$request->getUri()->getPath(),
+                'status' => $status,
+                'request_data' => $context['data'] ?? null,
+            ], $context));
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
         }
     }
 

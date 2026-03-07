@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\User;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 
 class NotificationPreferenceService
@@ -53,10 +54,14 @@ class NotificationPreferenceService
     private array $userIdByEmailCache = [];
 
     private Logger $logger;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(Logger $logger)
+    public function __construct(Logger $logger, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null)
     {
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -132,6 +137,10 @@ class NotificationPreferenceService
                         'updated_at' => date('Y-m-d H:i:s'),
                     ]);
             } catch (\Throwable $e) {
+                $this->logFailure('notification_preferences_update_failed', $e, [
+                    'user_id' => $userId,
+                    'notification_email_mask' => $updatedMask,
+                ], '/internal/notification-preferences/update');
                 $this->logger->error('Failed to update notification mask', [
                     'user_id' => $userId,
                     'error' => $e->getMessage(),
@@ -205,6 +214,9 @@ class NotificationPreferenceService
                     ->whereNull('deleted_at')
                     ->value('notification_email_mask');
             } catch (\Throwable $e) {
+                $this->logFailure('notification_preferences_load_failed', $e, [
+                    'user_id' => $userId,
+                ], '/internal/notification-preferences/load');
                 $this->logger->warning('Failed to load notification mask; assuming defaults', [
                     'user_id' => $userId,
                     'error' => $e->getMessage(),
@@ -226,5 +238,33 @@ class NotificationPreferenceService
     private function isValidCategory(string $category): bool
     {
         return isset(self::CATEGORY_DEFINITIONS[$category]);
+    }
+
+    private function logFailure(string $action, \Throwable $e, array $context, string $path): void
+    {
+        if ($this->auditLogService !== null) {
+            try {
+                $this->auditLogService->log([
+                    'action' => $action,
+                    'operation_category' => 'notification',
+                    'actor_type' => 'system',
+                    'status' => 'failed',
+                    'data' => $context,
+                ]);
+            } catch (\Throwable $ignore) {
+                // ignore audit failures for preference service
+            }
+        }
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures for preference service
+        }
     }
 }

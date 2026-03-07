@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CheckinService;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -51,5 +52,40 @@ class CheckinServiceTest extends TestCase
         $this->assertTrue($service->hasCheckin($userId, '2026-01-03'));
         $stats = $service->getUserStreakStats($userId, new DateTimeImmutable('2026-01-03', new DateTimeZone('UTC')));
         $this->assertSame(1, $stats['makeup_days']);
+    }
+
+    public function testSyncUserCheckinsLogsAuditWhenRowsInserted(): void
+    {
+        $userId = (int) $this->pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)'
+        );
+        $stmt->execute([
+            'rec-sync-1',
+            $userId,
+            '550e8400-e29b-41d4-a716-446655440001',
+            1,
+            'times',
+            0.019,
+            1,
+            '2026-01-05',
+            'approved',
+            '2026-01-05 08:00:00',
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload) use ($userId): bool {
+                return ($payload['action'] ?? null) === 'checkin_sync_completed'
+                    && ($payload['operation_category'] ?? null) === 'checkin'
+                    && ($payload['data']['user_id'] ?? null) === $userId
+                    && ($payload['data']['synced_count'] ?? null) === 1;
+            }))
+            ->willReturn(true);
+
+        $service = new CheckinService($this->pdo, null, 'UTC', $audit, null);
+
+        $this->assertSame(1, $service->syncUserCheckinsFromRecords($userId));
     }
 }
