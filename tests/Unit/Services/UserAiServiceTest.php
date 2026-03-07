@@ -6,6 +6,8 @@ namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\Ai\LlmClientInterface;
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -14,11 +16,15 @@ class UserAiServiceTest extends TestCase
 {
     private $llmClient;
     private $logger;
+    private $auditLogService;
+    private $errorLogService;
 
     protected function setUp(): void
     {
         $this->llmClient = $this->createMock(LlmClientInterface::class);
         $this->logger = new NullLogger();
+        $this->auditLogService = $this->createMock(AuditLogService::class);
+        $this->errorLogService = $this->createMock(ErrorLogService::class);
     }
 
     private function createService(array $config = [], bool $withClient = true): UserAiService
@@ -26,7 +32,10 @@ class UserAiServiceTest extends TestCase
         return new UserAiService(
             $withClient ? $this->llmClient : null,
             $this->logger,
-            $config
+            $config,
+            null,
+            $this->auditLogService,
+            $this->errorLogService
         );
     }
 
@@ -51,6 +60,8 @@ class UserAiServiceTest extends TestCase
 
     public function testSuggestActivitySuccess(): void
     {
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
+
         $expectedResponse = [
             'activity_name' => 'Bus',
             'amount' => 10,
@@ -155,6 +166,9 @@ class UserAiServiceTest extends TestCase
 
     public function testSuggestActivityHandlesClientException(): void
     {
+        $this->auditLogService->expects($this->once())->method('logUserAction')->willReturn(true);
+        $this->errorLogService->expects($this->once())->method('logException');
+
         $this->llmClient->method('createChatCompletion')
             ->willThrowException(new \Exception('API Error'));
 

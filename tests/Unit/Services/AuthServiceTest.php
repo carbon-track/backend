@@ -4,13 +4,17 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
 
 class AuthServiceTest extends TestCase
 {
     private AuthService $authService;
     private string $jwtSecret = 'test-jwt-secret-key';
+    private AuditLogService $auditLogService;
+    private ErrorLogService $errorLogService;
 
     protected function setUp(): void
     {
@@ -18,8 +22,10 @@ class AuthServiceTest extends TestCase
         
         // Mock PDO for testing
         $mockPdo = $this->createMock(\PDO::class);
+        $this->auditLogService = $this->createMock(AuditLogService::class);
+        $this->errorLogService = $this->createMock(ErrorLogService::class);
         
-        $this->authService = new AuthService($this->jwtSecret);
+        $this->authService = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
         $this->authService->setDatabase($mockPdo);
     }
 
@@ -144,6 +150,31 @@ class AuthServiceTest extends TestCase
         $this->assertIsString($token2);
         $this->assertEquals(64, strlen($token1)); // 32 bytes = 64 hex chars
         $this->assertNotEquals($token1, $token2); // Should be unique
+    }
+
+    public function testIsAccountLockedLogsAuditWhenThresholdReached(): void
+    {
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->once())->method('execute')->with(['locked-user', '127.0.0.1']);
+        $stmt->method('fetchColumn')->willReturn(5);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->expects($this->once())->method('prepare')->willReturn($stmt);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                return ($payload['action'] ?? null) === 'auth_account_locked'
+                    && ($payload['operation_category'] ?? null) === 'authentication'
+                    && ($payload['data']['failed_attempts'] ?? null) === 5;
+            }))
+            ->willReturn(true);
+
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $audit, $this->createMock(ErrorLogService::class));
+        $service->setDatabase($pdo);
+
+        $this->assertTrue($service->isAccountLocked('locked-user', '127.0.0.1'));
     }
 }
 

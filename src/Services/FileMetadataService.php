@@ -6,15 +6,34 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\File;
 use Illuminate\Database\Capsule\Manager as DB;
-use Monolog\Logger;
-
 class FileMetadataService
 {
-    public function __construct(private Logger $logger) {}
+    private const PUBLIC_READABLE_ROOTS = ['products', 'badges', 'avatars'];
 
     public function findBySha256(string $sha256): ?File
     {
         return File::where('sha256',$sha256)->orderByDesc('id')->first();
+    }
+
+    public function findByFilePath(string $filePath): ?File
+    {
+        return File::where('file_path', $filePath)->orderByDesc('id')->first();
+    }
+
+    public function isPubliclyReadablePath(string $filePath): bool
+    {
+        return in_array($this->extractRootDirectory($filePath), self::PUBLIC_READABLE_ROOTS, true);
+    }
+
+    public function extractRootDirectory(string $filePath): string
+    {
+        $normalized = ltrim(trim($filePath), '/');
+        if ($normalized === '') {
+            return '';
+        }
+
+        $segments = explode('/', $normalized);
+        return strtolower($segments[0] ?? '');
     }
 
     public function createRecord(array $data): File

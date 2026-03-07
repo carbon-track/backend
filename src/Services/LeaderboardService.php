@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 use PDO;
 
@@ -17,14 +18,18 @@ class LeaderboardService
     private PDO $db;
     private RegionService $regionService;
     private ?Logger $logger;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
     private string $cacheFile;
     private int $ttlSeconds;
 
-    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null)
+    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->regionService = $regionService;
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $baseDir = $cacheDir ?? (dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache');
         if (!is_dir($baseDir)) {
             @mkdir($baseDir, 0755, true);
@@ -50,10 +55,21 @@ class LeaderboardService
         try {
             $data = $this->generateSnapshot();
             $this->writeCache($data, $reason);
+            $this->logAudit('leaderboard_cache_rebuilt', 'success', [
+                'reason' => $reason,
+                'entries_global' => count($data['global'] ?? []),
+            ]);
             return $data;
         } catch (\Throwable $e) {
             $this->log('error', 'Failed to rebuild leaderboard cache', [
                 'error' => $e->getMessage(),
+                'reason' => $reason,
+            ]);
+            $this->logAudit('leaderboard_cache_rebuild_failed', 'failed', [
+                'reason' => $reason,
+                'error' => $e->getMessage(),
+            ]);
+            $this->logError($e, '/internal/leaderboard/rebuild', [
                 'reason' => $reason,
             ]);
             return $this->readCache() ?? [
@@ -182,6 +198,10 @@ class LeaderboardService
             'reason' => $reason,
             'entries_global' => count($data['global'] ?? []),
         ]);
+        $this->logAudit('leaderboard_cache_written', 'success', [
+            'reason' => $reason,
+            'entries_global' => count($data['global'] ?? []),
+        ]);
     }
 
     private function formatEntry(array $row): array
@@ -212,6 +232,38 @@ class LeaderboardService
             $this->logger->log($level, $message, $context);
         } catch (\Throwable $ignore) {
             // swallow logger failures
+        }
+    }
+
+    private function logAudit(string $action, string $status, array $data = []): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->logSystemEvent($action, 'leaderboard_service', [
+                'status' => $status,
+                'endpoint' => '/internal/leaderboard/cache',
+                'request_method' => 'SYSTEM',
+                'request_data' => $data,
+            ]);
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
+        }
+    }
+
+    private function logError(\Throwable $exception, string $path, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'SYSTEM', null, [], $context, ['PHP_SAPI' => PHP_SAPI]);
+            $this->errorLogService->logException($exception, $request, $context);
+        } catch (\Throwable $ignore) {
+            // swallow secondary logging failure
         }
     }
 }

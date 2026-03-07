@@ -14,6 +14,12 @@ use PDO;
 
 class MessageController
 {
+    private const BROADCAST_CONTENT_FORMAT_TEXT = 'text';
+    private const BROADCAST_CONTENT_FORMAT_HTML = 'html';
+    private const BROADCAST_RENDER_PROFILE_HTML = 'announcement_html_v1';
+    private const BROADCAST_RENDER_VERSION_HTML = 1;
+    private const BROADCAST_SOURCE_KIND_ADMIN = 'admin_broadcast';
+
     private PDO $db;
     private MessageService $messageService;
     private AuditLogService $auditLog;
@@ -495,6 +501,23 @@ class MessageController
                 return $this->json($response, ['error' => 'Missing required field: content'], 400);
             }
 
+            $contentFormat = $this->normalizeBroadcastContentFormat($data['content_format'] ?? self::BROADCAST_CONTENT_FORMAT_TEXT);
+            if ($contentFormat === null) {
+                return $this->json($response, ['error' => 'Invalid content_format value'], 422);
+            }
+
+            $renderProfile = $this->normalizeBroadcastRenderProfile($data['render_profile'] ?? null, $contentFormat);
+            if ($contentFormat === self::BROADCAST_CONTENT_FORMAT_HTML && $renderProfile === null) {
+                return $this->json($response, ['error' => 'Invalid render_profile value'], 422);
+            }
+            $renderVersion = $this->resolveBroadcastRenderVersion($contentFormat, $renderProfile);
+            $sourceKind = self::BROADCAST_SOURCE_KIND_ADMIN;
+
+            $content = $this->normalizeBroadcastContent($content, $contentFormat);
+            if ($content === '') {
+                return $this->json($response, ['error' => 'Content cannot be empty after sanitization'], 422);
+            }
+
             $priorityRaw = $data['priority'] ?? Message::PRIORITY_NORMAL;
             $priority = strtolower(trim((string)$priorityRaw));
             if ($priority === '') {
@@ -633,6 +656,10 @@ class MessageController
                     [
                         'scope' => $scope,
                         'message_ids' => $messageIdSample,
+                        'content_format' => $contentFormat,
+                        'render_profile' => $renderProfile,
+                        'render_version' => $renderVersion,
+                        'source_kind' => $sourceKind,
                     ]
                 );
                 if (!empty($queueResult['queued'])) {
@@ -687,6 +714,10 @@ $auditPayload = [
                 'data' => [
                     'title' => $title,
                     'content' => $content,
+                    'content_format' => $contentFormat,
+                    'render_profile' => $renderProfile,
+                    'render_version' => $renderVersion,
+                    'source_kind' => $sourceKind,
                     'priority' => $priority,
                     'scope' => $scope,
                     'target_count' => count($targetUserIds),
@@ -738,6 +769,10 @@ $auditPayload = [
             }
 
             $metaSnapshot = [];
+            $metaSnapshot['content_format'] = $contentFormat;
+            $metaSnapshot['render_profile'] = $renderProfile;
+            $metaSnapshot['render_version'] = $renderVersion;
+            $metaSnapshot['source_kind'] = $sourceKind;
 
             if (!empty($targetUserRecords)) {
                 $metaSnapshot['target_records_sample'] = array_slice(array_values($targetUserRecords), 0, 50);
@@ -787,6 +822,10 @@ $auditPayload = [
                 'scope' => $scope,
                 'message' => 'System message sent successfully',
                 'priority' => $priority,
+                'content_format' => $contentFormat,
+                'render_profile' => $renderProfile,
+                'render_version' => $renderVersion,
+                'source_kind' => $sourceKind,
                 'message_ids' => $messageIdSample,
                 'message_id_count' => $messageIdCount,
                 'email_delivery' => $emailDelivery,
@@ -952,6 +991,12 @@ $auditPayload = [
                 $messageIdCount = isset($row['message_id_count']) ? (int)$row['message_id_count'] : (count($messageIds) ?: null);
                 $messageIdMap = $this->decodeJsonObject($row['message_map_snapshot'] ?? null);
                 $emailDelivery = $this->normalizeEmailDeliveryMeta($this->decodeJsonValue($row['email_delivery_snapshot'] ?? null));
+                $meta = $this->decodeJsonObject($row['meta'] ?? null);
+                $contentFormat = $this->normalizeBroadcastContentFormat($meta['content_format'] ?? self::BROADCAST_CONTENT_FORMAT_TEXT)
+                    ?? self::BROADCAST_CONTENT_FORMAT_TEXT;
+                $renderProfile = $this->normalizeBroadcastRenderProfile($meta['render_profile'] ?? null, $contentFormat);
+                $renderVersion = $this->normalizeBroadcastRenderVersion($meta['render_version'] ?? null, $contentFormat, $renderProfile);
+                $sourceKind = $this->normalizeBroadcastSourceKind($meta['source_kind'] ?? null);
                 $errorIds = $this->decodeIdList($row['error_log_ids'] ?? []);
                 $requestId = isset($row['request_id']) ? trim((string)$row['request_id']) : null;
                 if ($requestId === '') {
@@ -987,6 +1032,10 @@ $auditPayload = [
                     'actor_username' => ($createdBy !== null && isset($actorMap[$createdBy])) ? $actorMap[$createdBy] : null,
                     'title' => $title,
                     'content' => $content,
+                    'content_format' => $contentFormat,
+                    'render_profile' => $renderProfile,
+                    'render_version' => $renderVersion,
+                    'source_kind' => $sourceKind,
                     'priority' => $priority,
                     'scope' => $scope,
                     'target_count' => $targetCount,
@@ -1151,6 +1200,12 @@ $auditPayload = [
 
                 $deliverableList = array_values($deliverable);
                 $attempted = count($deliverableList);
+                $meta = $this->decodeJsonObject($row['meta'] ?? null);
+                $contentFormat = $this->normalizeBroadcastContentFormat($meta['content_format'] ?? self::BROADCAST_CONTENT_FORMAT_TEXT)
+                    ?? self::BROADCAST_CONTENT_FORMAT_TEXT;
+                $renderProfile = $this->normalizeBroadcastRenderProfile($meta['render_profile'] ?? null, $contentFormat);
+                $renderVersion = $this->normalizeBroadcastRenderVersion($meta['render_version'] ?? null, $contentFormat, $renderProfile);
+                $sourceKind = $this->normalizeBroadcastSourceKind($meta['source_kind'] ?? null);
 
                 $status = $delivery['status'];
                 $errors = $delivery['errors'];
@@ -1172,7 +1227,11 @@ $auditPayload = [
                         $payload,
                         (string)($row['title'] ?? ''),
                         (string)($row['content'] ?? ''),
-                        (string)($row['priority'] ?? Message::PRIORITY_NORMAL)
+                        (string)($row['priority'] ?? Message::PRIORITY_NORMAL),
+                        $contentFormat,
+                        $renderProfile,
+                        $renderVersion,
+                        $sourceKind
                     );
 
                     if ($sendResult) {
@@ -1886,6 +1945,253 @@ $auditPayload = [
             }
         }
         return $result;
+    }
+
+    private function normalizeBroadcastContentFormat($value): ?string
+    {
+        $normalized = strtolower(trim((string) $value));
+        if ($normalized === '' || $normalized === self::BROADCAST_CONTENT_FORMAT_TEXT) {
+            return self::BROADCAST_CONTENT_FORMAT_TEXT;
+        }
+        if ($normalized === self::BROADCAST_CONTENT_FORMAT_HTML) {
+            return self::BROADCAST_CONTENT_FORMAT_HTML;
+        }
+
+        return null;
+    }
+
+    private function normalizeBroadcastRenderProfile($value, string $contentFormat): ?string
+    {
+        if ($contentFormat !== self::BROADCAST_CONTENT_FORMAT_HTML) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+        if ($normalized === '') {
+            return self::BROADCAST_RENDER_PROFILE_HTML;
+        }
+
+        return $normalized === self::BROADCAST_RENDER_PROFILE_HTML
+            ? self::BROADCAST_RENDER_PROFILE_HTML
+            : null;
+    }
+
+    private function resolveBroadcastRenderVersion(string $contentFormat, ?string $renderProfile): ?int
+    {
+        if (
+            $contentFormat === self::BROADCAST_CONTENT_FORMAT_HTML
+            && $renderProfile === self::BROADCAST_RENDER_PROFILE_HTML
+        ) {
+            return self::BROADCAST_RENDER_VERSION_HTML;
+        }
+
+        return null;
+    }
+
+    private function normalizeBroadcastRenderVersion($value, string $contentFormat, ?string $renderProfile): ?int
+    {
+        $resolved = $this->resolveBroadcastRenderVersion($contentFormat, $renderProfile);
+        if ($resolved === null) {
+            return null;
+        }
+
+        if ($value === null || $value === '') {
+            return $resolved;
+        }
+
+        return (int) $value === $resolved ? $resolved : $resolved;
+    }
+
+    private function normalizeBroadcastSourceKind($value): string
+    {
+        $normalized = trim((string) $value);
+        return $normalized !== '' ? $normalized : self::BROADCAST_SOURCE_KIND_ADMIN;
+    }
+
+    private function normalizeBroadcastContent(string $content, string $contentFormat): string
+    {
+        $normalized = trim($content);
+        if ($normalized === '') {
+            return '';
+        }
+
+        if ($contentFormat !== self::BROADCAST_CONTENT_FORMAT_HTML) {
+            return $normalized;
+        }
+
+        return $this->sanitizeBroadcastAnnouncementHtml($normalized);
+    }
+
+    private function sanitizeBroadcastAnnouncementHtml(string $html): string
+    {
+        $normalized = trim($html);
+        if ($normalized === '') {
+            return '';
+        }
+
+        if (!class_exists(\DOMDocument::class)) {
+            return trim(strip_tags($normalized));
+        }
+
+        $wrapperId = '__broadcast_root__';
+        $document = new \DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        try {
+            $loaded = $document->loadHTML(
+                '<?xml encoding="utf-8" ?><div id="' . $wrapperId . '">' . $normalized . '</div>',
+                LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+            );
+
+            if ($loaded === false) {
+                return trim(strip_tags($normalized));
+            }
+
+            $root = $document->getElementById($wrapperId);
+            if (!$root instanceof \DOMElement) {
+                return trim(strip_tags($normalized));
+            }
+
+            $this->sanitizeBroadcastAnnouncementNode($root, $document);
+
+            $output = '';
+            foreach ($root->childNodes as $child) {
+                $output .= $document->saveHTML($child);
+            }
+
+            return trim($output);
+        } catch (\Throwable $e) {
+            return trim(strip_tags($normalized));
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+        }
+    }
+
+    private function sanitizeBroadcastAnnouncementNode(\DOMNode $node, \DOMDocument $document): void
+    {
+        if ($node->nodeType === XML_COMMENT_NODE) {
+            if ($node->parentNode) {
+                $node->parentNode->removeChild($node);
+            }
+            return;
+        }
+
+        if ($node->nodeType === XML_ELEMENT_NODE) {
+            $tagName = strtolower($node->nodeName);
+            $blockedTags = ['form', 'iframe', 'img', 'input', 'meta', 'object', 'script', 'style', 'textarea', 'video'];
+            $allowedTags = ['a', 'abbr', 'b', 'blockquote', 'br', 'caption', 'code', 'col', 'colgroup', 'div', 'em', 'h1', 'h2', 'h3', 'h4', 'hr', 'i', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'];
+
+            if (in_array($tagName, $blockedTags, true)) {
+                if ($node->parentNode) {
+                    $node->parentNode->removeChild($node);
+                }
+                return;
+            }
+
+            if (!in_array($tagName, $allowedTags, true)) {
+                $this->unwrapBroadcastAnnouncementNode($node);
+                return;
+            }
+
+            $this->sanitizeBroadcastAnnouncementAttributes($node);
+        }
+
+        $child = $node->firstChild;
+        while ($child !== null) {
+            $next = $child->nextSibling;
+            $this->sanitizeBroadcastAnnouncementNode($child, $document);
+            $child = $next;
+        }
+    }
+
+    private function unwrapBroadcastAnnouncementNode(\DOMNode $node): void
+    {
+        $parent = $node->parentNode;
+        if ($parent === null) {
+            return;
+        }
+
+        while ($node->firstChild !== null) {
+            $parent->insertBefore($node->firstChild, $node);
+        }
+
+        $parent->removeChild($node);
+    }
+
+    private function sanitizeBroadcastAnnouncementAttributes(\DOMNode $node): void
+    {
+        if (!$node instanceof \DOMElement || !$node->hasAttributes()) {
+            return;
+        }
+
+        $tagName = strtolower($node->tagName);
+        $allowedAttributes = ['title'];
+        if ($tagName === 'a') {
+            $allowedAttributes = ['href', 'rel', 'target', 'title'];
+        } elseif ($tagName === 'td' || $tagName === 'th') {
+            $allowedAttributes = ['colspan', 'rowspan', 'align', 'title'];
+            if ($tagName === 'th') {
+                $allowedAttributes[] = 'scope';
+            }
+        }
+
+        $attributes = [];
+        foreach ($node->attributes as $attribute) {
+            if ($attribute instanceof \DOMAttr) {
+                $attributes[] = $attribute->name;
+            } elseif ($attribute instanceof \DOMNode) {
+                $attributes[] = $attribute->nodeName;
+            }
+        }
+
+        foreach ($attributes as $attributeName) {
+            if (!in_array(strtolower($attributeName), $allowedAttributes, true)) {
+                $node->removeAttribute($attributeName);
+            }
+        }
+
+        if ($tagName === 'a') {
+            $href = trim((string) $node->getAttribute('href'));
+            if ($href === '' || !preg_match('/^(?:(?:https?|mailto|tel):|#|\/)/i', $href)) {
+                $node->removeAttribute('href');
+                $node->removeAttribute('rel');
+                $node->removeAttribute('target');
+            } else {
+                $node->setAttribute('rel', 'noopener noreferrer');
+                $node->setAttribute('target', '_blank');
+            }
+        }
+
+        foreach (['colspan', 'rowspan'] as $spanAttribute) {
+            if (!$node->hasAttribute($spanAttribute)) {
+                continue;
+            }
+            $raw = trim((string) $node->getAttribute($spanAttribute));
+            $numeric = ctype_digit($raw) ? (int) $raw : 0;
+            if ($numeric < 1 || $numeric > 12) {
+                $node->removeAttribute($spanAttribute);
+            } else {
+                $node->setAttribute($spanAttribute, (string) $numeric);
+            }
+        }
+
+        if ($node->hasAttribute('align')) {
+            $align = strtolower(trim((string) $node->getAttribute('align')));
+            if (!in_array($align, ['left', 'center', 'right'], true)) {
+                $node->removeAttribute('align');
+            } else {
+                $node->setAttribute('align', $align);
+            }
+        }
+
+        if ($node->hasAttribute('scope')) {
+            $scope = strtolower(trim((string) $node->getAttribute('scope')));
+            if (!in_array($scope, ['col', 'row', 'colgroup', 'rowgroup'], true)) {
+                $node->removeAttribute('scope');
+            } else {
+                $node->setAttribute('scope', $scope);
+            }
+        }
     }
 
     private function normalizeMessageIdMap($value): array

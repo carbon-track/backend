@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use CarbonTrack\Services\Ai\LlmClientInterface;
 use Psr\Log\LoggerInterface;
 
@@ -18,7 +19,9 @@ class UserAiService
         private ?LlmClientInterface $client,
         private LoggerInterface $logger,
         array $config = [],
-        private ?LlmLogService $llmLogService = null
+        private ?LlmLogService $llmLogService = null,
+        private ?AuditLogService $auditLogService = null,
+        private ?ErrorLogService $errorLogService = null
     ) {
         $this->model = (string)($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float)$config['temperature'] : 0.1;
@@ -68,10 +71,33 @@ class UserAiService
                 'message' => $e->getMessage(),
             ]);
             $this->logLlmFailure($query, $logContext, $clientTimeContext, $startedAt, $e);
+            $this->logAudit('user_ai_service_suggest_failed', $logContext, [
+                'status' => 'failed',
+                'request_data' => [
+                    'query_length' => mb_strlen($query),
+                    'source' => $logContext['source'] ?? null,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
+            $this->logError($e, $logContext, [
+                'query' => $query,
+                'client_time_context' => $clientTimeContext,
+            ]);
             throw new \RuntimeException('LLM_UNAVAILABLE', 0, $e);
         }
 
-        return $this->processResponse($rawResponse, $availableActivities);
+        $result = $this->processResponse($rawResponse, $availableActivities);
+        $this->logAudit('user_ai_service_suggest_succeeded', $logContext, [
+            'request_data' => [
+                'query_length' => mb_strlen($query),
+                'source' => $logContext['source'] ?? null,
+                'model' => $rawResponse['model'] ?? $this->model,
+                'activity_uuid' => $result['prediction']['activity_uuid'] ?? null,
+                'confidence' => $result['prediction']['confidence'] ?? null,
+            ],
+        ]);
+
+        return $result;
     }
 
     private function logLlmCall(string $prompt, array $rawResponse, array $logContext, array $context, float $startedAt): void
@@ -260,5 +286,49 @@ EOT;
                 'usage' => $rawResponse['usage'] ?? null
             ]
          ];
+    }
+
+    private function logAudit(string $action, array $logContext, array $context = []): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $actorId = isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id'])
+                ? (int) $logContext['actor_id']
+                : null;
+            $this->auditLogService->logUserAction($actorId, $action, array_merge([
+                'request_id' => $logContext['request_id'] ?? null,
+                'endpoint' => $logContext['source'] ?? '/ai/suggest-activity',
+                'request_method' => 'POST',
+                'status' => 'success',
+            ], $context));
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
+        }
+    }
+
+    private function logError(\Throwable $exception, array $logContext, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext(
+                $logContext['source'] ?? '/ai/suggest-activity',
+                'POST',
+                $logContext['request_id'] ?? null,
+                [],
+                $context
+            );
+            $this->errorLogService->logException($exception, $request, [
+                'request_id' => $logContext['request_id'] ?? null,
+                'actor_type' => $logContext['actor_type'] ?? 'user',
+            ]);
+        } catch (\Throwable $ignore) {
+            // swallow secondary logging failure
+        }
     }
 }

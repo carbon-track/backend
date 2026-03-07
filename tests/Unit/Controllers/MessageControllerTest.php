@@ -498,6 +498,126 @@ class MessageControllerTest extends TestCase
         $this->assertSame([], $json['email_delivery']['errors']);
     }
 
+    public function testBroadcastSupportsHtmlContentFormatMetadata(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+
+        $pdo->exec('CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            email TEXT,
+            school TEXT,
+            school_id INTEGER,
+            location TEXT,
+            is_admin INTEGER,
+            status TEXT,
+            deleted_at TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE system_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT
+        )');
+
+        $pdo->exec('CREATE TABLE message_broadcasts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            audit_log_id INTEGER,
+            system_log_id INTEGER,
+            error_log_ids TEXT,
+            title TEXT,
+            content TEXT,
+            priority TEXT,
+            scope TEXT,
+            target_count INTEGER,
+            sent_count INTEGER,
+            invalid_user_ids TEXT,
+            failed_user_ids TEXT,
+            message_ids_snapshot TEXT,
+            message_map_snapshot TEXT,
+            message_id_count INTEGER,
+            content_hash TEXT,
+            email_delivery_snapshot TEXT,
+            filters_snapshot TEXT,
+            meta TEXT,
+            created_by INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        )');
+
+        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
+            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 7, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $svc->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with(
+                5,
+                'Alert',
+                $this->callback(static function (string $content): bool {
+                    return str_contains($content, '<h1>Headline</h1>')
+                        && str_contains($content, '<p>Body</p>')
+                        && !str_contains($content, '<script');
+                }),
+                Message::TYPE_SYSTEM,
+                'high'
+            )
+            ->willReturn($this->createMock(Message::class));
+
+        $svc->expects($this->once())
+            ->method('queueBroadcastEmail')
+            ->with(
+                $this->anything(),
+                'Alert',
+                $this->callback(static fn (string $content): bool => !str_contains($content, '<script')),
+                'high',
+                $this->callback(static function (array $context): bool {
+                    return ($context['content_format'] ?? null) === 'html'
+                        && ($context['render_profile'] ?? null) === 'announcement_html_v1'
+                        && ($context['render_version'] ?? null) === 1
+                        && ($context['source_kind'] ?? null) === 'admin_broadcast';
+                })
+            )
+            ->willReturn(['queued' => true, 'recipient_count' => 1]);
+
+        $audit->expects($this->once())->method('log');
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('POST', '/admin/messages/broadcast', [
+            'title' => 'Alert',
+            'content' => '<h1>Headline</h1><script>alert(1)</script><p>Body</p>',
+            'content_format' => 'html',
+            'render_profile' => 'announcement_html_v1',
+            'priority' => 'high',
+            'target_users' => [5]
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->sendSystemMessage($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+        $json = json_decode((string)$resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('html', $json['content_format']);
+        $this->assertSame('announcement_html_v1', $json['render_profile']);
+        $this->assertSame(1, $json['render_version']);
+        $this->assertSame('admin_broadcast', $json['source_kind']);
+
+        $metaRow = $pdo->query('SELECT meta FROM message_broadcasts ORDER BY id DESC LIMIT 1')->fetchColumn();
+        $this->assertNotFalse($metaRow);
+        $meta = json_decode((string)$metaRow, true);
+        $this->assertSame('html', $meta['content_format']);
+        $this->assertSame('announcement_html_v1', $meta['render_profile']);
+        $this->assertSame(1, $meta['render_version']);
+        $this->assertSame('admin_broadcast', $meta['source_kind']);
+    }
+
 
     public function testSearchBroadcastRecipientsReturnsData(): void
     {
@@ -614,7 +734,12 @@ class MessageControllerTest extends TestCase
             $contentHash,
             json_encode($emailSnapshot),
             json_encode(['scope' => 'custom']),
-            null,
+            json_encode([
+                'content_format' => 'html',
+                'render_profile' => 'announcement_html_v1',
+                'render_version' => 1,
+                'source_kind' => 'admin_broadcast',
+            ]),
             42,
             $createdAt,
             $createdAt,
@@ -656,6 +781,10 @@ class MessageControllerTest extends TestCase
         $this->assertSame(654, $item['system_log_id']);
         $this->assertSame([555], $item['error_log_ids']);
         $this->assertSame([900, 901], $item['message_ids']);
+        $this->assertSame('html', $item['content_format']);
+        $this->assertSame('announcement_html_v1', $item['render_profile']);
+        $this->assertSame(1, $item['render_version']);
+        $this->assertSame('admin_broadcast', $item['source_kind']);
         $this->assertSame('sent', $item['email_delivery']['status']);
         $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
         $this->assertSame([], $item['email_delivery']['errors']);

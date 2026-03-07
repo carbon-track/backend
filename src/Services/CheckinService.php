@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
@@ -16,11 +17,21 @@ class CheckinService
     private ?Logger $logger;
     private DateTimeZone $timezone;
     private string $driver;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(PDO $db, ?Logger $logger = null, ?string $timezone = null)
+    public function __construct(
+        PDO $db,
+        ?Logger $logger = null,
+        ?string $timezone = null,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $this->db = $db;
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $tzName = $timezone ?? ($_ENV['APP_TIMEZONE'] ?? date_default_timezone_get());
         if (!$tzName) {
             $tzName = 'UTC';
@@ -84,8 +95,22 @@ class CheckinService
         try {
             $stmt = $this->db->prepare($sql);
             $stmt->execute(['uid' => $userId]);
-            return $stmt->rowCount();
+            $count = $stmt->rowCount();
+            if ($count > 0) {
+                $this->logAudit('checkin_sync_completed', [
+                    'user_id' => $userId,
+                    'synced_count' => $count,
+                ]);
+            }
+
+            return $count;
         } catch (\Throwable $e) {
+            $this->logAudit('checkin_sync_failed', [
+                'user_id' => $userId,
+            ], 'failed');
+            $this->logError($e, '/internal/checkins/sync', 'Failed to sync user checkins from records', [
+                'user_id' => $userId,
+            ]);
             $this->log('Checkin sync failed', [
                 'error' => $e->getMessage(),
                 'user_id' => $userId,
@@ -279,8 +304,30 @@ class CheckinService
                 'notes' => $notes,
                 'created_at' => $createdAt->format('Y-m-d H:i:s'),
             ]);
-            return $stmt->rowCount() > 0;
+            $inserted = $stmt->rowCount() > 0;
+            if ($inserted) {
+                $this->logAudit('checkin_record_persisted', [
+                    'user_id' => $userId,
+                    'checkin_date' => $date,
+                    'source' => $source,
+                    'record_id' => $recordId,
+                ]);
+            }
+
+            return $inserted;
         } catch (\Throwable $e) {
+            $this->logAudit('checkin_persist_failed', [
+                'user_id' => $userId,
+                'checkin_date' => $date,
+                'source' => $source,
+                'record_id' => $recordId,
+            ], 'failed');
+            $this->logError($e, '/internal/checkins', 'Failed to persist checkin', [
+                'user_id' => $userId,
+                'checkin_date' => $date,
+                'source' => $source,
+                'record_id' => $recordId,
+            ]);
             $this->log('Checkin insert failed', [
                 'error' => $e->getMessage(),
                 'user_id' => $userId,
@@ -306,6 +353,39 @@ class CheckinService
             $this->logger->warning($message, $context);
         } catch (\Throwable $ignore) {
             // ignore logger failures
+        }
+    }
+
+    private function logAudit(string $action, array $context = [], string $status = 'success'): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'checkin',
+                'actor_type' => 'system',
+                'status' => $status,
+                'data' => $context,
+            ]);
+        } catch (\Throwable $ignore) {
+            // ignore audit failures in checkin service
+        }
+    }
+
+    private function logError(\Throwable $e, string $path, string $message, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'POST', null, [], $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $message] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures in checkin service
         }
     }
 }

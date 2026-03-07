@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\AdminAiController;
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\AdminAnnouncementAiUnavailableException;
+use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Services\AdminAiIntentService;
 use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\AuthService;
@@ -15,6 +18,9 @@ use Slim\Psr7\Response;
 
 class AdminAiControllerTest extends TestCase
 {
+    private const ACTIVE_CONFIG_PATH = '/path/config.php';
+    private const INTENT_ROUTE = '/admin/ai/intents';
+
     public function testAnalyzeReturnsParsedIntent(): void
     {
         $authService = $this->createMock(AuthService::class);
@@ -44,20 +50,26 @@ class AdminAiControllerTest extends TestCase
             ],
         ]);
 
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+
         $commandRepo = $this->createMock(AdminAiCommandRepository::class);
         $commandRepo->method('getFingerprint')->willReturn('test-fingerprint');
-        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getActivePath')->willReturn(self::ACTIVE_CONFIG_PATH);
         $commandRepo->method('getLastModified')->willReturn(1234567890);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
 
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $announcementAiService,
             $commandRepo,
+            $auditLogService,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
 
-        $request = makeRequest('POST', '/admin/ai/intents', ['query' => '打开用户管理']);
+        $request = makeRequest('POST', self::INTENT_ROUTE, ['query' => '打开用户管理']);
         $response = $controller->analyze($request, new Response());
 
         $this->assertSame(200, $response->getStatusCode());
@@ -78,6 +90,9 @@ class AdminAiControllerTest extends TestCase
         $intentService = $this->createMock(AdminAiIntentService::class);
         $intentService->method('isEnabled')->willReturn(false);
 
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+        $announcementAiService->method('isEnabled')->willReturn(false);
+
         $commandRepo = $this->createMock(AdminAiCommandRepository::class);
         $commandRepo->method('getFingerprint')->willReturn('test');
         $commandRepo->method('getActivePath')->willReturn(null);
@@ -86,12 +101,14 @@ class AdminAiControllerTest extends TestCase
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $announcementAiService,
             $commandRepo,
+            $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
 
-        $request = makeRequest('POST', '/admin/ai/intents', ['query' => 'something']);
+        $request = makeRequest('POST', self::INTENT_ROUTE, ['query' => 'something']);
         $response = $controller->analyze($request, new Response());
 
         $this->assertSame(503, $response->getStatusCode());
@@ -109,6 +126,8 @@ class AdminAiControllerTest extends TestCase
         $intentService = $this->createMock(AdminAiIntentService::class);
         $intentService->method('isEnabled')->willReturn(true);
 
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+
         $commandRepo = $this->createMock(AdminAiCommandRepository::class);
         $commandRepo->method('getFingerprint')->willReturn('test');
         $commandRepo->method('getActivePath')->willReturn(null);
@@ -117,12 +136,14 @@ class AdminAiControllerTest extends TestCase
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $announcementAiService,
             $commandRepo,
+            $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
 
-        $request = makeRequest('POST', '/admin/ai/intents', ['query' => '  ']);
+        $request = makeRequest('POST', self::INTENT_ROUTE, ['query' => '  ']);
         $response = $controller->analyze($request, new Response());
 
         $this->assertSame(422, $response->getStatusCode());
@@ -147,15 +168,21 @@ class AdminAiControllerTest extends TestCase
                 'connectivity' => ['status' => 'not_checked'],
             ]);
 
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+
         $commandRepo = $this->createMock(AdminAiCommandRepository::class);
         $commandRepo->method('getFingerprint')->willReturn('test');
-        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getActivePath')->willReturn(self::ACTIVE_CONFIG_PATH);
         $commandRepo->method('getLastModified')->willReturn(987654321);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
 
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $announcementAiService,
             $commandRepo,
+            $auditLogService,
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -186,15 +213,19 @@ class AdminAiControllerTest extends TestCase
                 'connectivity' => ['status' => 'ok'],
             ]);
 
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+
         $commandRepo = $this->createMock(AdminAiCommandRepository::class);
         $commandRepo->method('getFingerprint')->willReturn('test');
-        $commandRepo->method('getActivePath')->willReturn('/path/config.php');
+        $commandRepo->method('getActivePath')->willReturn(self::ACTIVE_CONFIG_PATH);
         $commandRepo->method('getLastModified')->willReturn(987654321);
 
         $controller = new AdminAiController(
             $authService,
             $intentService,
+            $announcementAiService,
             $commandRepo,
+            $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
             new NullLogger()
         );
@@ -205,6 +236,140 @@ class AdminAiControllerTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertSame('ok', $payload['diagnostics']['connectivity']['status']);
+    }
+
+    public function testGenerateAnnouncementDraftReturnsGeneratedPayload(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+        $announcementAiService->method('isEnabled')->willReturn(true);
+        $announcementAiService->expects($this->once())
+            ->method('generateDraft')
+            ->with($this->callback(function (array $payload) {
+                return $payload['action'] === 'generate'
+                    && $payload['priority'] === 'high'
+                    && $payload['content_format'] === 'html';
+            }), $this->anything())
+            ->willReturn([
+                'success' => true,
+                'result' => [
+                    'title' => 'Generated announcement',
+                    'content' => '<p>Hello admin</p>',
+                    'content_format' => 'html',
+                    'action' => 'generate',
+                ],
+                'metadata' => [
+                    'model' => 'test-model',
+                    'usage' => ['total_tokens' => 10],
+                ],
+            ]);
+
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $announcementAiService,
+            $commandRepo,
+            $auditLogService,
+            $this->createMock(ErrorLogService::class),
+            new NullLogger()
+        );
+
+        $request = makeRequest('POST', '/admin/ai/announcement-drafts', [
+            'action' => 'generate',
+            'title' => 'Maintenance',
+            'content' => 'Need a draft',
+            'priority' => 'high',
+            'content_format' => 'html',
+            'instruction' => 'Keep it concise',
+        ]);
+        $response = $controller->generateAnnouncementDraft($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame('Generated announcement', $payload['data']['title']);
+        $this->assertSame('test-model', $payload['metadata']['model']);
+        $this->assertArrayHasKey('timestamp', $payload['metadata']);
+    }
+
+    public function testGenerateAnnouncementDraftValidatesAction(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+        $announcementAiService->method('isEnabled')->willReturn(true);
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $announcementAiService,
+            $commandRepo,
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new NullLogger()
+        );
+
+        $request = makeRequest('POST', '/admin/ai/announcement-drafts', [
+            'action' => 'explode',
+            'title' => 'Maintenance',
+        ]);
+        $response = $controller->generateAnnouncementDraft($request, new Response());
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
+        $this->assertSame('INVALID_ACTION', $payload['code']);
+    }
+
+    public function testGenerateAnnouncementDraftReturns503WhenProviderUnavailable(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $announcementAiService = $this->createMock(AdminAnnouncementAiService::class);
+        $announcementAiService->method('isEnabled')->willReturn(true);
+        $announcementAiService->method('generateDraft')
+            ->willThrowException(new AdminAnnouncementAiUnavailableException('LLM_UNAVAILABLE'));
+
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $announcementAiService,
+            $commandRepo,
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new NullLogger()
+        );
+
+        $request = makeRequest('POST', '/admin/ai/announcement-drafts', [
+            'action' => 'generate',
+            'title' => 'Maintenance',
+            'content' => 'Need a draft',
+            'priority' => 'high',
+            'content_format' => 'html',
+        ]);
+        $response = $controller->generateAnnouncementDraft($request, new Response());
+
+        $this->assertSame(503, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
+        $this->assertSame('AI_UNAVAILABLE', $payload['code']);
     }
 }
 

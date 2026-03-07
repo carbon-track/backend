@@ -6,6 +6,7 @@ namespace CarbonTrack\Controllers;
 
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use PDO;
@@ -19,14 +20,16 @@ class SystemLogController
 {
     private PDO $db;
     private AuthService $authService;
+    private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
 
     private const SENSITIVE_KEYS = ['password','pass','token','authorization','auth','secret'];
 
-    public function __construct(PDO $db, AuthService $authService, ErrorLogService $errorLogService = null)
+    public function __construct(PDO $db, AuthService $authService, AuditLogService $auditLogService, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->authService = $authService;
+        $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
     }
 
@@ -93,6 +96,14 @@ class SystemLogController
             $stmt->execute();
             $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+            $this->logAudit('admin_system_logs_list_viewed', $admin, $request, [
+                'data' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'result_count' => count($logs),
+                ],
+            ]);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => [
@@ -106,7 +117,10 @@ class SystemLogController
                 ]
             ]);
         } catch (\Exception $e) {
-            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { /* swallow secondary logging failure */ }
+            $this->logAudit('admin_system_logs_list_failed', $admin ?? null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -144,13 +158,38 @@ class SystemLogController
             $log['request_body'] = $this->redact($log['request_body']);
             $log['response_body'] = $this->redact($log['response_body']);
 
+            $this->logAudit('admin_system_log_detail_viewed', $admin, $request, [
+                'record_id' => $id,
+                'data' => ['request_id' => $log['request_id'] ?? null],
+            ]);
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $log
             ]);
         } catch (\Exception $e) {
-            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { /* swallow secondary logging failure */ }
+            $this->logAudit('admin_system_log_detail_failed', $admin ?? null, $request, [
+                'data' => ['error' => $e->getMessage()],
+            ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function logAudit(string $action, ?array $admin, Request $request, array $context = [], string $status = 'success'): void
+    {
+        try {
+            $adminId = isset($admin['id']) && is_numeric((string)$admin['id']) ? (int)$admin['id'] : null;
+            $this->auditLogService->logAdminOperation($action, $adminId, 'system_logs', array_merge([
+                'record_id' => $context['record_id'] ?? null,
+                'request_id' => $request->getAttribute('request_id'),
+                'request_method' => $request->getMethod(),
+                'endpoint' => (string)$request->getUri()->getPath(),
+                'status' => $status,
+                'request_data' => $context['data'] ?? null,
+            ], $context));
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
         }
     }
 

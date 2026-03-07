@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -19,7 +20,9 @@ class StatisticsService
         private PDO $db,
         private ?string $cacheDir = null,
         private ?int $publicTtlSeconds = null,
-        private ?int $adminTtlSeconds = null
+        private ?int $adminTtlSeconds = null,
+        private ?AuditLogService $auditLogService = null,
+        private ?ErrorLogService $errorLogService = null
     ) {
         $tzName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
         if (!$tzName) {
@@ -35,37 +38,53 @@ class StatisticsService
 
     public function getAdminStats(bool $forceRefresh = false): array
     {
-        if (!$forceRefresh) {
-            $cached = $this->readCache('admin', $this->adminTtlSeconds);
-            if ($cached !== null) {
-                return $cached['data'];
+        try {
+            if (!$forceRefresh) {
+                $cached = $this->readCache('admin', $this->adminTtlSeconds);
+                if ($cached !== null) {
+                    $this->logAudit('statistics_admin_cache_hit', 'success', ['force_refresh' => false]);
+                    return $cached['data'];
+                }
             }
+
+            $data = $this->computeAdminStats();
+            $this->writeCache('admin', $data, $this->adminTtlSeconds);
+
+            // Refresh public cache alongside admin stats so homepage stays in sync.
+            $public = $this->buildPublicSummary($data);
+            $this->writeCache('public', $public, $this->publicTtlSeconds);
+            $this->logAudit('statistics_admin_computed', 'success', ['force_refresh' => $forceRefresh]);
+
+            return $data;
+        } catch (\Throwable $exception) {
+            $this->logAudit('statistics_admin_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => $exception->getMessage()]);
+            $this->logError($exception, '/internal/statistics/admin', ['force_refresh' => $forceRefresh]);
+            throw $exception;
         }
-
-        $data = $this->computeAdminStats();
-        $this->writeCache('admin', $data, $this->adminTtlSeconds);
-
-        // Refresh public cache alongside admin stats so homepage stays in sync.
-        $public = $this->buildPublicSummary($data);
-        $this->writeCache('public', $public, $this->publicTtlSeconds);
-
-        return $data;
     }
 
     public function getPublicStats(bool $forceRefresh = false): array
     {
-        if (!$forceRefresh) {
-            $cached = $this->readCache('public', $this->publicTtlSeconds);
-            if ($cached !== null) {
-                return $cached['data'];
+        try {
+            if (!$forceRefresh) {
+                $cached = $this->readCache('public', $this->publicTtlSeconds);
+                if ($cached !== null) {
+                    $this->logAudit('statistics_public_cache_hit', 'success', ['force_refresh' => false]);
+                    return $cached['data'];
+                }
             }
+
+            $adminData = $this->getAdminStats(true);
+            $summary = $this->buildPublicSummary($adminData);
+            $this->writeCache('public', $summary, $this->publicTtlSeconds);
+            $this->logAudit('statistics_public_computed', 'success', ['force_refresh' => $forceRefresh]);
+
+            return $summary;
+        } catch (\Throwable $exception) {
+            $this->logAudit('statistics_public_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => $exception->getMessage()]);
+            $this->logError($exception, '/internal/statistics/public', ['force_refresh' => $forceRefresh]);
+            throw $exception;
         }
-
-        $adminData = $this->getAdminStats(true);
-        $summary = $this->buildPublicSummary($adminData);
-        $this->writeCache('public', $summary, $this->publicTtlSeconds);
-
-        return $summary;
     }
 
     private function computeAdminStats(): array
@@ -805,5 +824,37 @@ class StatisticsService
     {
         $sanitized = preg_replace('/[^a-zA-Z0-9_\\-]/', '_', $key);
         return $this->cacheDir . DIRECTORY_SEPARATOR . $sanitized . '_stats.json';
+    }
+
+    private function logAudit(string $action, string $status, array $data = []): void
+    {
+        if (!$this->auditLogService) {
+            return;
+        }
+
+        try {
+            $this->auditLogService->logSystemEvent($action, 'statistics_service', [
+                'status' => $status,
+                'endpoint' => '/internal/statistics',
+                'request_method' => 'SYSTEM',
+                'request_data' => $data,
+            ]);
+        } catch (\Throwable $ignore) {
+            // 审计日志失败不阻断主流程
+        }
+    }
+
+    private function logError(\Throwable $exception, string $path, array $context = []): void
+    {
+        if (!$this->errorLogService) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'SYSTEM', null, [], $context, ['PHP_SAPI' => PHP_SAPI]);
+            $this->errorLogService->logException($exception, $request, $context);
+        } catch (\Throwable $ignore) {
+            // swallow secondary logging failure
+        }
     }
 }

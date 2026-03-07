@@ -6,6 +6,8 @@ namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\AdminAiIntentService;
 use CarbonTrack\Services\Ai\LlmClientInterface;
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 
@@ -47,7 +49,9 @@ class AdminAiIntentServiceTest extends TestCase
         ]);
 
         $client = new FakeLlmClient($responsePayload);
-        $service = new AdminAiIntentService($client, new NullLogger(), ['model' => 'test-model']);
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+        $service = new AdminAiIntentService($client, new NullLogger(), ['model' => 'test-model'], null, null, $auditLogService, $this->createMock(ErrorLogService::class));
 
         $result = $service->analyzeIntent('审批 10 11', []);
 
@@ -234,7 +238,11 @@ class AdminAiIntentServiceTest extends TestCase
     public function testDiagnosticsConnectivityCheckError(): void
     {
         $client = new ThrowingLlmClient(new \RuntimeException('bad gateway'));
-        $service = new AdminAiIntentService($client, new NullLogger());
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+        $errorLogService = $this->createMock(ErrorLogService::class);
+        $errorLogService->expects($this->once())->method('logException');
+        $service = new AdminAiIntentService($client, new NullLogger(), [], null, null, $auditLogService, $errorLogService);
 
         $diagnostics = $service->getDiagnostics(true);
 

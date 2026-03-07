@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 
 /**
@@ -18,8 +19,15 @@ class RegionService
     private array $countries = [];
     private ?Logger $logger;
     private string $datasetPath;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(?string $datasetPath = null, ?Logger $logger = null)
+    public function __construct(
+        ?string $datasetPath = null,
+        ?Logger $logger = null,
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
+    )
     {
         $projectRoot = dirname(__DIR__, 3);
         $defaultPath = $projectRoot . DIRECTORY_SEPARATOR . 'frontend' . DIRECTORY_SEPARATOR . 'public'
@@ -35,6 +43,8 @@ class RegionService
         }
 
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
         $this->hydrateDataset();
     }
 
@@ -175,18 +185,21 @@ class RegionService
     {
         $path = $this->datasetPath;
         if (!is_file($path)) {
+            $this->logDatasetIssue('region_dataset_missing', 'Region dataset not found', ['path' => $path]);
             $this->log('warning', 'Region dataset not found', ['path' => $path]);
             return;
         }
 
         $contents = @file_get_contents($path);
         if ($contents === false) {
+            $this->logDatasetIssue('region_dataset_unreadable', 'Unable to read region dataset', ['path' => $path]);
             $this->log('warning', 'Unable to read region dataset', ['path' => $path]);
             return;
         }
 
         $decoded = json_decode($contents, true);
         if (!is_array($decoded)) {
+            $this->logDatasetIssue('region_dataset_decode_failed', 'Unable to decode region dataset', ['path' => $path]);
             $this->log('warning', 'Unable to decode region dataset', ['path' => $path]);
             return;
         }
@@ -231,6 +244,7 @@ class RegionService
         }
 
         if (empty($this->countries)) {
+            $this->logDatasetIssue('region_dataset_empty', 'Region dataset parsed but no usable countries were found', ['path' => $path]);
             $this->log('warning', 'Region dataset parsed but no usable countries were found', ['path' => $path]);
         }
     }
@@ -253,6 +267,34 @@ class RegionService
             $this->logger->log($level, $message, $context);
         } catch (\Throwable $ignore) {
             // suppress logging failures
+        }
+    }
+
+    private function logDatasetIssue(string $action, string $message, array $context): void
+    {
+        if ($this->auditLogService !== null) {
+            try {
+                $this->auditLogService->log([
+                    'action' => $action,
+                    'operation_category' => 'system',
+                    'actor_type' => 'system',
+                    'status' => 'failed',
+                    'data' => $context,
+                ]);
+            } catch (\Throwable $ignore) {
+                // ignore audit failures for region service
+            }
+        }
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext('/internal/regions/dataset', 'GET', null, $context);
+            $this->errorLogService->logError('RegionDatasetError', $message, $request, $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures for region service
         }
     }
 }

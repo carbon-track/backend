@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Services\AuditLogService;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Services\CarbonCalculatorService;
+use CarbonTrack\Services\ErrorLogService;
 
 class CarbonCalculatorServiceTest extends TestCase
 {
@@ -248,6 +250,34 @@ class CarbonCalculatorServiceTest extends TestCase
         $this->carbonCalculator->calculateCarbonSavings('activity-negative', -1, [
             'carbon_factor' => 2,
         ]);
+    }
+
+    public function testCalculateCarbonSavingsLogsWhenActivityResolveFails(): void
+    {
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                return ($payload['action'] ?? null) === 'carbon_activity_resolve_failed'
+                    && ($payload['operation_category'] ?? null) === 'carbon_management';
+            }))
+            ->willReturn(true);
+
+        $error = $this->createMock(ErrorLogService::class);
+        $error->expects($this->once())
+            ->method('logException')
+            ->with(
+                $this->isInstanceOf(\Throwable::class),
+                $this->anything(),
+                $this->arrayHasKey('context_message')
+            )
+            ->willReturn(1);
+
+        $service = new CarbonCalculatorService($logger, $audit, $error);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $service->calculateCarbonSavings('missing-activity', 1.0);
     }
 }
 

@@ -5,15 +5,20 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\CarbonActivity;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
 
 class CarbonCalculatorService
 {
     private ?Logger $logger;
+    private ?AuditLogService $auditLogService;
+    private ?ErrorLogService $errorLogService;
 
-    public function __construct(?Logger $logger = null)
+    public function __construct(?Logger $logger = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null)
     {
         $this->logger = $logger;
+        $this->auditLogService = $auditLogService;
+        $this->errorLogService = $errorLogService;
     }
 
     /**
@@ -222,6 +227,7 @@ class CarbonCalculatorService
         try {
             $model = CarbonActivity::find($activityId);
         } catch (\Throwable $e) {
+            $this->logFailure('carbon_activity_resolve_failed', $e, ['activity_id' => $activityId], '/internal/carbon-activities/resolve');
             if ($this->logger) {
                 $this->logger->warning('Failed to resolve carbon activity', [
                     'activity_id' => $activityId,
@@ -315,6 +321,10 @@ class CarbonCalculatorService
                 })
                 ->toArray();
         } catch (\Exception $e) {
+            $this->logFailure('carbon_activities_query_failed', $e, [
+                'category' => $category,
+                'search' => $search,
+            ], '/internal/carbon-activities/list');
             if ($this->logger) {
                 $this->logger->error('Failed to get activities from database', ['error' => $e->getMessage()]);
             }
@@ -373,6 +383,7 @@ class CarbonCalculatorService
                 ->values()
                 ->toArray();
         } catch (\Exception $e) {
+            $this->logFailure('carbon_categories_query_failed', $e, [], '/internal/carbon-activities/categories');
             if ($this->logger) {
                 $this->logger->error('Failed to get categories from database', ['error' => $e->getMessage()]);
             }
@@ -406,6 +417,34 @@ class CarbonCalculatorService
             'pending_records' => 0,
             'rejected_records' => 0,
         ];
+    }
+
+    private function logFailure(string $action, \Throwable $e, array $context, string $path): void
+    {
+        if ($this->auditLogService !== null) {
+            try {
+                $this->auditLogService->log([
+                    'action' => $action,
+                    'operation_category' => 'carbon_management',
+                    'actor_type' => 'system',
+                    'status' => 'failed',
+                    'data' => $context,
+                ]);
+            } catch (\Throwable $ignore) {
+                // ignore audit failures in calculator service
+            }
+        }
+
+        if ($this->errorLogService === null) {
+            return;
+        }
+
+        try {
+            $request = SyntheticRequestFactory::fromContext($path, 'GET', null, $context);
+            $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
+        } catch (\Throwable $ignore) {
+            // ignore error log failures in calculator service
+        }
     }
 }
 
