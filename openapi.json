@@ -6032,7 +6032,8 @@
                           "type": "string"
                         },
                         "content": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "Untrusted message body string. Clients must sanitize it before rendering as HTML."
                         },
                         "is_read": {
                           "type": "boolean"
@@ -14614,7 +14615,7 @@
           },
           "content": {
             "type": "string",
-            "description": "Message body text"
+            "description": "Message body string. Treat this field as untrusted content and sanitize it before rendering any HTML on the client."
           },
           "priority": {
             "type": "string",
@@ -14751,7 +14752,8 @@
             "type": "string"
           },
           "content": {
-            "type": "string"
+            "type": "string",
+            "description": "Broadcast body string stored for history. Treat it as untrusted content until a renderer explicitly sanitizes it."
           },
           "request_id": {
             "type": [
@@ -15919,7 +15921,8 @@
                           "type": "string"
                         },
                         "content": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "Untrusted message body string. Clients must sanitize it before rendering as HTML."
                         },
                         "is_read": {
                           "type": "boolean"
