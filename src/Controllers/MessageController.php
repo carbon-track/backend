@@ -1995,11 +1995,7 @@ $auditPayload = [
             return null;
         }
 
-        if ($value === null || $value === '') {
-            return $resolved;
-        }
-
-        return (int) $value === $resolved ? $resolved : $resolved;
+        return $resolved;
     }
 
     private function normalizeBroadcastSourceKind($value): string
@@ -2089,7 +2085,20 @@ $auditPayload = [
             }
 
             if (!in_array($tagName, $allowedTags, true)) {
+                $children = [];
+                $child = $node->firstChild;
+                while ($child !== null) {
+                    $children[] = $child;
+                    $child = $child->nextSibling;
+                }
+
                 $this->unwrapBroadcastAnnouncementNode($node);
+
+                foreach ($children as $childNode) {
+                    if ($childNode->parentNode !== null) {
+                        $this->sanitizeBroadcastAnnouncementNode($childNode, $document);
+                    }
+                }
                 return;
             }
 
