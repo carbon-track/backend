@@ -360,6 +360,7 @@ CREATE TABLE `multipart_uploads` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `upload_id` varchar(191) NOT NULL,
   `file_path` varchar(191) NOT NULL,
+  `sha256` varchar(64) DEFAULT NULL,
   `user_id` bigint(20) UNSIGNED NOT NULL,
   `expires_at` datetime DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT NULL,

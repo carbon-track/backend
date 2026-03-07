@@ -13,6 +13,7 @@ class MultipartUpload extends Model
     protected $fillable = [
         'upload_id',
         'file_path',
+        'sha256',
         'user_id',
         'expires_at',
     ];
