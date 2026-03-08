@@ -43,12 +43,28 @@ class MultipartUploadServiceTest extends TestCase
 
         $service = new MultipartUploadService(new Logger('multipart-test'), $audit, null);
 
-        $upload = $service->registerUpload('upload-123', '/tmp/file.bin', 42, 120);
+        $upload = $service->registerUpload('upload-123', '/tmp/file.bin', 42, null, 120);
         $service->clearUpload('upload-123');
 
         $this->assertSame('upload-123', $upload->upload_id);
         $this->assertContains('multipart_upload_registered', $actions);
         $this->assertContains('multipart_upload_cleared', $actions);
         $this->assertSame(0, (int) $this->capsule->getConnection()->table('multipart_uploads')->count());
+    }
+
+    public function testRegisterUploadAcceptsLegacyFourthArgumentAsTtl(): void
+    {
+        $service = new MultipartUploadService(new Logger('multipart-test'));
+
+        $before = time();
+        $upload = $service->registerUpload('upload-legacy', '/tmp/file.bin', 42, 120);
+        $after = time();
+
+        $expiresAt = strtotime((string) $upload->expires_at);
+
+        $this->assertNotFalse($expiresAt);
+        $this->assertGreaterThanOrEqual($before + 60, $expiresAt);
+        $this->assertLessThanOrEqual($after + 125, $expiresAt);
+        $this->assertNull($upload->sha256);
     }
 }
