@@ -179,6 +179,7 @@ class CloudflareR2Service
      * @param string $filePath 对象 key
      * @param string $contentType 内容类型
      * @param int $expiresIn 过期秒数（默认 600，最大 3600）
+    * @param array $metadata 自定义元数据（键值对）
      * @return array{url:string,method:string,headers:array,expires_in:int,expires_at:string}
      */
     public function generateUploadPresignedUrl(string $filePath, string $contentType, int $expiresIn = 600, array $metadata = []): array
