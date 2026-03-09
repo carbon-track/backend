@@ -59,8 +59,16 @@ use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserGroupService;
+use CarbonTrack\Services\PasskeyConfig;
+use CarbonTrack\Services\PasskeyService;
+use CarbonTrack\Services\WebauthnProviderInterface;
+use CarbonTrack\Services\NativeWebauthnProvider;
+use CarbonTrack\Services\NullWebauthnProvider;
 use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\CheckinController;
+use CarbonTrack\Controllers\PasskeyController;
+use CarbonTrack\Models\UserPasskey;
+use CarbonTrack\Models\WebauthnChallenge;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -488,6 +496,43 @@ $__deps_initializer = function (Container $container) {
         return new QuotaConfigService();
     });
 
+    $container->set(PasskeyConfig::class, function () {
+        return new PasskeyConfig();
+    });
+
+    $container->set(WebauthnProviderInterface::class, function (ContainerInterface $c) {
+        $nativeProvider = new NativeWebauthnProvider();
+        if ($nativeProvider->isAvailable()) {
+            return $nativeProvider;
+        }
+
+        return new NullWebauthnProvider($c->get(PasskeyConfig::class));
+    });
+
+    $container->set(UserPasskey::class, function (ContainerInterface $c) {
+        return new UserPasskey($c->get(PDO::class));
+    });
+
+    $container->set(WebauthnChallenge::class, function (ContainerInterface $c) {
+        return new WebauthnChallenge($c->get(PDO::class));
+    });
+
+    $container->set(PasskeyService::class, function (ContainerInterface $c) {
+        return new PasskeyService(
+            $c->get(PasskeyConfig::class),
+            $c->get(UserPasskey::class),
+            $c->get(WebauthnChallenge::class),
+            $c->get(WebauthnProviderInterface::class),
+            $c->get(AuditLogService::class),
+            $c->get(PDO::class),
+            $c->get(RegionService::class),
+            $c->get(CheckinService::class),
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
+            $c->get(ErrorLogService::class),
+            $c->get(Logger::class)
+        );
+    });
+
     $container->set(UserAiController::class, function (ContainerInterface $c) {
         return new UserAiController(
             $c->get(UserAiService::class),
@@ -705,6 +750,15 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(PasskeyController::class, function (ContainerInterface $c) {
+        return new PasskeyController(
+            $c->get(AuthService::class),
+            $c->get(PasskeyService::class),
+            $c->get(Logger::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
     // System Log Controller
     $container->set(SystemLogController::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
@@ -797,6 +851,4 @@ if (isset($container) && $container instanceof Container) {
 }
 
 return $__deps_initializer;
-
-
 

@@ -1663,6 +1663,461 @@
         }
       }
     },
+    "/users/me/passkeys": {
+      "get": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "列出当前用户的 Passkeys",
+        "description": "返回当前登录用户已注册的 Passkey 摘要信息。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回当前用户的 Passkey 列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "查询 Passkey 列表失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/passkeys/registration/options": {
+      "post": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "创建 Passkey 注册选项",
+        "description": "为当前登录用户生成 WebAuthn 注册 challenge 与创建选项，并将 challenge 持久化到后端。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegistrationOptionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功返回 Passkey 注册选项与 challenge 元数据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegistrationOptionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "当前账号缺少可用于 Passkey 的 UUID 身份。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "部署配置已禁用 Passkeys。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "生成注册选项失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/passkeys/registration/verify": {
+      "post": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "完成 Passkey 注册",
+        "description": "提交浏览器返回的 WebAuthn 注册凭据。后端会校验 challenge、origin、rpIdHash、attested credential data，并在通过后持久化 passkey。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyRegistrationVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Passkey 注册完成并已写入后端。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyRegistrationVerifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "challenge_id 或 credential 请求体非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "challenge 不存在或已过期。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Passkey 已存在，或当前账号缺少可用于 Passkey 的 UUID 身份。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "当前环境尚未安装或接入 WebAuthn PHP 校验库。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Passkey 注册失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/me/passkeys/{id}": {
+      "delete": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "删除当前用户的 Passkey",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Passkey 已禁用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Passkey deleted successfully"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Passkey id 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Passkey 不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "部署配置已禁用 Passkeys。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "删除 Passkey 失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkey/login/options": {
+      "post": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "创建 Passkey 登录选项",
+        "description": "生成 WebAuthn assertion challenge。可选传入 identifier 以辅助账号匹配；无论账号是否存在或是否已注册 Passkey，均返回通用登录选项以降低枚举风险。",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyAuthenticationOptionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功返回 Passkey 登录 challenge 与 assertion 选项。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyAuthenticationOptionsResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "部署配置已禁用 Passkeys。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "创建 Passkey 登录选项失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/passkey/login/verify": {
+      "post": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "完成 Passkey 登录",
+        "description": "提交浏览器返回的 WebAuthn assertion 凭据。后端会校验 challenge、origin、rpIdHash、signature 与 signCount，并在通过后返回与密码登录兼容的 JWT + user 载荷。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyAuthenticationVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Passkey 登录成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyAuthenticationVerifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "challenge_id 或 credential 请求体非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Passkey 验证失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "challenge、用户或 passkey 不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Passkey 所属账号缺少可用于签发登录载荷的 UUID 身份。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "当前部署未接入可用 WebAuthn 校验器。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Passkey 登录失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/users/me/notification-preferences": {
       "get": {
         "tags": [
@@ -17156,6 +17611,527 @@
               "null"
             ],
             "description": "Resolved state/province name from locales/states.json."
+          }
+        }
+      },
+      "PasskeySummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "credential_type": {
+            "type": "string",
+            "example": "public-key"
+          },
+          "rp_id": {
+            "type": "string"
+          },
+          "user_handle": {
+            "type": "string"
+          },
+          "transports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "aaguid": {
+            "type": "string",
+            "nullable": true
+          },
+          "sign_count": {
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "attested_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "backup_eligible": {
+            "type": "boolean"
+          },
+          "backup_state": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "PasskeyListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "passkeys": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PasskeySummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PasskeyRegistrationOptionsRequest": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "用户为即将注册的 Passkey 指定的可读名称。"
+          }
+        }
+      },
+      "PasskeyIntegrationMetadata": {
+        "type": "object",
+        "properties": {
+          "package": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "implementation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "native"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "expected_class": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_extension": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "rp_id": {
+            "type": "string"
+          },
+          "rp_name": {
+            "type": "string"
+          },
+          "allowed_origins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PasskeyCredentialDescriptor": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "public-key"
+          },
+          "id": {
+            "type": "string"
+          },
+          "transports": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PasskeyRegistrationOptionsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "challenge_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "public_key": {
+                "type": "object",
+                "properties": {
+                  "rp": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "user": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "challenge": {
+                    "type": "string"
+                  },
+                  "pubKeyCredParams": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "alg": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "timeout": {
+                    "type": "integer"
+                  },
+                  "attestation": {
+                    "type": "string"
+                  },
+                  "authenticatorSelection": {
+                    "type": "object",
+                    "properties": {
+                      "residentKey": {
+                        "type": "string"
+                      },
+                      "userVerification": {
+                        "type": "string"
+                      },
+                      "authenticatorAttachment": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "excludeCredentials": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PasskeyCredentialDescriptor"
+                    }
+                  },
+                  "extensions": {
+                    "type": "object",
+                    "properties": {
+                      "credProps": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              },
+              "integration": {
+                "$ref": "#/components/schemas/PasskeyIntegrationMetadata"
+              }
+            }
+          }
+        }
+      },
+      "PasskeyRegistrationVerifyRequest": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "credential"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "credential": {
+            "type": "object",
+            "description": "浏览器 navigator.credentials.create() 返回的 PublicKeyCredential JSON 结构。"
+          }
+        }
+      },
+      "PasskeyRegistrationVerifyResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "passkey": {
+                "$ref": "#/components/schemas/PasskeySummary"
+              }
+            }
+          }
+        }
+      },
+      "PasskeyAuthenticationOptionsRequest": {
+        "type": "object",
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "可选。用户名或邮箱；提供后会将 assertion 限定为该账号已注册的 passkeys。"
+          }
+        }
+      },
+      "PasskeyAuthenticationOptionsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "challenge_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "public_key": {
+                "type": "object",
+                "properties": {
+                  "challenge": {
+                    "type": "string"
+                  },
+                  "rpId": {
+                    "type": "string"
+                  },
+                  "timeout": {
+                    "type": "integer"
+                  },
+                  "userVerification": {
+                    "type": "string"
+                  },
+                  "allowCredentials": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PasskeyCredentialDescriptor"
+                    }
+                  }
+                }
+              },
+              "integration": {
+                "$ref": "#/components/schemas/PasskeyIntegrationMetadata"
+              }
+            }
+          }
+        }
+      },
+      "PasskeyAuthenticationVerifyRequest": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "credential"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "credential": {
+            "type": "object",
+            "description": "浏览器 navigator.credentials.get() 返回的 PublicKeyCredential JSON 结构。"
+          }
+        }
+      },
+      "PasskeyAuthenticationVerifyResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Login successful"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "user": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "integer"
+                  },
+                  "uuid": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "email": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "school_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "school_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "points": {
+                    "type": "integer"
+                  },
+                  "is_admin": {
+                    "type": "boolean"
+                  },
+                  "email_verified_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "avatar_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "avatar_path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "avatar_url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lastlgn": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "updated_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "region_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "region_label": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "country_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "state_code": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "passkey": {
+                "$ref": "#/components/schemas/PasskeySummary"
+              }
+            }
           }
         }
       },

@@ -311,6 +311,56 @@ CREATE TABLE `user_checkins` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `user_passkeys`
+--
+
+CREATE TABLE `user_passkeys` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `credential_id` varchar(1024) NOT NULL,
+  `credential_id_hash` char(64) NOT NULL,
+  `credential_type` varchar(32) NOT NULL DEFAULT 'public-key',
+  `label` varchar(100) DEFAULT NULL,
+  `public_key` longtext NOT NULL,
+  `rp_id` varchar(255) NOT NULL,
+  `user_handle` varchar(255) NOT NULL,
+  `transports` longtext DEFAULT NULL,
+  `aaguid` char(36) DEFAULT NULL,
+  `sign_count` bigint(20) UNSIGNED NOT NULL DEFAULT '0',
+  `attestation_format` varchar(64) DEFAULT NULL,
+  `backup_eligible` tinyint(1) NOT NULL DEFAULT '0',
+  `backup_state` tinyint(1) NOT NULL DEFAULT '0',
+  `meta_json` longtext DEFAULT NULL,
+  `last_used_at` datetime DEFAULT NULL,
+  `attested_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `disabled_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `webauthn_challenges`
+--
+
+CREATE TABLE `webauthn_challenges` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `challenge_id` char(36) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `flow_type` varchar(32) NOT NULL,
+  `challenge` varchar(255) NOT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
+  `context_json` longtext DEFAULT NULL,
+  `expires_at` datetime NOT NULL,
+  `consumed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `error_logs`
 --
 
@@ -838,6 +888,28 @@ ALTER TABLE `user_checkins`
   ADD KEY `idx_user_checkins_date` (`checkin_date`);
 
 --
+-- 表的索引 `user_passkeys`
+--
+ALTER TABLE `user_passkeys`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_user_passkeys_credential_id_hash` (`credential_id_hash`),
+  ADD KEY `idx_user_passkeys_user_id` (`user_id`),
+  ADD KEY `idx_user_passkeys_rp_id` (`rp_id`),
+  ADD KEY `idx_user_passkeys_disabled_at` (`disabled_at`),
+  ADD KEY `idx_user_passkeys_last_used_at` (`last_used_at`);
+
+--
+-- 表的索引 `webauthn_challenges`
+--
+ALTER TABLE `webauthn_challenges`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_webauthn_challenges_challenge_id` (`challenge_id`),
+  ADD KEY `idx_webauthn_challenges_user_id` (`user_id`),
+  ADD KEY `idx_webauthn_challenges_flow_type` (`flow_type`),
+  ADD KEY `idx_webauthn_challenges_expires_at` (`expires_at`),
+  ADD KEY `idx_webauthn_challenges_request_id` (`request_id`);
+
+--
 -- 表的索引 `error_logs`
 --
 ALTER TABLE `error_logs`
@@ -1099,6 +1171,18 @@ ALTER TABLE `message_broadcasts`
 --
 ALTER TABLE `user_checkins`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `user_passkeys`
+--
+ALTER TABLE `user_passkeys`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `webauthn_challenges`
+--
+ALTER TABLE `webauthn_challenges`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `points_transactions`
