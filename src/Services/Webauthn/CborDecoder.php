@@ -9,12 +9,17 @@ final class CborDecoder
     public static function decode(string $payload)
     {
         $offset = 0;
-        $value = self::readItem($payload, $offset);
+        $value = self::decodeWithOffset($payload, $offset);
         if ($offset !== strlen($payload)) {
             throw new \InvalidArgumentException('Unexpected trailing bytes in CBOR payload.');
         }
 
         return $value;
+    }
+
+    public static function decodeWithOffset(string $payload, int &$offset)
+    {
+        return self::readItem($payload, $offset);
     }
 
     private static function readItem(string $payload, int &$offset)

@@ -14,6 +14,7 @@ class NativeWebauthnProvider implements WebauthnProviderInterface
     private const FLAG_BACKUP_ELIGIBLE = 0x08;
     private const FLAG_BACKUP_STATE = 0x10;
     private const FLAG_ATTESTED_CREDENTIAL_DATA = 0x40;
+    private const FLAG_EXTENSION_DATA = 0x80;
 
     public function isAvailable(): bool
     {
@@ -280,12 +281,32 @@ class NativeWebauthnProvider implements WebauthnProviderInterface
                 throw new \InvalidArgumentException('Credential id is missing from authenticator data.');
             }
 
-            $credentialPublicKey = substr($authData, $offset);
+            $oldOffset = $offset;
+            try {
+                CborDecoder::decodeWithOffset($authData, $offset);
+                $credentialPublicKey = substr($authData, $oldOffset, $offset - $oldOffset);
+            } catch (\Exception $e) {
+                throw new \InvalidArgumentException('Failed to decode credential public key: ' . $e->getMessage());
+            }
+
             if ($credentialPublicKey === false || $credentialPublicKey === '') {
                 throw new \InvalidArgumentException('Credential public key is missing from authenticator data.');
             }
         } elseif ($requireAttestedCredentialData) {
             throw new \InvalidArgumentException('Authenticator data is missing attested credential data.');
+        }
+
+        $extensions = null;
+        if (($flags & self::FLAG_EXTENSION_DATA) !== 0) {
+            try {
+                $extensions = CborDecoder::decodeWithOffset($authData, $offset);
+            } catch (\Exception $e) {
+                throw new \InvalidArgumentException('Failed to decode extensions: ' . $e->getMessage());
+            }
+        }
+
+        if ($offset !== strlen($authData)) {
+            throw new \InvalidArgumentException('Authenticator data contains unexpected trailing bytes.');
         }
 
         return [
@@ -298,6 +319,7 @@ class NativeWebauthnProvider implements WebauthnProviderInterface
             'aaguid' => $aaguid,
             'credential_id' => $credentialId !== null ? Base64Url::encode($credentialId) : null,
             'credential_public_key' => $credentialPublicKey,
+            'extensions' => $extensions,
         ];
     }
 
