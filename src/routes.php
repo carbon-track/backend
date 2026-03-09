@@ -25,6 +25,7 @@ use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Controllers\CheckinController;
+use CarbonTrack\Controllers\PasskeyController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
@@ -93,6 +94,8 @@ return function (App $app) {
         $group->group(PATH_AUTH, function (RouteCollectorProxy $auth) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
+            $auth->post('/passkey/login/options', [PasskeyController::class, 'beginAuthentication']);
+            $auth->post('/passkey/login/verify', [PasskeyController::class, 'completeAuthentication']);
             $auth->post('/logout', [AuthController::class, 'logout']);
             $auth->post('/forgot-password', [AuthController::class, 'forgotPassword']);
             $auth->post('/send-verification-code', [AuthController::class, 'sendVerificationCode']);
@@ -114,6 +117,10 @@ return function (App $app) {
             $users->get('/me/badges', [BadgeController::class, 'myBadges']);
             $users->get('/me/checkins', [CheckinController::class, 'list']);
             $users->post('/me/checkins/makeup', [CheckinController::class, 'makeup']);
+            $users->get('/me/passkeys', [PasskeyController::class, 'list']);
+            $users->post('/me/passkeys/registration/options', [PasskeyController::class, 'beginRegistration']);
+            $users->post('/me/passkeys/registration/verify', [PasskeyController::class, 'completeRegistration']);
+            $users->delete('/me/passkeys/{id:[0-9]+}', [PasskeyController::class, 'delete']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);
@@ -385,4 +392,3 @@ return function (App $app) {
         return $response->withStatus(404)->withHeader('Content-Type', CONTENT_TYPE_JSON);
     });
 };
-

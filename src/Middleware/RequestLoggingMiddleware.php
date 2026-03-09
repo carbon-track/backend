@@ -10,6 +10,7 @@ use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 
 class RequestLoggingMiddleware implements MiddlewareInterface
@@ -99,16 +100,11 @@ class RequestLoggingMiddleware implements MiddlewareInterface
     {
         $incoming = trim((string) $incoming);
 
-        if ($incoming !== '' && $this->isValidUuid($incoming)) {
+        if ($incoming !== '' && Uuid::isValid($incoming)) {
             return strtolower($incoming);
         }
 
-        return $this->generateRequestId();
-    }
-
-    private function isValidUuid(string $uuid): bool
-    {
-        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $uuid) === 1;
+        return Uuid::generateV4();
     }
 
     private function shouldSkip(string $path): bool
@@ -119,23 +115,6 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         // skip system log endpoints themselves to prevent recursion once added
         if (strpos($path, '/api/v1/admin/system-logs') === 0) return true;
         return false;
-    }
-
-    private function generateRequestId(): string
-    {
-        $bytes = random_bytes(16);
-        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
-        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
-        $hex = bin2hex($bytes);
-
-        return sprintf(
-            '%s-%s-%s-%s-%s',
-            substr($hex, 0, 8),
-            substr($hex, 8, 4),
-            substr($hex, 12, 4),
-            substr($hex, 16, 4),
-            substr($hex, 20, 12)
-        );
     }
 
     private function decodeIfJson(?string $body)
