@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS `user_passkeys` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_user_passkeys_credential_id_hash` (`credential_id_hash`),
   KEY `idx_user_passkeys_user_id` (`user_id`),
-  KEY `idx_user_passkeys_rp_id` (`rp_id`),
+ KEY `idx_user_passkeys_rp_id` (`rp_id`(191)),
   KEY `idx_user_passkeys_disabled_at` (`disabled_at`),
   KEY `idx_user_passkeys_last_used_at` (`last_used_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=DYNAMIC;
