@@ -20,7 +20,12 @@ class AuthMiddlewareTest extends TestCase
     {
         $auth = $this->createMock(AuthService::class);
         $audit = $this->createMock(AuditLogService::class);
-        $auth->method('validateToken')->willReturn(['user_id' => 1, 'email' => 'a@b.com', 'role' => 'user']);
+        $auth->method('validateToken')->willReturn([
+            'user_id' => 1,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440001',
+            'email' => 'a@b.com',
+            'role' => 'user'
+        ]);
         $audit->expects($this->once())->method('log');
 
         $mw = new AuthMiddleware($auth, $audit);
@@ -28,6 +33,11 @@ class AuthMiddlewareTest extends TestCase
         $request = makeRequest('GET', '/', null, null, ['Authorization' => 'Bearer token']);
         $handler = new class implements \Psr\Http\Server\RequestHandlerInterface {
             public function handle(\Psr\Http\Message\ServerRequestInterface $request): \Psr\Http\Message\ResponseInterface {
+                TestCase::assertSame(1, $request->getAttribute('user_id'));
+                TestCase::assertSame('550e8400-e29b-41d4-a716-446655440001', $request->getAttribute('user_uuid'));
+                TestCase::assertSame('a@b.com', $request->getAttribute('user_email'));
+                TestCase::assertSame('user', $request->getAttribute('user_role'));
+
                 $resp = new \Slim\Psr7\Response();
                 $resp->getBody()->write('ok');
                 return $resp;

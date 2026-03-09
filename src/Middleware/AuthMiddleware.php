@@ -40,6 +40,7 @@ class AuthMiddleware implements MiddlewareInterface
             // Add user info to request attributes
             $request = $request
                 ->withAttribute('user_id', $payload['user_id'])
+                ->withAttribute('user_uuid', $payload['uuid'] ?? null)
                 ->withAttribute('user_email', $payload['email'])
                 ->withAttribute('user_role', $payload['role'] ?? 'user')
                 ->withAttribute('token_payload', $payload);
@@ -68,10 +69,12 @@ class AuthMiddleware implements MiddlewareInterface
             if ($isTesting) {
                 $fallback = [
                     'user_id' => null,
+                    'uuid' => null,
                     'email' => null,
                     'role' => 'admin',
                     'user' => [
                         'id' => null,
+                        'uuid' => null,
                         'is_admin' => true,
                         'username' => 'test-admin',
                         'email' => null,
@@ -79,6 +82,7 @@ class AuthMiddleware implements MiddlewareInterface
                 ];
                 $request = $request
                     ->withAttribute('user_id', $fallback['user_id'])
+                    ->withAttribute('user_uuid', $fallback['uuid'])
                     ->withAttribute('user_email', $fallback['email'])
                     ->withAttribute('user_role', $fallback['role'])
                     ->withAttribute('token_payload', $fallback);

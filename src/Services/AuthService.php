@@ -98,6 +98,7 @@ class AuthService
         $user = (array)$decoded['user'];
         return [
             'user_id' => $user['id'] ?? null,
+            'uuid' => $user['uuid'] ?? null,
             'email' => $user['email'] ?? null,
             'role' => ($user['is_admin'] ?? false) ? 'admin' : 'user',
             'user' => $user,
