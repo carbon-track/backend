@@ -1725,6 +1725,7 @@ class ComposerStaticInitb0a5952653a4f33403aa273cd7543b80
         'CarbonTrack\\Tests\\Unit\\Services\\SystemLogServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/SystemLogServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\TurnstileServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/TurnstileServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\UserAiServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/UserAiServiceTest.php',
+        'CarbonTrack\\Tests\\Unit\\Services\\Webauthn\\CborDecoderTest' => __DIR__ . '/../..' . '/tests/Unit/Services/Webauthn/CborDecoderTest.php',
         'CarbonTrack\\Tests\\Unit\\Support\\ErrorResponseBuilderTest' => __DIR__ . '/../..' . '/tests/Unit/Support/ErrorResponseBuilderTest.php',
         'CarbonTrack\\Tests\\Unit\\Support\\RequestIdNormalizerTest' => __DIR__ . '/../..' . '/tests/Unit/Support/RequestIdNormalizerTest.php',
         'Carbon\\AbstractTranslator' => __DIR__ . '/..' . '/nesbot/carbon/src/Carbon/AbstractTranslator.php',

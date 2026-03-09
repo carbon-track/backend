@@ -127,6 +127,38 @@ class PasskeyServiceTest extends TestCase
         $this->assertSame('internal', json_decode((string) $stored['transports'], true)[0]);
     }
 
+    public function testCompleteRegistrationParsesCredentialPublicKeyWhenExtensionsFollow(): void
+    {
+        $registration = $this->service->beginRegistration($this->userFixture(), [
+            'label' => 'Desk Key With Extensions',
+        ]);
+        $keyPair = $this->generateEcKeyPair();
+        $credentialIdBytes = 'credential-registration-ext-1';
+
+        $result = $this->service->completeRegistration($this->userFixture(), [
+            'challenge_id' => $registration['challenge_id'],
+            'credential' => $this->buildRegistrationCredential(
+                $registration['public_key']['challenge'],
+                'https://app.example.test',
+                $keyPair['x'],
+                $keyPair['y'],
+                $credentialIdBytes,
+                $this->cborMap([
+                    'credProtect' => 1,
+                ])
+            ),
+        ]);
+
+        $expectedCredentialId = $this->base64UrlEncode($credentialIdBytes);
+        $this->assertSame($expectedCredentialId, $result['credential_id']);
+
+        $stored = $this->pdo->query('SELECT public_key FROM user_passkeys WHERE credential_id = "' . $expectedCredentialId . '"')->fetch(PDO::FETCH_ASSOC);
+        $this->assertIsArray($stored);
+        $publicKey = json_decode((string) $stored['public_key'], true);
+        $this->assertSame('EC2', $publicKey['kty']);
+        $this->assertSame(-7, $publicKey['alg']);
+    }
+
     public function testCompleteAuthenticationVerifiesAssertionAndUpdatesCounter(): void
     {
         $registration = $this->service->beginRegistration($this->userFixture(), [
@@ -347,7 +379,8 @@ class PasskeyServiceTest extends TestCase
         string $origin,
         string $x,
         string $y,
-        string $credentialIdBytes
+        string $credentialIdBytes,
+        ?array $extensions = null
     ): array {
         $clientDataJson = json_encode([
             'type' => 'webauthn.create',
@@ -364,13 +397,21 @@ class PasskeyServiceTest extends TestCase
             -3 => $this->cborBytes($y),
         ]));
 
+        $flags = 0x45;
+        $extensionData = '';
+        if ($extensions !== null) {
+            $flags |= 0x80;
+            $extensionData = $this->cborEncode($extensions);
+        }
+
         $authenticatorData = hash('sha256', 'app.example.test', true)
-            . chr(0x45)
+            . chr($flags)
             . pack('N', 0)
             . str_repeat("\x00", 16)
             . pack('n', strlen($credentialIdBytes))
             . $credentialIdBytes
-            . $credentialPublicKey;
+            . $credentialPublicKey
+            . $extensionData;
 
         $attestationObject = $this->cborEncode($this->cborMap([
             'fmt' => 'none',

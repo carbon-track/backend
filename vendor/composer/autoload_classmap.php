@@ -1322,6 +1322,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\SystemLogServiceTest' => $baseDir . '/tests/Unit/Services/SystemLogServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\TurnstileServiceTest' => $baseDir . '/tests/Unit/Services/TurnstileServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\UserAiServiceTest' => $baseDir . '/tests/Unit/Services/UserAiServiceTest.php',
+    'CarbonTrack\\Tests\\Unit\\Services\\Webauthn\\CborDecoderTest' => $baseDir . '/tests/Unit/Services/Webauthn/CborDecoderTest.php',
     'CarbonTrack\\Tests\\Unit\\Support\\ErrorResponseBuilderTest' => $baseDir . '/tests/Unit/Support/ErrorResponseBuilderTest.php',
     'CarbonTrack\\Tests\\Unit\\Support\\RequestIdNormalizerTest' => $baseDir . '/tests/Unit/Support/RequestIdNormalizerTest.php',
     'Carbon\\AbstractTranslator' => $vendorDir . '/nesbot/carbon/src/Carbon/AbstractTranslator.php',
