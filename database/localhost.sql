@@ -718,6 +718,7 @@ INSERT INTO `user_groups` (`id`, `name`, `code`, `config`, `is_default`, `notes`
 
 CREATE TABLE `users` (
   `id` int(11) NOT NULL,
+  `uuid` char(36) NOT NULL,
   `username` varchar(255) DEFAULT NULL,
   `password` varchar(255) NOT NULL,
   `lastlgn` datetime DEFAULT NULL,
@@ -1023,6 +1024,7 @@ ALTER TABLE `user_usage_stats`
 ALTER TABLE `users`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `id` (`id`),
+  ADD UNIQUE KEY `idx_users_uuid_unique` (`uuid`),
   ADD UNIQUE KEY `idx_users_email_unique` (`email`),
   ADD KEY `idx_users_verification_token` (`verification_token`),
   ADD KEY `idx_users_email_verified_at` (`email_verified_at`),

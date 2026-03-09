@@ -12372,6 +12372,10 @@
                   "id": {
                     "type": "integer"
                   },
+                  "uuid": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
                   "username": {
                     "type": "string"
                   },

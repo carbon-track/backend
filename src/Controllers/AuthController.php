@@ -152,9 +152,11 @@ class AuthController
             $hashed = password_hash((string)$data['password'], PASSWORD_DEFAULT);
             // 为兼容旧库，这里优先写入 password 列
             // 不再接受/存储 real_name 或 class_name，保持向后兼容：如果客户端仍发送则忽略
+            $userUuid = $this->generateUuidV4();
             $now = date('Y-m-d H:i:s');
-            $stmt = $this->db->prepare('INSERT INTO users (username, email, password, school_id, region_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+            $stmt = $this->db->prepare('INSERT INTO users (uuid, username, email, password, school_id, region_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
             $stmt->execute([
+                $userUuid,
                 $data['username'],
                 $data['email'],
                 $hashed,
@@ -187,7 +189,7 @@ class AuthController
                 'username' => $data['username'],
                 'email' => $data['email'],
                 'is_admin' => false,
-                'uuid' => null
+                'uuid' => $userUuid
             ]);
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -195,6 +197,7 @@ class AuthController
                 'data' => [
                     'user' => [
                         'id' => $userId,
+                        'uuid' => $userUuid,
                         'username' => $data['username'],
                         'email' => $data['email'],
                         'points' => 0,
@@ -1288,5 +1291,14 @@ class AuthController
             return $cf;
         }
         return $server['REMOTE_ADDR'] ?? '0.0.0.0';
+    }
+
+    private function generateUuidV4(): string
+    {
+        $bytes = random_bytes(16);
+        $bytes[6] = chr((ord($bytes[6]) & 0x0f) | 0x40);
+        $bytes[8] = chr((ord($bytes[8]) & 0x3f) | 0x80);
+
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4));
     }
 }

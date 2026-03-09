@@ -53,7 +53,7 @@ class AuthServiceTest extends TestCase
     {
         $user = [
             'id' => 1,
-            'uuid' => 'test-uuid',
+            'uuid' => '550e8400-e29b-41d4-a716-446655440000',
             'username' => 'testuser',
             'email' => 'test@example.com',
             'is_admin' => false
@@ -65,6 +65,27 @@ class AuthServiceTest extends TestCase
         $this->assertIsArray($decoded);
         $this->assertEquals($user['id'], $decoded['user']->id);
         $this->assertEquals($user['username'], $decoded['user']->username);
+        $this->assertEquals($user['uuid'], $decoded['user']->uuid);
+    }
+
+    public function testValidateTokenNormalizesUuidIntoMiddlewarePayload(): void
+    {
+        $user = [
+            'id' => 42,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440042',
+            'username' => 'uuid-user',
+            'email' => 'uuid@example.com',
+            'is_admin' => false,
+        ];
+
+        $token = $this->authService->generateJwtToken($user);
+        $payload = $this->authService->validateToken($token);
+
+        $this->assertSame($user['id'], $payload['user_id']);
+        $this->assertSame($user['uuid'], $payload['uuid']);
+        $this->assertSame($user['email'], $payload['email']);
+        $this->assertSame('user', $payload['role']);
+        $this->assertSame($user['uuid'], $payload['user']['uuid']);
     }
 
     public function testValidateJwtTokenWithInvalidToken(): void
