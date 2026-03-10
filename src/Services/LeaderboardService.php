@@ -20,16 +20,18 @@ class LeaderboardService
     private ?Logger $logger;
     private ?AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
+    private UserProfileViewService $userProfileViewService;
     private string $cacheFile;
     private int $ttlSeconds;
 
-    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null)
+    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null, ?UserProfileViewService $userProfileViewService = null)
     {
         $this->db = $db;
         $this->regionService = $regionService;
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
         $baseDir = $cacheDir ?? (dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache');
         if (!is_dir($baseDir)) {
             @mkdir($baseDir, 0755, true);
@@ -85,7 +87,7 @@ class LeaderboardService
     private function generateSnapshot(): array
     {
         $sql = "SELECT u.id, u.username, COALESCE(u.points, 0) AS total_points,
-                    u.avatar_id, u.region_code, u.school_id, s.name AS school_name, a.file_path AS avatar_path
+                    u.avatar_id, u.region_code, u.school_id, u.school, u.location, s.name AS school_name, a.file_path AS avatar_path
                 FROM users u
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 LEFT JOIN schools s ON u.school_id = s.id
@@ -101,21 +103,22 @@ class LeaderboardService
         $schools = [];
 
         foreach ($rows as $row) {
-            $entry = $this->formatEntry($row);
+            $profileFields = $this->userProfileViewService->buildProfileFields($row);
+            $entry = $this->formatEntry($row, $profileFields);
 
             if (count($global) < self::GLOBAL_LIMIT) {
                 $entry['rank'] = count($global) + 1;
                 $global[] = $entry;
             }
 
-            $regionCode = $row['region_code'] ?? null;
+            $regionCode = $profileFields['region_code'] ?? null;
             if ($regionCode) {
                 if (!isset($regions[$regionCode])) {
-                    $context = $this->regionService->getRegionContext($regionCode) ?? [
-                        'region_code' => $regionCode,
-                        'country_code' => null,
-                        'state_code' => null,
-                        'region_label' => null,
+                    $context = [
+                        'region_code' => $profileFields['region_code'] ?? $regionCode,
+                        'country_code' => $profileFields['country_code'] ?? null,
+                        'state_code' => $profileFields['state_code'] ?? null,
+                        'region_label' => $profileFields['region_label'] ?? null,
                     ];
                     $regions[$regionCode] = [
                         'region_code' => $context['region_code'] ?? $regionCode,
@@ -136,7 +139,7 @@ class LeaderboardService
                 if (!isset($schools[$schoolId])) {
                     $schools[$schoolId] = [
                         'school_id' => $schoolId,
-                        'school_name' => $row['school_name'] ?? null,
+                        'school_name' => $profileFields['school_name'] ?? null,
                         'entries' => [],
                     ];
                 }
@@ -204,7 +207,7 @@ class LeaderboardService
         ]);
     }
 
-    private function formatEntry(array $row): array
+    private function formatEntry(array $row, array $profileFields): array
     {
         return [
             'id' => isset($row['id']) ? (int) $row['id'] : null,
@@ -212,9 +215,9 @@ class LeaderboardService
             'total_points' => isset($row['total_points']) ? (float) $row['total_points'] : 0.0,
             'avatar_id' => isset($row['avatar_id']) ? (int) $row['avatar_id'] : null,
             'avatar_path' => $row['avatar_path'] ?? null,
-            'region_code' => $row['region_code'] ?? null,
+            'region_code' => $profileFields['region_code'] ?? null,
             'school_id' => isset($row['school_id']) ? (int) $row['school_id'] : null,
-            'school_name' => $row['school_name'] ?? null,
+            'school_name' => $profileFields['school_name'] ?? null,
         ];
     }
 

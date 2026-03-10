@@ -337,6 +337,55 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertEquals(50, $points);
     }
 
+    public function testGetPendingRecordsUsesLegacySchoolFallback(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->method('execute')->willReturn(true);
+        $countStmt->method('fetch')->willReturn(['total' => 1]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->method('bindValue')->willReturn(true);
+        $listStmt->method('execute')->willReturn(true);
+        $listStmt->method('fetchAll')->willReturn([
+            [
+                'id' => 'r1',
+                'images' => null,
+                'username' => 'alice',
+                'email' => 'alice@example.com',
+                'school' => 'Legacy Academy',
+                'school_name' => null,
+                'activity_name_zh' => '节能',
+                'activity_name_en' => 'Energy Saving',
+                'category' => 'energy',
+                'amount' => 3,
+                'unit' => 'times',
+                'carbon_saved' => 1.2,
+                'points_earned' => 12,
+                'status' => 'pending',
+            ],
+        ]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+
+        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $request = makeRequest('GET', '/admin/activities/pending');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getPendingRecords($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('Legacy Academy', $json['data'][0]['school_name']);
+    }
+
     public function testGetRecordDetailAsAdmin(): void
     {
         $pdo = $this->createMock(\PDO::class);

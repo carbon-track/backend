@@ -65,7 +65,7 @@ class AdminControllerTest extends TestCase
             });
         $listStmt->method('execute')->willReturn(true);
         $listStmt->method('fetchAll')->willReturn([
-            ['id'=>1,'username'=>'u1','email'=>'u1@x.com','points'=>100]
+            ['id'=>1,'username'=>'u1','email'=>'u1@x.com','points'=>100,'school_id'=>9,'school_name'=>null,'school'=>'Legacy Academy']
         ]);
 
         $countStmt = $this->createMock(\PDOStatement::class);
@@ -102,10 +102,52 @@ class AdminControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['data']['pagination']['total_items']);
         $this->assertEquals('u1', $json['data']['users'][0]['username']);
+        $this->assertSame('Legacy Academy', $json['data']['users'][0]['school_name']);
         $this->assertEquals('%u%', $capturedParams[':search_username'] ?? null);
         $this->assertEquals('%u%', $capturedParams[':search_email'] ?? null);
         $this->assertEquals('active', $capturedParams[':status'] ?? null);
         $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
+    }
+
+    public function testLoadUserRowFallsBackToLegacySchool(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $quotaConfigService = new QuotaConfigService();
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetch')->willReturn([
+            'id' => 2,
+            'username' => 'legacy',
+            'email' => 'legacy@example.com',
+            'status' => 'active',
+            'is_admin' => 0,
+            'points' => 12,
+            'created_at' => '2025-01-01 00:00:00',
+            'updated_at' => '2025-01-02 00:00:00',
+            'school_id' => 7,
+            'school_name' => null,
+            'school' => 'Legacy Academy',
+            'lastlgn' => null,
+        ]);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'lastlgn');
+
+        $method = new \ReflectionMethod($controller, 'loadUserRow');
+        $method->setAccessible(true);
+        $row = $method->invoke($controller, 2);
+
+        $this->assertSame('Legacy Academy', $row['school_name']);
+        $this->assertSame(7, $row['school_id']);
     }
 
 }

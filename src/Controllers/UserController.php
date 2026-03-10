@@ -19,6 +19,7 @@ use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
 use PDO;
@@ -40,6 +41,7 @@ class UserController
     private ?LeaderboardService $leaderboardService;
     private ?CheckinService $checkinService;
     private ?StreakLeaderboardService $streakLeaderboardService;
+    private UserProfileViewService $userProfileViewService;
 
     public function __construct(
         AuthService $authService,
@@ -56,7 +58,8 @@ class UserController
         RegionService $regionService,
         ?LeaderboardService $leaderboardService = null,
         ?CheckinService $checkinService = null,
-        ?StreakLeaderboardService $streakLeaderboardService = null
+        ?StreakLeaderboardService $streakLeaderboardService = null,
+        ?UserProfileViewService $userProfileViewService = null
     ) {
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
@@ -73,6 +76,7 @@ class UserController
         $this->leaderboardService = $leaderboardService;
         $this->checkinService = $checkinService;
         $this->streakLeaderboardService = $streakLeaderboardService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
     }
 
     private function buildNotificationTestEmailJob(array $user, string $category, string $email, string $displayName): ?array
@@ -430,15 +434,15 @@ class UserController
             }
 
             $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
-            $regionMeta = $this->buildRegionResponse($row['region_code'] ?? null);
+            $profileFields = $this->userProfileViewService->buildProfileFields($row);
 
             $userInfo = [
                 'id' => $row['id'],
                 'uuid' => $row['uuid'] ?? null,
                 'username' => $row['username'],
                 'email' => $row['email'],
-                'school_id' => $row['school_id'],
-                'school_name' => $row['school_name'],
+                'school_id' => $profileFields['school_id'],
+                'school_name' => $profileFields['school_name'],
                 'points' => (int)$row['points'],
                 'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
                 'email_verified_at' => $row['email_verified_at'] ?? null,
@@ -447,12 +451,12 @@ class UserController
                 'avatar_url' => $avatar['avatar_url'],
                 'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
                 'updated_at' => $row['updated_at'] ?? null,
-                'region_code' => $regionMeta['region_code'],
-                'region_label' => $regionMeta['region_label'],
-                'country_code' => $regionMeta['country_code'],
-                'state_code' => $regionMeta['state_code'],
-                'country_name' => $regionMeta['country_name'],
-                'state_name' => $regionMeta['state_name'],
+                'region_code' => $profileFields['region_code'],
+                'region_label' => $profileFields['region_label'],
+                'country_code' => $profileFields['country_code'],
+                'state_code' => $profileFields['state_code'],
+                'country_name' => $profileFields['country_name'],
+                'state_name' => $profileFields['state_name'],
             ];
 
             return $this->jsonResponse($response, [
@@ -516,11 +520,13 @@ class UserController
                 ], 404);
             }
 
-            $currentSchoolId = (int)($currentUser['school_id'] ?? 0);
+            $currentProfileFields = $this->userProfileViewService->buildProfileFields($currentUser);
+            $currentSchoolId = (int)($currentProfileFields['school_id'] ?? 0);
             $incomingSchoolId = null;
             $normalizedNewSchool = null;
             $regionChangeRequested = false;
             $newRegionCode = null;
+            $resolvedSchoolName = null;
 
             $hasCountryInput = array_key_exists('country_code', $data);
             $hasStateInput = array_key_exists('state_code', $data);
@@ -545,7 +551,7 @@ class UserController
                 }
 
                 $candidateRegion = $this->regionService->buildRegionCode($normalizedCountry, $normalizedState);
-                if ($candidateRegion !== ($currentUser['region_code'] ?? null)) {
+                if ($candidateRegion !== ($currentProfileFields['region_code'] ?? null)) {
                     $regionChangeRequested = true;
                     $newRegionCode = $candidateRegion;
                 }
@@ -649,12 +655,18 @@ class UserController
                     ], 400);
                 }
 
-                $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = ? AND deleted_at IS NULL");
+                $stmt = $this->db->prepare("SELECT id, name FROM schools WHERE id = ? AND deleted_at IS NULL");
                 $stmt->execute([$incomingSchoolId]);
-                if ($stmt->fetch()) {
+                $schoolRow = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($schoolRow) {
+                    $resolvedSchoolName = trim((string)($schoolRow['name'] ?? '')) ?: null;
                     if ($incomingSchoolId !== $currentSchoolId) {
                         $oldValues['school_id'] = $currentUser['school_id'];
                         $updateData['school_id'] = $incomingSchoolId;
+                    }
+                    if ($resolvedSchoolName !== null && $resolvedSchoolName !== ($currentUser['school'] ?? null)) {
+                        $oldValues['school'] = $currentUser['school'] ?? null;
+                        $updateData['school'] = $resolvedSchoolName;
                     }
                 } else {
                     return $this->jsonResponse($response, [
@@ -676,11 +688,20 @@ class UserController
                     $oldValues['school_id'] = $currentUser['school_id'];
                     $updateData['school_id'] = $newSchoolId;
                 }
+                $resolvedSchoolName = $this->findSchoolNameById($newSchoolId) ?? $normalizedNewSchool;
+                if ($resolvedSchoolName !== ($currentUser['school'] ?? null)) {
+                    $oldValues['school'] = $currentUser['school'] ?? null;
+                    $updateData['school'] = $resolvedSchoolName;
+                }
             }
 
             if ($regionChangeRequested && $newRegionCode) {
                 $oldValues['region_code'] = $currentUser['region_code'] ?? null;
                 $updateData['region_code'] = $newRegionCode;
+                if (($currentUser['location'] ?? null) !== $newRegionCode) {
+                    $oldValues['location'] = $currentUser['location'] ?? null;
+                    $updateData['location'] = $newRegionCode;
+                }
             }
 
             if (empty($updateData)) {
@@ -744,7 +765,7 @@ class UserController
             $stmt->execute([$user['id']]);
             $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
             $updatedAvatar = $this->resolveAvatar($updatedUser['avatar_path'] ?? null);
-            $regionMeta = $this->buildRegionResponse($updatedUser['region_code'] ?? null);
+            $profileFields = $this->userProfileViewService->buildProfileFields($updatedUser);
 
             // 准备返回的用户信息
             $userInfo = [
@@ -752,8 +773,8 @@ class UserController
                 'uuid' => $updatedUser['uuid'],
                 'username' => $updatedUser['username'],
                 'email' => $updatedUser['email'],
-                'school_id' => $updatedUser['school_id'],
-                'school_name' => $updatedUser['school_name'],
+                'school_id' => $profileFields['school_id'],
+                'school_name' => $profileFields['school_name'],
                 'points' => $updatedUser['points'],
                 'is_admin' => (bool)$updatedUser['is_admin'],
                 'avatar_id' => $updatedUser['avatar_id'],
@@ -761,12 +782,12 @@ class UserController
                 'avatar_url' => $updatedAvatar['avatar_url'],
                 'lastlgn' => $updatedUser['lastlgn'] ?? ($updatedUser['last_login_at'] ?? null),
                 'updated_at' => $updatedUser['updated_at'],
-                'region_code' => $regionMeta['region_code'],
-                'region_label' => $regionMeta['region_label'],
-                'country_code' => $regionMeta['country_code'],
-                'state_code' => $regionMeta['state_code'],
-                'country_name' => $regionMeta['country_name'],
-                'state_name' => $regionMeta['state_name'],
+                'region_code' => $profileFields['region_code'],
+                'region_label' => $profileFields['region_label'],
+                'country_code' => $profileFields['country_code'],
+                'state_code' => $profileFields['state_code'],
+                'country_name' => $profileFields['country_name'],
+                'state_name' => $profileFields['state_name'],
             ];
 
             return $this->jsonResponse($response, [
@@ -1367,13 +1388,21 @@ class UserController
             $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
             // 4) 用户当前积分与注册时间
-            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, s.name AS school_name
+            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, u.school, u.location, s.name AS school_name
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
                 WHERE u.id = ? AND u.deleted_at IS NULL");
             $userInfoStmt->execute([$user['id']]);
-            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
-            $regionMeta = $this->buildRegionResponse($userRow['region_code'] ?? null);
+            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null, 'school' => null, 'location' => null];
+            $profileFields = $this->userProfileViewService->buildProfileFields($userRow);
+            $regionMeta = [
+                'region_code' => $profileFields['region_code'],
+                'region_label' => $profileFields['region_label'],
+                'country_code' => $profileFields['country_code'],
+                'state_code' => $profileFields['state_code'],
+                'country_name' => $profileFields['country_name'],
+                'state_name' => $profileFields['state_name'],
+            ];
 
             $storeStats = [
                 'available_products' => 0,
@@ -1503,8 +1532,8 @@ class UserController
                     'entries' => [],
                 ],
                 'school' => [
-                    'label' => $userRow['school_name'] ?? null,
-                    'school_id' => isset($userRow['school_id']) ? (int) $userRow['school_id'] : null,
+                    'label' => $profileFields['school_name'],
+                    'school_id' => $profileFields['school_id'],
                     'entries' => [],
                 ],
             ];
@@ -1521,7 +1550,7 @@ class UserController
                         $regionBucket = $snapshot['regions'][$regionMeta['region_code']] ?? null;
                         $leaderboards['region']['entries'] = $this->normalizeLeaderboardEntries(array_slice($regionBucket['entries'] ?? [], 0, 5));
                     }
-                    $schoolId = isset($userRow['school_id']) ? (int) $userRow['school_id'] : 0;
+                    $schoolId = isset($profileFields['school_id']) ? (int) $profileFields['school_id'] : 0;
                     if ($schoolId > 0) {
                         $schoolBucket = $snapshot['schools'][$schoolId] ?? null;
                         $leaderboards['school']['entries'] = $this->normalizeLeaderboardEntries(array_slice($schoolBucket['entries'] ?? [], 0, 5));
@@ -1543,8 +1572,8 @@ class UserController
                     'entries' => [],
                 ],
                 'school' => [
-                    'label' => $userRow['school_name'] ?? null,
-                    'school_id' => isset($userRow['school_id']) ? (int) $userRow['school_id'] : null,
+                    'label' => $profileFields['school_name'],
+                    'school_id' => $profileFields['school_id'],
                     'entries' => [],
                 ],
             ];
@@ -1586,7 +1615,7 @@ class UserController
                         $streakLeaderboards['region']['entries'] = $this->normalizeStreakEntries(array_slice($regionBucket['entries'] ?? [], 0, 5));
                         $streakRanks['region'] = $snapshot['ranks']['regions'][$regionMeta['region_code']][$user['id']] ?? null;
                     }
-                    $schoolId = isset($userRow['school_id']) ? (int) $userRow['school_id'] : 0;
+                    $schoolId = isset($profileFields['school_id']) ? (int) $profileFields['school_id'] : 0;
                     if ($schoolId > 0) {
                         $schoolBucket = $snapshot['schools'][$schoolId] ?? null;
                         $streakLeaderboards['school']['entries'] = $this->normalizeStreakEntries(array_slice($schoolBucket['entries'] ?? [], 0, 5));
@@ -1854,6 +1883,27 @@ class UserController
             $this->logger->error('Failed to resolve school name for profile update', [
                 'error' => $e->getMessage(),
                 'school_name' => $normalized
+            ]);
+            return null;
+        }
+    }
+
+    private function findSchoolNameById(int $schoolId): ?string
+    {
+        if ($schoolId <= 0) {
+            return null;
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT name FROM schools WHERE id = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$schoolId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $name = isset($row['name']) ? trim((string) $row['name']) : '';
+            return $name !== '' ? $name : null;
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to fetch school name by id during profile update', [
+                'error' => $e->getMessage(),
+                'school_id' => $schoolId,
             ]);
             return null;
         }

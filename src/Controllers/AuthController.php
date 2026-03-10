@@ -15,6 +15,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 use PDO;
@@ -32,6 +33,7 @@ class AuthController
    private PDO $db;
    private RegionService $regionService;
     private ?CheckinService $checkinService;
+    private UserProfileViewService $userProfileViewService;
 
     private const VERIFICATION_RESEND_LIMIT = 3;
     private const VERIFICATION_CODE_TTL_MINUTES = 30;
@@ -48,7 +50,8 @@ class AuthController
         PDO $db,
         ErrorLogService $errorLogService = null,
         RegionService $regionService,
-        ?CheckinService $checkinService = null
+        ?CheckinService $checkinService = null,
+        ?UserProfileViewService $userProfileViewService = null
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
@@ -61,6 +64,7 @@ class AuthController
         $this->errorLogService = $errorLogService;
         $this->regionService = $regionService;
         $this->checkinService = $checkinService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
     }
 
     public function register(Request $request, Response $response): Response
@@ -611,23 +615,8 @@ class AuthController
             $stmt = $this->db->prepare('SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0 AND deleted_at IS NULL');
             $stmt->execute([$user['id']]);
             $unread = (int)$stmt->fetchColumn();
-            $avatarRow = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
-
-            $userData = [
-                'id' => $row['id'],
-                'uuid' => $row['uuid'] ?? null,
-                'username' => $row['username'],
-                'email' => $row['email'] ?? null,
-                'school_id' => $row['school_id'] ?? null,
-                'school_name' => $row['school_name'] ?? null,
-                'points' => (int)($row['points'] ?? 0),
-                'is_admin' => (bool)($row['is_admin'] ?? 0),
-                'avatar_path' => $avatarRow['avatar_path'],
-                'avatar_url' => $avatarRow['avatar_url'],
-                'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
-                'created_at' => $row['created_at'] ?? null,
-                'unread_messages' => $unread
-            ];
+            $userData = $this->formatUserPayload($row);
+            $userData['unread_messages'] = $unread;
             return $this->jsonResponse($response, [
                 'success' => true,
                 'data' => $userData
@@ -1232,15 +1221,14 @@ class AuthController
     private function formatUserPayload(array $row): array
     {
         $avatar = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
-        $regionCode = $row['region_code'] ?? null;
-        $regionContext = $this->regionService->getRegionContext($regionCode);
+        $profileFields = $this->userProfileViewService->buildProfileFields($row);
         return [
             'id' => (int)($row['id'] ?? 0),
             'uuid' => $row['uuid'] ?? null,
             'username' => $row['username'] ?? null,
             'email' => $row['email'] ?? null,
-            'school_id' => $row['school_id'] ?? null,
-            'school_name' => $row['school_name'] ?? null,
+            'school_id' => $profileFields['school_id'],
+            'school_name' => $profileFields['school_name'],
             'points' => (int)($row['points'] ?? 0),
             'is_admin' => (bool)($row['is_admin'] ?? 0),
             'email_verified_at' => $row['email_verified_at'] ?? null,
@@ -1250,10 +1238,12 @@ class AuthController
             'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
             'status' => $row['status'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
-            'region_code' => $regionContext['region_code'] ?? $regionCode,
-            'region_label' => $regionContext['region_label'] ?? null,
-            'country_code' => $regionContext['country_code'] ?? null,
-            'state_code' => $regionContext['state_code'] ?? null,
+            'region_code' => $profileFields['region_code'],
+            'region_label' => $profileFields['region_label'],
+            'country_code' => $profileFields['country_code'],
+            'state_code' => $profileFields['state_code'],
+            'country_name' => $profileFields['country_name'],
+            'state_name' => $profileFields['state_name'],
         ];
     }
 

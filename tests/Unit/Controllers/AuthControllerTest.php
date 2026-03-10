@@ -13,6 +13,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\UserProfileViewService;
 use PHPUnit\Framework\TestCase;
 
 class AuthControllerTest extends TestCase
@@ -76,13 +77,88 @@ class AuthControllerTest extends TestCase
         $this->assertTrue($meMethod->isPublic());
     }
 
+    public function testMeUsesCompatibleSchoolAndRegionFields(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockRegion = $this->createMock(RegionService::class);
+        $mockRegion->method('getRegionContext')
+            ->with('US-UM-81')
+            ->willReturn([
+                'region_code' => 'US-UM-81',
+                'region_label' => 'US-UM-81',
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => null,
+            ]);
+
+        $selectStmt = $this->createMock(\PDOStatement::class);
+        $selectStmt->method('execute')->willReturn(true);
+        $selectStmt->method('fetch')->willReturn([
+            'id' => 5,
+            'uuid' => 'u-5',
+            'username' => 'legacy-user',
+            'email' => 'legacy@example.com',
+            'school_id' => null,
+            'school_name' => null,
+            'school' => 'Legacy Academy',
+            'region_code' => null,
+            'location' => 'US-UM-81',
+            'points' => 9,
+            'is_admin' => 0,
+            'avatar_id' => null,
+            'avatar_path' => null,
+            'created_at' => '2025-01-01 00:00:00',
+        ]);
+
+        $unreadStmt = $this->createMock(\PDOStatement::class);
+        $unreadStmt->method('execute')->willReturn(true);
+        $unreadStmt->method('fetchColumn')->willReturn(3);
+
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $unreadStmt);
+
+        $mockAuthService->method('getCurrentUser')->willReturn(['id' => 5]);
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            null,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion,
+            null,
+            new UserProfileViewService($mockRegion)
+        );
+
+        $request = makeRequest('GET', '/auth/me');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->me($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('Legacy Academy', $json['data']['school_name']);
+        $this->assertSame('US-UM-81', $json['data']['region_code']);
+        $this->assertSame(3, $json['data']['unread_messages']);
+    }
+
     public function testAuthControllerHasCorrectDependencies(): void
     {
         $reflection = new \ReflectionClass(AuthController::class);
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(11, $parameters);
+        $this->assertCount(12, $parameters);
 
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -95,9 +171,10 @@ class AuthControllerTest extends TestCase
             'PDO',
             'CarbonTrack\Services\ErrorLogService',
             'CarbonTrack\Services\RegionService',
-            'CarbonTrack\Services\CheckinService'
+            'CarbonTrack\Services\CheckinService',
+            'CarbonTrack\Services\UserProfileViewService'
         ];
-        $nullableIndexes = [5, 8, 10];
+        $nullableIndexes = [5, 8, 10, 11];
 
         foreach ($parameters as $index => $parameter) {
             $type = $parameter->getType();

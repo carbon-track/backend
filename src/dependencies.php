@@ -42,6 +42,7 @@ use CarbonTrack\Controllers\LeaderboardController;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
@@ -252,7 +253,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(LeaderboardService::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class), null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
+        return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class), null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class), $c->get(UserProfileViewService::class));
     });
 
     $container->set(CheckinService::class, function (ContainerInterface $c) {
@@ -275,7 +276,8 @@ $__deps_initializer = function (Container $container) {
             null,
             null,
             $c->get(AuditLogService::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 
@@ -529,7 +531,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(CheckinService::class),
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
             $c->get(ErrorLogService::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 
@@ -574,6 +577,10 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
         );
+    });
+
+    $container->set(UserProfileViewService::class, function (ContainerInterface $c) {
+        return new UserProfileViewService($c->get(RegionService::class));
     });
 
     // Turnstile Service
@@ -650,7 +657,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(RegionService::class),
             $c->get(LeaderboardService::class),
             $c->get(CheckinService::class),
-            $c->get(StreakLeaderboardService::class)
+            $c->get(StreakLeaderboardService::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 
@@ -667,7 +675,8 @@ $__deps_initializer = function (Container $container) {
             $db,
             $c->get(ErrorLogService::class),
             $c->get(RegionService::class),
-            $c->get(CheckinService::class)
+            $c->get(CheckinService::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 
@@ -683,7 +692,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(CloudflareR2Service::class),
             $c->get(CheckinService::class),
             $c->get(QuotaService::class),
-            $c->get(BadgeService::class)
+            $c->get(BadgeService::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 
@@ -714,7 +724,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(CheckinService::class),
             $c->get(QuotaConfigService::class),
             $c->get(ErrorLogService::class),
-            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
+            $c->get(UserProfileViewService::class)
         );
     });
 

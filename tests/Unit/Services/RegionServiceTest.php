@@ -26,6 +26,10 @@ class RegionServiceTest extends TestCase
             $this->assertSame('GD', $service->normalizeStateCode('gd'));
             $this->assertTrue($service->isValidRegion('CN', 'GD'));
             $this->assertFalse($service->isValidRegion('CN', 'INVALID'));
+            $this->assertSame([
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+            ], $service->parseRegionCode('us-um-81'));
         } finally {
             if ($previousRegionDataPath !== null) {
                 $_ENV['REGION_DATA_PATH'] = $previousRegionDataPath;
@@ -51,6 +55,13 @@ class RegionServiceTest extends TestCase
             $this->assertFalse($service->isValidRegion('CN', '-'));
             $this->assertFalse($service->isValidRegion('CN', 'GD-'));
             $this->assertFalse($service->isValidRegion('CN', '-GD'));
+
+            $context = $service->getRegionContext('US-UM-81');
+            $this->assertNotNull($context);
+            $this->assertSame('US-UM-81', $context['region_code']);
+            $this->assertSame('US', $context['country_code']);
+            $this->assertSame('UM-81', $context['state_code']);
+            $this->assertNull($context['region_label']);
         } finally {
             if ($previousRegionDataPath !== null) {
                 $_ENV['REGION_DATA_PATH'] = $previousRegionDataPath;

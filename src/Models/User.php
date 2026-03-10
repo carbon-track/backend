@@ -24,9 +24,12 @@ class User extends Model
         'role',
         'status',
         'points',
+        'school_id',
         'school',
+        'region_code',
         'location',
         'is_admin',
+        'avatar_id',
         'lastlgn',
         'notification_email_mask',
         'group_id',
@@ -256,11 +259,12 @@ class User extends Model
     }
 
     /**
-     * Get the user's school
+     * Get the canonical school relation.
+     * Display values should still be resolved via UserProfileViewService.
      */
     public function schoolInfo()
     {
-        return $this->belongsTo(School::class, 'school', 'name');
+        return $this->belongsTo(School::class, 'school_id');
     }
 
     /**

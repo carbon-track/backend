@@ -24,8 +24,8 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         $tables = [
-            // Users
-"CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                group_id INTEGER,\n                region_code TEXT,\n                quota_override TEXT,\n                admin_notes TEXT,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                avatar_id INTEGER,\n                image_path TEXT,\n                lastlgn TEXT,\n                reset_token TEXT,\n                reset_token_expires_at TEXT,\n                email_verified_at TEXT,\n                verification_code TEXT,\n                verification_token TEXT,\n                verification_code_expires_at TEXT,\n                verification_attempts INTEGER DEFAULT 0,\n                verification_send_count INTEGER DEFAULT 0,\n                verification_last_sent_at TEXT,\n                notification_email_mask INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            // Users: mirror backend/database/localhost.sql columns where practical, plus test-only conveniences.
+"CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                uuid TEXT,\n                username TEXT UNIQUE,\n                password TEXT,\n                lastlgn TEXT,\n                email TEXT UNIQUE,\n                points REAL DEFAULT 0,\n                school TEXT,\n                location TEXT,\n                region_code TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                deleted_at TEXT,\n                status TEXT DEFAULT 'active',\n                is_admin INTEGER DEFAULT 0,\n                class_name TEXT,\n                school_id INTEGER,\n                avatar_id INTEGER,\n                image_path TEXT,\n                reset_token TEXT,\n                reset_token_expires_at TEXT,\n                email_verified_at TEXT,\n                verification_code TEXT,\n                verification_token TEXT,\n                verification_code_expires_at TEXT,\n                verification_attempts INTEGER DEFAULT 0,\n                verification_send_count INTEGER DEFAULT 0,\n                verification_last_sent_at TEXT,\n                notification_email_mask INTEGER DEFAULT 0,\n                group_id INTEGER DEFAULT 1,\n                quota_override TEXT,\n                admin_notes TEXT\n            )",
             "CREATE TABLE IF NOT EXISTS user_groups (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                code TEXT UNIQUE,\n                config TEXT,\n                is_default INTEGER DEFAULT 0,\n                notes TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Products
             "CREATE TABLE IF NOT EXISTS products (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                description TEXT,\n                category TEXT,\n                category_slug TEXT,\n                images TEXT,\n                image_path TEXT,\n                stock INTEGER DEFAULT 0,\n                points_required INTEGER DEFAULT 0,\n                status TEXT DEFAULT 'active',\n                sort_order INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
@@ -93,9 +93,22 @@ class TestSchemaBuilder
 
         // Perform lightweight schema upgrades for existing SQLite file (idempotent)
         self::ensureColumns($pdo, 'users', [
+            'uuid TEXT',
+            'lastlgn TEXT',
+            'points REAL DEFAULT 0',
+            'status TEXT DEFAULT \'active\'',
+            'is_admin INTEGER DEFAULT 0',
+            'school_id INTEGER',
+            'class_name TEXT',
+            'notification_email_mask INTEGER DEFAULT 0',
+            'deleted_at TEXT',
+            'created_at TEXT DEFAULT CURRENT_TIMESTAMP',
+            'updated_at TEXT DEFAULT CURRENT_TIMESTAMP',
             'avatar_id INTEGER',
             'group_id INTEGER',
+            'school TEXT',
             'region_code TEXT',
+            'location TEXT',
             'quota_override TEXT',
             'admin_notes TEXT',
             'reset_token TEXT',
