@@ -12437,7 +12437,7 @@
               },
               "headers": {
                 "type": "object",
-                "description": "Pre-signed upload headers. Includes x-amz-meta-* ownership headers that must be sent unchanged with the PUT request.",
+                "description": "Pre-signed upload headers. Only ASCII-safe signed headers are returned here and must be sent unchanged with the PUT request; the original file name is confirmed separately via /files/confirm.",
                 "additionalProperties": {
                   "type": "string"
                 }

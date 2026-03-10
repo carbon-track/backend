@@ -139,7 +139,7 @@ class FileUploadController
                 $keyInfo['file_path'],
                 $mimeType,
                 $expiresIn,
-                $this->buildDirectUploadMetadata($user, $originalName, $entityType, $entityId)
+                $this->buildDirectUploadMetadata($user, $entityType, $entityId)
             );
 
             $data = array_merge($keyInfo, $presign, [
@@ -1032,10 +1032,9 @@ class FileUploadController
         return !empty($user['is_admin']);
     }
 
-    private function buildDirectUploadMetadata(array $user, string $originalName, ?string $entityType, ?int $entityId): array
+    private function buildDirectUploadMetadata(array $user, ?string $entityType, ?int $entityId): array
     {
         return [
-            'original_name' => $originalName,
             'uploaded_by' => (string) ((int) ($user['id'] ?? 0)),
             'entity_type' => $entityType ?: 'unknown',
             'entity_id' => $entityId !== null ? (string) $entityId : '',

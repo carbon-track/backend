@@ -160,7 +160,7 @@ class FileUploadControllerTest extends TestCase
                     self::MIME_JPEG,
                     600,
                     $this->callback(function(array $metadata): bool {
-                        return ($metadata['original_name'] ?? null) === 'a.jpg'
+                        return !array_key_exists('original_name', $metadata)
                             && ($metadata['uploaded_by'] ?? null) === '10'
                             && ($metadata['entity_type'] ?? null) === 'unknown'
                             && array_key_exists('upload_time', $metadata);
@@ -183,6 +183,7 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(200,$resp->getStatusCode());
         $payload = json_decode((string)$resp->getBody(), true);
         $this->assertSame('10', $payload['data']['headers']['x-amz-meta-uploaded_by']);
+        $this->assertArrayNotHasKey('x-amz-meta-original_name', $payload['data']['headers']);
     }
 
     public function testPresignInvalidSha256(): void
@@ -242,7 +243,7 @@ class FileUploadControllerTest extends TestCase
                     self::MIME_PNG,
                     600,
                     $this->callback(function(array $metadata): bool {
-                        return ($metadata['original_name'] ?? null) === 'face.png'
+                        return !array_key_exists('original_name', $metadata)
                             && ($metadata['uploaded_by'] ?? null) === '21';
                     })
                 )
@@ -263,6 +264,51 @@ class FileUploadControllerTest extends TestCase
         ]), new \Slim\Psr7\Response());
 
         $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testPresignUnicodeFileNameDoesNotLeakIntoSignedHeaders(): void
+    {
+        $c = $this->controller(['id' => 23], function($r2) {
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getMaxFileSize')->willReturn(5 * 1024 * 1024);
+            $r2->method('generateDirectUploadKey')->with('微信图片.jpg', 'uploads')->willReturn([
+                'file_name' => 'uuid.jpg',
+                'file_path' => 'uploads/2026/03/uuid.jpg',
+                'public_url' => 'https://cdn/uuid.jpg'
+            ]);
+            $r2->expects($this->once())
+                ->method('generateUploadPresignedUrl')
+                ->with(
+                    'uploads/2026/03/uuid.jpg',
+                    self::MIME_JPEG,
+                    600,
+                    $this->callback(function(array $metadata): bool {
+                        return !array_key_exists('original_name', $metadata)
+                            && ($metadata['uploaded_by'] ?? null) === '23';
+                    })
+                )
+                ->willReturn([
+                    'url' => 'https://r2/presigned',
+                    'method' => 'PUT',
+                    'headers' => [
+                        'Content-Type' => self::MIME_JPEG,
+                        'x-amz-meta-uploaded_by' => '23'
+                    ],
+                    'expires_in' => 600,
+                    'expires_at' => '2026-03-10 00:00:00'
+                ]);
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST', self::ROUTE_PRESIGN, [
+            'original_name' => '微信图片.jpg',
+            'mime_type' => self::MIME_JPEG,
+            'file_size' => 2048
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertArrayNotHasKey('x-amz-meta-original_name', $payload['data']['headers']);
     }
 
     public function testPresignRejectsInvalidDirectory(): void
