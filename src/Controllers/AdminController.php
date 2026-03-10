@@ -14,7 +14,6 @@ use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
-use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\UserProfileViewService;
 use PDO;
 use DateTimeImmutable;
@@ -36,7 +35,11 @@ class AdminController
         private ?CloudflareR2Service $r2Service = null,
         ?UserProfileViewService $userProfileViewService = null
     ) {
-        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService(new RegionService());
+        if ($userProfileViewService === null) {
+            throw new \InvalidArgumentException('UserProfileViewService is required.');
+        }
+
+        $this->userProfileViewService = $userProfileViewService;
     }
 
 

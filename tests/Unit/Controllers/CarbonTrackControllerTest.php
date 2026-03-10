@@ -7,9 +7,43 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
 use CarbonTrack\Services\CarbonCalculatorService;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 
 class CarbonTrackControllerTest extends TestCase
 {
+    private function makeUserProfileViewService(): UserProfileViewService
+    {
+        return new UserProfileViewService(new RegionService(null, null, null, null));
+    }
+
+    private function makeController(
+        \PDO $pdo,
+        $calc,
+        $msg,
+        $audit,
+        $auth,
+        $errorLogService = null,
+        $r2Service = null,
+        $checkinService = null,
+        $quotaService = null,
+        $badgeService = null
+    ): CarbonTrackController {
+        return new CarbonTrackController(
+            $pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            $errorLogService,
+            $r2Service,
+            $checkinService,
+            $quotaService,
+            $badgeService,
+            $this->makeUserProfileViewService()
+        );
+    }
+
     public function testControllerClassExists(): void
     {
         $this->assertTrue(class_exists(CarbonTrackController::class));
@@ -38,7 +72,7 @@ class CarbonTrackControllerTest extends TestCase
             'carbon_savings' => 25.0
         ]);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
 
         $request = makeRequest('POST', '/carbon-track/calculate', ['activity_id' => 'uuid-1', 'data' => 10]);
         $response = new \Slim\Psr7\Response();
@@ -60,7 +94,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/calculate', ['activity_id' => 'uuid-1']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->calculate($request, $response);
@@ -75,7 +109,7 @@ class CarbonTrackControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/factors');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCarbonFactors($request, $response);
@@ -112,7 +146,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($summaryStmt, $monthlyStmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -149,7 +183,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($activityStmt, $insert, $admins);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/record', ['activity_id'=>'a1','amount'=>5,'date'=>'2025-08-01']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->submitRecord($request, $response);
@@ -173,7 +207,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUserModel')->willReturn(new \CarbonTrack\Models\User(['id' => 1]));
         $checkin->method('hasCheckin')->willReturn(true);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
 
         $request = makeRequest('POST', '/carbon-track/record', [
             'activity_id' => 'a1',
@@ -242,7 +276,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/admin/activities/r2/review', ['action' => 'reject', 'review_note' => '资料不完整']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r2']);
@@ -317,7 +351,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/admin/activities/review', ['action' => 'approve', 'record_ids' => ['r10', 'r11']]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecordsBulk($request, $response);
@@ -375,7 +409,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities/pending');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);
@@ -402,7 +436,7 @@ class CarbonTrackControllerTest extends TestCase
         $stmt->method('fetch')->willReturn(['id'=>'r3','images'=>null]);
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/transactions/r3');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getRecordDetail($request, $response, ['id' => 'r3']);
@@ -431,7 +465,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/records');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserRecords($request, $response);
@@ -450,7 +484,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/record', ['activity_id' => 'a1', 'amount' => 1]); // missing date
         $response = new \Slim\Psr7\Response();
         $resp = $controller->submitRecord($request, $response);
@@ -473,7 +507,7 @@ class CarbonTrackControllerTest extends TestCase
         $stmt->method('fetch')->willReturn(false); // not found when not owner
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/transactions/r1');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getRecordDetail($request, $response, ['id' => 'r1']);
@@ -506,7 +540,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/carbon-track/transactions/r1/approve', ['action' => 'approve']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r1']);
@@ -539,7 +573,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/carbon-track/transactions/r9', ['status' => 'approved']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r9']);
@@ -562,7 +596,7 @@ class CarbonTrackControllerTest extends TestCase
         $update->method('execute')->willReturn(true);
         $pdo->method('prepare')->willReturn($update);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('DELETE', '/carbon-track/transactions/r2');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteTransaction($request, $response, ['id' => 'r2']);
@@ -579,7 +613,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
         $auth->method('isAdmin')->willReturn(false);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);
@@ -609,7 +643,7 @@ class CarbonTrackControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = new CarbonTrackController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);

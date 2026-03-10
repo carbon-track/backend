@@ -640,6 +640,18 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(MessageController::class, function (ContainerInterface $c) {
+        return new MessageController(
+            $c->get(PDO::class),
+            $c->get(MessageService::class),
+            $c->get(AuditLogService::class),
+            $c->get(AuthService::class),
+            $c->get(EmailService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(UserProfileViewService::class)
+        );
+    });
+
     $container->set(UserController::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
         return new UserController(

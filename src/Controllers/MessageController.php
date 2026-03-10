@@ -9,7 +9,6 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\EmailService;
-use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
 use PDO;
@@ -45,7 +44,11 @@ class MessageController
         $this->authService = $authService;
         $this->emailService = $emailService;
         $this->errorLogService = $errorLogService;
-        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService(new RegionService());
+        if ($userProfileViewService === null) {
+            throw new \InvalidArgumentException('UserProfileViewService is required.');
+        }
+
+        $this->userProfileViewService = $userProfileViewService;
     }
 
     /**
