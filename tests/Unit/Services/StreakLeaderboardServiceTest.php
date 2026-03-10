@@ -58,7 +58,7 @@ class StreakLeaderboardServiceTest extends TestCase
     {
         $pdo = new \PDO('sqlite::memory:');
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, region_code TEXT, school_id INTEGER, school TEXT, location TEXT, avatar_id INTEGER, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, region_code TEXT, school_id INTEGER, avatar_id INTEGER, deleted_at TEXT)');
         $pdo->exec('CREATE TABLE schools (id INTEGER PRIMARY KEY, name TEXT)');
         $pdo->exec('CREATE TABLE avatars (id INTEGER PRIMARY KEY, file_path TEXT)');
         $pdo->exec('CREATE TABLE user_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, checkin_date TEXT)');
@@ -67,7 +67,8 @@ class StreakLeaderboardServiceTest extends TestCase
         $todayStr = $today->format('Y-m-d');
         $yesterdayStr = $today->modify('-1 day')->format('Y-m-d');
 
-        $pdo->exec("INSERT INTO users (id, username, region_code, school_id, school, location, avatar_id, deleted_at) VALUES (1, 'alice', NULL, 7, 'Legacy Academy', 'US-UM-81', NULL, NULL)");
+        $pdo->exec("INSERT INTO schools (id, name) VALUES (7, 'Canonical Academy')");
+        $pdo->exec("INSERT INTO users (id, username, region_code, school_id, avatar_id, deleted_at) VALUES (1, 'alice', 'US-UM-81', 7, NULL, NULL)");
         $pdo->exec("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$yesterdayStr}')");
         $pdo->exec("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$todayStr}')");
 
@@ -106,9 +107,9 @@ class StreakLeaderboardServiceTest extends TestCase
             $snapshot = $service->rebuildCache('test');
 
             $this->assertSame('US-UM-81', $snapshot['global'][0]['region_code']);
-            $this->assertSame('Legacy Academy', $snapshot['global'][0]['school_name']);
+            $this->assertSame('Canonical Academy', $snapshot['global'][0]['school_name']);
             $this->assertArrayHasKey('US-UM-81', $snapshot['regions']);
-            $this->assertSame('Legacy Academy', $snapshot['schools'][7]['school_name']);
+            $this->assertSame('Canonical Academy', $snapshot['schools'][7]['school_name']);
         } finally {
             @unlink($cacheDir . DIRECTORY_SEPARATOR . 'streak_leaderboards.json');
             @rmdir($cacheDir);

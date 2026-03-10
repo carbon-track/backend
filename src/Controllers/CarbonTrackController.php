@@ -944,7 +944,6 @@ class CarbonTrackController
                     a.category,
                     u.username,
                     u.email,
-                    u.school,
                     s.name as school_name
                 FROM carbon_records r
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
@@ -967,7 +966,6 @@ class CarbonTrackController
             foreach ($records as &$record) {
                 $profileFields = $this->userProfileViewService->buildProfileFields($record);
                 $record['school_name'] = $profileFields['school_name'];
-                unset($record['school']);
                 $decoded = $record['images'] ? json_decode($record['images'], true) : [];
                 $record['images'] = $this->normalizeImages($decoded);
                 if ($this->r2Service && is_array($record['images'])) {

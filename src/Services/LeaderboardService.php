@@ -87,7 +87,7 @@ class LeaderboardService
     private function generateSnapshot(): array
     {
         $sql = "SELECT u.id, u.username, COALESCE(u.points, 0) AS total_points,
-                    u.avatar_id, u.region_code, u.school_id, u.school, u.location, s.name AS school_name, a.file_path AS avatar_path
+                    u.avatar_id, u.region_code, u.school_id, s.name AS school_name, a.file_path AS avatar_path
                 FROM users u
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 LEFT JOIN schools s ON u.school_id = s.id

@@ -75,4 +75,39 @@ class UserProfileViewServiceTest extends TestCase
         $this->assertSame('Legacy Academy', $legacy['school']);
         $this->assertSame('US-UM-81', $legacy['location']);
     }
+
+    public function testCanonicalFieldsTakePriorityOverLegacyValues(): void
+    {
+        $regionService = $this->createMock(RegionService::class);
+        $regionService->expects($this->exactly(2))
+            ->method('getRegionContext')
+            ->with('US-UM-81')
+            ->willReturn([
+                'region_code' => 'US-UM-81',
+                'region_label' => 'United States · Baker Island',
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => 'Baker Island',
+            ]);
+
+        $service = new UserProfileViewService($regionService);
+
+        $row = [
+            'school_id' => 7,
+            'school_name' => 'Canonical Academy',
+            'school' => 'Legacy Academy',
+            'region_code' => 'US-UM-81',
+            'location' => 'CN-GD',
+        ];
+
+        $fields = $service->buildProfileFields($row);
+        $legacy = $service->buildLegacyDisplayFields($row);
+
+        $this->assertSame(7, $fields['school_id']);
+        $this->assertSame('Canonical Academy', $fields['school_name']);
+        $this->assertSame('US-UM-81', $fields['region_code']);
+        $this->assertSame('Canonical Academy', $legacy['school']);
+        $this->assertSame('United States · Baker Island', $legacy['location']);
+    }
 }

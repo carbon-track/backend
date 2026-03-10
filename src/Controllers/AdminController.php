@@ -117,7 +117,7 @@ class AdminController
 
 $sql = "
                 SELECT
-                    u.id, u.username, u.email, u.school_id, u.school,
+                    u.id, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     u.group_id, u.quota_override, u.admin_notes,
                     {$lastLoginSelect},
@@ -186,7 +186,6 @@ $sql = "
                 $profileFields = $this->userProfileViewService->buildProfileFields($row);
                 $row['school_id'] = $profileFields['school_id'];
                 $row['school_name'] = $profileFields['school_name'];
-                unset($row['school']);
                 $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
                 $row['points'] = (float) ($row['points'] ?? 0);
                 $row['total_transactions'] = (int) ($row['total_transactions'] ?? 0);
@@ -669,7 +668,7 @@ $sql = "
     private function loadUserRow(int $userId): ?array
     {
         $lastLoginSelect = $this->buildLastLoginSelect('u');
-        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, u.school, s.name as school_name, ' . $lastLoginSelect . " FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1");
+        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, s.name as school_name, ' . $lastLoginSelect . " FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1");
         $stmt->execute(['id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
@@ -678,7 +677,6 @@ $sql = "
         $profileFields = $this->userProfileViewService->buildProfileFields($row);
         $row['school_id'] = $profileFields['school_id'];
         $row['school_name'] = $profileFields['school_name'];
-        unset($row['school']);
         $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
         $row['points'] = (float) ($row['points'] ?? 0);
         $row['days_since_registration'] = $this->computeDaysSince($row['created_at'] ?? null);

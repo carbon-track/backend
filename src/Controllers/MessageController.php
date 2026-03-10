@@ -1585,7 +1585,7 @@ $auditPayload = [
         }
 
         $placeholders = implode(',', array_fill(0, count($sanitized), '?'));
-        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL AND u.id IN (' . $placeholders . ')';
+        $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL AND u.id IN (' . $placeholders . ')';
 
         try {
             $stmt = $this->db->prepare($sql);
@@ -1668,7 +1668,7 @@ $auditPayload = [
         ];
 
         try {
-            $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL';
+            $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL';
             $stmt = $this->db->query($sql);
             if (!$stmt) {
                 return $result;
@@ -1713,8 +1713,8 @@ $auditPayload = [
         $fieldMap = [
             'username' => 'u.username',
             'email' => 'u.email',
-            'school' => 'u.school',
-            'location' => 'u.location',
+            'school' => 's.name',
+            'location' => 'u.region_code',
             'school_name' => 's.name',
             'status' => 'u.status',
             'role' => 'u.role',
@@ -1728,12 +1728,10 @@ $auditPayload = [
                     continue;
                 }
                 if ($field === 'school') {
-                    $searchParts[] = 'u.school LIKE :search';
                     $searchParts[] = 's.name LIKE :search';
                     continue;
                 }
                 if ($field === 'location') {
-                    $searchParts[] = 'u.location LIKE :search';
                     $searchParts[] = 'u.region_code LIKE :search';
                     continue;
                 }
@@ -1754,7 +1752,7 @@ $auditPayload = [
         }
 
         if (!empty($criteria['school'])) {
-            $where[] = '(u.school LIKE :school_exact OR s.name LIKE :school_exact)';
+            $where[] = 's.name LIKE :school_exact';
             $params['school_exact'] = '%' . trim((string)$criteria['school']) . '%';
         }
 
@@ -1806,7 +1804,7 @@ $auditPayload = [
 
         $conditions = implode(' AND ', $where);
 
-        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name '
+        $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name '
             . 'FROM users u '
             . 'LEFT JOIN schools s ON s.id = u.school_id '
             . 'WHERE ' . $conditions . ' '
