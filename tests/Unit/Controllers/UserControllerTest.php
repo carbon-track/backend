@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\UserController;
 
@@ -1127,6 +1128,115 @@ class UserControllerTest extends TestCase
 
         $this->assertSame('/avatars/default/avatar_01.png', $result['avatar_path']);
         $this->assertSame('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png', $result['avatar_url']);
+    }
+
+    public function testGetSecurityActivityRequiresAuthentication(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(null);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $pdo = $this->createMock(\PDO::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            null,
+            $logger,
+            $pdo,
+            $errorLog,
+            null,
+            $region
+        );
+
+        $response = $controller->getSecurityActivity(
+            makeRequest('GET', '/users/me/security-activity'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(401, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
+        $this->assertSame('UNAUTHORIZED', $payload['code']);
+    }
+
+    public function testGetSecurityActivityReturnsOnlyOwnWhitelistedEvents(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $insert = $pdo->prepare(
+            'INSERT INTO audit_logs (user_id, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $insert->execute([1, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-1 hour'))]);
+        $insert->execute([1, 'user', 'passkey_label_updated', 'success', json_encode(['old_label' => 'Old', 'new_label' => 'New', 'passkey_id' => 3]), gmdate('Y-m-d H:i:s', strtotime('-30 minutes'))]);
+        $insert->execute([1, 'user', 'passkey_list_viewed', 'success', json_encode(['count' => 2]), gmdate('Y-m-d H:i:s', strtotime('-20 minutes'))]);
+        $insert->execute([2, 'user', 'logout', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-10 minutes'))]);
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                $this->assertSame('user_security_activity_viewed', $payload['action']);
+                $this->assertSame(1, $payload['user_id']);
+                return true;
+            }))
+            ->willReturn(true);
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            null,
+            $logger,
+            $pdo,
+            $errorLog,
+            null,
+            $region
+        );
+
+        $response = $controller->getSecurityActivity(
+            makeRequest('GET', '/users/me/security-activity', null, ['page' => 1, 'limit' => 10]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame(2, $payload['data']['pagination']['total_items']);
+        $this->assertCount(2, $payload['data']['items']);
+        $this->assertSame('passkey_label_updated', $payload['data']['items'][0]['action']);
+        $this->assertSame('New', $payload['data']['items'][0]['metadata']['new_label']);
+        $this->assertSame('login', $payload['data']['items'][1]['action']);
+        $this->assertSame('1.1.1.1', $payload['data']['items'][1]['ip_address']);
     }
 
     private function mockTurnstile(bool $configured = false)

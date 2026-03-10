@@ -23,6 +23,7 @@ class PasskeyServiceTest extends TestCase
     private PDO $pdo;
     private PasskeyConfig $config;
     private PasskeyService $service;
+    private AuditLogService $auditLogService;
 
     protected function setUp(): void
     {
@@ -43,8 +44,8 @@ class PasskeyServiceTest extends TestCase
             'PASSKEYS_AUTHENTICATION_TIMEOUT_MS' => '120000',
         ]);
 
-        $auditLogService = $this->createMock(AuditLogService::class);
-        $auditLogService->method('log')->willReturn(true);
+        $this->auditLogService = $this->createMock(AuditLogService::class);
+        $this->auditLogService->method('log')->willReturn(true);
 
         $regionService = $this->createMock(RegionService::class);
         $regionService->method('getRegionContext')->willReturn([
@@ -59,7 +60,7 @@ class PasskeyServiceTest extends TestCase
             new UserPasskey($this->pdo),
             new WebauthnChallenge($this->pdo),
             new NativeWebauthnProvider(),
-            $auditLogService,
+            $this->auditLogService,
             $this->pdo,
             $regionService,
             null,
@@ -313,6 +314,134 @@ class PasskeyServiceTest extends TestCase
         }
     }
 
+    public function testUpdateLabelForUserTrimsValueAndWritesAuditEvent(): void
+    {
+        $this->insertExistingPasskey();
+        $passkeyId = (int) $this->pdo
+            ->query("SELECT id FROM user_passkeys WHERE credential_id = 'existing-credential'")
+            ->fetchColumn();
+
+        $expectedLabel = str_repeat('A', 100);
+        $this->auditLogService->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload) use ($passkeyId, $expectedLabel): bool {
+                $this->assertSame('passkey_label_updated', $payload['action']);
+                $this->assertSame(1, $payload['user_id']);
+                $this->assertSame('success', $payload['status']);
+                $this->assertSame($passkeyId, $payload['data']['passkey_id']);
+                $this->assertSame($expectedLabel, $payload['data']['new_label']);
+                return true;
+            }))
+            ->willReturn(true);
+
+        $updated = $this->service->updateLabelForUser(1, $passkeyId, str_repeat('A', 120));
+
+        $this->assertSame($expectedLabel, $updated['label']);
+        $storedLabel = $this->pdo
+            ->query("SELECT label FROM user_passkeys WHERE id = {$passkeyId}")
+            ->fetchColumn();
+        $this->assertSame($expectedLabel, $storedLabel);
+    }
+
+    public function testUpdateLabelForUserSkipsNoOpUpdates(): void
+    {
+        $this->insertExistingPasskey();
+        $passkeyId = (int) $this->pdo
+            ->query("SELECT id FROM user_passkeys WHERE credential_id = 'existing-credential'")
+            ->fetchColumn();
+        $originalUpdatedAt = (string) $this->pdo
+            ->query("SELECT updated_at FROM user_passkeys WHERE id = {$passkeyId}")
+            ->fetchColumn();
+
+        $this->auditLogService->expects($this->never())->method('log');
+
+        $updated = $this->service->updateLabelForUser(1, $passkeyId, '  Existing laptop  ');
+
+        $this->assertSame('Existing laptop', $updated['label']);
+        $storedUpdatedAt = (string) $this->pdo
+            ->query("SELECT updated_at FROM user_passkeys WHERE id = {$passkeyId}")
+            ->fetchColumn();
+        $this->assertSame($originalUpdatedAt, $storedUpdatedAt);
+    }
+
+    public function testListForAdminReturnsFilteredSortedPasskeys(): void
+    {
+        $this->insertPasskeyForUser(1, 'admin-credential', 'Admin Laptop', 2, '2026-03-10 08:00:00');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password, school_id, status, points, is_admin, uuid)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([
+            'bob',
+            'bob@example.com',
+            password_hash('password123', PASSWORD_BCRYPT),
+            1,
+            'active',
+            50,
+            0,
+            '550e8400-e29b-41d4-a716-4466554400bb',
+        ]);
+        $bobId = (int) $this->pdo->lastInsertId();
+        $this->insertPasskeyForUser($bobId, 'bob-credential', 'Bob Phone', 9, '2026-03-10 09:00:00', true);
+
+        $result = $this->service->listForAdmin(1, [
+            'q' => 'bob',
+            'sort' => 'sign_count_desc',
+            'page' => 1,
+            'limit' => 10,
+        ]);
+
+        $this->assertSame(1, $result['pagination']['total_items']);
+        $this->assertCount(1, $result['passkeys']);
+        $this->assertSame('bob', $result['passkeys'][0]['username']);
+        $this->assertSame('bob@example.com', $result['passkeys'][0]['email']);
+        $this->assertSame('Bob Phone', $result['passkeys'][0]['label']);
+        $this->assertSame(9, $result['passkeys'][0]['sign_count']);
+        $this->assertTrue($result['passkeys'][0]['backup_state']);
+    }
+
+    public function testGetAdminStatsCountsActivePasskeysAndRecentPasskeyLogins(): void
+    {
+        $this->insertPasskeyForUser(1, 'admin-credential', 'Admin Laptop', 2, gmdate('Y-m-d H:i:s', strtotime('-2 days')));
+        $this->insertPasskeyForUser(1, 'admin-credential-2', 'Admin Phone', 4, gmdate('Y-m-d H:i:s', strtotime('-18 days')));
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password, school_id, status, points, is_admin, uuid)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([
+            'retired-user',
+            'retired@example.com',
+            password_hash('password123', PASSWORD_BCRYPT),
+            1,
+            'inactive',
+            0,
+            0,
+            '550e8400-e29b-41d4-a716-4466554400bc',
+        ]);
+        $deletedUserId = (int) $this->pdo->lastInsertId();
+        $this->pdo->prepare('UPDATE users SET deleted_at = ? WHERE id = ?')
+            ->execute([gmdate('Y-m-d H:i:s', strtotime('-1 day')), $deletedUserId]);
+        $this->insertPasskeyForUser($deletedUserId, 'deleted-user-credential', 'Old Device', 8, gmdate('Y-m-d H:i:s', strtotime('-3 days')));
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO audit_logs (user_id, actor_type, action, status, operation_category, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        );
+        $stmt->execute([1, 'user', 'passkey_login', 'success', 'authentication', gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $stmt->execute([1, 'user', 'passkey_login', 'success', 'authentication', gmdate('Y-m-d H:i:s', strtotime('-10 days'))]);
+        $stmt->execute([1, 'user', 'passkey_login', 'success', 'authentication', gmdate('Y-m-d H:i:s', strtotime('-40 days'))]);
+
+        $stats = $this->service->getAdminStats(1);
+
+        $this->assertSame(1, $stats['users_with_passkeys']);
+        $this->assertSame(2, $stats['total_active_passkeys']);
+        $this->assertSame(2, $stats['new_passkeys_30d']);
+        $this->assertSame(1, $stats['passkey_logins_7d']);
+        $this->assertSame(2, $stats['passkey_logins_30d']);
+    }
+
     private function userFixture(): array
     {
         return [
@@ -327,6 +456,17 @@ class PasskeyServiceTest extends TestCase
 
     private function insertExistingPasskey(): void
     {
+        $this->insertPasskeyForUser(1, 'existing-credential', 'Existing laptop', 7);
+    }
+
+    private function insertPasskeyForUser(
+        int $userId,
+        string $credentialId,
+        string $label,
+        int $signCount,
+        ?string $createdAt = null,
+        bool $backupState = false
+    ): void {
         $stmt = $this->pdo->prepare(
             'INSERT INTO user_passkeys (
                 user_id, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
@@ -338,26 +478,27 @@ class PasskeyServiceTest extends TestCase
                 :last_used_at, :attested_at, :created_at, :updated_at
             )'
         );
+        $timestamp = $createdAt ?? gmdate('Y-m-d H:i:s');
         $stmt->execute([
-            'user_id' => 1,
-            'credential_id' => 'existing-credential',
-            'credential_id_hash' => hash('sha256', 'existing-credential'),
+            'user_id' => $userId,
+            'credential_id' => $credentialId,
+            'credential_id_hash' => hash('sha256', $credentialId),
             'credential_type' => 'public-key',
-            'label' => 'Existing laptop',
+            'label' => $label,
             'public_key' => json_encode(['pem' => 'placeholder', 'alg' => -7]),
             'rp_id' => 'app.example.test',
             'user_handle' => 'dGVzdC11c2Vy',
             'transports' => json_encode(['internal']),
             'aaguid' => null,
-            'sign_count' => 7,
+            'sign_count' => $signCount,
             'attestation_format' => null,
             'backup_eligible' => 0,
-            'backup_state' => 0,
+            'backup_state' => $backupState ? 1 : 0,
             'meta_json' => null,
-            'last_used_at' => null,
-            'attested_at' => gmdate('Y-m-d H:i:s'),
-            'created_at' => gmdate('Y-m-d H:i:s'),
-            'updated_at' => gmdate('Y-m-d H:i:s'),
+            'last_used_at' => $timestamp,
+            'attested_at' => $timestamp,
+            'created_at' => $timestamp,
+            'updated_at' => $timestamp,
         ]);
     }
 
@@ -370,7 +511,13 @@ class PasskeyServiceTest extends TestCase
             'private_key_type' => OPENSSL_KEYTYPE_EC,
             'curve_name' => 'prime256v1',
         ]);
+        if ($privateKey === false) {
+            $this->markTestSkipped('OpenSSL EC key generation is not available in this environment.');
+        }
         $details = openssl_pkey_get_details($privateKey);
+        if (!is_array($details) || !isset($details['ec']['x'], $details['ec']['y'])) {
+            $this->markTestSkipped('OpenSSL EC key details are not available in this environment.');
+        }
 
         return [
             'private_key' => $privateKey,

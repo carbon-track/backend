@@ -21,6 +21,16 @@ use DateTimeZone;
 
 class AdminController
 {
+    private const SECURITY_ACTIVITY_ACTIONS = [
+        'login',
+        'passkey_login',
+        'logout',
+        'password_change',
+        'passkey_registered',
+        'passkey_deleted',
+        'passkey_label_updated',
+    ];
+
     private UserProfileViewService $userProfileViewService;
 
     public function __construct(
@@ -130,6 +140,8 @@ $sql = "
                     COALESCE(uc.checkin_days, 0) as checkin_days,
                     COALESCE(uc.makeup_checkins, 0) as makeup_checkins,
                     uc.last_checkin_date,
+                    COALESCE(pk.passkey_count, 0) as passkey_count,
+                    pk.last_passkey_used_at,
                     COALESCE(ub.badges_awarded, 0) as badges_awarded,
                     COALESCE(ub.badges_revoked, 0) as badges_revoked,
                     COALESCE(ub.active_badges, 0) as active_badges,
@@ -153,6 +165,15 @@ $sql = "
                     FROM user_checkins
                     GROUP BY user_id
                 ) uc ON u.id = uc.user_id
+                LEFT JOIN (
+                    SELECT
+                        user_id,
+                        COUNT(*) AS passkey_count,
+                        MAX(last_used_at) AS last_passkey_used_at
+                    FROM user_passkeys
+                    WHERE disabled_at IS NULL
+                    GROUP BY user_id
+                ) pk ON u.id = pk.user_id
                 LEFT JOIN (
                     SELECT user_id,
                         COUNT(*) AS badge_records,
@@ -193,6 +214,7 @@ $sql = "
                 $row['total_carbon_saved'] = (float) ($row['total_carbon_saved'] ?? 0);
                 $row['checkin_days'] = (int) ($row['checkin_days'] ?? 0);
                 $row['makeup_checkins'] = (int) ($row['makeup_checkins'] ?? 0);
+                $row['passkey_count'] = (int) ($row['passkey_count'] ?? 0);
                 $row['badges_awarded'] = (int) ($row['badges_awarded'] ?? 0);
                 $row['badges_revoked'] = (int) ($row['badges_revoked'] ?? 0);
                 $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
@@ -315,6 +337,8 @@ $sql = "
                 'badge_summary' => $badgePayload['summary'],
                 'recent_badges' => array_slice($badgePayload['items'], 0, 5),
                 'checkin_stats' => $checkinStats,
+                'passkey_summary' => $this->getUserPasskeySummary($userId),
+                'recent_security_activity' => $this->getRecentSecurityActivity($userId, 10),
             ];
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);
@@ -668,7 +692,32 @@ $sql = "
     private function loadUserRow(int $userId): ?array
     {
         $lastLoginSelect = $this->buildLastLoginSelect('u');
-        $stmt = $this->db->prepare('SELECT u.id, u.username, u.email, u.status, u.is_admin, u.points, u.created_at, u.updated_at, u.school_id, s.name as school_name, ' . $lastLoginSelect . " FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.id = :id AND u.deleted_at IS NULL LIMIT 1");
+        $stmt = $this->db->prepare(
+            'SELECT
+                u.id,
+                u.username,
+                u.email,
+                u.status,
+                u.is_admin,
+                u.points,
+                u.created_at,
+                u.updated_at,
+                u.school_id,
+                s.name as school_name,
+                COALESCE(pk.passkey_count, 0) as passkey_count,
+                pk.last_passkey_used_at,
+                ' . $lastLoginSelect . '
+             FROM users u
+             LEFT JOIN schools s ON u.school_id = s.id
+             LEFT JOIN (
+                SELECT user_id, COUNT(*) AS passkey_count, MAX(last_used_at) AS last_passkey_used_at
+                FROM user_passkeys
+                WHERE disabled_at IS NULL
+                GROUP BY user_id
+             ) pk ON pk.user_id = u.id
+             WHERE u.id = :id AND u.deleted_at IS NULL
+             LIMIT 1'
+        );
         $stmt->execute(['id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
@@ -679,8 +728,94 @@ $sql = "
         $row['school_name'] = $profileFields['school_name'];
         $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
         $row['points'] = (float) ($row['points'] ?? 0);
+        $row['passkey_count'] = (int) ($row['passkey_count'] ?? 0);
         $row['days_since_registration'] = $this->computeDaysSince($row['created_at'] ?? null);
         return $row;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function getUserPasskeySummary(int $userId): array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN backup_state = 1 THEN 1 ELSE 0 END) AS backup_enabled,
+                SUM(CASE WHEN backup_eligible = 1 THEN 1 ELSE 0 END) AS backup_eligible,
+                MAX(last_used_at) AS last_used_at,
+                MAX(created_at) AS last_registered_at
+             FROM user_passkeys
+             WHERE user_id = :user_id AND disabled_at IS NULL'
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        return [
+            'total' => (int) ($row['total'] ?? 0),
+            'backup_enabled' => (int) ($row['backup_enabled'] ?? 0),
+            'backup_eligible' => (int) ($row['backup_eligible'] ?? 0),
+            'last_used_at' => $row['last_used_at'] ?? null,
+            'last_registered_at' => $row['last_registered_at'] ?? null,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function getRecentSecurityActivity(int $userId, int $limit): array
+    {
+        $placeholders = implode(', ', array_fill(0, count(self::SECURITY_ACTIVITY_ACTIONS), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+             FROM audit_logs
+             WHERE user_id = ?
+               AND action IN ({$placeholders})
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?"
+        );
+        $stmt->execute(array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        return array_map([$this, 'normalizeSecurityActivityRow'], $rows);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function normalizeSecurityActivityRow(array $row): array
+    {
+        $metadata = $this->decodeAuditPayload($row['data'] ?? null);
+
+        return [
+            'id' => (int) ($row['id'] ?? 0),
+            'action' => (string) ($row['action'] ?? ''),
+            'status' => (string) ($row['status'] ?? 'success'),
+            'actor_type' => (string) ($row['actor_type'] ?? 'user'),
+            'occurred_at' => $row['created_at'] ?? null,
+            'ip_address' => $metadata['ip_address'] ?? ($row['ip_address'] ?? null),
+            'user_agent' => $metadata['user_agent'] ?? ($row['user_agent'] ?? null),
+            'request_id' => $row['request_id'] ?? null,
+            'metadata' => $metadata,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeAuditPayload(mixed $value): array
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
     }
 
     private function computeDaysSince(?string $timestamp): int
