@@ -1982,7 +1982,7 @@
           "Passkeys"
         ],
         "summary": "创建 Passkey 登录选项",
-        "description": "生成 WebAuthn assertion challenge。可选传入 identifier 以辅助账号匹配；无论账号是否存在或是否已注册 Passkey，均返回通用登录选项以降低枚举风险。",
+        "description": "生成 WebAuthn assertion challenge。可选传入 identifier 以辅助账号匹配；前端也可在未输入用户名或邮箱时直接发起通用 Passkey 登录。即使账号不存在或没有可用的 Passkey，仍可能返回通用的 allowCredentials 列表以降低枚举风险。",
         "requestBody": {
           "required": false,
           "content": {
@@ -17930,7 +17930,7 @@
         "properties": {
           "identifier": {
             "type": "string",
-            "description": "可选。用户名或邮箱；提供后会将 assertion 限定为该账号已注册的 passkeys。"
+            "description": "可选。用户名或邮箱；提供后通常会将 assertion 限定为该账号已注册的 passkeys。但当用户不存在或该账号没有可用的 Passkey 时，仍可能返回通用的 allowCredentials 列表以降低用户枚举风险。"
           }
         }
       },

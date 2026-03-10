@@ -34,21 +34,17 @@ class MessageController
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
+        UserProfileViewService $userProfileViewService,
         ?EmailService $emailService = null,
-        ?ErrorLogService $errorLogService = null,
-        ?UserProfileViewService $userProfileViewService = null
+        ?ErrorLogService $errorLogService = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->userProfileViewService = $userProfileViewService;
         $this->emailService = $emailService;
         $this->errorLogService = $errorLogService;
-        if ($userProfileViewService === null) {
-            throw new \InvalidArgumentException('UserProfileViewService is required.');
-        }
-
-        $this->userProfileViewService = $userProfileViewService;
     }
 
     /**

@@ -34,9 +34,9 @@ class MessageControllerTest extends TestCase
             $svc,
             $audit,
             $auth,
+            $userProfileViewService ?? $this->makeUserProfileViewService(),
             $emailService,
-            null,
-            $userProfileViewService ?? $this->makeUserProfileViewService()
+            null
         );
     }
 

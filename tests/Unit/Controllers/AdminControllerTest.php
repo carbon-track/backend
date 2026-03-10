@@ -37,9 +37,9 @@ class AdminControllerTest extends TestCase
             $statsService,
             $checkinService,
             $quotaConfigService,
+            $this->makeUserProfileViewService(),
             null,
-            null,
-            $this->makeUserProfileViewService()
+            null
         );
     }
 

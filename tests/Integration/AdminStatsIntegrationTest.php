@@ -93,9 +93,9 @@ class AdminStatsIntegrationTest extends TestCase
             $statsService,
             $checkinService,
             $quotaConfigService,
+            new UserProfileViewService(new RegionService(null, null, null, null)),
             null,
-            null,
-            new UserProfileViewService(new RegionService(null, null, null, null))
+            null
         );
     }
 
