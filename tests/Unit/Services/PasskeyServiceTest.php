@@ -234,6 +234,14 @@ class PasskeyServiceTest extends TestCase
         $this->assertArrayNotHasKey('allowCredentials', $result['public_key']);
     }
 
+    public function testBeginAuthenticationAllowsOmittingIdentifier(): void
+    {
+        $result = $this->service->beginAuthentication();
+
+        $this->assertNotEmpty($result['challenge_id']);
+        $this->assertArrayNotHasKey('allowCredentials', $result['public_key']);
+    }
+
     public function testBeginAuthenticationReturnsGenericOptionsWhenAccountHasNoPasskeys(): void
     {
         $result = $this->service->beginAuthentication([

@@ -25,6 +25,7 @@ class StreakLeaderboardService
     private DateTimeZone $timezone;
     private ?AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
+    private UserProfileViewService $userProfileViewService;
 
     public function __construct(
         PDO $db,
@@ -33,7 +34,8 @@ class StreakLeaderboardService
         ?string $cacheDir = null,
         ?int $ttlSeconds = null,
         ?AuditLogService $auditLogService = null,
-        ?ErrorLogService $errorLogService = null
+        ?ErrorLogService $errorLogService = null,
+        ?UserProfileViewService $userProfileViewService = null
     )
     {
         $this->db = $db;
@@ -41,6 +43,7 @@ class StreakLeaderboardService
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
         $baseDir = $cacheDir ?? (dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache');
         if (!is_dir($baseDir)) {
             @mkdir($baseDir, 0755, true);
@@ -109,7 +112,7 @@ class StreakLeaderboardService
     private function generateSnapshot(): array
     {
         $sql = "SELECT uc.user_id, uc.checkin_date,
-                    u.username, u.region_code, u.school_id, u.avatar_id,
+                    u.username, u.region_code, u.school_id, u.school, u.location, u.avatar_id,
                     s.name AS school_name, a.file_path AS avatar_path
                 FROM user_checkins uc
                 JOIN users u ON u.id = uc.user_id AND u.deleted_at IS NULL
@@ -147,12 +150,13 @@ class StreakLeaderboardService
                 }
 
                 $currentUserId = $userId;
+                $profileFields = $this->userProfileViewService->buildProfileFields($row);
                 $current = [
                     'id' => $userId,
                     'username' => $row['username'] ?? null,
-                    'region_code' => $row['region_code'] ?? null,
-                    'school_id' => isset($row['school_id']) ? (int) $row['school_id'] : null,
-                    'school_name' => $row['school_name'] ?? null,
+                    'region_code' => $profileFields['region_code'] ?? null,
+                    'school_id' => $profileFields['school_id'] ?? null,
+                    'school_name' => $profileFields['school_name'] ?? null,
                     'avatar_id' => isset($row['avatar_id']) ? (int) $row['avatar_id'] : null,
                     'avatar_path' => $row['avatar_path'] ?? null,
                     'last_date' => null,
@@ -212,12 +216,7 @@ class StreakLeaderboardService
                 continue;
             }
             if (!isset($regions[$regionCode])) {
-                $context = $this->regionService->getRegionContext($regionCode) ?? [
-                    'region_code' => $regionCode,
-                    'country_code' => null,
-                    'state_code' => null,
-                    'region_label' => null,
-                ];
+                $context = $this->userProfileViewService->buildRegionFields(['region_code' => $regionCode]);
                 $regions[$regionCode] = [
                     'region_code' => $context['region_code'] ?? $regionCode,
                     'country_code' => $context['country_code'] ?? null,

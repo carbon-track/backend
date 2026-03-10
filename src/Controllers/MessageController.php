@@ -9,6 +9,8 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
 use PDO;
 
@@ -26,6 +28,7 @@ class MessageController
     private AuthService $authService;
     private ?EmailService $emailService;
     private ?ErrorLogService $errorLogService;
+    private UserProfileViewService $userProfileViewService;
 
     public function __construct(
         PDO $db,
@@ -33,7 +36,8 @@ class MessageController
         AuditLogService $auditLog,
         AuthService $authService,
         ?EmailService $emailService = null,
-        ?ErrorLogService $errorLogService = null
+        ?ErrorLogService $errorLogService = null,
+        ?UserProfileViewService $userProfileViewService = null
     ) {
         $this->db = $db;
         $this->messageService = $messageService;
@@ -41,6 +45,7 @@ class MessageController
         $this->authService = $authService;
         $this->emailService = $emailService;
         $this->errorLogService = $errorLogService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService(new RegionService());
     }
 
     /**
@@ -1581,7 +1586,7 @@ $auditPayload = [
         }
 
         $placeholders = implode(',', array_fill(0, count($sanitized), '?'));
-        $sql = 'SELECT id, username, email, school, school_id, location, is_admin, status FROM users WHERE deleted_at IS NULL AND id IN (' . $placeholders . ')';
+        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL AND u.id IN (' . $placeholders . ')';
 
         try {
             $stmt = $this->db->prepare($sql);
@@ -1664,7 +1669,7 @@ $auditPayload = [
         ];
 
         try {
-            $sql = 'SELECT id, username, email, school, school_id, location, is_admin, status FROM users WHERE deleted_at IS NULL';
+            $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL';
             $stmt = $this->db->query($sql);
             if (!$stmt) {
                 return $result;
@@ -1723,6 +1728,16 @@ $auditPayload = [
                     $searchParts[] = 'CAST(u.id AS CHAR) LIKE :search';
                     continue;
                 }
+                if ($field === 'school') {
+                    $searchParts[] = 'u.school LIKE :search';
+                    $searchParts[] = 's.name LIKE :search';
+                    continue;
+                }
+                if ($field === 'location') {
+                    $searchParts[] = 'u.location LIKE :search';
+                    $searchParts[] = 'u.region_code LIKE :search';
+                    continue;
+                }
                 if (!isset($fieldMap[$field])) {
                     continue;
                 }
@@ -1740,7 +1755,7 @@ $auditPayload = [
         }
 
         if (!empty($criteria['school'])) {
-            $where[] = 'u.school LIKE :school_exact';
+            $where[] = '(u.school LIKE :school_exact OR s.name LIKE :school_exact)';
             $params['school_exact'] = '%' . trim((string)$criteria['school']) . '%';
         }
 
@@ -1792,7 +1807,7 @@ $auditPayload = [
 
         $conditions = implode(' AND ', $where);
 
-        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.is_admin, u.status, s.name AS school_name '
+        $sql = 'SELECT u.id, u.username, u.email, u.school, u.school_id, u.location, u.region_code, u.is_admin, u.status, s.name AS school_name '
             . 'FROM users u '
             . 'LEFT JOIN schools s ON s.id = u.school_id '
             . 'WHERE ' . $conditions . ' '
@@ -1849,13 +1864,16 @@ $auditPayload = [
 
     private function normalizeUserRow(array $row): array
     {
+        $profileFields = $this->userProfileViewService->buildProfileFields($row);
+        $legacyDisplayFields = $this->userProfileViewService->buildLegacyDisplayFields($row);
+
         return [
             'id' => isset($row['id']) ? (int)$row['id'] : null,
             'username' => $row['username'] ?? null,
             'email' => $row['email'] ?? null,
-            'school' => $row['school'] ?? ($row['school_name'] ?? null),
-            'school_id' => isset($row['school_id']) ? (int)$row['school_id'] : null,
-            'location' => $row['location'] ?? null,
+            'school' => $legacyDisplayFields['school'],
+            'school_id' => $profileFields['school_id'],
+            'location' => $legacyDisplayFields['location'],
             'is_admin' => isset($row['is_admin']) ? (bool)$row['is_admin'] : null,
             'status' => $row['status'] ?? null,
         ];

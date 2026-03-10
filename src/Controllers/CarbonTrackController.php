@@ -13,6 +13,8 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\BadgeService;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -28,6 +30,7 @@ class CarbonTrackController
     private ?CheckinService $checkinService;
     private ?QuotaService $quotaService;
     private ?BadgeService $badgeService;
+    private UserProfileViewService $userProfileViewService;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -42,7 +45,8 @@ class CarbonTrackController
         $r2Service = null,
         $checkinService = null,
         $quotaService = null,
-        ?BadgeService $badgeService = null
+        ?BadgeService $badgeService = null,
+        ?UserProfileViewService $userProfileViewService = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -54,6 +58,7 @@ class CarbonTrackController
         $this->checkinService = $checkinService;
         $this->quotaService = $quotaService;
         $this->badgeService = $badgeService;
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService(new RegionService());
     }
 
     /**
@@ -940,6 +945,7 @@ class CarbonTrackController
                     a.category,
                     u.username,
                     u.email,
+                    u.school,
                     s.name as school_name
                 FROM carbon_records r
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
@@ -960,6 +966,9 @@ class CarbonTrackController
 
             // 处理图片字段与前端期望的别名（同时在这里直接返回可用 URL，前端不再单独请求预签名）
             foreach ($records as &$record) {
+                $profileFields = $this->userProfileViewService->buildProfileFields($record);
+                $record['school_name'] = $profileFields['school_name'];
+                unset($record['school']);
                 $decoded = $record['images'] ? json_decode($record['images'], true) : [];
                 $record['images'] = $this->normalizeImages($decoded);
                 if ($this->r2Service && is_array($record['images'])) {

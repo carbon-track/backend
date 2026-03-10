@@ -92,11 +92,20 @@ class RegionService
         if (!is_string($regionCode) || trim($regionCode) === '') {
             return null;
         }
-        $parts = explode('-', strtoupper($regionCode));
-        if (count($parts) !== 2) {
+        $normalized = strtoupper(trim($regionCode));
+        $separatorPosition = strpos($normalized, '-');
+        if ($separatorPosition === false) {
             return null;
         }
-        [$country, $state] = $parts;
+
+        $country = substr($normalized, 0, $separatorPosition);
+        $state = substr($normalized, $separatorPosition + 1);
+        $country = $this->normalizeCountryCode($country);
+        $state = $this->normalizeStateCode($state);
+        if ($country === null || $state === null) {
+            return null;
+        }
+
         return [
             'country_code' => $country,
             'state_code' => $state,
@@ -130,10 +139,6 @@ class RegionService
         $stateCode = $parsed['state_code'];
         $countryName = $this->getCountryName($countryCode);
         $stateName = $this->getStateName($countryCode, $stateCode);
-
-        if ($countryName === null && $stateName === null) {
-            return null;
-        }
 
         return [
             'region_code' => $this->buildRegionCode($countryCode, $stateCode),

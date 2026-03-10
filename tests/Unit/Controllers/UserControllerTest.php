@@ -177,6 +177,12 @@ class UserControllerTest extends TestCase
             $stmtInsertSchool = $this->createMock(\PDOStatement::class);
             $stmtInsertSchool->method('execute')->willReturn(true);
 
+            $stmtFetchSchoolName = $this->createMock(\PDOStatement::class);
+            $stmtFetchSchoolName->method('execute')->willReturn(true);
+            $stmtFetchSchoolName->method('fetch')->willReturn([
+                'name' => 'Climate Academy',
+            ]);
+
             $stmtUpdate = $this->createMock(\PDOStatement::class);
             $stmtUpdate->method('execute')->willReturn(true);
 
@@ -202,6 +208,7 @@ class UserControllerTest extends TestCase
                 $stmtSelectUser,
                 $stmtFindSchool,
                 $stmtInsertSchool,
+                $stmtFetchSchoolName,
                 $stmtUpdate,
                 $stmtJoined
             );
@@ -351,7 +358,15 @@ class UserControllerTest extends TestCase
 
         $stmtUserInfo = $this->createMock(\PDOStatement::class);
         $stmtUserInfo->method('execute')->willReturn(true);
-        $stmtUserInfo->expects($this->once())->method('fetch')->willReturn(['points' => 200, 'created_at' => '2024-01-01']);
+        $stmtUserInfo->expects($this->once())->method('fetch')->willReturn([
+            'points' => 200,
+            'created_at' => '2024-01-01',
+            'region_code' => null,
+            'school_id' => 7,
+            'school_name' => null,
+            'school' => 'Legacy Academy',
+            'location' => 'US-UM-81',
+        ]);
 
         $stmtRank = $this->createMock(\PDOStatement::class);
         $stmtRank->method('execute')->willReturn(true);
@@ -402,21 +417,39 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $region->method('getRegionContext')->willReturn([
-            'region_code' => 'CN-BJ',
-            'region_label' => 'CN-BJ',
-            'country_code' => 'CN',
-            'state_code' => 'BJ'
-        ]);
+        $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
+            if ($value !== 'US-UM-81') {
+                return null;
+            }
+
+            return [
+                'region_code' => 'US-UM-81',
+                'region_label' => 'US-UM-81',
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => null,
+            ];
+        });
         $leaderboardService = $this->createMock(\CarbonTrack\Services\LeaderboardService::class);
         $leaderboardService->method('getSnapshot')->willReturn([
             'generated_at' => '2025-01-01 00:00:00',
             'expires_at' => '2025-01-01 01:00:00',
             'global' => [
                 ['id' => 99, 'username' => 'alice', 'total_points' => 520, 'avatar_id' => null, 'avatar_path' => null],
-            ]
+            ],
+            'regions' => [
+                'US-UM-81' => [
+                    'entries' => [],
+                ],
+            ],
+            'schools' => [
+                7 => [
+                    'entries' => [],
+                ],
+            ],
         ]);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region, $leaderboardService);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region, $leaderboardService, null, null, new \CarbonTrack\Services\UserProfileViewService($region));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -433,6 +466,8 @@ class UserControllerTest extends TestCase
         $this->assertEquals(80, $json['data']['min_exchange_points']);
         $this->assertEquals('2024-01-01', $json['data']['member_since']);
         $this->assertCount(1, $json['data']['leaderboard']);
+        $this->assertSame('Legacy Academy', $json['data']['leaderboards']['school']['label']);
+        $this->assertSame('US-UM-81', $json['data']['region_context']['region_code']);
     }
 
 
@@ -545,6 +580,196 @@ class UserControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals('john', $json['data']['username']);
+    }
+
+    public function testGetCurrentUserFallsBackToLegacySchoolAndLocationFields(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 3]);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetch')->willReturn([
+            'id' => 3,
+            'uuid' => 'u-3',
+            'username' => 'legacy-user',
+            'email' => 'legacy@example.com',
+            'school_id' => null,
+            'school_name' => null,
+            'school' => 'Legacy Academy',
+            'location' => 'US-UM-81',
+            'region_code' => null,
+            'points' => 15,
+            'is_admin' => 0,
+            'avatar_id' => null,
+            'avatar_path' => null,
+            'lastlgn' => null,
+            'updated_at' => '2025-01-01 00:00:00'
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+        $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
+            if ($value !== 'US-UM-81') {
+                return null;
+            }
+
+            return [
+                'region_code' => 'US-UM-81',
+                'region_label' => 'United States · Baker Island',
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => 'Baker Island',
+            ];
+        });
+
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+        $request = makeRequest('GET', '/users/me');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getCurrentUser($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('Legacy Academy', $json['data']['school_name']);
+        $this->assertSame('US-UM-81', $json['data']['region_code']);
+        $this->assertSame('US', $json['data']['country_code']);
+        $this->assertSame('UM-81', $json['data']['state_code']);
+    }
+
+    public function testUpdateProfileMirrorsSchoolAndRegionToLegacyColumns(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+        $avatar->method('isAvatarAvailable')->willReturn(true);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                $this->assertSame('US-UM-81', $payload['new_data']['region_code']);
+                $this->assertSame('US-UM-81', $payload['new_data']['location']);
+                $this->assertSame('Canonical Academy', $payload['new_data']['school']);
+                return true;
+            }));
+
+        $stmtSelectUser = $this->createMock(\PDOStatement::class);
+        $stmtSelectUser->method('execute')->willReturn(true);
+        $stmtSelectUser->method('fetch')->willReturn([
+            'id' => 1,
+            'username' => 'john',
+            'avatar_id' => null,
+            'school_id' => null,
+            'school' => 'Legacy Academy',
+            'location' => 'US-UM-80',
+            'region_code' => null,
+        ]);
+
+        $stmtSelectSchool = $this->createMock(\PDOStatement::class);
+        $stmtSelectSchool->method('execute')->willReturn(true);
+        $stmtSelectSchool->method('fetch')->willReturn([
+            'id' => 9,
+            'name' => 'Canonical Academy',
+        ]);
+
+        $stmtUpdate = $this->createMock(\PDOStatement::class);
+        $stmtUpdate->expects($this->once())
+            ->method('execute')
+            ->with($this->callback(function (array $params): bool {
+                return in_array(9, $params, true)
+                    && in_array('Canonical Academy', $params, true)
+                    && in_array('US-UM-81', $params, true)
+                    && $params[count($params) - 1] === 1;
+            }))
+            ->willReturn(true);
+
+        $stmtJoined = $this->createMock(\PDOStatement::class);
+        $stmtJoined->method('execute')->willReturn(true);
+        $stmtJoined->method('fetch')->willReturn([
+            'id' => 1,
+            'uuid' => 'u-1',
+            'username' => 'john',
+            'email' => 'john@example.com',
+            'school_id' => 9,
+            'school_name' => 'Canonical Academy',
+            'school' => 'Canonical Academy',
+            'location' => 'US-UM-81',
+            'region_code' => 'US-UM-81',
+            'points' => 0,
+            'is_admin' => 0,
+            'avatar_id' => null,
+            'avatar_path' => null,
+            'lastlgn' => null,
+            'updated_at' => '2025-01-01 00:00:00'
+        ]);
+
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+            $stmtSelectUser,
+            $stmtSelectSchool,
+            $stmtUpdate,
+            $stmtJoined
+        );
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+        $region->method('normalizeCountryCode')->willReturn('US');
+        $region->method('normalizeStateCode')->willReturn('UM-81');
+        $region->method('isValidRegion')->with('US', 'UM-81')->willReturn(true);
+        $region->method('buildRegionCode')->with('US', 'UM-81')->willReturn('US-UM-81');
+        $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
+            $map = [
+                'US-UM-80' => [
+                    'region_code' => 'US-UM-80',
+                    'region_label' => 'United States · Howland Island',
+                    'country_code' => 'US',
+                    'state_code' => 'UM-80',
+                    'country_name' => 'United States',
+                    'state_name' => 'Howland Island',
+                ],
+                'US-UM-81' => [
+                    'region_code' => 'US-UM-81',
+                    'region_label' => 'United States · Baker Island',
+                    'country_code' => 'US',
+                    'state_code' => 'UM-81',
+                    'country_name' => 'United States',
+                    'state_name' => 'Baker Island',
+                ],
+            ];
+
+            return $map[$value] ?? null;
+        });
+
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
+        $request = makeRequest('PUT', '/users/me/profile', [
+            'school_id' => 9,
+            'country_code' => 'US',
+            'state_code' => 'UM-81',
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->updateProfile($request, $response);
+        $this->assertSame(200, $resp->getStatusCode());
+
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame('Canonical Academy', $payload['data']['school_name']);
+        $this->assertSame('US-UM-81', $payload['data']['region_code']);
+        $this->assertSame('UM-81', $payload['data']['state_code']);
     }
 
     public function testUpdateCurrentUserDelegatesToUpdateProfile(): void

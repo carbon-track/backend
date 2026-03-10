@@ -10,6 +10,8 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
 
 class MessageControllerTest extends TestCase
@@ -321,9 +323,14 @@ class MessageControllerTest extends TestCase
             school TEXT,
             school_id INTEGER,
             location TEXT,
+            region_code TEXT,
             is_admin INTEGER,
             status TEXT,
             deleted_at TEXT
+        )');
+        $pdo->exec('CREATE TABLE schools (
+            id INTEGER PRIMARY KEY,
+            name TEXT
         )');
 
         $pdo->exec('CREATE TABLE system_logs (
@@ -421,9 +428,14 @@ class MessageControllerTest extends TestCase
             school TEXT,
             school_id INTEGER,
             location TEXT,
+            region_code TEXT,
             is_admin INTEGER,
             status TEXT,
             deleted_at TEXT
+        )');
+        $pdo->exec('CREATE TABLE schools (
+            id INTEGER PRIMARY KEY,
+            name TEXT
         )');
 
         $pdo->exec('CREATE TABLE system_logs (
@@ -510,9 +522,14 @@ class MessageControllerTest extends TestCase
             school TEXT,
             school_id INTEGER,
             location TEXT,
+            region_code TEXT,
             is_admin INTEGER,
             status TEXT,
             deleted_at TEXT
+        )');
+        $pdo->exec('CREATE TABLE schools (
+            id INTEGER PRIMARY KEY,
+            name TEXT
         )');
 
         $pdo->exec('CREATE TABLE system_logs (
@@ -630,9 +647,14 @@ class MessageControllerTest extends TestCase
             school TEXT,
             school_id INTEGER,
             location TEXT,
+            region_code TEXT,
             is_admin INTEGER,
             status TEXT,
             deleted_at TEXT
+        )');
+        $pdo->exec('CREATE TABLE schools (
+            id INTEGER PRIMARY KEY,
+            name TEXT
         )');
 
         $pdo->exec('CREATE TABLE system_logs (
@@ -762,13 +784,29 @@ class MessageControllerTest extends TestCase
         $stmt->method('bindValue')->willReturn(true);
         $stmt->method('execute')->willReturn(true);
         $stmt->method('fetchAll')->willReturn([
-            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => 'Green', 'school_id' => 1, 'location' => 'City', 'is_admin' => 0, 'status' => 'active'],
-            ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school' => 'Green', 'school_id' => 1, 'location' => 'City', 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => null, 'school_id' => 1, 'school_name' => 'Canonical Green', 'location' => null, 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school' => 'Legacy Green', 'school_id' => 1, 'school_name' => null, 'location' => null, 'region_code' => null, 'is_admin' => 0, 'status' => 'active'],
         ]);
 
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $region = $this->createMock(RegionService::class);
+        $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
+            if ($value !== 'US-UM-81') {
+                return null;
+            }
+
+            return [
+                'region_code' => 'US-UM-81',
+                'region_label' => null,
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => null,
+            ];
+        });
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth, null, null, new UserProfileViewService($region));
         $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, ['search' => 'example', 'limit' => 1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->searchBroadcastRecipients($request, $response);
@@ -779,6 +817,49 @@ class MessageControllerTest extends TestCase
         $this->assertCount(1, $json['data']);
         $this->assertTrue($json['pagination']['has_more']);
         $this->assertSame(1, $json['pagination']['page']);
+        $this->assertSame('Canonical Green', $json['data'][0]['school']);
+        $this->assertSame('US-UM-81', $json['data'][0]['location']);
+    }
+
+    public function testResolveExplicitRecipientsUsesCompatibleSchoolAndLocationFields(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $stmt->method('fetchAll')->willReturn([
+            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => null, 'school_id' => 1, 'school_name' => 'Canonical Green', 'location' => null, 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
+        ]);
+        $pdo->method('prepare')->willReturn($stmt);
+
+        $region = $this->createMock(RegionService::class);
+        $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
+            if ($value !== 'US-UM-81') {
+                return null;
+            }
+
+            return [
+                'region_code' => 'US-UM-81',
+                'region_label' => null,
+                'country_code' => 'US',
+                'state_code' => 'UM-81',
+                'country_name' => 'United States',
+                'state_name' => null,
+            ];
+        });
+
+        $controller = new MessageController($pdo, $svc, $audit, $auth, null, null, new UserProfileViewService($region));
+
+        $method = new \ReflectionMethod($controller, 'resolveExplicitRecipients');
+        $method->setAccessible(true);
+        $result = $method->invoke($controller, [10]);
+
+        $this->assertNull($result['error']);
+        $this->assertSame('Canonical Green', $result['records'][10]['school']);
+        $this->assertSame('US-UM-81', $result['records'][10]['location']);
     }
 
     public function testGetBroadcastHistoryReturnsAggregatedData(): void

@@ -15,6 +15,7 @@ class PasskeyService
 {
     private const FLOW_AUTHENTICATION = 'authentication';
     private const FLOW_REGISTRATION = 'registration';
+    private UserProfileViewService $userProfileViewService;
 
     public function __construct(
         private PasskeyConfig $config,
@@ -27,8 +28,10 @@ class PasskeyService
         private ?CheckinService $checkinService = null,
         private ?CloudflareR2Service $r2Service = null,
         private ?ErrorLogService $errorLogService = null,
-        private ?Logger $logger = null
+        private ?Logger $logger = null,
+        ?UserProfileViewService $userProfileViewService = null
     ) {
+        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
     }
 
     /**
@@ -692,16 +695,15 @@ class PasskeyService
     private function formatUserPayload(array $row): array
     {
         $avatar = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
-        $regionCode = $row['region_code'] ?? null;
-        $regionContext = $this->regionService->getRegionContext($regionCode);
+        $profileFields = $this->userProfileViewService->buildProfileFields($row);
 
         return [
             'id' => (int) ($row['id'] ?? 0),
             'uuid' => $row['uuid'] ?? null,
             'username' => $row['username'] ?? null,
             'email' => $row['email'] ?? null,
-            'school_id' => $row['school_id'] ?? null,
-            'school_name' => $row['school_name'] ?? null,
+            'school_id' => $profileFields['school_id'],
+            'school_name' => $profileFields['school_name'],
             'points' => (int) ($row['points'] ?? 0),
             'is_admin' => (bool) ($row['is_admin'] ?? 0),
             'email_verified_at' => $row['email_verified_at'] ?? null,
@@ -711,10 +713,12 @@ class PasskeyService
             'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
             'status' => $row['status'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
-            'region_code' => $regionContext['region_code'] ?? $regionCode,
-            'region_label' => $regionContext['region_label'] ?? null,
-            'country_code' => $regionContext['country_code'] ?? null,
-            'state_code' => $regionContext['state_code'] ?? null,
+            'region_code' => $profileFields['region_code'],
+            'region_label' => $profileFields['region_label'],
+            'country_code' => $profileFields['country_code'],
+            'state_code' => $profileFields['state_code'],
+            'country_name' => $profileFields['country_name'],
+            'state_name' => $profileFields['state_name'],
         ];
     }
 
