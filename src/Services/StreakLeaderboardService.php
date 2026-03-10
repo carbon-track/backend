@@ -112,7 +112,7 @@ class StreakLeaderboardService
     private function generateSnapshot(): array
     {
         $sql = "SELECT uc.user_id, uc.checkin_date,
-                    u.username, u.region_code, u.school_id, u.school, u.location, u.avatar_id,
+                    u.username, u.region_code, u.school_id, u.avatar_id,
                     s.name AS school_name, a.file_path AS avatar_path
                 FROM user_checkins uc
                 JOIN users u ON u.id = uc.user_id AND u.deleted_at IS NULL

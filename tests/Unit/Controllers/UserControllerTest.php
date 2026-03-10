@@ -177,12 +177,6 @@ class UserControllerTest extends TestCase
             $stmtInsertSchool = $this->createMock(\PDOStatement::class);
             $stmtInsertSchool->method('execute')->willReturn(true);
 
-            $stmtFetchSchoolName = $this->createMock(\PDOStatement::class);
-            $stmtFetchSchoolName->method('execute')->willReturn(true);
-            $stmtFetchSchoolName->method('fetch')->willReturn([
-                'name' => 'Climate Academy',
-            ]);
-
             $stmtUpdate = $this->createMock(\PDOStatement::class);
             $stmtUpdate->method('execute')->willReturn(true);
 
@@ -208,7 +202,6 @@ class UserControllerTest extends TestCase
                 $stmtSelectUser,
                 $stmtFindSchool,
                 $stmtInsertSchool,
-                $stmtFetchSchoolName,
                 $stmtUpdate,
                 $stmtJoined
             );
@@ -361,11 +354,9 @@ class UserControllerTest extends TestCase
         $stmtUserInfo->expects($this->once())->method('fetch')->willReturn([
             'points' => 200,
             'created_at' => '2024-01-01',
-            'region_code' => null,
+            'region_code' => 'US-UM-81',
             'school_id' => 7,
-            'school_name' => null,
-            'school' => 'Legacy Academy',
-            'location' => 'US-UM-81',
+            'school_name' => 'Canonical Academy',
         ]);
 
         $stmtRank = $this->createMock(\PDOStatement::class);
@@ -466,7 +457,7 @@ class UserControllerTest extends TestCase
         $this->assertEquals(80, $json['data']['min_exchange_points']);
         $this->assertEquals('2024-01-01', $json['data']['member_since']);
         $this->assertCount(1, $json['data']['leaderboard']);
-        $this->assertSame('Legacy Academy', $json['data']['leaderboards']['school']['label']);
+        $this->assertSame('Canonical Academy', $json['data']['leaderboards']['school']['label']);
         $this->assertSame('US-UM-81', $json['data']['region_context']['region_code']);
     }
 
@@ -582,7 +573,7 @@ class UserControllerTest extends TestCase
         $this->assertEquals('john', $json['data']['username']);
     }
 
-    public function testGetCurrentUserFallsBackToLegacySchoolAndLocationFields(): void
+    public function testGetCurrentUserUsesCanonicalSchoolAndRegionFields(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -597,13 +588,11 @@ class UserControllerTest extends TestCase
         $stmt->method('fetch')->willReturn([
             'id' => 3,
             'uuid' => 'u-3',
-            'username' => 'legacy-user',
-            'email' => 'legacy@example.com',
-            'school_id' => null,
-            'school_name' => null,
-            'school' => 'Legacy Academy',
-            'location' => 'US-UM-81',
-            'region_code' => null,
+            'username' => 'canonical-user',
+            'email' => 'canonical@example.com',
+            'school_id' => 9,
+            'school_name' => 'Canonical Academy',
+            'region_code' => 'US-UM-81',
             'points' => 15,
             'is_admin' => 0,
             'avatar_id' => null,
@@ -641,13 +630,13 @@ class UserControllerTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
         $json = json_decode((string) $resp->getBody(), true);
         $this->assertTrue($json['success']);
-        $this->assertSame('Legacy Academy', $json['data']['school_name']);
+        $this->assertSame('Canonical Academy', $json['data']['school_name']);
         $this->assertSame('US-UM-81', $json['data']['region_code']);
         $this->assertSame('US', $json['data']['country_code']);
         $this->assertSame('UM-81', $json['data']['state_code']);
     }
 
-    public function testUpdateProfileMirrorsSchoolAndRegionToLegacyColumns(): void
+    public function testUpdateProfilePersistsCanonicalSchoolAndRegionFields(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -660,9 +649,12 @@ class UserControllerTest extends TestCase
         $audit->expects($this->once())
             ->method('log')
             ->with($this->callback(function (array $payload): bool {
+                $this->assertNull($payload['old_data']['school_id']);
+                $this->assertSame('US-UM-80', $payload['old_data']['region_code']);
+                $this->assertSame(9, $payload['new_data']['school_id']);
                 $this->assertSame('US-UM-81', $payload['new_data']['region_code']);
-                $this->assertSame('US-UM-81', $payload['new_data']['location']);
-                $this->assertSame('Canonical Academy', $payload['new_data']['school']);
+                $this->assertArrayNotHasKey('school', $payload['new_data']);
+                $this->assertArrayNotHasKey('location', $payload['new_data']);
                 return true;
             }));
 
@@ -673,9 +665,7 @@ class UserControllerTest extends TestCase
             'username' => 'john',
             'avatar_id' => null,
             'school_id' => null,
-            'school' => 'Legacy Academy',
-            'location' => 'US-UM-80',
-            'region_code' => null,
+            'region_code' => 'US-UM-80',
         ]);
 
         $stmtSelectSchool = $this->createMock(\PDOStatement::class);
@@ -690,8 +680,8 @@ class UserControllerTest extends TestCase
             ->method('execute')
             ->with($this->callback(function (array $params): bool {
                 return in_array(9, $params, true)
-                    && in_array('Canonical Academy', $params, true)
                     && in_array('US-UM-81', $params, true)
+                    && !in_array('Canonical Academy', $params, true)
                     && $params[count($params) - 1] === 1;
             }))
             ->willReturn(true);
@@ -705,8 +695,6 @@ class UserControllerTest extends TestCase
             'email' => 'john@example.com',
             'school_id' => 9,
             'school_name' => 'Canonical Academy',
-            'school' => 'Canonical Academy',
-            'location' => 'US-UM-81',
             'region_code' => 'US-UM-81',
             'points' => 0,
             'is_admin' => 0,

@@ -182,8 +182,34 @@ FROM (
     CROSS JOIN (SELECT @prev_email := NULL, @dup_seq := 0) vars
 ) ranked;
 
+INSERT INTO `carbontrack_v3`.`schools`
+(`name`, `deleted_at`, `location`, `is_active`, `created_at`, `updated_at`)
+SELECT
+    pending.`school_name`,
+    NULL AS `deleted_at`,
+    NULL AS `location`,
+    1 AS `is_active`,
+    CURRENT_TIMESTAMP AS `created_at`,
+    CURRENT_TIMESTAMP AS `updated_at`
+FROM (
+    SELECT DISTINCT
+        LEFT(TRIM(t.`school`), 255) AS `school_name`
+    FROM `_tmp_old_users` t
+    WHERE NULLIF(TRIM(COALESCE(t.`school`, '')), '') IS NOT NULL
+) pending
+LEFT JOIN (
+    SELECT
+        LOWER(TRIM(ns.`name`)) AS `school_name_key`
+    FROM `carbontrack_v3`.`schools` ns
+    WHERE ns.`deleted_at` IS NULL
+      AND NULLIF(TRIM(COALESCE(ns.`name`, '')), '') IS NOT NULL
+    GROUP BY LOWER(TRIM(ns.`name`))
+) existing
+    ON existing.`school_name_key` = LOWER(pending.`school_name`)
+WHERE existing.`school_name_key` IS NULL;
+
 INSERT INTO `carbontrack_v3`.`users`
-(`id`, `username`, `password`, `lastlgn`, `email`, `points`, `school`, `location`, `region_code`, `created_at`, `updated_at`, `deleted_at`, `status`, `is_admin`, `class_name`, `school_id`, `avatar_id`, `reset_token`, `reset_token_expires_at`, `email_verified_at`, `verification_code`, `verification_token`, `verification_code_expires_at`, `verification_attempts`, `verification_send_count`, `verification_last_sent_at`, `notification_email_mask`, `group_id`, `quota_override`, `admin_notes`)
+(`id`, `username`, `password`, `lastlgn`, `email`, `points`, `region_code`, `created_at`, `updated_at`, `deleted_at`, `status`, `is_admin`, `class_name`, `school_id`, `avatar_id`, `reset_token`, `reset_token_expires_at`, `email_verified_at`, `verification_code`, `verification_token`, `verification_code_expires_at`, `verification_attempts`, `verification_send_count`, `verification_last_sent_at`, `notification_email_mask`, `group_id`, `quota_override`, `admin_notes`)
 SELECT
     t.`id`,
     t.`username`,
@@ -211,8 +237,6 @@ SELECT
         )
     END AS `email`,
     CAST(ROUND(COALESCE(t.`points`, 0), 2) AS DECIMAL(10,2)) AS `points`,
-    NULLIF(LEFT(TRIM(COALESCE(t.`school`, '')), 255), '') AS `school`,
-    NULLIF(LEFT(TRIM(COALESCE(t.`location`, '')), 255), '') AS `location`,
     NULLIF(LEFT(TRIM(COALESCE(t.`location`, '')), 16), '') AS `region_code`,
     COALESCE(
         CASE
@@ -237,9 +261,17 @@ SELECT
     CASE WHEN LOWER(TRIM(COALESCE(t.`username`, ''))) = 'admin' THEN 1 ELSE 0 END AS `is_admin`,
     NULL AS `class_name`,
     (
-        SELECT ns.`id`
-        FROM `carbontrack_v3`.`schools` ns
-        WHERE ns.`name` = NULLIF(TRIM(COALESCE(t.`school`, '')), '')
+        SELECT matched.`school_id`
+        FROM (
+            SELECT
+                LOWER(TRIM(ns.`name`)) AS `school_name_key`,
+                MIN(ns.`id`) AS `school_id`
+            FROM `carbontrack_v3`.`schools` ns
+            WHERE ns.`deleted_at` IS NULL
+              AND NULLIF(TRIM(COALESCE(ns.`name`, '')), '') IS NOT NULL
+            GROUP BY LOWER(TRIM(ns.`name`))
+        ) matched
+        WHERE matched.`school_name_key` = LOWER(TRIM(COALESCE(t.`school`, '')))
         LIMIT 1
     ) AS `school_id`,
     NULLIF(t.`avatar_id`, 0) AS `avatar_id`,
@@ -268,8 +300,6 @@ ON DUPLICATE KEY UPDATE
     `password` = VALUES(`password`),
     `lastlgn` = VALUES(`lastlgn`),
     `points` = VALUES(`points`),
-    `school` = VALUES(`school`),
-    `location` = VALUES(`location`),
     `region_code` = VALUES(`region_code`),
     `updated_at` = VALUES(`updated_at`),
     `deleted_at` = VALUES(`deleted_at`),

@@ -15,10 +15,11 @@ class LeaderboardServiceTest extends TestCase
     {
         $pdo = new \PDO('sqlite::memory:');
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, points REAL, avatar_id INTEGER, region_code TEXT, school_id INTEGER, school TEXT, location TEXT, deleted_at TEXT)');
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, points REAL, avatar_id INTEGER, region_code TEXT, school_id INTEGER, deleted_at TEXT)');
         $pdo->exec('CREATE TABLE schools (id INTEGER PRIMARY KEY, name TEXT)');
         $pdo->exec('CREATE TABLE avatars (id INTEGER PRIMARY KEY, file_path TEXT)');
-        $pdo->exec("INSERT INTO users (id, username, points, avatar_id, region_code, school_id, school, location, deleted_at) VALUES (1, 'alice', 520, NULL, NULL, 7, 'Legacy Academy', 'US-UM-81', NULL)");
+        $pdo->exec("INSERT INTO schools (id, name) VALUES (7, 'Canonical Academy')");
+        $pdo->exec("INSERT INTO users (id, username, points, avatar_id, region_code, school_id, deleted_at) VALUES (1, 'alice', 520, NULL, 'US-UM-81', 7, NULL)");
 
         $regionService = $this->createMock(RegionService::class);
         $regionService->method('getRegionContext')
@@ -55,9 +56,9 @@ class LeaderboardServiceTest extends TestCase
             $snapshot = $service->rebuildCache('test');
 
             $this->assertSame('US-UM-81', $snapshot['global'][0]['region_code']);
-            $this->assertSame('Legacy Academy', $snapshot['global'][0]['school_name']);
+            $this->assertSame('Canonical Academy', $snapshot['global'][0]['school_name']);
             $this->assertArrayHasKey('US-UM-81', $snapshot['regions']);
-            $this->assertSame('Legacy Academy', $snapshot['schools'][7]['school_name']);
+            $this->assertSame('Canonical Academy', $snapshot['schools'][7]['school_name']);
         } finally {
             @unlink($cacheDir . DIRECTORY_SEPARATOR . 'leaderboards.json');
             @rmdir($cacheDir);

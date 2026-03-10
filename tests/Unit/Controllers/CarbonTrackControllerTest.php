@@ -371,7 +371,7 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertEquals(50, $points);
     }
 
-    public function testGetPendingRecordsUsesLegacySchoolFallback(): void
+    public function testGetPendingRecordsUsesCanonicalSchoolName(): void
     {
         $pdo = $this->createMock(\PDO::class);
         $calc = $this->createMock(CarbonCalculatorService::class);
@@ -394,8 +394,7 @@ class CarbonTrackControllerTest extends TestCase
                 'images' => null,
                 'username' => 'alice',
                 'email' => 'alice@example.com',
-                'school' => 'Legacy Academy',
-                'school_name' => null,
+                'school_name' => 'Canonical Academy',
                 'activity_name_zh' => '节能',
                 'activity_name_en' => 'Energy Saving',
                 'category' => 'energy',
@@ -417,7 +416,7 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
         $json = json_decode((string) $resp->getBody(), true);
         $this->assertTrue($json['success']);
-        $this->assertSame('Legacy Academy', $json['data'][0]['school_name']);
+        $this->assertSame('Canonical Academy', $json['data'][0]['school_name']);
     }
 
     public function testGetRecordDetailAsAdmin(): void

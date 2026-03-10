@@ -526,8 +526,6 @@ class UserController
             $normalizedNewSchool = null;
             $regionChangeRequested = false;
             $newRegionCode = null;
-            $resolvedSchoolName = null;
-
             $hasCountryInput = array_key_exists('country_code', $data);
             $hasStateInput = array_key_exists('state_code', $data);
 
@@ -659,14 +657,9 @@ class UserController
                 $stmt->execute([$incomingSchoolId]);
                 $schoolRow = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($schoolRow) {
-                    $resolvedSchoolName = trim((string)($schoolRow['name'] ?? '')) ?: null;
                     if ($incomingSchoolId !== $currentSchoolId) {
-                        $oldValues['school_id'] = $currentUser['school_id'];
+                        $oldValues['school_id'] = $currentProfileFields['school_id'] ?? null;
                         $updateData['school_id'] = $incomingSchoolId;
-                    }
-                    if ($resolvedSchoolName !== null && $resolvedSchoolName !== ($currentUser['school'] ?? null)) {
-                        $oldValues['school'] = $currentUser['school'] ?? null;
-                        $updateData['school'] = $resolvedSchoolName;
                     }
                 } else {
                     return $this->jsonResponse($response, [
@@ -685,23 +678,14 @@ class UserController
                     ], 400);
                 }
                 if ($newSchoolId !== $currentSchoolId) {
-                    $oldValues['school_id'] = $currentUser['school_id'];
+                    $oldValues['school_id'] = $currentProfileFields['school_id'] ?? null;
                     $updateData['school_id'] = $newSchoolId;
-                }
-                $resolvedSchoolName = $this->findSchoolNameById($newSchoolId) ?? $normalizedNewSchool;
-                if ($resolvedSchoolName !== ($currentUser['school'] ?? null)) {
-                    $oldValues['school'] = $currentUser['school'] ?? null;
-                    $updateData['school'] = $resolvedSchoolName;
                 }
             }
 
             if ($regionChangeRequested && $newRegionCode) {
-                $oldValues['region_code'] = $currentUser['region_code'] ?? null;
+                $oldValues['region_code'] = $currentProfileFields['region_code'] ?? null;
                 $updateData['region_code'] = $newRegionCode;
-                if (($currentUser['location'] ?? null) !== $newRegionCode) {
-                    $oldValues['location'] = $currentUser['location'] ?? null;
-                    $updateData['location'] = $newRegionCode;
-                }
             }
 
             if (empty($updateData)) {
@@ -1388,12 +1372,12 @@ class UserController
             $recentStmt->fetchAll(PDO::FETCH_ASSOC);
 
             // 4) 用户当前积分与注册时间
-            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, u.school, u.location, s.name AS school_name
+            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, s.name AS school_name
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
                 WHERE u.id = ? AND u.deleted_at IS NULL");
             $userInfoStmt->execute([$user['id']]);
-            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null, 'school' => null, 'location' => null];
+            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
             $profileFields = $this->userProfileViewService->buildProfileFields($userRow);
             $regionMeta = [
                 'region_code' => $profileFields['region_code'],

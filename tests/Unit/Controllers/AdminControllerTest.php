@@ -95,7 +95,7 @@ class AdminControllerTest extends TestCase
             });
         $listStmt->method('execute')->willReturn(true);
         $listStmt->method('fetchAll')->willReturn([
-            ['id'=>1,'username'=>'u1','email'=>'u1@x.com','points'=>100,'school_id'=>9,'school_name'=>null,'school'=>'Legacy Academy']
+            ['id'=>1,'username'=>'u1','email'=>'u1@x.com','points'=>100,'school_id'=>9,'school_name'=>'Canonical Academy']
         ]);
 
         $countStmt = $this->createMock(\PDOStatement::class);
@@ -132,14 +132,14 @@ class AdminControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['data']['pagination']['total_items']);
         $this->assertEquals('u1', $json['data']['users'][0]['username']);
-        $this->assertSame('Legacy Academy', $json['data']['users'][0]['school_name']);
+        $this->assertSame('Canonical Academy', $json['data']['users'][0]['school_name']);
         $this->assertEquals('%u%', $capturedParams[':search_username'] ?? null);
         $this->assertEquals('%u%', $capturedParams[':search_email'] ?? null);
         $this->assertEquals('active', $capturedParams[':status'] ?? null);
         $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
     }
 
-    public function testLoadUserRowFallsBackToLegacySchool(): void
+    public function testLoadUserRowUsesCanonicalSchoolName(): void
     {
         $pdo = $this->createMock(\PDO::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -161,8 +161,7 @@ class AdminControllerTest extends TestCase
             'created_at' => '2025-01-01 00:00:00',
             'updated_at' => '2025-01-02 00:00:00',
             'school_id' => 7,
-            'school_name' => null,
-            'school' => 'Legacy Academy',
+            'school_name' => 'Canonical Academy',
             'lastlgn' => null,
         ]);
         $pdo->method('prepare')->willReturn($stmt);
@@ -176,7 +175,7 @@ class AdminControllerTest extends TestCase
         $method->setAccessible(true);
         $row = $method->invoke($controller, 2);
 
-        $this->assertSame('Legacy Academy', $row['school_name']);
+        $this->assertSame('Canonical Academy', $row['school_name']);
         $this->assertSame(7, $row['school_id']);
     }
 

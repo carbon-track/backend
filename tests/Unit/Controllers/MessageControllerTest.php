@@ -344,9 +344,7 @@ class MessageControllerTest extends TestCase
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
-            school TEXT,
             school_id INTEGER,
-            location TEXT,
             region_code TEXT,
             is_admin INTEGER,
             status TEXT,
@@ -449,9 +447,7 @@ class MessageControllerTest extends TestCase
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
-            school TEXT,
             school_id INTEGER,
-            location TEXT,
             region_code TEXT,
             is_admin INTEGER,
             status TEXT,
@@ -543,9 +539,7 @@ class MessageControllerTest extends TestCase
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
-            school TEXT,
             school_id INTEGER,
-            location TEXT,
             region_code TEXT,
             is_admin INTEGER,
             status TEXT,
@@ -668,9 +662,7 @@ class MessageControllerTest extends TestCase
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
-            school TEXT,
             school_id INTEGER,
-            location TEXT,
             region_code TEXT,
             is_admin INTEGER,
             status TEXT,
@@ -808,8 +800,8 @@ class MessageControllerTest extends TestCase
         $stmt->method('bindValue')->willReturn(true);
         $stmt->method('execute')->willReturn(true);
         $stmt->method('fetchAll')->willReturn([
-            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => null, 'school_id' => 1, 'school_name' => 'Canonical Green', 'location' => null, 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
-            ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school' => 'Legacy Green', 'school_id' => 1, 'school_name' => null, 'location' => null, 'region_code' => null, 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school_id' => 1, 'school_name' => 'Canonical Green', 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school_id' => 2, 'school_name' => 'Harbor Green', 'region_code' => null, 'is_admin' => 0, 'status' => 'active'],
         ]);
 
         $pdo->method('prepare')->willReturn($stmt);
@@ -845,7 +837,7 @@ class MessageControllerTest extends TestCase
         $this->assertSame('US-UM-81', $json['data'][0]['location']);
     }
 
-    public function testResolveExplicitRecipientsUsesCompatibleSchoolAndLocationFields(): void
+    public function testResolveExplicitRecipientsUsesDisplayAliasesFromCanonicalFields(): void
     {
         $pdo = $this->createMock(\PDO::class);
         $svc = $this->createMock(MessageService::class);
@@ -855,7 +847,7 @@ class MessageControllerTest extends TestCase
         $stmt = $this->createMock(\PDOStatement::class);
         $stmt->method('execute')->willReturn(true);
         $stmt->method('fetchAll')->willReturn([
-            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school' => null, 'school_id' => 1, 'school_name' => 'Canonical Green', 'location' => null, 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
+            ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school_id' => 1, 'school_name' => 'Canonical Green', 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
         ]);
         $pdo->method('prepare')->willReturn($stmt);
 
