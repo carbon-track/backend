@@ -115,10 +115,10 @@ class FileUploadController
                 ], 400);
             }
 
-            // 去重：如果提供 sha256 且记录存在，直接返回已有文件信息（不生成 presign）
+            // 去重：仅允许当前用户复用自己已持有的 sha256 记录，避免泄露其他用户文件元数据。
             if ($sha256) {
                 $existing = $this->fileMetadataService->findBySha256($sha256);
-                if ($existing) {
+                if ($existing && $this->isOwnedFileRecord($existing, (int) $user['id'])) {
                     return $this->jsonResponse($response, [
                         'success' => true,
                         'data' => [
@@ -233,7 +233,7 @@ class FileUploadController
             $payload = $info;
             if ($fileRecord) {
                 $payload['reference_count'] = $fileRecord->reference_count;
-                $payload['sha256'] = $sha256;
+                $payload['sha256'] = $fileRecord->sha256 ?: null;
                 $payload['duplicate'] = $duplicated;
             }
 
@@ -1042,6 +1042,13 @@ class FileUploadController
         ];
     }
 
+    private function isOwnedFileRecord(File $fileRecord, int $userId): bool
+    {
+        $existingOwnerId = (int) ($fileRecord->user_id ?? 0);
+
+        return $userId > 0 && $existingOwnerId > 0 && $existingOwnerId === $userId;
+    }
+
     private function persistDirectUploadOwnership(string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): array
     {
         $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
@@ -1051,18 +1058,23 @@ class FileUploadController
         }
 
         $duplicated = false;
+        $persistedSha256 = $sha256;
         if ($sha256) {
             $existing = $this->fileMetadataService->findBySha256($sha256);
-            if ($existing && $existing->file_path === $filePath) {
+            if ($existing && $existing->file_path === $filePath && $this->isOwnedFileRecord($existing, $userId)) {
                 return [
                     'file' => $this->fileMetadataService->incrementReference($existing),
                     'duplicate' => true,
                 ];
             }
+
+            if ($existing) {
+                $persistedSha256 = null;
+            }
         }
 
         $fileRecord = $this->fileMetadataService->createRecord(
-            $this->buildDirectUploadFileRecordData($filePath, $userId, $originalName, $fileInfo, $sha256)
+            $this->buildDirectUploadFileRecordData($filePath, $userId, $originalName, $fileInfo, $persistedSha256)
         );
 
         return ['file' => $fileRecord, 'duplicate' => $duplicated];
@@ -1122,7 +1134,13 @@ class FileUploadController
             throw new \InvalidArgumentException('Missing sha256 for multipart upload ownership persistence');
         }
 
-        $this->fileMetadataService->createRecord($this->buildMultipartFileRecordData($filePath, $userId, $fileInfo, $sha256));
+        $persistedSha256 = $sha256;
+        $existing = $this->fileMetadataService->findBySha256($sha256);
+        if ($existing) {
+            $persistedSha256 = null;
+        }
+
+        $this->fileMetadataService->createRecord($this->buildMultipartFileRecordData($filePath, $userId, $fileInfo, $persistedSha256));
 
         return true;
     }

@@ -24,7 +24,9 @@ class FileUploadControllerTest extends TestCase
     private const PRIVATE_UPLOAD_ENCODED_PATH = 'uploads%2F2026%2F03%2Fdoc.png';
     private const NEW_UPLOAD_PATH = 'uploads/new.jpg';
     private const OWNERLESS_UPLOAD_PATH = 'uploads/existing-ownerless.jpg';
+    private const FOREIGN_DUPLICATE_PATH = 'uploads/foreign-owned.jpg';
     private const MULTIPART_FILE_PATH = 'uploads/2026/03/big.jpg';
+    private const MULTIPART_EXISTING_FILE_PATH = 'uploads/2026/03/existing-big.jpg';
     private const MULTIPART_SHA256 = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
     private const EXISTING_OK_PATH = 'uploads/ok.jpg';
 
@@ -204,6 +206,7 @@ class FileUploadControllerTest extends TestCase
     $fileMeta = $this->createMock(FileMetadataService::class);
     $existing = new File();
     $existing->file_path = 'uploads/exist/abc.jpg';
+    $existing->user_id = 20;
     $existing->reference_count = 3;
     $fileMeta->method('findBySha256')->willReturn($existing);
 
@@ -220,6 +223,48 @@ class FileUploadControllerTest extends TestCase
         $payload = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($payload['data']['duplicate']);
         $this->assertArrayNotHasKey('url',$payload['data']);
+    }
+
+    public function testPresignDuplicateOwnedByAnotherUserDoesNotShortCircuit(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $existing = new File();
+        $existing->file_path = 'uploads/exist/abc.jpg';
+        $existing->user_id = 99;
+        $existing->reference_count = 3;
+        $fileMeta->method('findBySha256')->willReturn($existing);
+
+        $c = $this->controller(['id' => 20], function($r2) {
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getMaxFileSize')->willReturn(5 * 1024 * 1024);
+            $r2->method('generateDirectUploadKey')->willReturn([
+                'file_name' => 'uuid.jpg',
+                'file_path' => self::FOREIGN_DUPLICATE_PATH,
+                'public_url' => 'https://cdn/foreign-owned.jpg'
+            ]);
+            $r2->expects($this->once())
+                ->method('generateUploadPresignedUrl')
+                ->willReturn([
+                    'url' => 'https://r2/presigned',
+                    'method' => 'PUT',
+                    'headers' => ['Content-Type' => self::MIME_JPEG],
+                    'expires_in' => 600,
+                    'expires_at' => '2026-03-10 00:00:00'
+                ]);
+        }, $fileMeta);
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST', self::ROUTE_PRESIGN, [
+            'original_name' => 'dup.jpg',
+            'mime_type' => self::MIME_JPEG,
+            'sha256' => str_repeat('a', 64)
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($payload['data']['duplicate']);
+        $this->assertSame(self::FOREIGN_DUPLICATE_PATH, $payload['data']['file_path']);
+        $this->assertArrayHasKey('url', $payload['data']);
     }
 
     public function testPresignAllowsNestedAvatarDirectory(): void
@@ -356,6 +401,7 @@ class FileUploadControllerTest extends TestCase
     {
     $existing = new File();
     $existing->file_path=self::EXISTING_OK_PATH;
+    $existing->user_id = 31;
     $existing->reference_count=2;
         $fileMeta = $this->createMock(FileMetadataService::class);
         $fileMeta->method('findByFilePath')->with(self::EXISTING_OK_PATH)->willReturn(null);
@@ -378,6 +424,56 @@ class FileUploadControllerTest extends TestCase
         $payload = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($payload['data']['duplicate']);
         $this->assertEquals(3,$payload['data']['reference_count']);
+    }
+
+    public function testConfirmCrossOwnerSha256CreatesIndependentRecordWithoutPersistingHash(): void
+    {
+        $existing = new File();
+        $existing->file_path = self::EXISTING_OK_PATH;
+        $existing->user_id = 99;
+        $existing->reference_count = 2;
+
+        $created = new File();
+        $created->reference_count = 1;
+        $created->sha256 = null;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::FOREIGN_DUPLICATE_PATH)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('findBySha256')
+            ->with(str_repeat('e', 64))
+            ->willReturn($existing);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data): bool {
+                return ($data['file_path'] ?? null) === self::FOREIGN_DUPLICATE_PATH
+                    && ($data['user_id'] ?? null) === 32
+                    && !array_key_exists('sha256', $data);
+            }))
+            ->willReturn($created);
+
+        $c = $this->controller(['id' => 32], function($r2) {
+            $r2->method('getFileInfo')->willReturn([
+                'file_path' => self::FOREIGN_DUPLICATE_PATH,
+                'size' => 10,
+                'mime_type' => self::MIME_JPEG
+            ]);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => self::FOREIGN_DUPLICATE_PATH,
+            'original_name' => 'foreign-owned.jpg',
+            'sha256' => str_repeat('e', 64)
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($payload['data']['duplicate']);
+        $this->assertNull($payload['data']['sha256']);
+        $this->assertSame(1, $payload['data']['reference_count']);
     }
 
     public function testConfirmNotFound(): void
@@ -562,6 +658,10 @@ class FileUploadControllerTest extends TestCase
             ->with(self::MULTIPART_FILE_PATH)
             ->willReturn(null);
         $fileMeta->expects($this->once())
+            ->method('findBySha256')
+            ->with(self::MULTIPART_SHA256)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
             ->method('createRecord')
             ->with($this->callback(function(array $data): bool {
                 return ($data['file_path'] ?? null) === self::MULTIPART_FILE_PATH
@@ -594,6 +694,62 @@ class FileUploadControllerTest extends TestCase
             'file_path' => self::MULTIPART_FILE_PATH,
             'upload_id' => 'up-3',
             'sha256' => self::MULTIPART_SHA256,
+            'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testCompleteMultipartCrossOwnerSha256CreatesRecordWithoutPersistingHash(): void
+    {
+        $upload = new MultipartUpload();
+        $upload->upload_id = 'up-7';
+        $upload->file_path = self::MULTIPART_FILE_PATH;
+        $upload->sha256 = self::MULTIPART_SHA256;
+        $upload->user_id = 42;
+
+        $existing = new File();
+        $existing->file_path = self::MULTIPART_EXISTING_FILE_PATH;
+        $existing->user_id = 77;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::MULTIPART_FILE_PATH)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('findBySha256')
+            ->with(self::MULTIPART_SHA256)
+            ->willReturn($existing);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data): bool {
+                return ($data['file_path'] ?? null) === self::MULTIPART_FILE_PATH
+                    && ($data['user_id'] ?? null) === 42
+                    && !array_key_exists('sha256', $data);
+            }))
+            ->willReturn(new File());
+
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->method('findActiveUpload')->with('up-7')->willReturn($upload);
+        $multipart->expects($this->once())->method('clearUpload')->with('up-7');
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('completeMultipartUpload')->willReturn([
+                'success' => true,
+                'file_path' => self::MULTIPART_FILE_PATH
+            ]);
+            $r2->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willReturn([
+                'file_path' => self::MULTIPART_FILE_PATH,
+                'size' => 98765,
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => ['original_name' => 'big.jpg']
+            ]);
+        }, $fileMeta, $multipart);
+
+        $resp = $c->completeMultipartUpload(makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [
+            'file_path' => self::MULTIPART_FILE_PATH,
+            'upload_id' => 'up-7',
             'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
         ]), new \Slim\Psr7\Response());
 
