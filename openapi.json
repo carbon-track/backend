@@ -1762,8 +1762,8 @@
               }
             }
           },
-          "503": {
-            "description": "部署配置已禁用 Passkeys。",
+          "500": {
+            "description": "生成注册选项失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1772,8 +1772,8 @@
               }
             }
           },
-          "500": {
-            "description": "生成注册选项失败。",
+          "503": {
+            "description": "部署配置已禁用 Passkeys。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1858,8 +1858,8 @@
               }
             }
           },
-          "501": {
-            "description": "当前环境尚未安装或接入 WebAuthn PHP 校验库。",
+          "500": {
+            "description": "Passkey 注册失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1868,8 +1868,8 @@
               }
             }
           },
-          "500": {
-            "description": "Passkey 注册失败。",
+          "501": {
+            "description": "当前环境尚未安装或接入 WebAuthn PHP 校验库。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1882,6 +1882,90 @@
       }
     },
     "/users/me/passkeys/{id}": {
+      "patch": {
+        "tags": [
+          "Passkeys"
+        ],
+        "summary": "更新当前用户的 Passkey 备注",
+        "description": "允许当前登录用户修改自己名下 Passkey 的备注标签。留空可清除备注。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasskeyUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Passkey 备注更新成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasskeyUpdateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Passkey id 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Passkey 不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "更新 Passkey 备注失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "Passkeys"
@@ -1953,6 +2037,16 @@
               }
             }
           },
+          "500": {
+            "description": "删除 Passkey 失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "部署配置已禁用 Passkeys。",
             "content": {
@@ -1962,9 +2056,65 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/users/me/security-activity": {
+      "get": {
+        "tags": [
+          "User",
+          "Security"
+        ],
+        "summary": "获取当前用户安全活动时间线",
+        "description": "按时间倒序返回当前用户最近的安全事件时间线，包含登录、退出、密码修改与通行密钥相关事件。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回安全活动列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityActivityListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或登录状态无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "删除 Passkey 失败。",
+            "description": "获取安全活动失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2004,8 +2154,8 @@
               }
             }
           },
-          "503": {
-            "description": "部署配置已禁用 Passkeys。",
+          "500": {
+            "description": "创建 Passkey 登录选项失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2014,8 +2164,8 @@
               }
             }
           },
-          "500": {
-            "description": "创建 Passkey 登录选项失败。",
+          "503": {
+            "description": "部署配置已禁用 Passkeys。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2095,8 +2245,8 @@
               }
             }
           },
-          "501": {
-            "description": "当前部署未接入可用 WebAuthn 校验器。",
+          "500": {
+            "description": "Passkey 登录失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2105,8 +2255,8 @@
               }
             }
           },
-          "500": {
-            "description": "Passkey 登录失败。",
+          "501": {
+            "description": "当前部署未接入可用 WebAuthn 校验器。",
             "content": {
               "application/json": {
                 "schema": {
@@ -7914,6 +8064,140 @@
         }
       }
     },
+    "/admin/passkeys": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Passkeys"
+        ],
+        "summary": "获取管理员通行密钥列表",
+        "description": "管理员分页查看当前平台已启用的 Passkey，并可按关键字、最近使用时间或签名次数排序。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "按用户名、邮箱或 Passkey 备注模糊搜索。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at_desc",
+                "last_used_at_desc",
+                "sign_count_desc"
+              ],
+              "default": "created_at_desc"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回管理员通行密钥列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPasskeyListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仅管理员可访问。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "获取管理员通行密钥列表失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/passkeys/stats": {
+      "get": {
+        "tags": [
+          "Admin",
+          "Passkeys"
+        ],
+        "summary": "获取管理员通行密钥统计",
+        "description": "返回通行密钥覆盖率、活跃数量、近 30 天新增量，以及近 7/30 天通行密钥登录次数。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回管理员通行密钥统计。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPasskeyStatsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "仅管理员可访问。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "获取管理员通行密钥统计失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/users": {
       "get": {
         "tags": [
@@ -7945,9 +8229,17 @@
             }
           },
           {
+            "name": "q",
+            "in": "query",
+            "description": "按用户名或邮箱模糊搜索（推荐参数；search 为兼容别名）。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "search",
             "in": "query",
-            "description": "按用户名或邮箱模糊搜索。",
+            "description": "按用户名或邮箱模糊搜索（兼容旧参数，建议使用 q）。",
             "schema": {
               "type": "string"
             }
@@ -8277,7 +8569,7 @@
                             "last7_points_awarded": {
                               "type": "number",
                               "format": "float",
-                              "example": 278.0
+                              "example": 278
                             }
                           }
                         },
@@ -8657,7 +8949,7 @@
                                   "carbon_saved": {
                                     "type": "number",
                                     "format": "float",
-                                    "example": 1.0
+                                    "example": 1
                                   },
                                   "points_earned": {
                                     "type": "number",
@@ -9220,37 +9512,188 @@
           }
         ],
         "parameters": [
-          { "name": "q", "in": "query", "schema": { "type": "string" } },
-          { "name": "date_from", "in": "query", "schema": { "type": "string", "format": "date" } },
-          { "name": "date_to", "in": "query", "schema": { "type": "string", "format": "date" } },
-          { "name": "types", "in": "query", "schema": { "type": "string" }, "description": "system,audit,error,llm" },
-          { "name": "limit_per_type", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 200 } },
-          { "name": "system_page", "in": "query", "schema": { "type": "integer" } },
-          { "name": "audit_page", "in": "query", "schema": { "type": "integer" } },
-          { "name": "error_page", "in": "query", "schema": { "type": "integer" } },
-          { "name": "llm_page", "in": "query", "schema": { "type": "integer" } },
-          { "name": "method", "in": "query", "schema": { "type": "string" } },
-          { "name": "status_code", "in": "query", "schema": { "type": "integer" } },
-          { "name": "user_id", "in": "query", "schema": { "type": "integer" } },
-          { "name": "request_id", "in": "query", "schema": { "type": "string" } },
-          { "name": "path", "in": "query", "schema": { "type": "string" } },
-          { "name": "min_duration", "in": "query", "schema": { "type": "integer" } },
-          { "name": "max_duration", "in": "query", "schema": { "type": "integer" } },
-          { "name": "action", "in": "query", "schema": { "type": "string" } },
-          { "name": "audit_status", "in": "query", "schema": { "type": "string" } },
-          { "name": "error_type", "in": "query", "schema": { "type": "string" } },
-          { "name": "model", "in": "query", "schema": { "type": "string" } },
-          { "name": "source", "in": "query", "schema": { "type": "string" } },
-          { "name": "actor_type", "in": "query", "schema": { "type": "string" } },
-          { "name": "actor_id", "in": "query", "schema": { "type": "integer" } },
-          { "name": "llm_status", "in": "query", "schema": { "type": "string" } }
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "system,audit,error,llm"
+          },
+          {
+            "name": "limit_per_type",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "system_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "audit_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "error_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "llm_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status_code",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_duration",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "max_duration",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "audit_status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "llm_status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "成功",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/UnifiedLogSearchResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiedLogSearchResponse"
+                }
               }
             }
           }
@@ -9284,7 +9727,9 @@
             "description": "成功",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/RelatedLogsResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedLogsResponse"
+                }
               }
             }
           }
@@ -9304,19 +9749,48 @@
           }
         ],
         "parameters": [
-          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "ndjson"], "default": "csv" } },
-          { "name": "types", "in": "query", "schema": { "type": "string" }, "description": "system,audit,error,llm" },
-          { "name": "max", "in": "query", "schema": { "type": "integer", "default": 1000 } }
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "ndjson"
+              ],
+              "default": "csv"
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "system,audit,error,llm"
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1000
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "导出文件",
             "content": {
               "text/csv": {
-                "schema": { "type": "string" }
+                "schema": {
+                  "type": "string"
+                }
               },
               "application/x-ndjson": {
-                "schema": { "type": "string" }
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -11576,7 +12050,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回用户概览与徽章/签到指标。",
+            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11803,8 +12277,8 @@
               }
             }
           },
-          "503": {
-            "description": "AI 服务暂时不可用。",
+          "500": {
+            "description": "管理员指令解析失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11813,8 +12287,8 @@
               }
             }
           },
-          "500": {
-            "description": "管理员指令解析失败。",
+          "503": {
+            "description": "AI 服务暂时不可用。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11880,6 +12354,16 @@
               }
             }
           },
+          "500": {
+            "description": "服务器生成公告草稿时发生未预期错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "502": {
             "description": "AI 返回的草稿无法被服务端解析为有效公告结构。",
             "content": {
@@ -11892,16 +12376,6 @@
           },
           "503": {
             "description": "AI 能力未配置或上游模型暂时不可用。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "服务器生成公告草稿时发生未预期错误。",
             "content": {
               "application/json": {
                 "schema": {
@@ -12055,53 +12529,117 @@
       "LlmUsageSummary": {
         "type": "object",
         "properties": {
-          "total_calls": { "type": "integer" },
-          "calls_24h": { "type": "integer" },
-          "calls_7d": { "type": "integer" },
-          "calls_30d": { "type": "integer" },
-          "admin_calls_30d": { "type": "integer" },
-          "user_calls_30d": { "type": "integer" },
-          "tokens_30d": { "type": "integer" },
-          "failed_calls_30d": { "type": "integer" },
-          "last_call_at": { "type": "string", "nullable": true }
+          "total_calls": {
+            "type": "integer"
+          },
+          "calls_24h": {
+            "type": "integer"
+          },
+          "calls_7d": {
+            "type": "integer"
+          },
+          "calls_30d": {
+            "type": "integer"
+          },
+          "admin_calls_30d": {
+            "type": "integer"
+          },
+          "user_calls_30d": {
+            "type": "integer"
+          },
+          "tokens_30d": {
+            "type": "integer"
+          },
+          "failed_calls_30d": {
+            "type": "integer"
+          },
+          "last_call_at": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "LlmUsageUser": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" },
-          "username": { "type": "string" },
-          "email": { "type": "string" },
-          "is_admin": { "type": "boolean" },
-          "group_id": { "type": "integer", "nullable": true },
-          "group_name": { "type": "string", "nullable": true },
-          "daily_used": { "type": "integer" },
-          "daily_limit": { "type": "integer", "nullable": true },
-          "daily_remaining": { "type": "integer", "nullable": true },
-          "rate_limit": { "type": "integer", "nullable": true },
-          "reset_at": { "type": "string", "nullable": true },
-          "last_used_at": { "type": "string", "nullable": true }
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "group_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "group_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "daily_used": {
+            "type": "integer"
+          },
+          "daily_limit": {
+            "type": "integer",
+            "nullable": true
+          },
+          "daily_remaining": {
+            "type": "integer",
+            "nullable": true
+          },
+          "rate_limit": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reset_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "last_used_at": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "LlmUsageResponse": {
         "type": "object",
         "properties": {
-          "success": { "type": "boolean" },
+          "success": {
+            "type": "boolean"
+          },
           "data": {
             "type": "object",
             "properties": {
-              "summary": { "$ref": "#/components/schemas/LlmUsageSummary" },
+              "summary": {
+                "$ref": "#/components/schemas/LlmUsageSummary"
+              },
               "users": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/LlmUsageUser" }
+                "items": {
+                  "$ref": "#/components/schemas/LlmUsageUser"
+                }
               },
               "pagination": {
                 "type": "object",
                 "properties": {
-                  "current_page": { "type": "integer" },
-                  "per_page": { "type": "integer" },
-                  "total_items": { "type": "integer" },
-                  "total_pages": { "type": "integer" }
+                  "current_page": {
+                    "type": "integer"
+                  },
+                  "per_page": {
+                    "type": "integer"
+                  },
+                  "total_items": {
+                    "type": "integer"
+                  },
+                  "total_pages": {
+                    "type": "integer"
+                  }
                 }
               }
             }
@@ -12111,96 +12649,247 @@
       "LlmUsageTrendPoint": {
         "type": "object",
         "properties": {
-          "date": { "type": "string" },
-          "calls": { "type": "integer" },
-          "tokens": { "type": "integer" },
-          "success_calls": { "type": "integer" },
-          "failed_calls": { "type": "integer" },
-          "avg_latency_ms": { "type": "number", "format": "float", "nullable": true }
+          "date": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          },
+          "success_calls": {
+            "type": "integer"
+          },
+          "failed_calls": {
+            "type": "integer"
+          },
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          }
         }
       },
       "LlmUsageModelStat": {
         "type": "object",
         "properties": {
-          "model": { "type": "string" },
-          "calls": { "type": "integer" },
-          "tokens": { "type": "integer" }
+          "model": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          }
         }
       },
       "LlmUsageSourceStat": {
         "type": "object",
         "properties": {
-          "source": { "type": "string" },
-          "calls": { "type": "integer" },
-          "tokens": { "type": "integer" }
+          "source": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          }
         }
       },
       "LlmUsageActorStat": {
         "type": "object",
         "properties": {
-          "actor_type": { "type": "string" },
-          "calls": { "type": "integer" },
-          "tokens": { "type": "integer" }
+          "actor_type": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          }
         }
       },
       "LlmUsageStatusStat": {
         "type": "object",
         "properties": {
-          "status": { "type": "string" },
-          "calls": { "type": "integer" },
-          "tokens": { "type": "integer" }
+          "status": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "tokens": {
+            "type": "integer"
+          }
         }
       },
       "LlmUsageInsights": {
         "type": "object",
         "properties": {
-          "success_rate": { "type": "number", "format": "float", "nullable": true },
-          "avg_latency_ms": { "type": "number", "format": "float", "nullable": true },
-          "p95_latency_ms": { "type": "number", "format": "float", "nullable": true },
-          "avg_tokens_per_call": { "type": "number", "format": "float", "nullable": true },
-          "total_calls": { "type": "integer" },
-          "total_tokens": { "type": "integer" },
-          "calls_last_7d": { "type": "integer" },
-          "calls_prev_7d": { "type": "integer" },
-          "calls_delta": { "type": "integer" },
-          "calls_delta_rate": { "type": "number", "format": "float", "nullable": true },
-          "tokens_last_7d": { "type": "integer" },
-          "tokens_prev_7d": { "type": "integer" },
-          "tokens_delta": { "type": "integer" },
-          "tokens_delta_rate": { "type": "number", "format": "float", "nullable": true },
-          "top_model": { "type": "string", "nullable": true },
-          "top_source": { "type": "string", "nullable": true },
-          "admin_share": { "type": "number", "format": "float", "nullable": true },
-          "user_share": { "type": "number", "format": "float", "nullable": true }
+          "success_rate": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "avg_latency_ms": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "p95_latency_ms": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "avg_tokens_per_call": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "total_calls": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          },
+          "calls_last_7d": {
+            "type": "integer"
+          },
+          "calls_prev_7d": {
+            "type": "integer"
+          },
+          "calls_delta": {
+            "type": "integer"
+          },
+          "calls_delta_rate": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "tokens_last_7d": {
+            "type": "integer"
+          },
+          "tokens_prev_7d": {
+            "type": "integer"
+          },
+          "tokens_delta": {
+            "type": "integer"
+          },
+          "tokens_delta_rate": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "top_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "top_source": {
+            "type": "string",
+            "nullable": true
+          },
+          "admin_share": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "user_share": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          }
         }
       },
       "LlmUsageRecentConversation": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" },
-          "created_at": { "type": "string", "nullable": true },
-          "actor_type": { "type": "string" },
-          "actor_id": { "type": "integer", "nullable": true },
-          "actor_name": { "type": "string", "nullable": true },
-          "actor_email": { "type": "string", "nullable": true },
-          "source": { "type": "string", "nullable": true },
-          "model": { "type": "string", "nullable": true },
-          "status": { "type": "string", "nullable": true },
-          "request_id": { "type": "string", "nullable": true },
-          "response_id": { "type": "string", "nullable": true },
-          "total_tokens": { "type": "integer", "nullable": true },
-          "latency_ms": { "type": "number", "format": "float", "nullable": true },
-          "prompt_preview": { "type": "string", "nullable": true },
-          "response_preview": { "type": "string", "nullable": true },
-          "context": { "type": "object", "additionalProperties": true },
-          "system_path": { "type": "string", "nullable": true },
-          "system_status_code": { "type": "integer", "nullable": true },
+          "id": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "actor_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "actor_email": {
+            "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "response_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "total_tokens": {
+            "type": "integer",
+            "nullable": true
+          },
+          "latency_ms": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "prompt_preview": {
+            "type": "string",
+            "nullable": true
+          },
+          "response_preview": {
+            "type": "string",
+            "nullable": true
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "system_path": {
+            "type": "string",
+            "nullable": true
+          },
+          "system_status_code": {
+            "type": "integer",
+            "nullable": true
+          },
           "related": {
             "type": "object",
             "properties": {
-              "system": { "type": "integer" },
-              "audit": { "type": "integer" },
-              "error": { "type": "integer" }
+              "system": {
+                "type": "integer"
+              },
+              "audit": {
+                "type": "integer"
+              },
+              "error": {
+                "type": "integer"
+              }
             }
           }
         }
@@ -12208,75 +12897,154 @@
       "LlmUsageAnalytics": {
         "type": "object",
         "properties": {
-          "summary": { "$ref": "#/components/schemas/LlmUsageSummary" },
-          "range_days": { "type": "integer" },
+          "summary": {
+            "$ref": "#/components/schemas/LlmUsageSummary"
+          },
+          "range_days": {
+            "type": "integer"
+          },
           "trends": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/LlmUsageTrendPoint" }
+            "items": {
+              "$ref": "#/components/schemas/LlmUsageTrendPoint"
+            }
           },
           "distributions": {
             "type": "object",
             "properties": {
               "models": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/LlmUsageModelStat" }
+                "items": {
+                  "$ref": "#/components/schemas/LlmUsageModelStat"
+                }
               },
               "sources": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/LlmUsageSourceStat" }
+                "items": {
+                  "$ref": "#/components/schemas/LlmUsageSourceStat"
+                }
               },
               "actors": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/LlmUsageActorStat" }
+                "items": {
+                  "$ref": "#/components/schemas/LlmUsageActorStat"
+                }
               },
               "status": {
                 "type": "array",
-                "items": { "$ref": "#/components/schemas/LlmUsageStatusStat" }
+                "items": {
+                  "$ref": "#/components/schemas/LlmUsageStatusStat"
+                }
               }
             }
           },
-          "insights": { "$ref": "#/components/schemas/LlmUsageInsights" },
+          "insights": {
+            "$ref": "#/components/schemas/LlmUsageInsights"
+          },
           "recent_conversations": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/LlmUsageRecentConversation" }
+            "items": {
+              "$ref": "#/components/schemas/LlmUsageRecentConversation"
+            }
           }
         }
       },
       "LlmUsageAnalyticsResponse": {
         "type": "object",
         "properties": {
-          "success": { "type": "boolean" },
-          "data": { "$ref": "#/components/schemas/LlmUsageAnalytics" }
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/LlmUsageAnalytics"
+          }
         }
       },
       "LlmLogDetail": {
         "type": "object",
         "properties": {
-          "id": { "type": "integer" },
-          "request_id": { "type": "string", "nullable": true },
-          "actor_type": { "type": "string" },
-          "actor_id": { "type": "integer", "nullable": true },
-          "source": { "type": "string", "nullable": true },
-          "model": { "type": "string", "nullable": true },
-          "prompt": { "type": "string", "nullable": true },
-          "response_raw": { "type": "string", "nullable": true },
-          "response_id": { "type": "string", "nullable": true },
-          "status": { "type": "string", "nullable": true },
-          "error_message": { "type": "string", "nullable": true },
-          "prompt_tokens": { "type": "integer", "nullable": true },
-          "completion_tokens": { "type": "integer", "nullable": true },
-          "total_tokens": { "type": "integer", "nullable": true },
-          "latency_ms": { "type": "number", "format": "float", "nullable": true },
-          "usage": { "type": "object", "additionalProperties": true },
-          "context": { "type": "object", "additionalProperties": true },
-          "created_at": { "type": "string", "nullable": true }
+          "id": {
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "actor_id": {
+            "type": "integer",
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt": {
+            "type": "string",
+            "nullable": true
+          },
+          "response_raw": {
+            "type": "string",
+            "nullable": true
+          },
+          "response_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "error_message": {
+            "type": "string",
+            "nullable": true
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "nullable": true
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "nullable": true
+          },
+          "total_tokens": {
+            "type": "integer",
+            "nullable": true
+          },
+          "latency_ms": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "LlmLogDetailResponse": {
         "type": "object",
         "properties": {
-          "success": { "type": "boolean" },
-          "data": { "$ref": "#/components/schemas/LlmLogDetail" }
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/LlmLogDetail"
+          }
         }
       },
       "AdminAiDiagnosticsResponse": {
@@ -12733,7 +13501,7 @@
           "request_id": {
             "type": "string",
             "nullable": true,
-              "description": "请求链路 ID，用于在系统日志、审计日志和错误日志之间关联同一次请求。",
+            "description": "请求链路 ID，用于在系统日志、审计日志和错误日志之间关联同一次请求。",
             "pattern": "^[0-9a-f]{16}$",
             "example": "d4c1ab09ef23aa7b"
           },
@@ -13300,6 +14068,16 @@
             "type": "string",
             "nullable": true,
             "description": "Administrative notes"
+          },
+          "passkey_count": {
+            "type": "integer",
+            "description": "当前启用的 Passkey 数量"
+          },
+          "last_passkey_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "最近一次使用 Passkey 的时间"
           }
         }
       },
@@ -13500,7 +14278,7 @@
             "items": {
               "$ref": "#/components/schemas/ImageObject"
             },
-              "description": "与本次碳减排记录关联的佐证图片列表。",
+            "description": "与本次碳减排记录关联的佐证图片列表。",
             "default": []
           }
         }
@@ -16434,6 +17212,15 @@
               },
               "checkin_stats": {
                 "$ref": "#/components/schemas/StreakStats"
+              },
+              "passkey_summary": {
+                "$ref": "#/components/schemas/AdminUserPasskeySummary"
+              },
+              "recent_security_activity": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SecurityActivityItem"
+                }
               }
             }
           }
@@ -18330,6 +19117,254 @@
                   }
                 ],
                 "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "StandardPagination": {
+        "type": "object",
+        "properties": {
+          "current_page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total_items": {
+            "type": "integer"
+          },
+          "total_pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "PasskeyUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 100,
+            "description": "Passkey 的可读备注名称。留空或空字符串会清除备注。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PasskeyUpdateResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "passkey": {
+                "$ref": "#/components/schemas/PasskeySummary"
+              }
+            }
+          }
+        }
+      },
+      "SecurityActivityItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "login",
+              "passkey_login",
+              "logout",
+              "password_change",
+              "passkey_registered",
+              "passkey_deleted",
+              "passkey_label_updated"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "example": "success"
+          },
+          "actor_type": {
+            "type": "string",
+            "example": "user"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "ip_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "user_agent": {
+            "type": "string",
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "SecurityActivityListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SecurityActivityItem"
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/StandardPagination"
+              }
+            }
+          }
+        }
+      },
+      "AdminUserPasskeySummary": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "backup_enabled": {
+            "type": "integer"
+          },
+          "backup_eligible": {
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "last_registered_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "AdminPasskeyListItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "school_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "sign_count": {
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "attested_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "backup_eligible": {
+            "type": "boolean"
+          },
+          "backup_state": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        }
+      },
+      "AdminPasskeyListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "passkeys": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminPasskeyListItem"
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/StandardPagination"
+              }
+            }
+          }
+        }
+      },
+      "AdminPasskeyStatsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "users_with_passkeys": {
+                "type": "integer"
+              },
+              "total_active_passkeys": {
+                "type": "integer"
+              },
+              "new_passkeys_30d": {
+                "type": "integer"
+              },
+              "passkey_logins_7d": {
+                "type": "integer"
+              },
+              "passkey_logins_30d": {
+                "type": "integer"
               }
             }
           }

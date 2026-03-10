@@ -235,6 +235,114 @@ class PasskeyController
         }
     }
 
+    public function update(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED',
+                ], 401);
+            }
+
+            $passkeyId = isset($args['id']) ? (int) $args['id'] : 0;
+            if ($passkeyId <= 0) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid passkey id',
+                    'code' => 'INVALID_PASSKEY_ID',
+                ], 400);
+            }
+
+            $body = $request->getParsedBody();
+            $payload = is_array($body) ? $body : [];
+            $passkey = $this->passkeyService->updateLabelForUser(
+                (int) $user['id'],
+                $passkeyId,
+                isset($payload['label']) ? (string) $payload['label'] : null
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'passkey' => $passkey,
+                ],
+            ]);
+        } catch (PasskeyOperationException $exception) {
+            $this->logException($exception, $request, 'Passkey update operation failed');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'code' => $exception->getErrorCode(),
+            ], $exception->getHttpStatus());
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, 'Failed to update passkey');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to update passkey',
+                'code' => 'PASSKEY_UPDATE_FAILED',
+            ], 500);
+        }
+    }
+
+    public function adminList(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Access denied',
+                    'code' => 'ACCESS_DENIED',
+                ], 403);
+            }
+
+            $payload = $this->passkeyService->listForAdmin((int) $user['id'], $request->getQueryParams());
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $payload,
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, 'Failed to list admin passkeys');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to list admin passkeys',
+                'code' => 'ADMIN_PASSKEY_LIST_FAILED',
+            ], 500);
+        }
+    }
+
+    public function adminStats(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Access denied',
+                    'code' => 'ACCESS_DENIED',
+                ], 403);
+            }
+
+            $stats = $this->passkeyService->getAdminStats((int) $user['id']);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => $stats,
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, 'Failed to fetch admin passkey stats');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to fetch admin passkey stats',
+                'code' => 'ADMIN_PASSKEY_STATS_FAILED',
+            ], 500);
+        }
+    }
+
     private function logException(\Throwable $exception, Request $request, string $message): void
     {
         $this->logger->error($message, [

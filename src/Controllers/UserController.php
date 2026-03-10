@@ -26,6 +26,16 @@ use PDO;
 
 class UserController
 {
+    private const SECURITY_ACTIVITY_ACTIONS = [
+        'login',
+        'passkey_login',
+        'logout',
+        'password_change',
+        'passkey_registered',
+        'passkey_deleted',
+        'passkey_label_updated',
+    ];
+
     private AuthService $authService;
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
@@ -485,6 +495,67 @@ class UserController
     public function updateCurrentUser(Request $request, Response $response): Response
     {
         return $this->updateProfile($request, $response);
+    }
+
+    public function getSecurityActivity(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Unauthorized',
+                    'code' => 'UNAUTHORIZED'
+                ], 401);
+            }
+
+            $query = $request->getQueryParams();
+            $page = max(1, (int) ($query['page'] ?? 1));
+            $limit = min(100, max(1, (int) ($query['limit'] ?? 20)));
+            $offset = ($page - 1) * $limit;
+
+            $result = $this->fetchSecurityActivityTimeline((int) $user['id'], $limit, $offset);
+
+            $this->auditLogService->log([
+                'action' => 'user_security_activity_viewed',
+                'operation_category' => 'authentication',
+                'user_id' => (int) $user['id'],
+                'actor_type' => 'user',
+                'affected_table' => 'audit_logs',
+                'status' => 'success',
+                'change_type' => 'read',
+                'data' => [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'count' => count($result['items']),
+                ],
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'items' => $result['items'],
+                    'pagination' => [
+                        'current_page' => $page,
+                        'per_page' => $limit,
+                        'total_items' => $result['total'],
+                        'total_pages' => $result['total'] > 0 ? (int) ceil($result['total'] / $limit) : 0,
+                    ],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Get security activity failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to get security activity',
+                'code' => 'SECURITY_ACTIVITY_FETCH_FAILED'
+            ], 500);
+        }
     }
 
     /**
@@ -2009,6 +2080,77 @@ class UserController
                 'school_name' => $entry['school_name'] ?? null,
             ];
         }, $entries);
+    }
+
+    /**
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    private function fetchSecurityActivityTimeline(int $userId, int $limit, int $offset): array
+    {
+        $placeholders = implode(', ', array_fill(0, count(self::SECURITY_ACTIVITY_ACTIONS), '?'));
+        $baseParams = array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS);
+
+        $listStmt = $this->db->prepare(
+            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+             FROM audit_logs
+             WHERE user_id = ?
+               AND action IN ({$placeholders})
+             ORDER BY created_at DESC, id DESC
+             LIMIT ? OFFSET ?"
+        );
+        $listStmt->execute(array_merge($baseParams, [$limit, $offset]));
+        $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $countStmt = $this->db->prepare(
+            "SELECT COUNT(*)
+             FROM audit_logs
+             WHERE user_id = ?
+               AND action IN ({$placeholders})"
+        );
+        $countStmt->execute($baseParams);
+
+        return [
+            'items' => array_map([$this, 'normalizeSecurityActivityRow'], $rows),
+            'total' => (int) $countStmt->fetchColumn(),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function normalizeSecurityActivityRow(array $row): array
+    {
+        $metadata = $this->decodeAuditPayload($row['data'] ?? null);
+
+        return [
+            'id' => (int) ($row['id'] ?? 0),
+            'action' => (string) ($row['action'] ?? ''),
+            'status' => (string) ($row['status'] ?? 'success'),
+            'actor_type' => (string) ($row['actor_type'] ?? 'user'),
+            'occurred_at' => $row['created_at'] ?? null,
+            'ip_address' => $metadata['ip_address'] ?? ($row['ip_address'] ?? null),
+            'user_agent' => $metadata['user_agent'] ?? ($row['user_agent'] ?? null),
+            'request_id' => $row['request_id'] ?? null,
+            'metadata' => $metadata,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeAuditPayload(mixed $value): array
+    {
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($value, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return $decoded;
     }
 
     private function jsonResponse(Response $response, array $data, int $status = 200): Response

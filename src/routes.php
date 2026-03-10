@@ -120,7 +120,9 @@ return function (App $app) {
             $users->get('/me/passkeys', [PasskeyController::class, 'list']);
             $users->post('/me/passkeys/registration/options', [PasskeyController::class, 'beginRegistration']);
             $users->post('/me/passkeys/registration/verify', [PasskeyController::class, 'completeRegistration']);
+            $users->patch('/me/passkeys/{id:[0-9]+}', [PasskeyController::class, 'update']);
             $users->delete('/me/passkeys/{id:[0-9]+}', [PasskeyController::class, 'delete']);
+            $users->get('/me/security-activity', [UserController::class, 'getSecurityActivity']);
             $users->get('/me/points-history', [UserController::class, 'getPointsHistory']);
             $users->get('/me/stats', [UserController::class, 'getUserStats']);
             $users->get('/me/chart-data', [UserController::class, 'getChartData']);
@@ -205,6 +207,8 @@ return function (App $app) {
     $registerAdminRoutes = function (RouteCollectorProxy $group) {
         $group->group('/admin', function (RouteCollectorProxy $admin) {
             $admin->get(PATH_USERS, [AdminController::class, 'getUsers']);
+            $admin->get('/passkeys', [PasskeyController::class, 'adminList']);
+            $admin->get('/passkeys/stats', [PasskeyController::class, 'adminStats']);
             $admin->get(PATH_USERS . '/groups', [AdminUserGroupController::class, 'list']);
             $admin->get(PATH_USERS . '/groups/meta', [AdminUserGroupController::class, 'meta']);
             $admin->post(PATH_USERS . '/groups', [AdminUserGroupController::class, 'create']);

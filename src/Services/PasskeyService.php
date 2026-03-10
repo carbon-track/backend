@@ -15,6 +15,11 @@ class PasskeyService
 {
     private const FLOW_AUTHENTICATION = 'authentication';
     private const FLOW_REGISTRATION = 'registration';
+    private const ADMIN_PASSKEY_SORTS = [
+        'created_at_desc',
+        'last_used_at_desc',
+        'sign_count_desc',
+    ];
     private UserProfileViewService $userProfileViewService;
 
     public function __construct(
@@ -364,6 +369,117 @@ class PasskeyService
             'passkey_id' => $passkeyId,
             'credential_id' => $passkey['credential_id'] ?? null,
         ], 'delete', 'user_passkeys');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function updateLabelForUser(int $userId, int $passkeyId, ?string $label): array
+    {
+        $passkey = $this->userPasskeyModel->findActiveByIdForUser($passkeyId, $userId);
+        if ($passkey === null) {
+            throw new PasskeyOperationException('Passkey was not found.', 'PASSKEY_NOT_FOUND', 404);
+        }
+
+        $sanitizedLabel = $this->sanitizeLabel($label);
+        $currentLabel = $this->sanitizeLabel($passkey['label'] ?? null);
+        if ($sanitizedLabel === $currentLabel) {
+            return $this->toPublicSummary($passkey);
+        }
+
+        $updated = $this->userPasskeyModel->updateLabel($passkeyId, $userId, $sanitizedLabel);
+        if ($updated === null) {
+            throw new PasskeyOperationException('Passkey label could not be updated.', 'PASSKEY_LABEL_UPDATE_FAILED', 500);
+        }
+
+        $this->logPasskeyEvent('passkey_label_updated', $userId, 'success', [
+            'passkey_id' => $passkeyId,
+            'credential_id' => $passkey['credential_id'] ?? null,
+            'old_label' => $passkey['label'] ?? null,
+            'new_label' => $updated['label'] ?? null,
+        ], 'update', 'user_passkeys');
+
+        return $this->toPublicSummary($updated);
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     * @return array<string, mixed>
+     */
+    public function listForAdmin(int $adminId, array $filters = []): array
+    {
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $limit = min(100, max(1, (int) ($filters['limit'] ?? 20)));
+        $offset = ($page - 1) * $limit;
+        $search = trim((string) ($filters['q'] ?? ''));
+        $sort = (string) ($filters['sort'] ?? 'created_at_desc');
+        if (!in_array($sort, self::ADMIN_PASSKEY_SORTS, true)) {
+            $sort = 'created_at_desc';
+        }
+
+        $result = $this->userPasskeyModel->listAdminPasskeys($search, $limit, $offset, $sort);
+        $items = $result['items'] ?? [];
+        $total = (int) ($result['total'] ?? 0);
+
+        $this->auditLogService->log([
+            'action' => 'admin_passkeys_viewed',
+            'operation_category' => 'admin',
+            'user_id' => $adminId,
+            'actor_type' => 'admin',
+            'affected_table' => 'user_passkeys',
+            'status' => 'success',
+            'change_type' => 'read',
+            'data' => [
+                'q' => $search,
+                'page' => $page,
+                'limit' => $limit,
+                'sort' => $sort,
+                'count' => count($items),
+            ],
+        ]);
+
+        return [
+            'passkeys' => $items,
+            'pagination' => [
+                'current_page' => $page,
+                'per_page' => $limit,
+                'total_items' => $total,
+                'total_pages' => $total > 0 ? (int) ceil($total / $limit) : 0,
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getAdminStats(int $adminId): array
+    {
+        $since7Days = gmdate('Y-m-d H:i:s', strtotime('-7 days'));
+        $since30Days = gmdate('Y-m-d H:i:s', strtotime('-30 days'));
+        $stats = $this->userPasskeyModel->getAdminPasskeyStats($since30Days);
+        $stats['passkey_logins_7d'] = $this->countAuditActionSince('passkey_login', $since7Days);
+        $stats['passkey_logins_30d'] = $this->countAuditActionSince('passkey_login', $since30Days);
+
+        $this->auditLogService->log([
+            'action' => 'admin_passkey_stats_viewed',
+            'operation_category' => 'admin',
+            'user_id' => $adminId,
+            'actor_type' => 'admin',
+            'affected_table' => 'user_passkeys',
+            'status' => 'success',
+            'change_type' => 'read',
+            'data' => $stats,
+        ]);
+
+        return $stats;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getUserPasskeySummary(int $userId): array
+    {
+        return $this->userPasskeyModel->getUserPasskeySummary($userId);
     }
 
     /**
@@ -764,4 +880,21 @@ class PasskeyService
         ]);
     }
 
+    private function countAuditActionSince(string $action, string $since): int
+    {
+        $stmt = $this->db->prepare(
+            'SELECT COUNT(*)
+             FROM audit_logs
+             WHERE action = :action
+               AND status = :status
+               AND created_at >= :since'
+        );
+        $stmt->execute([
+            'action' => $action,
+            'status' => 'success',
+            'since' => $since,
+        ]);
+
+        return (int) $stmt->fetchColumn();
+    }
 }

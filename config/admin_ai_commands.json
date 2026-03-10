@@ -15,6 +15,21 @@
       ]
     },
     {
+      "id": "passkeys",
+      "label": "Passkey Overview",
+      "route": "/admin/passkeys",
+      "description": "Inspect registered passkeys, backup posture, and recent passkey sign-in activity.",
+      "keywords": [
+        "passkey",
+        "webauthn",
+        "security key",
+        "authenticator",
+        "通行密钥",
+        "安全密钥",
+        "认证器"
+      ]
+    },
+    {
       "id": "users",
       "label": "User Management",
       "route": "/admin/users",
