@@ -9,8 +9,10 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
+use CarbonTrack\Services\UserProfileViewService;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Response;
 
@@ -90,7 +92,10 @@ class AdminStatsIntegrationTest extends TestCase
             $badgeService,
             $statsService,
             $checkinService,
-            $quotaConfigService
+            $quotaConfigService,
+            null,
+            null,
+            new UserProfileViewService(new RegionService(null, null, null, null))
         );
     }
 

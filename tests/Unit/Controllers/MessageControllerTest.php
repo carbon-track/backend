@@ -16,6 +16,30 @@ use CarbonTrack\Models\Message;
 
 class MessageControllerTest extends TestCase
 {
+    private function makeUserProfileViewService(?RegionService $regionService = null): UserProfileViewService
+    {
+        return new UserProfileViewService($regionService ?? new RegionService(null, null, null, null));
+    }
+
+    private function makeController(
+        \PDO $pdo,
+        MessageService $svc,
+        AuditLogService $audit,
+        AuthService $auth,
+        ?EmailService $emailService = null,
+        ?UserProfileViewService $userProfileViewService = null
+    ): MessageController {
+        return new MessageController(
+            $pdo,
+            $svc,
+            $audit,
+            $auth,
+            $emailService,
+            null,
+            $userProfileViewService ?? $this->makeUserProfileViewService()
+        );
+    }
+
     public function testControllerClassExists(): void
     {
         $this->assertTrue(class_exists(MessageController::class));
@@ -43,7 +67,7 @@ class MessageControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserMessages($request, $response);
@@ -74,7 +98,7 @@ class MessageControllerTest extends TestCase
         
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages/100');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getMessageDetail($request, $response, ['id'=>100]);
@@ -99,7 +123,7 @@ class MessageControllerTest extends TestCase
         ]);
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages/unread-count');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUnreadCount($request, $response);
@@ -122,7 +146,7 @@ class MessageControllerTest extends TestCase
         $updateStmt->method('rowCount')->willReturn(5);
         $pdo->method('prepare')->willReturn($updateStmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/mark-all-read', []);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAllAsRead($request, $response);
@@ -145,7 +169,7 @@ class MessageControllerTest extends TestCase
         $updateStmt->method('rowCount')->willReturn(2);
         $pdo->method('prepare')->willReturn($updateStmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/mark-all-read', ['message_ids' => [1,2]]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAllAsRead($request, $response);
@@ -168,7 +192,7 @@ class MessageControllerTest extends TestCase
         $select->method('fetch')->willReturn(false);
         $pdo->method('prepare')->willReturn($select);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/9/read');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAsRead($request, $response, ['id' => 9]);
@@ -192,7 +216,7 @@ class MessageControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/300/read');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAsRead($request, $response, ['id' => 300]);
@@ -214,7 +238,7 @@ class MessageControllerTest extends TestCase
         $select->method('fetch')->willReturn(false);
         $pdo->method('prepare')->willReturn($select);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('DELETE', '/messages/12');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteMessage($request, $response, ['id' => 12]);
@@ -238,7 +262,7 @@ class MessageControllerTest extends TestCase
 
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('DELETE', '/messages/77');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteMessage($request, $response, ['id' => 77]);
@@ -263,7 +287,7 @@ class MessageControllerTest extends TestCase
         ]);
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getMessageStats($request, $response);
@@ -282,7 +306,7 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 5, 'is_admin' => false]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', ['title' => 'Hello', 'content' => 'World']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->sendSystemMessage($request, $response);
@@ -298,7 +322,7 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 6, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Test',
             'content' => 'Payload',
@@ -392,7 +416,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Announcement',
             'content' => 'Broadcast body',
@@ -490,7 +514,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => 'System high priority',
@@ -606,7 +630,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => '<h1>Headline</h1><script>alert(1)</script><p>Body</p>',
@@ -739,7 +763,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => '<span><script>alert(1)</script></span><svg><script>alert(1)</script></svg><p>Safe body</p>',
@@ -806,7 +830,7 @@ class MessageControllerTest extends TestCase
             ];
         });
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth, null, null, new UserProfileViewService($region));
+        $controller = $this->makeController($pdo, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
         $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, ['search' => 'example', 'limit' => 1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->searchBroadcastRecipients($request, $response);
@@ -851,7 +875,7 @@ class MessageControllerTest extends TestCase
             ];
         });
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth, null, null, new UserProfileViewService($region));
+        $controller = $this->makeController($pdo, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
 
         $method = new \ReflectionMethod($controller, 'resolveExplicitRecipients');
         $method->setAccessible(true);
@@ -970,7 +994,7 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 99, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/admin/messages/broadcasts');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getBroadcastHistory($request, $response);
@@ -1054,7 +1078,7 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 88, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->flushBroadcastEmailQueue($request, $response);
@@ -1132,7 +1156,7 @@ class MessageControllerTest extends TestCase
             ->willReturn(false);
         $emailService->method('getLastError')->willReturn('mailer down');
 
-        $controller = new MessageController($pdo, $svc, $audit, $auth, $emailService);
+        $controller = $this->makeController($pdo, $svc, $audit, $auth, $emailService);
         $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5, 'force' => 1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->flushBroadcastEmailQueue($request, $response);

@@ -50,14 +50,7 @@ class UserProfileViewService
         $joinedSchoolName = $this->normalizeText($row['school_name'] ?? null);
         $legacySchoolName = $this->normalizeText($row['school'] ?? null);
 
-        $schoolName = $joinedSchoolName;
-        if ($schoolName === null && $schoolId === null) {
-            $schoolName = $legacySchoolName;
-        }
-
-        if ($schoolName === null && $joinedSchoolName === null) {
-            $schoolName = $legacySchoolName;
-        }
+        $schoolName = $joinedSchoolName ?? $legacySchoolName;
 
         return [
             'school_id' => $schoolId,

@@ -1495,7 +1495,7 @@
           "User"
         ],
         "summary": "更新当前用户资料",
-        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，某些部署会要求提供 Turnstile 验证。用户资料读取与写入会兼容 legacy `school` / `location` 列：返回体优先使用 `school_id` / `region_code`，必要时回退旧列；提交学校或地区修改时会同步镜像写回旧列以保持兼容。",
+        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，某些部署会要求提供 Turnstile 验证。",
         "security": [
           {
             "bearerAuth": []
@@ -1982,7 +1982,7 @@
           "Passkeys"
         ],
         "summary": "创建 Passkey 登录选项",
-        "description": "生成 WebAuthn assertion challenge。`identifier` 可选；前端可在未输入用户名/邮箱时直接调用以发起通用 Passkey 登录。提供 identifier 时会辅助账号匹配；无论账号是否存在或是否已注册 Passkey，均返回通用登录选项以降低枚举风险。",
+        "description": "生成 WebAuthn assertion challenge。可选传入 identifier 以辅助账号匹配；无论账号是否存在或是否已注册 Passkey，均返回通用登录选项以降低枚举风险。",
         "requestBody": {
           "required": false,
           "content": {
@@ -2344,7 +2344,7 @@
           "User"
         ],
         "summary": "Get User Stats",
-        "description": "获取当前登录用户的统计数据、排行榜与连续打卡信息。学校与地区上下文会按统一用户资料解析规则生成：优先使用 canonical `school_id` / `region_code`，必要时回退 legacy `school` / `location`，从而保证排行榜上下文与 profile 展示一致。",
+        "description": "获取当前登录用户的统计数据、排行榜与连续打卡信息。",
         "security": [
           {
             "bearerAuth": []
@@ -3124,7 +3124,7 @@
           "Carbon Track"
         ],
         "summary": "获取碳减排记录列表（管理员审核）",
-        "description": "管理员分页获取碳减排记录列表，支持按审核状态、关键字、活动、日期与排序方式筛选，用于审核后台。返回体中的 `school_name` 会兼容 legacy `users.school` 回退，避免 `school_id` 缺失或学校联表为空时学校信息丢失。",
+        "description": "管理员分页获取碳减排记录列表，支持按审核状态、关键字、活动、日期与排序方式筛选，用于审核后台。",
         "security": [
           {
             "bearerAuth": []
@@ -7921,7 +7921,7 @@
           "User"
         ],
         "summary": "获取用户列表 (管理员)",
-        "description": "管理员分页获取用户列表，支持按关键字、状态、学校、管理员身份与排序规则筛选。列表里的学校展示统一经过用户资料解析服务，优先使用 canonical 学校信息，必要时回退 legacy `users.school`。",
+        "description": "管理员分页获取用户列表，支持按关键字、状态、学校、管理员身份与排序规则筛选。",
         "security": [
           {
             "bearerAuth": []
@@ -9697,7 +9697,7 @@
           "Carbon Track"
         ],
         "summary": "待审核碳记录列表 (别名)",
-        "description": "管理员兼容别名接口：获取待审核碳记录列表。返回体中的 `school_name` 会兼容 legacy `users.school` 回退。",
+        "description": "管理员兼容别名接口：获取待审核碳记录列表。",
         "security": [
           {
             "bearerAuth": []
@@ -11654,7 +11654,7 @@
           "Message"
         ],
         "summary": "搜索广播收件人",
-        "description": "管理员搜索广播收件人，支持按关键字、学校、邮箱后缀、状态与管理员标记筛选。学校与地区展示统一经过用户资料解析服务；搜索时会同时兼容 canonical 与 legacy 用户资料列，例如 `school` 同时匹配 `users.school` 与学校联表名称，`location` 同时匹配 legacy `location` 与可用的 `region_code`。",
+        "description": "管理员搜索广播收件人，支持按关键字、学校、邮箱后缀、状态与管理员标记筛选。",
         "security": [
           {
             "bearerAuth": []
@@ -13374,7 +13374,6 @@
       },
       "UpdateProfileRequest": {
         "type": "object",
-        "description": "更新当前用户资料的请求体。地区通过 `country_code` + `state_code` 更新，服务端会折叠为 `region_code`，并在兼容模式下同步镜像到 legacy `location`；学校更新时会同步维护 `school_id` 与 legacy `school`。",
         "properties": {
           "school_id": {
             "type": "integer",
@@ -17931,7 +17930,7 @@
         "properties": {
           "identifier": {
             "type": "string",
-            "description": "可选。用户名或邮箱；省略时返回通用 assertion 选项，以支持无需预先输入账号的 Passkey 登录。提供后会将 assertion 限定为该账号已注册的 passkeys。"
+            "description": "可选。用户名或邮箱；提供后会将 assertion 限定为该账号已注册的 passkeys。"
           }
         }
       },

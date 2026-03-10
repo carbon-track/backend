@@ -8,11 +8,41 @@ use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
+use CarbonTrack\Services\UserProfileViewService;
 
 class AdminControllerTest extends TestCase
 {
+    private function makeUserProfileViewService(): UserProfileViewService
+    {
+        return new UserProfileViewService(new RegionService(null, null, null, null));
+    }
+
+    private function makeController(
+        \PDO $pdo,
+        \CarbonTrack\Services\AuthService $auth,
+        \CarbonTrack\Services\AuditLogService $audit,
+        BadgeService $badgeService,
+        StatisticsService $statsService,
+        CheckinService $checkinService,
+        QuotaConfigService $quotaConfigService
+    ): AdminController {
+        return new AdminController(
+            $pdo,
+            $auth,
+            $audit,
+            $badgeService,
+            $statsService,
+            $checkinService,
+            $quotaConfigService,
+            null,
+            null,
+            $this->makeUserProfileViewService()
+        );
+    }
+
     public function testControllerClassExists(): void
     {
         $this->assertTrue(class_exists(AdminController::class));
@@ -31,7 +61,7 @@ class AdminControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 0]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
         $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
         $prop->setAccessible(true);
         $prop->setValue($controller, 'lastlgn');
@@ -89,7 +119,7 @@ class AdminControllerTest extends TestCase
             )
             ->willReturnOnConsecutiveCalls($listStmt, $countStmt);
 
-        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
         $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
         $prop->setAccessible(true);
         $prop->setValue($controller, 'lastlgn');
@@ -137,7 +167,7 @@ class AdminControllerTest extends TestCase
         ]);
         $pdo->method('prepare')->willReturn($stmt);
 
-        $controller = new AdminController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
         $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
         $prop->setAccessible(true);
         $prop->setValue($controller, 'lastlgn');

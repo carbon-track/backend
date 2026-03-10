@@ -13,7 +13,6 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\BadgeService;
-use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
@@ -58,7 +57,11 @@ class CarbonTrackController
         $this->checkinService = $checkinService;
         $this->quotaService = $quotaService;
         $this->badgeService = $badgeService;
-        $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService(new RegionService());
+        if ($userProfileViewService === null) {
+            throw new \InvalidArgumentException('UserProfileViewService is required.');
+        }
+
+        $this->userProfileViewService = $userProfileViewService;
     }
 
     /**

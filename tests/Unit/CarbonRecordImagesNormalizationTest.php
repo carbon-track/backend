@@ -5,6 +5,8 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
 use CarbonTrack\Services\{CarbonCalculatorService, MessageService, AuditLogService, AuthService, ErrorLogService, CloudflareR2Service};
+use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\UserProfileViewService;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Psr7\Factory\ServerRequestFactory;
 
@@ -58,7 +60,19 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
         $r2 = $this->createMock(CloudflareR2Service::class);
         $r2->method('getPublicUrl')->willReturnCallback(fn(string $p) => 'https://cdn.example/' . ltrim($p,'/'));
 
-        return new CarbonTrackController($this->pdo, $calc, $msg, $audit, $auth, $err, $r2);
+        return new CarbonTrackController(
+            $this->pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            $err,
+            $r2,
+            null,
+            null,
+            null,
+            new UserProfileViewService(new RegionService(null, null, null, null))
+        );
     }
 
     public function testNormalizeExistingStringArrayImages(): void
