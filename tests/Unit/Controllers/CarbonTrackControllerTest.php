@@ -35,12 +35,12 @@ class CarbonTrackControllerTest extends TestCase
             $msg,
             $audit,
             $auth,
+            $this->makeUserProfileViewService(),
             $errorLogService,
             $r2Service,
             $checkinService,
             $quotaService,
-            $badgeService,
-            $this->makeUserProfileViewService()
+            $badgeService
         );
     }
 

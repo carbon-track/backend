@@ -40,28 +40,24 @@ class CarbonTrackController
         $messageService,
         $auditLog,
         $authService,
+        UserProfileViewService $userProfileViewService,
         $errorLogService = null,
         $r2Service = null,
         $checkinService = null,
         $quotaService = null,
-        ?BadgeService $badgeService = null,
-        ?UserProfileViewService $userProfileViewService = null
+        ?BadgeService $badgeService = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
         $this->messageService = $messageService;
         $this->auditLog = $auditLog;
         $this->authService = $authService;
+        $this->userProfileViewService = $userProfileViewService;
         $this->errorLogService = $errorLogService;
         $this->r2Service = $r2Service;
         $this->checkinService = $checkinService;
         $this->quotaService = $quotaService;
         $this->badgeService = $badgeService;
-        if ($userProfileViewService === null) {
-            throw new \InvalidArgumentException('UserProfileViewService is required.');
-        }
-
-        $this->userProfileViewService = $userProfileViewService;
     }
 
     /**

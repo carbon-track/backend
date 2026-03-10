@@ -66,12 +66,12 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
             $msg,
             $audit,
             $auth,
+            new UserProfileViewService(new RegionService(null, null, null, null)),
             $err,
             $r2,
             null,
             null,
-            null,
-            new UserProfileViewService(new RegionService(null, null, null, null))
+            null
         );
     }
 

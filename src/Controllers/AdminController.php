@@ -31,14 +31,10 @@ class AdminController
         private StatisticsService $statisticsService,
         private CheckinService $checkinService,
         private QuotaConfigService $quotaConfigService,
+        UserProfileViewService $userProfileViewService,
         private ?ErrorLogService $errorLogService = null,
-        private ?CloudflareR2Service $r2Service = null,
-        ?UserProfileViewService $userProfileViewService = null
+        private ?CloudflareR2Service $r2Service = null
     ) {
-        if ($userProfileViewService === null) {
-            throw new \InvalidArgumentException('UserProfileViewService is required.');
-        }
-
         $this->userProfileViewService = $userProfileViewService;
     }
 

@@ -646,9 +646,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
             $c->get(AuthService::class),
+            $c->get(UserProfileViewService::class),
             $c->get(EmailService::class),
-            $c->get(ErrorLogService::class),
-            $c->get(UserProfileViewService::class)
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -700,12 +700,12 @@ $__deps_initializer = function (Container $container) {
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
             $c->get(AuthService::class),
+            $c->get(UserProfileViewService::class),
             $c->get(ErrorLogService::class),
             $c->get(CloudflareR2Service::class),
             $c->get(CheckinService::class),
             $c->get(QuotaService::class),
-            $c->get(BadgeService::class),
-            $c->get(UserProfileViewService::class)
+            $c->get(BadgeService::class)
         );
     });
 
@@ -735,9 +735,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(StatisticsService::class),
             $c->get(CheckinService::class),
             $c->get(QuotaConfigService::class),
+            $c->get(UserProfileViewService::class),
             $c->get(ErrorLogService::class),
-            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
-            $c->get(UserProfileViewService::class)
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null
         );
     });
 
