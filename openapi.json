@@ -9750,6 +9750,7 @@
           "Files"
         ],
         "summary": "Get direct-upload presign URL",
+        "description": "生成前端直传所需的预签名信息。若请求携带 sha256，只有当前认证用户本人已持有的同内容文件才会返回 duplicate=true；系统不会返回其他用户既有文件的 file_path、public_url 或 reference_count。",
         "security": [
           {
             "bearerAuth": []
@@ -9805,6 +9806,7 @@
           "Files"
         ],
         "summary": "Confirm direct upload",
+        "description": "确认直传并落库文件元数据。若 sha256 已被其他 file record 占用，本次确认仍会创建当前用户自己的文件记录，但不会复用该 sha256 去重。",
         "security": [
           {
             "bearerAuth": []
@@ -10074,7 +10076,7 @@
           "Files"
         ],
         "summary": "完成分片上传",
-        "description": "完成 multipart 上传。仅初始化该 multipart 会话的用户或管理员可以提交；对于新文件记录必须能提供合法 sha256（优先使用 init 阶段绑定值，兼容旧会话时可在 complete 请求体显式传入）；成功后系统会清除 upload_id 归属记录。",
+        "description": "完成 multipart 上传。仅初始化该 multipart 会话的用户或管理员可以提交；对于新文件记录必须能提供合法 sha256（优先使用 init 阶段绑定值，兼容旧会话时可在 complete 请求体显式传入）；若该 sha256 已被其他 file record 占用，本次记录仍会创建，但不会复用该 sha256 去重；成功后系统会清除 upload_id 归属记录。",
         "security": [
           {
             "bearerAuth": []
@@ -12395,7 +12397,7 @@
           },
           "sha256": {
             "type": "string",
-            "description": "文件内容SHA256(64 hex)用于去重"
+            "description": "文件内容SHA256(64 hex)。仅用于同一 owner 范围内去重；命中其他用户文件时不会返回其既有元数据。"
           },
           "entity_type": {
             "type": "string"
@@ -12471,7 +12473,8 @@
                 "nullable": true
               },
               "duplicate": {
-                "type": "boolean"
+                "type": "boolean",
+                "description": "是否命中当前认证用户本人可复用的重复文件。"
               },
               "reference_count": {
                 "type": "integer",
