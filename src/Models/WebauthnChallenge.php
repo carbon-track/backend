@@ -49,10 +49,11 @@ class WebauthnChallenge
                 WHERE challenge_id = :challenge_id
                   AND flow_type = :flow_type
                   AND consumed_at IS NULL
-                  AND expires_at > CURRENT_TIMESTAMP';
+                  AND expires_at > :current_time';
         $params = [
             'challenge_id' => $challengeId,
             'flow_type' => $flowType,
+            'current_time' => $this->utcNow(),
         ];
 
         if ($userId !== null) {
@@ -93,9 +94,16 @@ class WebauthnChallenge
 
     public function deleteExpired(): int
     {
-        $stmt = $this->db->prepare('DELETE FROM webauthn_challenges WHERE expires_at <= CURRENT_TIMESTAMP');
-        $stmt->execute();
+        $stmt = $this->db->prepare('DELETE FROM webauthn_challenges WHERE expires_at <= :current_time');
+        $stmt->execute([
+            'current_time' => $this->utcNow(),
+        ]);
         return $stmt->rowCount();
+    }
+
+    private function utcNow(): string
+    {
+        return gmdate('Y-m-d H:i:s');
     }
 
     /**
