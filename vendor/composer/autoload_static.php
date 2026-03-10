@@ -1720,6 +1720,7 @@ class ComposerStaticInitb0a5952653a4f33403aa273cd7543b80
         'CarbonTrack\\Tests\\Unit\\Services\\LeaderboardServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/LeaderboardServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\MessageServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/MessageServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\NotificationPreferenceServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/NotificationPreferenceServiceTest.php',
+        'CarbonTrack\\Tests\\Unit\\Services\\PasskeyConfigTest' => __DIR__ . '/../..' . '/tests/Unit/Services/PasskeyConfigTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\PasskeyServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/PasskeyServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\QuotaServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/QuotaServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\RegionServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/RegionServiceTest.php',

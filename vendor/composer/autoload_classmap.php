@@ -1317,6 +1317,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\LeaderboardServiceTest' => $baseDir . '/tests/Unit/Services/LeaderboardServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\MessageServiceTest' => $baseDir . '/tests/Unit/Services/MessageServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\NotificationPreferenceServiceTest' => $baseDir . '/tests/Unit/Services/NotificationPreferenceServiceTest.php',
+    'CarbonTrack\\Tests\\Unit\\Services\\PasskeyConfigTest' => $baseDir . '/tests/Unit/Services/PasskeyConfigTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\PasskeyServiceTest' => $baseDir . '/tests/Unit/Services/PasskeyServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\QuotaServiceTest' => $baseDir . '/tests/Unit/Services/QuotaServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\RegionServiceTest' => $baseDir . '/tests/Unit/Services/RegionServiceTest.php',

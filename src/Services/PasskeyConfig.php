@@ -24,14 +24,28 @@ class PasskeyConfig
 
     public function getRpId(): string
     {
+        $frontendHost = $this->resolveHostFromUrl((string) ($this->env['FRONTEND_URL'] ?? ''));
+        $allowedOriginHosts = $this->getAllowedOriginHosts();
+
         $value = trim((string) ($this->env['PASSKEYS_RP_ID'] ?? ''));
         if ($value !== '') {
-            return strtolower($value);
+            $rpId = strtolower($value);
+
+            if ($frontendHost !== null) {
+                if ($this->isRpIdCompatibleWithHost($rpId, $frontendHost)) {
+                    return $rpId;
+                }
+            } elseif ($allowedOriginHosts === [] || $this->isRpIdCompatibleWithAnyHost($rpId, $allowedOriginHosts)) {
+                return $rpId;
+            }
         }
 
-        $urlHost = $this->resolveHostFromUrl((string) ($this->env['FRONTEND_URL'] ?? ''));
-        if ($urlHost !== null) {
-            return $urlHost;
+        if ($frontendHost !== null) {
+            return $frontendHost;
+        }
+
+        if ($allowedOriginHosts !== []) {
+            return $allowedOriginHosts[0];
         }
 
         $appUrlHost = $this->resolveHostFromUrl((string) ($this->env['APP_URL'] ?? ''));
@@ -58,20 +72,20 @@ class PasskeyConfig
      */
     public function getAllowedOrigins(): array
     {
-        $origins = $this->splitCsv((string) ($this->env['PASSKEYS_ORIGINS'] ?? ''));
+        $origins = $this->normalizeOrigins($this->splitCsv((string) ($this->env['PASSKEYS_ORIGINS'] ?? '')));
+        $frontendOrigin = $this->resolveOriginFromUrl((string) ($this->env['FRONTEND_URL'] ?? ''));
+
+        if ($frontendOrigin !== null) {
+            $origins[] = $frontendOrigin;
+        }
+
+        $origins = array_values(array_unique($origins));
         if ($origins !== []) {
             return $origins;
         }
 
-        $fallbacks = [];
-        foreach (['FRONTEND_URL', 'APP_URL'] as $key) {
-            $value = trim((string) ($this->env[$key] ?? ''));
-            if ($value !== '') {
-                $fallbacks[] = $value;
-            }
-        }
-
-        return array_values(array_unique($fallbacks));
+        $appOrigin = $this->resolveOriginFromUrl((string) ($this->env['APP_URL'] ?? ''));
+        return $appOrigin !== null ? [$appOrigin] : [];
     }
 
     public function getChallengeTtlSeconds(): int
@@ -177,14 +191,97 @@ class PasskeyConfig
         return array_values(array_unique($parts));
     }
 
-    private function resolveHostFromUrl(string $url): ?string
+    /**
+     * @param string[] $origins
+     * @return string[]
+     */
+    private function normalizeOrigins(array $origins): array
+    {
+        $normalized = [];
+
+        foreach ($origins as $origin) {
+            $normalizedOrigin = $this->resolveOriginFromUrl($origin);
+            $normalized[] = $normalizedOrigin ?? trim($origin);
+        }
+
+        return array_values(array_unique(array_filter($normalized, static fn (string $origin): bool => $origin !== '')));
+    }
+
+    /**
+     * @return string[]
+     */
+    private function getAllowedOriginHosts(): array
+    {
+        $hosts = [];
+
+        foreach ($this->getAllowedOrigins() as $origin) {
+            $host = $this->resolveHostFromUrl($origin);
+            if ($host !== null) {
+                $hosts[] = $host;
+            }
+        }
+
+        return array_values(array_unique($hosts));
+    }
+
+    private function isRpIdCompatibleWithAnyHost(string $rpId, array $hosts): bool
+    {
+        foreach ($hosts as $host) {
+            if ($this->isRpIdCompatibleWithHost($rpId, $host)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isRpIdCompatibleWithHost(string $rpId, string $host): bool
+    {
+        $rpId = strtolower(trim($rpId));
+        $host = strtolower(trim($host));
+
+        if ($rpId === '' || $host === '') {
+            return false;
+        }
+
+        return $host === $rpId || str_ends_with($host, '.' . $rpId);
+    }
+
+    private function resolveOriginFromUrl(string $url): ?string
     {
         $url = trim($url);
         if ($url === '') {
             return null;
         }
 
-        $host = parse_url($url, PHP_URL_HOST);
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $scheme = isset($parts['scheme']) && is_string($parts['scheme']) ? strtolower($parts['scheme']) : '';
+        $host = isset($parts['host']) && is_string($parts['host']) ? strtolower($parts['host']) : '';
+
+        if ($scheme === '' || $host === '') {
+            return null;
+        }
+
+        $origin = $scheme . '://' . $host;
+        if (isset($parts['port']) && is_int($parts['port'])) {
+            $origin .= ':' . $parts['port'];
+        }
+
+        return $origin;
+    }
+
+    private function resolveHostFromUrl(string $url): ?string
+    {
+        $origin = $this->resolveOriginFromUrl($url);
+        if ($origin === null) {
+            return null;
+        }
+
+        $host = parse_url($origin, PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return null;
         }
