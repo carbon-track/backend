@@ -1304,6 +1304,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Models\\CarbonActivityTest' => $baseDir . '/tests/Unit/Models/CarbonActivityTest.php',
     'CarbonTrack\\Tests\\Unit\\Models\\MessageTest' => $baseDir . '/tests/Unit/Models/MessageTest.php',
     'CarbonTrack\\Tests\\Unit\\Models\\UserTest' => $baseDir . '/tests/Unit/Models/UserTest.php',
+    'CarbonTrack\\Tests\\Unit\\Models\\WebauthnChallengeTest' => $baseDir . '/tests/Unit/Models/WebauthnChallengeTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AdminAiIntentServiceTest' => $baseDir . '/tests/Unit/Services/AdminAiIntentServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AdminAnnouncementAiServiceTest' => $baseDir . '/tests/Unit/Services/AdminAnnouncementAiServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AuditLogServiceTest' => $baseDir . '/tests/Unit/Services/AuditLogServiceTest.php',
