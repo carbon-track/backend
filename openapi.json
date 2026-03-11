@@ -17661,13 +17661,49 @@
         "properties": {
           "user_id": {
             "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "用户的稳定 UUID 标识。"
+          },
+          "uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "与 user_id 相同的稳定 UUID，供兼容客户端直接读取。"
+          },
+          "legacy_user_id": {
+            "type": [
               "integer",
               "null"
-            ]
+            ],
+            "description": "站内旧的自增用户 ID，仅用于兼容或内部排障。"
           },
           "username": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_admin": {
+            "type": [
+              "boolean",
               "null"
             ]
           },

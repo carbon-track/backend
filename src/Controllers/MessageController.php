@@ -1012,14 +1012,23 @@ $auditPayload = [
                     $startTime = $createdAtRaw->format('Y-m-d H:i:s');
                 }
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
-                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $row['content_hash'] ?? null);
+                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $row['content_hash'] ?? null, true);
 
                 $readUsers = [];
                 $unreadUsers = [];
                 foreach ($recipients as $recipient) {
+                    $recipientUuid = isset($recipient['uuid']) ? strtolower(trim((string)$recipient['uuid'])) : null;
+                    if ($recipientUuid === '') {
+                        $recipientUuid = null;
+                    }
                     $entry = [
-                        'user_id' => isset($recipient['receiver_id']) ? (int)$recipient['receiver_id'] : null,
+                        'user_id' => $recipientUuid,
+                        'uuid' => $recipientUuid,
+                        'legacy_user_id' => isset($recipient['receiver_id']) ? (int)$recipient['receiver_id'] : null,
                         'username' => $recipient['username'] ?? null,
+                        'email' => $recipient['email'] ?? null,
+                        'status' => $recipient['status'] ?? null,
+                        'is_admin' => isset($recipient['is_admin']) ? (bool)$recipient['is_admin'] : null,
                         'message_id' => isset($recipient['id']) ? (int)$recipient['id'] : null,
                         'read' => (bool)($recipient['is_read'] ?? false),
                     ];
@@ -1174,7 +1183,8 @@ $auditPayload = [
                     $startTime,
                     $endTime,
                     $messageIds,
-                    $contentHash
+                    $contentHash,
+                    false
                 );
 
                 $deliverable = [];
@@ -1434,13 +1444,23 @@ $auditPayload = [
         return [];
     }
 
-    private function loadBroadcastRecipients(string $title, string $start, string $end, array $messageIds = [], ?string $contentHash = null): array
+    private function loadBroadcastRecipients(
+        string $title,
+        string $start,
+        string $end,
+        array $messageIds = [],
+        ?string $contentHash = null,
+        bool $includeUserContext = true
+    ): array
     {
         try {
+            $userColumns = $includeUserContext
+                ? 'u.uuid, u.username, u.email, u.status, u.is_admin'
+                : 'u.username, u.email';
             $ids = array_values(array_filter(array_map('intval', $messageIds), static fn(int $value): bool => $value > 0));
             if (!empty($ids)) {
                 $placeholders = implode(',', array_fill(0, count($ids), '?'));
-                $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username, u.email FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
+                $sql = 'SELECT m.id, m.receiver_id, m.is_read, ' . $userColumns . ' FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
                 $stmt = $this->db->prepare($sql);
                 if (!$stmt) {
                     return [];
@@ -1452,7 +1472,7 @@ $auditPayload = [
                 return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
             }
 
-            $sql = 'SELECT m.id, m.receiver_id, m.is_read, u.username, u.email FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
+            $sql = 'SELECT m.id, m.receiver_id, m.is_read, ' . $userColumns . ' FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
             $stmt = $this->db->prepare($sql);
             if (!$stmt) {
                 return [];
