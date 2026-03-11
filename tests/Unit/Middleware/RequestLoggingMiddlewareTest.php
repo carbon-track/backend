@@ -101,11 +101,16 @@ class RequestLoggingMiddlewareTest extends TestCase
         $systemLog->expects($this->once())
             ->method('log')
             ->with($this->callback(function (array $context): bool {
-                return ($context['request_id'] ?? null) === '123e4567-e89b-12d3-a456-426614174000';
+                return ($context['request_id'] ?? null) === '123e4567-e89b-12d3-a456-426614174000'
+                    && ($context['user_id'] ?? null) === 42
+                    && ($context['user_uuid'] ?? null) === '550e8400-e29b-41d4-a716-446655440042';
             }));
 
         $authService = $this->createMock(AuthService::class);
-        $authService->method('getCurrentUser')->willReturn(['id' => 42]);
+        $authService->method('getCurrentUser')->willReturn([
+            'id' => 42,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440042',
+        ]);
         $logger = $this->createMock(Logger::class);
 
         $middleware = new RequestLoggingMiddleware($systemLog, $authService, $logger);

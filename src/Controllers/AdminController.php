@@ -15,6 +15,7 @@ use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Support\Uuid;
 use PDO;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -70,6 +71,12 @@ class AdminController
             $search   = $rawSearch !== null ? trim((string)$rawSearch) : '';
             $status   = trim((string)($params['status'] ?? ''));
             $schoolId = (int)($params['school_id'] ?? 0);
+            $userUuid = '';
+            if (isset($params['user_uuid']) && is_string($params['user_uuid'])) {
+                $userUuid = trim((string) $params['user_uuid']);
+            } elseif (isset($params['userUuid']) && is_string($params['userUuid'])) {
+                $userUuid = trim((string) $params['userUuid']);
+            }
             $isAdminParam = $params['is_admin'] ?? null;
             if ($isAdminParam === null && isset($params['role'])) {
                 $role = strtolower(trim((string)$params['role']));
@@ -93,13 +100,18 @@ class AdminController
             $where = ['u.deleted_at IS NULL'];
             $queryParams = [];
             if ($search !== '') {
-                $where[] = '(u.username LIKE :search_username OR u.email LIKE :search_email)';
+                $where[] = '(u.username LIKE :search_username OR u.email LIKE :search_email OR u.uuid LIKE :search_uuid)';
                 $queryParams['search_username'] = "%{$search}%";
                 $queryParams['search_email'] = "%{$search}%";
+                $queryParams['search_uuid'] = "%{$search}%";
             }
             if ($status !== '') {
                 $where[] = 'u.status = :status';
                 $queryParams['status'] = $status;
+            }
+            if ($userUuid !== '' && Uuid::isValid($userUuid)) {
+                $where[] = 'u.uuid = :user_uuid';
+                $queryParams['user_uuid'] = strtolower($userUuid);
             }
             if ($schoolId > 0) {
                 $where[] = 'u.school_id = :school_id';
@@ -277,21 +289,38 @@ $sql = "
 
     public function getUserBadges(Request $request, Response $response, array $args): Response
     {
+        return $this->getUserBadgesForTarget($request, $response, $args);
+    }
+
+    public function getUserBadgesByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->getUserBadgesForTarget($request, $response, $args);
+    }
+
+    public function getUserOverview(Request $request, Response $response, array $args): Response
+    {
+        return $this->getUserOverviewForTarget($request, $response, $args);
+    }
+
+    public function getUserOverviewByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->getUserOverviewForTarget($request, $response, $args);
+    }
+
+    private function getUserBadgesForTarget(Request $request, Response $response, array $args): Response
+    {
         try {
             $admin = $this->authService->getCurrentUser($request);
             if (!$admin || !$this->authService->isAdminUser($admin)) {
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $userId = (int) ($args['id'] ?? 0);
-            if ($userId <= 0) {
-                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
-
-            $userRow = $this->loadUserRow($userId);
-            if (!$userRow) {
-                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
-            }
+            $userId = $target['user']['id'];
+            $userRow = $target['user'];
 
             $query = $request->getQueryParams();
             $includeRevoked = !empty($query['include_revoked']) && filter_var($query['include_revoked'], FILTER_VALIDATE_BOOLEAN);
@@ -310,7 +339,7 @@ $sql = "
         }
     }
 
-    public function getUserOverview(Request $request, Response $response, array $args): Response
+    private function getUserOverviewForTarget(Request $request, Response $response, array $args): Response
     {
         try {
             $admin = $this->authService->getCurrentUser($request);
@@ -318,15 +347,12 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $userId = (int) ($args['id'] ?? 0);
-            if ($userId <= 0) {
-                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
-
-            $userRow = $this->loadUserRow($userId);
-            if (!$userRow) {
-                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
-            }
+            $userId = $target['user']['id'];
+            $userRow = $target['user'];
 
             $metrics = $this->badgeService->compileUserMetrics($userId);
             $badgePayload = $this->buildUserBadgePayload($userId, true);
@@ -338,7 +364,11 @@ $sql = "
                   'recent_badges' => array_slice($badgePayload['items'], 0, 5),
                   'checkin_stats' => $checkinStats,
                   'passkey_summary' => $this->getUserPasskeySummary((string) ($userRow['uuid'] ?? '')),
-                  'recent_security_activity' => $this->getRecentSecurityActivity($userId, 10),
+                  'recent_security_activity' => $this->getRecentSecurityActivity(
+                      $userId,
+                      isset($userRow['uuid']) ? (string) $userRow['uuid'] : null,
+                      10
+                  ),
               ];
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);
@@ -487,6 +517,11 @@ $sql = "
             if (!empty($params['user_id'])) {
                 $filters['user_id'] = (int)$params['user_id'];
             }
+            if (!empty($params['user_uuid']) && is_string($params['user_uuid']) && Uuid::isValid(trim((string) $params['user_uuid']))) {
+                $filters['user_uuid'] = strtolower(trim((string) $params['user_uuid']));
+            } elseif (!empty($params['userUuid']) && is_string($params['userUuid']) && Uuid::isValid(trim((string) $params['userUuid']))) {
+                $filters['user_uuid'] = strtolower(trim((string) $params['userUuid']));
+            }
             if (!empty($params['operation_category'])) {
                 $filters['category'] = trim($params['operation_category']);
             }
@@ -536,23 +571,29 @@ $sql = "
      */
     public function updateUser(Request $request, Response $response, array $args): Response
     {
+        return $this->updateUserForTarget($request, $response, $args);
+    }
+
+    public function updateUserByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->updateUserForTarget($request, $response, $args);
+    }
+
+    private function updateUserForTarget(Request $request, Response $response, array $args): Response
+    {
         try {
             $admin = $this->authService->getCurrentUser($request);
             if (!$admin || !$this->authService->isAdminUser($admin)) {
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
-            $userId = (int)($args['id'] ?? 0);
-            if ($userId <= 0) {
-                return $this->jsonResponse($response, ['error' => 'Invalid user id'], 400);
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
+            $userId = $target['user']['id'];
+            $userRow = $target['user'];
 
             $payload = $request->getParsedBody() ?? [];
-            $isAdmin  = array_key_exists('is_admin', $payload) ? (int)!!$payload['is_admin'] : null;
-            $status   = array_key_exists('status', $payload) ? trim((string)$payload['status']) : null;
-            $groupId  = array_key_exists('group_id', $payload) ? $payload['group_id'] : null;
-            $quotaOverride = array_key_exists('quota_override', $payload) ? $payload['quota_override'] : null;
-            $adminNotes = array_key_exists('admin_notes', $payload) ? $payload['admin_notes'] : null;
-
             $sets = [];
             $params = ['id' => $userId];
 
@@ -626,11 +667,158 @@ $sql = "
                 $userId,
                 null,
                 null,
-                ['fields' => array_keys($params)]
+                [
+                    'fields' => array_keys($params),
+                    'user_uuid' => $userRow['uuid'] ?? null,
+                ]
             );
 
             return $this->jsonResponse($response, ['success' => true]);
         } catch (\Exception $e) {
+            $this->logExceptionWithFallback($e, $request);
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    public function deleteUser(Request $request, Response $response, array $args): Response
+    {
+        return $this->deleteUserForTarget($request, $response, $args);
+    }
+
+    public function deleteUserByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->deleteUserForTarget($request, $response, $args);
+    }
+
+    private function deleteUserForTarget(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
+            }
+            $userRow = $target['user'];
+            $userId = $userRow['id'];
+
+            if ((int) ($admin['id'] ?? 0) === $userId) {
+                return $this->jsonResponse($response, ['error' => 'Cannot delete current admin user'], 400);
+            }
+
+            $stmt = $this->db->prepare(
+                'UPDATE users SET deleted_at = :deleted_at, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL'
+            );
+            $timestamp = date('Y-m-d H:i:s');
+            $stmt->execute([
+                'deleted_at' => $timestamp,
+                'updated_at' => $timestamp,
+                'id' => $userId,
+            ]);
+
+            if ($stmt->rowCount() < 1) {
+                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+            }
+
+            $this->auditLog->logDataChange(
+                'admin',
+                'user_delete',
+                $admin['id'] ?? null,
+                'admin',
+                'users',
+                $userId,
+                $userRow,
+                ['deleted_at' => $timestamp],
+                ['user_uuid' => $userRow['uuid'] ?? null]
+            );
+
+            return $this->jsonResponse($response, ['success' => true]);
+        } catch (\Throwable $e) {
+            $this->logExceptionWithFallback($e, $request);
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
+    public function adjustUserPoints(Request $request, Response $response, array $args): Response
+    {
+        return $this->adjustUserPointsForTarget($request, $response, $args);
+    }
+
+    public function adjustUserPointsByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->adjustUserPointsForTarget($request, $response, $args);
+    }
+
+    private function adjustUserPointsForTarget(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
+            }
+            $userRow = $target['user'];
+            $userId = $userRow['id'];
+
+            $payload = $request->getParsedBody();
+            $data = is_array($payload) ? $payload : [];
+            $delta = isset($data['delta']) && is_numeric($data['delta']) ? (float) $data['delta'] : null;
+            $reason = isset($data['reason']) ? trim((string) $data['reason']) : null;
+            if ($delta === null || $delta == 0.0) {
+                return $this->jsonResponse($response, ['error' => 'Invalid points delta'], 400);
+            }
+
+            $updatedAt = date('Y-m-d H:i:s');
+            $stmt = $this->db->prepare(
+                'UPDATE users SET points = COALESCE(points, 0) + :delta, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL'
+            );
+            $stmt->execute([
+                'delta' => $delta,
+                'updated_at' => $updatedAt,
+                'id' => $userId,
+            ]);
+
+            if ($stmt->rowCount() < 1) {
+                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+            }
+
+            $freshUser = $this->loadUserRow($userId);
+            if ($freshUser === null) {
+                return $this->jsonResponse($response, ['error' => 'User not found'], 404);
+            }
+
+            $this->auditLog->logDataChange(
+                'admin',
+                'user_points_adjusted',
+                $admin['id'] ?? null,
+                'admin',
+                'users',
+                $userId,
+                ['points' => $userRow['points'] ?? null],
+                ['points' => $freshUser['points'] ?? null],
+                [
+                    'reason' => $reason,
+                    'delta' => $delta,
+                    'user_uuid' => $userRow['uuid'] ?? null,
+                ]
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'user' => $freshUser,
+                    'delta' => $delta,
+                    'reason' => $reason,
+                ],
+            ]);
+        } catch (\Throwable $e) {
             $this->logExceptionWithFallback($e, $request);
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
@@ -689,7 +877,53 @@ $sql = "
         return $badge;
     }
 
+    /**
+     * @param array<string, mixed> $args
+     * @return array{user: array<string, mixed>|null, error: string|null, status: int}
+     */
+    private function resolveUserTarget(array $args): array
+    {
+        if (isset($args['uuid'])) {
+            $userUuid = trim((string) $args['uuid']);
+            if ($userUuid === '' || !Uuid::isValid($userUuid)) {
+                return ['user' => null, 'error' => 'Invalid user uuid', 'status' => 400];
+            }
+
+            $user = $this->loadUserRowByUuid($userUuid);
+            if ($user === null) {
+                return ['user' => null, 'error' => 'User not found', 'status' => 404];
+            }
+
+            return ['user' => $user, 'error' => null, 'status' => 200];
+        }
+
+        $userId = isset($args['id']) ? (int) $args['id'] : 0;
+        if ($userId <= 0) {
+            return ['user' => null, 'error' => 'Invalid user id', 'status' => 400];
+        }
+
+        $user = $this->loadUserRow($userId);
+        if ($user === null) {
+            return ['user' => null, 'error' => 'User not found', 'status' => 404];
+        }
+
+        return ['user' => $user, 'error' => null, 'status' => 200];
+    }
+
     private function loadUserRow(int $userId): ?array
+    {
+        return $this->loadUserRowByColumn('u.id = :value', ['value' => $userId]);
+    }
+
+    private function loadUserRowByUuid(string $userUuid): ?array
+    {
+        return $this->loadUserRowByColumn('u.uuid = :value', ['value' => strtolower($userUuid)]);
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    private function loadUserRowByColumn(string $whereClause, array $params): ?array
     {
         $lastLoginSelect = $this->buildLastLoginSelect('u');
         $stmt = $this->db->prepare(
@@ -716,15 +950,17 @@ $sql = "
                 WHERE disabled_at IS NULL
                 GROUP BY user_uuid
              ) pk ON pk.user_uuid = u.uuid
-             WHERE u.id = :id AND u.deleted_at IS NULL
+             WHERE ' . $whereClause . ' AND u.deleted_at IS NULL
              LIMIT 1'
         );
-        $stmt->execute(['id' => $userId]);
+        $stmt->execute($params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
             return null;
         }
         $profileFields = $this->userProfileViewService->buildProfileFields($row);
+        $row['id'] = (int) ($row['id'] ?? 0);
+        $row['uuid'] = isset($row['uuid']) ? strtolower((string) $row['uuid']) : null;
         $row['school_id'] = $profileFields['school_id'];
         $row['school_name'] = $profileFields['school_name'];
         $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
@@ -764,18 +1000,31 @@ $sql = "
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function getRecentSecurityActivity(int $userId, int $limit): array
+    private function getRecentSecurityActivity(int $userId, ?string $userUuid, int $limit): array
     {
         $placeholders = implode(', ', array_fill(0, count(self::SECURITY_ACTIVITY_ACTIONS), '?'));
-        $stmt = $this->db->prepare(
-            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
-             FROM audit_logs
-             WHERE user_id = ?
-               AND action IN ({$placeholders})
-             ORDER BY created_at DESC, id DESC
-             LIMIT ?"
-        );
-        $stmt->execute(array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+        $normalizedUuid = is_string($userUuid) && trim($userUuid) !== '' ? strtolower(trim($userUuid)) : null;
+        if ($normalizedUuid !== null) {
+            $stmt = $this->db->prepare(
+                "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+                 FROM audit_logs
+                 WHERE (user_uuid = ? OR (user_uuid IS NULL AND user_id = ?))
+                   AND action IN ({$placeholders})
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT ?"
+            );
+            $stmt->execute(array_merge([$normalizedUuid, $userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+        } else {
+            $stmt = $this->db->prepare(
+                "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+                 FROM audit_logs
+                 WHERE user_id = ?
+                   AND action IN ({$placeholders})
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT ?"
+            );
+            $stmt->execute(array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+        }
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
         return array_map([$this, 'normalizeSecurityActivityRow'], $rows);

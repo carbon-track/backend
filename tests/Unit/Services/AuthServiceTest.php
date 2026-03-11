@@ -7,7 +7,9 @@ namespace CarbonTrack\Tests\Unit\Services;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use Firebase\JWT\JWT;
 use PHPUnit\Framework\TestCase;
+use PDO;
 
 class AuthServiceTest extends TestCase
 {
@@ -86,6 +88,84 @@ class AuthServiceTest extends TestCase
         $this->assertSame($user['email'], $payload['email']);
         $this->assertSame('user', $payload['role']);
         $this->assertSame($user['uuid'], $payload['user']['uuid']);
+    }
+
+    public function testGenerateJwtTokenUsesUuidAsSubjectWhenAvailable(): void
+    {
+        $user = [
+            'id' => 9,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440009',
+            'username' => 'subject-user',
+            'email' => 'subject@example.com',
+            'is_admin' => false,
+        ];
+
+        $token = $this->authService->generateJwtToken($user);
+        $decoded = $this->authService->validateJwtToken($token);
+
+        $this->assertIsArray($decoded);
+        $this->assertSame($user['uuid'], $decoded['sub']);
+    }
+
+    public function testValidateTokenResolvesLocalUserIdFromUuidSubject(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $pdo->exec(
+            "INSERT INTO users (uuid, username, email, password, status, points, is_admin, created_at, updated_at)
+             VALUES ('550e8400-e29b-41d4-a716-4466554400aa', 'uuid-user', 'uuid-user@example.com', 'hash', 'active', 0, 0, '2026-03-11 00:00:00', '2026-03-11 00:00:00')"
+        );
+
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        $token = JWT::encode([
+            'iss' => 'carbontrack',
+            'aud' => 'carbontrack-users',
+            'iat' => time(),
+            'exp' => time() + 3600,
+            'sub' => '550e8400-e29b-41d4-a716-4466554400aa',
+            'user' => [
+                'uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
+                'username' => 'uuid-user',
+                'email' => 'uuid-user@example.com',
+                'is_admin' => false,
+            ],
+        ], $this->jwtSecret, 'HS256');
+
+        $payload = $service->validateToken($token);
+
+        $this->assertSame('550e8400-e29b-41d4-a716-4466554400aa', $payload['uuid']);
+        $this->assertSame(1, $payload['user_id']);
+        $this->assertSame(1, $payload['user']['id']);
+    }
+
+    public function testValidateTokenProvisionLocalUserWhenUuidOnlyIdentityArrives(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        $token = JWT::encode([
+            'iss' => 'carbontrack',
+            'aud' => 'carbontrack-users',
+            'iat' => time(),
+            'exp' => time() + 3600,
+            'sub' => '550e8400-e29b-41d4-a716-4466554400ab',
+            'user' => [
+                'uuid' => '550e8400-e29b-41d4-a716-4466554400ab',
+                'username' => 'new-sso-user',
+                'email' => 'new-sso-user@example.com',
+                'is_admin' => false,
+            ],
+        ], $this->jwtSecret, 'HS256');
+
+        $payload = $service->validateToken($token);
+
+        $this->assertSame('550e8400-e29b-41d4-a716-4466554400ab', $payload['uuid']);
+        $this->assertIsInt($payload['user_id']);
+        $this->assertGreaterThan(0, $payload['user_id']);
+        $this->assertSame(1, (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn());
+        $this->assertSame('new-sso-user', $pdo->query('SELECT username FROM users LIMIT 1')->fetchColumn());
     }
 
     public function testValidateJwtTokenWithInvalidToken(): void
@@ -196,6 +276,30 @@ class AuthServiceTest extends TestCase
         $service->setDatabase($pdo);
 
         $this->assertTrue($service->isAccountLocked('locked-user', '127.0.0.1'));
+    }
+
+    private function makeSqliteUsersPdo(): PDO
+    {
+        $pdo = new PDO('sqlite::memory:');
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->exec(
+            'CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT,
+                username TEXT UNIQUE,
+                email TEXT UNIQUE,
+                password TEXT,
+                status TEXT,
+                points INTEGER DEFAULT 0,
+                is_admin INTEGER DEFAULT 0,
+                deleted_at TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )'
+        );
+
+        return $pdo;
     }
 }
 

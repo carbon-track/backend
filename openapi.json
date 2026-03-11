@@ -8319,6 +8319,15 @@
             }
           },
           {
+            "name": "user_uuid",
+            "in": "query",
+            "description": "按稳定用户 UUID 精确筛选，适用于跨站同步后的用户定向。userUuid 为前端兼容别名。",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
             "name": "sort",
             "in": "query",
             "description": "指定排序方式。",
@@ -8392,6 +8401,7 @@
           "User"
         ],
         "summary": "更新用户 (管理员)",
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -8432,6 +8442,7 @@
           "User"
         ],
         "summary": "删除用户 (管理员)",
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -8444,6 +8455,80 @@
             "required": true,
             "schema": {
               "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "404": {
+            "description": "用户不存在"
+          }
+        }
+      }
+    },
+    "/admin/users/by-uuid/{uuid}": {
+      "put": {
+        "tags": [
+          "Admin",
+          "User"
+        ],
+        "summary": "按 UUID 更新用户 (管理员)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "404": {
+            "description": "用户不存在"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin",
+          "User"
+        ],
+        "summary": "按 UUID 删除用户 (管理员)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           }
         ],
@@ -10020,6 +10105,7 @@
         ],
         "summary": "调整用户积分",
         "description": "管理员调整指定用户的积分余额，并返回调整后的结果。",
+        "deprecated": true,
         "security": [
           {
             "bearerAuth": []
@@ -10061,6 +10147,69 @@
           },
           "404": {
             "description": "用户不存在"
+          }
+        }
+      }
+    },
+    "/admin/users/by-uuid/{uuid}/points/adjust": {
+      "post": {
+        "tags": [
+          "Admin",
+          "User"
+        ],
+        "summary": "按 UUID 调整用户积分",
+        "description": "管理员按稳定用户 UUID 调整指定用户的积分余额，并返回调整后的结果。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjustUserPointsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "积分调整成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdjustUserPointsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数不合法。"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
           }
         }
       }
@@ -12066,6 +12215,7 @@
     "/admin/users/{id}/overview": {
       "get": {
         "summary": "Get user overview with metrics",
+        "deprecated": true,
         "tags": [
           "Admin - Users"
         ],
@@ -12108,6 +12258,7 @@
     "/admin/users/{id}/badges": {
       "get": {
         "summary": "List badges for a specific user (admin)",
+        "deprecated": true,
         "tags": [
           "Admin - Users"
         ],
@@ -12118,6 +12269,99 @@
             "required": true,
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回指定用户的徽章列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserBadgesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/admin/users/by-uuid/{uuid}/overview": {
+      "get": {
+        "summary": "Get user overview with metrics by UUID",
+        "tags": [
+          "Admin - Users"
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserOverviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/admin/users/by-uuid/{uuid}/badges": {
+      "get": {
+        "summary": "List badges for a specific user by UUID (admin)",
+        "tags": [
+          "Admin - Users"
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           },
           {
@@ -13928,13 +14172,13 @@
         "properties": {
           "id": {
             "type": "integer",
-            "description": "用户ID"
+            "description": "用户在当前站点内的本地 UID，仅用于站内兼容逻辑。"
           },
           "uuid": {
             "type": "string",
             "format": "uuid",
             "nullable": true,
-            "description": "用户UUID"
+            "description": "用户的稳定全局 UUID，作为跨站同步与 SSO 的主身份标识。"
           },
           "username": {
             "type": "string",

@@ -1179,16 +1179,16 @@ class UserControllerTest extends TestCase
         TestSchemaBuilder::init($pdo);
 
         $insert = $pdo->prepare(
-            'INSERT INTO audit_logs (user_id, actor_type, action, status, data, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
-        $insert->execute([1, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-1 hour'))]);
-        $insert->execute([1, 'user', 'passkey_label_updated', 'success', json_encode(['old_label' => 'Old', 'new_label' => 'New', 'passkey_id' => 3]), gmdate('Y-m-d H:i:s', strtotime('-30 minutes'))]);
-        $insert->execute([1, 'user', 'passkey_list_viewed', 'success', json_encode(['count' => 2]), gmdate('Y-m-d H:i:s', strtotime('-20 minutes'))]);
-        $insert->execute([2, 'user', 'logout', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-10 minutes'))]);
+        $insert->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-1 hour'))]);
+        $insert->execute([null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_label_updated', 'success', json_encode(['old_label' => 'Old', 'new_label' => 'New', 'passkey_id' => 3]), gmdate('Y-m-d H:i:s', strtotime('-30 minutes'))]);
+        $insert->execute([1, null, 'user', 'passkey_list_viewed', 'success', json_encode(['count' => 2]), gmdate('Y-m-d H:i:s', strtotime('-20 minutes'))]);
+        $insert->execute([2, null, 'user', 'logout', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-10 minutes'))]);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
-        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'uuid' => '550e8400-e29b-41d4-a716-4466554400aa']);
 
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $audit->expects($this->once())
@@ -1249,15 +1249,15 @@ class UserControllerTest extends TestCase
         TestSchemaBuilder::init($pdo);
 
         $insert = $pdo->prepare(
-            'INSERT INTO audit_logs (user_id, actor_type, action, status, data, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
-        $insert->execute([1, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-45 days'))]);
-        $insert->execute([1, 'user', 'passkey_login', 'success', json_encode(['label' => 'Phone']), gmdate('Y-m-d H:i:s', strtotime('-3 days'))]);
-        $insert->execute([1, 'user', 'password_change', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $insert->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-45 days'))]);
+        $insert->execute([null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_login', 'success', json_encode(['label' => 'Phone']), gmdate('Y-m-d H:i:s', strtotime('-3 days'))]);
+        $insert->execute([1, null, 'user', 'password_change', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
-        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'uuid' => '550e8400-e29b-41d4-a716-4466554400aa']);
 
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $audit->expects($this->once())

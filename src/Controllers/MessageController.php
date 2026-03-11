@@ -1707,12 +1707,13 @@ $auditPayload = [
             }
         }
         if (empty($fields)) {
-            $fields = ['username', 'email', 'school', 'location', 'school_name'];
+            $fields = ['username', 'email', 'uuid', 'school', 'location', 'school_name'];
         }
 
         $fieldMap = [
             'username' => 'u.username',
             'email' => 'u.email',
+            'uuid' => 'u.uuid',
             'school' => 's.name',
             'location' => 'u.region_code',
             'school_name' => 's.name',
@@ -1804,7 +1805,7 @@ $auditPayload = [
 
         $conditions = implode(' AND ', $where);
 
-        $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name '
+        $sql = 'SELECT u.id, u.uuid, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name '
             . 'FROM users u '
             . 'LEFT JOIN schools s ON s.id = u.school_id '
             . 'WHERE ' . $conditions . ' '
@@ -1866,6 +1867,7 @@ $auditPayload = [
 
         return [
             'id' => isset($row['id']) ? (int)$row['id'] : null,
+            'uuid' => $row['uuid'] ?? null,
             'username' => $row['username'] ?? null,
             'email' => $row['email'] ?? null,
             'school' => $legacyDisplayFields['school'],

@@ -56,6 +56,7 @@ CREATE TABLE `admin_operations` (
 CREATE TABLE `audit_logs` (
   `id` int(11) NOT NULL,
   `user_id` int(11) DEFAULT NULL,
+  `user_uuid` char(36) DEFAULT NULL,
   `actor_type` enum('user','admin','system') NOT NULL DEFAULT 'user',
   `action` varchar(100) NOT NULL COMMENT 'Specific action name (e.g., user_login, admin_user_update)',
   `data` longtext COMMENT 'Original request/response data as JSON',
@@ -683,6 +684,7 @@ CREATE TABLE `system_logs` (
   `path` varchar(255) DEFAULT NULL,
   `status_code` int(11) DEFAULT NULL,
   `user_id` int(11) DEFAULT NULL,
+  `user_uuid` char(36) DEFAULT NULL,
   `ip_address` varchar(45) DEFAULT NULL,
   `user_agent` varchar(512) DEFAULT NULL,
   `duration_ms` decimal(10,2) DEFAULT NULL,
@@ -821,7 +823,7 @@ CREATE TABLE `user_usage_stats` (
 --
 DROP TABLE IF EXISTS `admin_operations`;
 
-CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `admin_operations`  AS  select `al`.`id` AS `id`,`al`.`user_id` AS `user_id`,`al`.`actor_type` AS `actor_type`,`al`.`action` AS `action`,`al`.`data` AS `data`,`al`.`old_data` AS `old_data`,`al`.`new_data` AS `new_data`,`al`.`affected_table` AS `affected_table`,`al`.`affected_id` AS `affected_id`,`al`.`status` AS `status`,`al`.`response_code` AS `response_code`,`al`.`session_id` AS `session_id`,`al`.`referrer` AS `referrer`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`ip_address` AS `ip_address`,`al`.`user_agent` AS `user_agent`,`al`.`request_method` AS `request_method`,`al`.`endpoint` AS `endpoint`,`al`.`created_at` AS `created_at`,`u`.`username` AS `admin_username`,`u`.`email` AS `admin_email` from (`audit_logs` `al` left join `users` `u` on((`al`.`user_id` = `u`.`id`))) where (`al`.`actor_type` = 'admin') order by `al`.`created_at` desc ;
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `admin_operations`  AS  select `al`.`id` AS `id`,`al`.`user_id` AS `user_id`,`al`.`user_uuid` AS `user_uuid`,`al`.`actor_type` AS `actor_type`,`al`.`action` AS `action`,`al`.`data` AS `data`,`al`.`old_data` AS `old_data`,`al`.`new_data` AS `new_data`,`al`.`affected_table` AS `affected_table`,`al`.`affected_id` AS `affected_id`,`al`.`status` AS `status`,`al`.`response_code` AS `response_code`,`al`.`session_id` AS `session_id`,`al`.`referrer` AS `referrer`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`ip_address` AS `ip_address`,`al`.`user_agent` AS `user_agent`,`al`.`request_method` AS `request_method`,`al`.`endpoint` AS `endpoint`,`al`.`created_at` AS `created_at`,`u`.`username` AS `admin_username`,`u`.`email` AS `admin_email` from (`audit_logs` `al` left join `users` `u` on((`al`.`user_id` = `u`.`id`))) where (`al`.`actor_type` = 'admin') order by `al`.`created_at` desc ;
 
 -- --------------------------------------------------------
 
@@ -830,7 +832,7 @@ CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW 
 --
 DROP TABLE IF EXISTS `recent_audit_activities`;
 
-CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `recent_audit_activities`  AS  select `al`.`id` AS `id`,`al`.`actor_type` AS `actor_type`,`al`.`user_id` AS `user_id`,`al`.`action` AS `action`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`status` AS `status`,`al`.`ip_address` AS `ip_address`,`al`.`created_at` AS `created_at` from `audit_logs` `al` where (`al`.`created_at` >= (now() - interval 7 day)) order by `al`.`created_at` desc ;
+CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `recent_audit_activities`  AS  select `al`.`id` AS `id`,`al`.`actor_type` AS `actor_type`,`al`.`user_id` AS `user_id`,`al`.`user_uuid` AS `user_uuid`,`al`.`action` AS `action`,`al`.`operation_category` AS `operation_category`,`al`.`operation_subtype` AS `operation_subtype`,`al`.`change_type` AS `change_type`,`al`.`status` AS `status`,`al`.`ip_address` AS `ip_address`,`al`.`created_at` AS `created_at` from `audit_logs` `al` where (`al`.`created_at` >= (now() - interval 7 day)) order by `al`.`created_at` desc ;
 
 --
 -- 转储表的索引
@@ -842,6 +844,7 @@ CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW 
 ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
+  ADD KEY `idx_audit_logs_user_uuid` (`user_uuid`),
   ADD KEY `idx_audit_logs_created_at` (`created_at`),
   ADD KEY `idx_audit_logs_actor_type` (`actor_type`),
   ADD KEY `idx_audit_logs_endpoint` (`endpoint`(191)),
@@ -1065,6 +1068,7 @@ ALTER TABLE `system_logs`
   ADD KEY `idx_system_logs_status_code` (`status_code`),
   ADD KEY `idx_system_logs_method` (`method`),
   ADD KEY `idx_system_logs_user_id` (`user_id`),
+  ADD KEY `idx_system_logs_user_uuid` (`user_uuid`),
   ADD KEY `idx_system_logs_path` (`path`(100));
 
 --
