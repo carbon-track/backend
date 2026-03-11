@@ -24,7 +24,13 @@ class AuthMiddlewareTest extends TestCase
             'user_id' => 1,
             'uuid' => '550e8400-e29b-41d4-a716-446655440001',
             'email' => 'a@b.com',
-            'role' => 'user'
+            'role' => 'user',
+            'user' => [
+                'id' => 1,
+                'uuid' => '550e8400-e29b-41d4-a716-446655440001',
+                'email' => 'a@b.com',
+                'is_admin' => false,
+            ],
         ]);
         $audit->expects($this->once())->method('log');
 
@@ -37,6 +43,10 @@ class AuthMiddlewareTest extends TestCase
                 TestCase::assertSame('550e8400-e29b-41d4-a716-446655440001', $request->getAttribute('user_uuid'));
                 TestCase::assertSame('a@b.com', $request->getAttribute('user_email'));
                 TestCase::assertSame('user', $request->getAttribute('user_role'));
+                TestCase::assertSame(
+                    '550e8400-e29b-41d4-a716-446655440001',
+                    $request->getAttribute('authenticated_user')['uuid'] ?? null
+                );
 
                 $resp = new \Slim\Psr7\Response();
                 $resp->getBody()->write('ok');

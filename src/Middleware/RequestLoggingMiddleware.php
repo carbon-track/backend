@@ -47,9 +47,13 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         $skip = $this->shouldSkip($path);
 
         $userId = null;
+        $userUuid = null;
         try {
             $user = $this->authService->getCurrentUser($request);
-            if ($user) { $userId = $user['id'] ?? null; }
+            if ($user) {
+                $userId = $user['id'] ?? null;
+                $userUuid = $user['uuid'] ?? null;
+            }
         } catch (\Throwable $e) {
             // ignore auth errors for logging middleware
         }
@@ -84,6 +88,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
                 'path' => $path,
                 'status_code' => $response->getStatusCode(),
                 'user_id' => $userId,
+                'user_uuid' => $userUuid,
                 'ip_address' => $ipAddress,
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'duration_ms' => round($duration, 2),

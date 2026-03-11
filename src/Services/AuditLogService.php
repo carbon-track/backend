@@ -23,6 +23,8 @@ class AuditLogService
     private Logger $logger;
     private ?int $lastInsertId = null;
     private int $maxDataLength = 10000; // JSON 字段截断长度
+    /** @var array<int, string|null> */
+    private array $userUuidCache = [];
     private array $sensitiveFields = [
         'password','pass','token','authorization','auth','secret',
         'api_key','access_token','refresh_token','session_id','credit_card'
@@ -124,18 +126,20 @@ class AuditLogService
 
             $stmt = $this->db->prepare(
                 "INSERT INTO audit_logs (
-                    user_id, actor_type, action, data, ip_address, user_agent,
+                    user_id, user_uuid, actor_type, action, data, ip_address, user_agent,
                     request_method, endpoint, old_data, new_data, affected_table,
                     affected_id, status, response_code, session_id, referrer,
                     operation_category, operation_subtype, change_type, request_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             );
 
             // request_id 优先来自显式字段，其次全局 $_SERVER（由中间件注入）
             $requestId = $data['request_id'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null);
+            $userUuid = $this->resolveUserUuid($data);
 
             $ok = $stmt->execute([
                 $data['user_id'] ?? null,
+                $userUuid,
                 $data['actor_type'] ?? 'user',
                 $data['action'],
                 $data['data'] ?? null,
@@ -202,6 +206,7 @@ class AuditLogService
             'action' => $action,
             'operation_category' => $category,
             'user_id' => $userId,
+            'user_uuid' => $context['user_uuid'] ?? ($context['uuid'] ?? null),
             'actor_type' => $actorType,
             'affected_table' => $table,
             'affected_id' => $affectedId,
@@ -283,8 +288,9 @@ class AuditLogService
     public function getUserLogs(int $userId, int $limit = 50): array
     {
         try {
-            $stmt = $this->db->prepare('SELECT * FROM audit_logs WHERE user_id = :uid ORDER BY created_at DESC LIMIT :lim');
+            $stmt = $this->db->prepare('SELECT * FROM audit_logs WHERE user_id = :uid OR user_uuid = :user_uuid ORDER BY created_at DESC LIMIT :lim');
             $stmt->bindValue(':uid', $userId, \PDO::PARAM_INT);
+            $stmt->bindValue(':user_uuid', $this->lookupUserUuidById($userId) ?? '', \PDO::PARAM_STR);
             $stmt->bindValue(':lim', $limit, \PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
@@ -334,6 +340,7 @@ class AuditLogService
             $sql = "SELECT * FROM audit_logs WHERE 1=1";
             $params = [];
             if (isset($filters['user_id'])) { $sql .= " AND user_id = ?"; $params[] = $filters['user_id']; }
+            if (isset($filters['user_uuid'])) { $sql .= " AND user_uuid = ?"; $params[] = strtolower((string) $filters['user_uuid']); }
             if (isset($filters['actor_type'])) { $sql .= self::SQL_AND_ACTOR_TYPE; $params[] = $filters['actor_type']; }
             if (isset($filters['category'])) { $sql .= self::SQL_AND_OPERATION_CATEGORY; $params[] = $filters['category']; }
             if (isset($filters['status'])) { $sql .= " AND status = ?"; $params[] = $filters['status']; }
@@ -356,6 +363,7 @@ class AuditLogService
             $sql = "SELECT COUNT(*) FROM audit_logs WHERE 1=1";
             $params = [];
             if (isset($filters['user_id'])) { $sql .= " AND user_id = ?"; $params[] = $filters['user_id']; }
+            if (isset($filters['user_uuid'])) { $sql .= " AND user_uuid = ?"; $params[] = strtolower((string) $filters['user_uuid']); }
             if (isset($filters['actor_type'])) { $sql .= self::SQL_AND_ACTOR_TYPE; $params[] = $filters['actor_type']; }
             if (isset($filters['category'])) { $sql .= self::SQL_AND_OPERATION_CATEGORY; $params[] = $filters['category']; }
             if (isset($filters['status'])) { $sql .= " AND status = ?"; $params[] = $filters['status']; }
@@ -457,6 +465,49 @@ class AuditLogService
         if ($oldData !== null && $newData !== null) return 'update';
         if ($oldData === null && $newData === null) return 'read';
         return 'other';
+    }
+
+    private function resolveUserUuid(array $data): ?string
+    {
+        $explicit = $data['user_uuid'] ?? $data['uuid'] ?? $data['userUuid'] ?? null;
+        if (is_string($explicit)) {
+            $trimmed = strtolower(trim($explicit));
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
+
+        $userId = $data['user_id'] ?? null;
+        if (is_int($userId) || (is_numeric($userId) && (string) (int) $userId === (string) $userId)) {
+            return $this->lookupUserUuidById((int) $userId);
+        }
+
+        return null;
+    }
+
+    private function lookupUserUuidById(int $userId): ?string
+    {
+        if ($userId <= 0) {
+            return null;
+        }
+
+        if (array_key_exists($userId, $this->userUuidCache)) {
+            return $this->userUuidCache[$userId];
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT uuid FROM users WHERE id = :id LIMIT 1');
+            if (!$stmt) {
+                return null;
+            }
+            $stmt->execute(['id' => $userId]);
+            $uuid = $stmt->fetchColumn();
+            $normalized = is_string($uuid) && trim($uuid) !== '' ? strtolower(trim($uuid)) : null;
+            $this->userUuidCache[$userId] = $normalized;
+            return $normalized;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     public function getLastInsertId(): ?int

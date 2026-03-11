@@ -62,7 +62,7 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS message_broadcasts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                audit_log_id INTEGER,\n                system_log_id INTEGER,\n                error_log_ids TEXT,\n                title TEXT NOT NULL,\n                content TEXT NOT NULL,\n                priority TEXT DEFAULT 'normal',\n                scope TEXT DEFAULT 'all',\n                target_count INTEGER DEFAULT 0,\n                sent_count INTEGER DEFAULT 0,\n                invalid_user_ids TEXT,\n                failed_user_ids TEXT,\n                message_ids_snapshot TEXT,\n                message_map_snapshot TEXT,\n                message_id_count INTEGER,\n                content_hash TEXT,\n                email_delivery_snapshot TEXT,\n                filters_snapshot TEXT,\n                meta TEXT,\n                created_by INTEGER,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
             // Only a subset of data is critical for tests; optional columns kept nullable.
-            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                request_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                user_uuid TEXT,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                request_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Login attempts
             "CREATE TABLE IF NOT EXISTS login_attempts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT,\n                ip_address TEXT,\n                success INTEGER,\n                attempted_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Error logs (simplified)
@@ -79,7 +79,7 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS multipart_uploads (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                upload_id TEXT UNIQUE,\n                file_path TEXT NOT NULL,\n                sha256 TEXT,\n                user_id INTEGER NOT NULL,\n                expires_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )"
             ,
             // System logs table for request logging middleware
-            "CREATE TABLE IF NOT EXISTS system_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                method TEXT,\n                path TEXT,\n                status_code INTEGER,\n                user_id INTEGER,\n                ip_address TEXT,\n                user_agent TEXT,\n                duration_ms REAL,\n                request_body TEXT,\n                response_body TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )"
+            "CREATE TABLE IF NOT EXISTS system_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                method TEXT,\n                path TEXT,\n                status_code INTEGER,\n                user_id INTEGER,\n                user_uuid TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                duration_ms REAL,\n                request_body TEXT,\n                response_body TEXT,\n                server_meta TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )"
             ,
             // LLM logs table for audit trails
             "CREATE TABLE IF NOT EXISTS llm_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                actor_type TEXT,\n                actor_id INTEGER,\n                source TEXT,\n                model TEXT,\n                prompt TEXT,\n                response_raw TEXT,\n                response_id TEXT,\n                status TEXT,\n                error_message TEXT,\n                prompt_tokens INTEGER,\n                completion_tokens INTEGER,\n                total_tokens INTEGER,\n                latency_ms REAL,\n                usage_json TEXT,\n                context_json TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
@@ -112,11 +112,11 @@ class TestSchemaBuilder
         self::ensureColumns($pdo, 'user_passkeys', ['user_uuid TEXT']);
         self::ensureColumns($pdo, 'webauthn_challenges', ['user_uuid TEXT']);
         self::ensureColumns($pdo, 'audit_logs', [
-            'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
+            'user_uuid TEXT', 'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
             'referrer TEXT', 'operation_category TEXT', 'operation_subtype TEXT', 'change_type TEXT'
         ]);
-        self::ensureColumns($pdo, 'system_logs', ['server_meta TEXT']);
+        self::ensureColumns($pdo, 'system_logs', ['user_uuid TEXT', 'server_meta TEXT']);
         self::ensureColumns($pdo, 'error_logs', ['request_id TEXT']);
         self::ensureColumns($pdo, 'llm_logs', ['context_json TEXT']);
         self::ensureColumns($pdo, 'points_transactions', [
@@ -140,6 +140,26 @@ class TestSchemaBuilder
                 UPDATE webauthn_challenges
                 SET user_uuid = LOWER((
                     SELECT uuid FROM users WHERE users.id = webauthn_challenges.user_id
+                ))
+                WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
+            ");
+        } catch (\Throwable $e) { /* ignore */ }
+
+        try {
+            $pdo->exec("
+                UPDATE audit_logs
+                SET user_uuid = LOWER((
+                    SELECT uuid FROM users WHERE users.id = audit_logs.user_id
+                ))
+                WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
+            ");
+        } catch (\Throwable $e) { /* ignore */ }
+
+        try {
+            $pdo->exec("
+                UPDATE system_logs
+                SET user_uuid = LOWER((
+                    SELECT uuid FROM users WHERE users.id = system_logs.user_id
                 ))
                 WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
             ");

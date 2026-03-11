@@ -43,16 +43,22 @@ class AuthMiddleware implements MiddlewareInterface
                 ->withAttribute('user_uuid', $payload['uuid'] ?? null)
                 ->withAttribute('user_email', $payload['email'])
                 ->withAttribute('user_role', $payload['role'] ?? 'user')
+                ->withAttribute('authenticated_user', $payload['user'] ?? null)
                 ->withAttribute('token_payload', $payload);
             
             // Log authentication success
             $this->auditLogService->log([
                 'user_id' => $payload['user_id'],
+                'user_uuid' => $payload['uuid'] ?? null,
                 'action' => 'auth_success',
-                'entity_type' => 'auth',
+                'operation_category' => 'authentication',
+                'actor_type' => ($payload['role'] ?? 'user') === 'admin' ? 'admin' : 'user',
+                'status' => 'success',
                 'ip_address' => $this->getClientIp($request),
                 'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'Token authentication successful'
+                'data' => [
+                    'message' => 'Token authentication successful',
+                ],
             ]);
             
             return $handler->handle($request);
@@ -60,10 +66,14 @@ class AuthMiddleware implements MiddlewareInterface
         } catch (\Exception $e) {
             $this->auditLogService->log([
                 'action' => 'auth_failure',
-                'entity_type' => 'auth',
+                'operation_category' => 'authentication',
+                'actor_type' => 'system',
+                'status' => 'failed',
                 'ip_address' => $this->getClientIp($request),
                 'user_agent' => $request->getHeaderLine('User-Agent'),
-                'notes' => 'Token authentication failed: ' . $e->getMessage()
+                'data' => [
+                    'message' => 'Token authentication failed: ' . $e->getMessage(),
+                ],
             ]);
 
             if ($isTesting) {
@@ -85,6 +95,7 @@ class AuthMiddleware implements MiddlewareInterface
                     ->withAttribute('user_uuid', $fallback['uuid'])
                     ->withAttribute('user_email', $fallback['email'])
                     ->withAttribute('user_role', $fallback['role'])
+                    ->withAttribute('authenticated_user', $fallback['user'])
                     ->withAttribute('token_payload', $fallback);
                 return $handler->handle($request);
             }

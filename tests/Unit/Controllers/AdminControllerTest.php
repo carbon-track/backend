@@ -119,7 +119,7 @@ class AdminControllerTest extends TestCase
                 [
                     $this->callback(function ($sql) {
                         $this->assertStringContainsString('u.is_admin = :is_admin', $sql);
-                        $this->assertStringContainsString('(u.username LIKE :search_username OR u.email LIKE :search_email)', $sql);
+                        $this->assertStringContainsString('(u.username LIKE :search_username OR u.email LIKE :search_email OR u.uuid LIKE :search_uuid)', $sql);
                         return true;
                     })
                 ],
@@ -146,6 +146,7 @@ class AdminControllerTest extends TestCase
         $this->assertSame(2, $json['data']['users'][0]['passkey_count']);
         $this->assertEquals('%u%', $capturedParams[':search_username'] ?? null);
         $this->assertEquals('%u%', $capturedParams[':search_email'] ?? null);
+        $this->assertEquals('%u%', $capturedParams[':search_uuid'] ?? null);
         $this->assertEquals('active', $capturedParams[':status'] ?? null);
         $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
     }
@@ -211,11 +212,11 @@ class AdminControllerTest extends TestCase
             )
         ");
         $stmt = $pdo->prepare(
-            'INSERT INTO audit_logs (user_id, actor_type, action, status, data, operation_category, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, operation_category, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([1, 'user', 'login', 'success', json_encode(['ip_address' => '2.2.2.2']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-3 hours'))]);
-        $stmt->execute([1, 'user', 'passkey_registered', 'success', json_encode(['passkey_id' => 1, 'label' => 'Admin Laptop']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-2 hours'))]);
+        $stmt->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '2.2.2.2']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-3 hours'))]);
+        $stmt->execute([null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_registered', 'success', json_encode(['passkey_id' => 1, 'label' => 'Admin Laptop']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-2 hours'))]);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1]);
@@ -258,6 +259,41 @@ class AdminControllerTest extends TestCase
         $this->assertSame(1, $json['data']['user']['passkey_count']);
         $this->assertCount(2, $json['data']['recent_security_activity']);
         $this->assertSame('passkey_registered', $json['data']['recent_security_activity'][0]['action']);
+    }
+
+    public function testGetUserOverviewByUuidResolvesSameUser(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
+        $badgeService->method('compileUserMetrics')->willReturn([]);
+        $badgeService->method('getUserBadges')->willReturn([]);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $checkinService->method('getUserStreakStats')->willReturn([]);
+        $quotaConfigService = new QuotaConfigService();
+
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'lastlgn');
+
+        $request = makeRequest('GET', '/admin/users/by-uuid/550e8400-e29b-41d4-a716-4466554400aa/overview');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getUserOverviewByUuid($request, $response, ['uuid' => '550e8400-e29b-41d4-a716-4466554400aa']);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('550e8400-e29b-41d4-a716-4466554400aa', $json['data']['user']['uuid']);
     }
 
 }

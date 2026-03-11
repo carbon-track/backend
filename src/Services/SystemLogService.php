@@ -15,6 +15,8 @@ class SystemLogService
 {
     private PDO $db;
     private Logger $logger;
+    /** @var array<int, string|null> */
+    private array $userUuidCache = [];
 
     // 截断阈值，防止巨大请求/响应撑爆日志表
     private int $maxBodyLength = 8000; // characters
@@ -42,11 +44,12 @@ class SystemLogService
                     'ip_address' => $data['ip_address'] ?? null,
                 ]
             );
+            $userUuid = $this->resolveUserUuid($data);
 
             // 为了兼容 MySQL 和 SQLite，采用字符串形式写 created_at，使用默认的 CURRENT_TIMESTAMP 进行处理
             $stmt = $this->db->prepare("INSERT INTO system_logs (
-                request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+                request_id, method, path, status_code, user_id, user_uuid, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
 
             $stmt->execute([
                 $requestId,
@@ -54,6 +57,7 @@ class SystemLogService
                 $data['path'] ?? null,
                 $data['status_code'] ?? null,
                 $data['user_id'] ?? null,
+                $userUuid,
                 $data['ip_address'] ?? null,
                 $data['user_agent'] ?? null,
                 $data['duration_ms'] ?? null,
@@ -196,6 +200,49 @@ class SystemLogService
             return $trimmed;
         }
         return null;
+    }
+
+    private function resolveUserUuid(array $data): ?string
+    {
+        $explicit = $data['user_uuid'] ?? $data['uuid'] ?? $data['userUuid'] ?? null;
+        if (is_string($explicit)) {
+            $trimmed = strtolower(trim($explicit));
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
+
+        $userId = $data['user_id'] ?? null;
+        if (is_int($userId) || (is_numeric($userId) && (string) (int) $userId === (string) $userId)) {
+            return $this->lookupUserUuidById((int) $userId);
+        }
+
+        return null;
+    }
+
+    private function lookupUserUuidById(int $userId): ?string
+    {
+        if ($userId <= 0) {
+            return null;
+        }
+
+        if (array_key_exists($userId, $this->userUuidCache)) {
+            return $this->userUuidCache[$userId];
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT uuid FROM users WHERE id = :id LIMIT 1');
+            if (!$stmt) {
+                return null;
+            }
+            $stmt->execute(['id' => $userId]);
+            $uuid = $stmt->fetchColumn();
+            $normalized = is_string($uuid) && trim($uuid) !== '' ? strtolower(trim($uuid)) : null;
+            $this->userUuidCache[$userId] = $normalized;
+            return $normalized;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 }
 

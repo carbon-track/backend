@@ -528,7 +528,13 @@ class UserController
             $offset = ($page - 1) * $limit;
             $filters = $this->resolveSecurityActivityFilters($query);
 
-            $result = $this->fetchSecurityActivityTimeline((int) $user['id'], $filters, $limit, $offset);
+            $result = $this->fetchSecurityActivityTimeline(
+                (int) $user['id'],
+                isset($user['uuid']) ? (string) $user['uuid'] : null,
+                $filters,
+                $limit,
+                $offset
+            );
 
             $this->auditLogService->log([
                 'action' => 'user_security_activity_viewed',
@@ -2131,15 +2137,24 @@ class UserController
     /**
      * @return array{items: array<int, array<string, mixed>>, total: int}
      */
-    private function fetchSecurityActivityTimeline(int $userId, array $filters, int $limit, int $offset): array
+    private function fetchSecurityActivityTimeline(int $userId, ?string $userUuid, array $filters, int $limit, int $offset): array
     {
         $actions = $filters['actions'] ?? self::SECURITY_ACTIVITY_ACTIONS;
         $placeholders = implode(', ', array_fill(0, count($actions), '?'));
-        $where = [
-            'user_id = ?',
-            "action IN ({$placeholders})",
-        ];
-        $baseParams = array_merge([$userId], $actions);
+        $userUuid = is_string($userUuid) && trim($userUuid) !== '' ? strtolower(trim($userUuid)) : null;
+        if ($userUuid !== null) {
+            $where = [
+                '(user_uuid = ? OR (user_uuid IS NULL AND user_id = ?))',
+                "action IN ({$placeholders})",
+            ];
+            $baseParams = array_merge([$userUuid, $userId], $actions);
+        } else {
+            $where = [
+                'user_id = ?',
+                "action IN ({$placeholders})",
+            ];
+            $baseParams = array_merge([$userId], $actions);
+        }
         $days = isset($filters['days']) && is_int($filters['days']) ? $filters['days'] : null;
         if ($days !== null) {
             $where[] = $this->buildSecurityActivityPeriodClause($days);

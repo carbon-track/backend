@@ -217,10 +217,15 @@ return function (App $app) {
 
             $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/badges', [AdminController::class, 'getUserBadges']);
             $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/overview', [AdminController::class, 'getUserOverview']);
+            $admin->get(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/badges', [AdminController::class, 'getUserBadgesByUuid']);
+            $admin->get(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/overview', [AdminController::class, 'getUserOverviewByUuid']);
             // 用户管理
             $admin->put(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
             $admin->delete(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
             $admin->post(PATH_USERS . PATTERN_ID_NUMERIC . '/points/adjust', [AdminController::class, 'adjustUserPoints']);
+            $admin->put(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}', [AdminController::class, 'updateUserByUuid']);
+            $admin->delete(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}', [AdminController::class, 'deleteUserByUuid']);
+            $admin->post(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/points/adjust', [AdminController::class, 'adjustUserPointsByUuid']);
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);

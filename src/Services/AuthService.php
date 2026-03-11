@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\Uuid;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
@@ -15,7 +16,7 @@ class AuthService
     private string $jwtSecret;
     private string $jwtAlgorithm;
     private int $jwtExpiration;
-    private PDO $db;
+    private ?PDO $db = null;
     private ?AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
 
@@ -44,21 +45,29 @@ class AuthService
      */
     public function generateToken(array $user): string
     {
+        $normalizedUser = $this->normalizeAuthenticatedUser($user);
+        $subject = $normalizedUser['uuid'] ?? null;
+        if ($subject === null && isset($normalizedUser['id'])) {
+            $subject = (string) $normalizedUser['id'];
+        }
+        if ($subject === null || $subject === '') {
+            throw new \RuntimeException('Unable to generate token without a stable subject');
+        }
+
         $now = time();
         $payload = [
             'iss' => 'carbontrack',
             'aud' => 'carbontrack-users',
             'iat' => $now,
             'exp' => $now + $this->jwtExpiration,
-            'sub' => $user['id'],
+            'sub' => $subject,
             'user' => [
-                'id' => $user['id'],
-                // uuid 在某些旧库/测试数据库中可能不存在，使用 null 回退
-                'uuid' => $user['uuid'] ?? null,
-                'username' => $user['username'],
-                'email' => $user['email'] ?? null,
-                'points' => (int)($user['points'] ?? 0),
-                'is_admin' => (bool)($user['is_admin'] ?? 0)
+                'id' => $normalizedUser['id'] ?? null,
+                'uuid' => $normalizedUser['uuid'] ?? null,
+                'username' => $normalizedUser['username'] ?? null,
+                'email' => $normalizedUser['email'] ?? null,
+                'points' => (int)($normalizedUser['points'] ?? 0),
+                'is_admin' => (bool)($normalizedUser['is_admin'] ?? 0)
             ]
         ];
 
@@ -92,16 +101,33 @@ class AuthService
     public function validateToken(string $token): array
     {
         $decoded = $this->verifyToken($token);
-        if (!$decoded || !isset($decoded['user'])) {
+        if (!$decoded) {
             throw new \RuntimeException('Invalid token');
         }
-        $user = (array)$decoded['user'];
+
+        $subject = isset($decoded['sub']) ? trim((string) $decoded['sub']) : null;
+        $user = [];
+        if (isset($decoded['user'])) {
+            $user = (array) $decoded['user'];
+        } elseif ($subject !== null && $subject !== '') {
+            if (Uuid::isValid($subject)) {
+                $user['uuid'] = strtolower($subject);
+            } elseif (ctype_digit($subject)) {
+                $user['id'] = (int) $subject;
+            }
+        }
+
+        if ($user === []) {
+            throw new \RuntimeException('Invalid token');
+        }
+
+        $normalizedUser = $this->normalizeAuthenticatedUser($user, $subject);
         return [
-            'user_id' => $user['id'] ?? null,
-            'uuid' => $user['uuid'] ?? null,
-            'email' => $user['email'] ?? null,
-            'role' => ($user['is_admin'] ?? false) ? 'admin' : 'user',
-            'user' => $user,
+            'user_id' => $normalizedUser['id'] ?? null,
+            'uuid' => $normalizedUser['uuid'] ?? null,
+            'email' => $normalizedUser['email'] ?? null,
+            'role' => ($normalizedUser['is_admin'] ?? false) ? 'admin' : 'user',
+            'user' => $normalizedUser,
         ];
     }
 
@@ -110,6 +136,16 @@ class AuthService
      */
     public function getCurrentUser(Request $request): ?array
     {
+        $authenticatedUser = $request->getAttribute('authenticated_user');
+        if (is_array($authenticatedUser)) {
+            return $authenticatedUser;
+        }
+
+        $tokenPayload = $request->getAttribute('token_payload');
+        if (is_array($tokenPayload) && isset($tokenPayload['user']) && is_array($tokenPayload['user'])) {
+            return $tokenPayload['user'];
+        }
+
         $authHeader = $request->getHeaderLine('Authorization');
         
         if (empty($authHeader)) {
@@ -125,10 +161,20 @@ class AuthService
         $decoded = $this->verifyToken($token);
 
         if (!$decoded || !isset($decoded['user'])) {
-            return null;
+            try {
+                $payload = $this->validateToken($token);
+                return is_array($payload['user'] ?? null) ? $payload['user'] : null;
+            } catch (\Throwable $e) {
+                return null;
+            }
         }
 
-        return (array)$decoded['user'];
+        try {
+            $payload = $this->validateToken($token);
+            return is_array($payload['user'] ?? null) ? $payload['user'] : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**
@@ -140,7 +186,18 @@ class AuthService
         if (!$userData) {
             return null;
         }
-        return \CarbonTrack\Models\User::find($userData['id']);
+
+        $userId = $this->normalizeUserId($userData['id'] ?? null);
+        if ($userId !== null) {
+            return \CarbonTrack\Models\User::find($userId);
+        }
+
+        $userUuid = $this->normalizeUuidValue($userData['uuid'] ?? null);
+        if ($userUuid !== null) {
+            return \CarbonTrack\Models\User::query()->where('uuid', $userUuid)->first();
+        }
+
+        return null;
     }
 
     /**
@@ -161,7 +218,7 @@ class AuthService
     public function getUserIdFromRequest(Request $request): ?int
     {
         $user = $this->getCurrentUser($request);
-        return $user['id'] ?? null;
+        return $this->normalizeUserId($user['id'] ?? null);
     }
 
     /**
@@ -214,7 +271,7 @@ class AuthService
      */
     public function isUsernameAvailable(string $username, ?int $excludeUserId = null): bool
     {
-        if (!$this->db) {
+        if ($this->db === null) {
             throw new \RuntimeException('Database not set');
         }
 
@@ -227,6 +284,9 @@ class AuthService
         }
 
         $stmt = $this->db->prepare($sql);
+        if (!$stmt) {
+            return true;
+        }
         $stmt->execute($params);
 
         return $stmt->fetchColumn() == 0;
@@ -237,7 +297,7 @@ class AuthService
      */
     public function isEmailAvailable(string $email, ?int $excludeUserId = null): bool
     {
-        if (!$this->db) {
+        if ($this->db === null) {
             throw new \RuntimeException('Database not set');
         }
 
@@ -250,6 +310,9 @@ class AuthService
         }
 
         $stmt = $this->db->prepare($sql);
+        if (!$stmt) {
+            return true;
+        }
         $stmt->execute($params);
 
         return $stmt->fetchColumn() == 0;
@@ -365,7 +428,7 @@ class AuthService
      */
     public function recordLoginAttempt(string $username, string $ip, bool $success): void
     {
-        if (!$this->db) {
+        if ($this->db === null) {
             return;
         }
 
@@ -395,7 +458,7 @@ class AuthService
      */
     public function isAccountLocked(string $username, string $ip): bool
     {
-        if (!$this->db) {
+        if ($this->db === null) {
             return false;
         }
 
@@ -442,7 +505,7 @@ class AuthService
      */
     public function cleanupLoginAttempts(): void
     {
-        if (!$this->db) {
+        if ($this->db === null) {
             return;
         }
 
@@ -508,6 +571,329 @@ class AuthService
         }
         
         return false;
+    }
+
+    /**
+     * Normalize a token/user payload into a local authenticated user context.
+     *
+     * UUID is treated as the stable cross-site subject. The local numeric user ID
+     * is resolved lazily from the current site's users table and kept for
+     * intra-site business logic.
+     *
+     * @param array<string, mixed> $user
+     * @return array<string, mixed>
+     */
+    private function normalizeAuthenticatedUser(array $user, ?string $subject = null): array
+    {
+        $userId = $this->normalizeUserId($user['id'] ?? $user['user_id'] ?? null);
+        $userUuid = $this->normalizeUuidValue($user['uuid'] ?? $user['user_uuid'] ?? null);
+        $subjectUuid = $this->normalizeUuidValue($subject);
+
+        if ($userUuid === null && $subjectUuid !== null) {
+            $userUuid = $subjectUuid;
+        }
+
+        if ($userId !== null && $userUuid === null) {
+            $userUuid = $this->ensureUserUuidForLocalId($userId, $userUuid) ?? $userUuid;
+        }
+
+        $localUser = null;
+        if ($userUuid !== null) {
+            $localUser = $this->findLocalUserByUuid($userUuid);
+            if ($localUser === null) {
+                $localUser = $this->provisionLocalUserForUuid($userUuid, $user);
+            }
+        }
+
+        if ($localUser === null && $userId !== null) {
+            $localUser = $this->findLocalUserById($userId);
+        }
+
+        if ($localUser !== null) {
+            $userId = $this->normalizeUserId($localUser['id'] ?? null) ?? $userId;
+            $userUuid = $this->normalizeUuidValue($localUser['uuid'] ?? null) ?? $userUuid;
+            $user = array_merge($user, $localUser);
+        }
+
+        if ($userId !== null) {
+            $user['id'] = $userId;
+        }
+        if ($userUuid !== null) {
+            $user['uuid'] = $userUuid;
+        }
+
+        if (array_key_exists('points', $user)) {
+            $user['points'] = (int) ($user['points'] ?? 0);
+        }
+        if (array_key_exists('is_admin', $user)) {
+            $user['is_admin'] = (bool) ($user['is_admin'] ?? false);
+        }
+
+        return $user;
+    }
+
+    private function normalizeUserId(mixed $value): ?int
+    {
+        if (is_int($value) && $value > 0) {
+            return $value;
+        }
+
+        if (is_string($value) && ctype_digit($value)) {
+            $parsed = (int) $value;
+            return $parsed > 0 ? $parsed : null;
+        }
+
+        return null;
+    }
+
+    private function normalizeUuidValue(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $trimmed = strtolower(trim($value));
+        if ($trimmed === '' || !Uuid::isValid($trimmed)) {
+            return null;
+        }
+
+        return $trimmed;
+    }
+
+    /**
+     * Ensure an existing local user has a persisted UUID.
+     */
+    private function ensureUserUuidForLocalId(int $userId, ?string $preferredUuid = null): ?string
+    {
+        if ($this->db === null) {
+            return $preferredUuid;
+        }
+
+        $row = $this->findLocalUserById($userId);
+        if ($row === null) {
+            return $preferredUuid;
+        }
+
+        $existingUuid = $this->normalizeUuidValue($row['uuid'] ?? null);
+        if ($existingUuid !== null) {
+            return $existingUuid;
+        }
+
+        $finalUuid = $preferredUuid ?? strtolower($this->generateUUID());
+
+        try {
+            $stmt = $this->db->prepare('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL');
+            if (!$stmt) {
+                return null;
+            }
+            $stmt->execute([
+                'uuid' => $finalUuid,
+                'updated_at' => date('Y-m-d H:i:s'),
+                'id' => $userId,
+            ]);
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        return $finalUuid;
+    }
+
+    /**
+     * @param array<string, mixed> $identity
+     * @return array<string, mixed>|null
+     */
+    private function provisionLocalUserForUuid(string $userUuid, array $identity): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $candidate = $this->findBindableLocalUser($identity);
+        if ($candidate !== null) {
+            $candidateId = $this->normalizeUserId($candidate['id'] ?? null);
+            $candidateUuid = $this->normalizeUuidValue($candidate['uuid'] ?? null);
+            if ($candidateId === null) {
+                return null;
+            }
+            if ($candidateUuid !== null && $candidateUuid !== $userUuid) {
+                throw new \RuntimeException('Conflicting UUID for existing local user');
+            }
+
+            $stmt = $this->db->prepare('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id');
+            if (!$stmt) {
+                return null;
+            }
+            $stmt->execute([
+                'uuid' => $userUuid,
+                'updated_at' => date('Y-m-d H:i:s'),
+                'id' => $candidateId,
+            ]);
+
+            return $this->findLocalUserById($candidateId);
+        }
+
+        $username = $this->prepareProvisionedUsername($identity['username'] ?? null, $userUuid);
+        $email = $this->prepareProvisionedEmail($identity['email'] ?? null);
+        $now = date('Y-m-d H:i:s');
+        $password = $this->hashPassword(bin2hex(random_bytes(16)));
+
+        $stmt = $this->db->prepare(
+            'INSERT INTO users (uuid, username, email, password, status, points, is_admin, created_at, updated_at)
+             VALUES (:uuid, :username, :email, :password, :status, :points, :is_admin, :created_at, :updated_at)'
+        );
+        if (!$stmt) {
+            return null;
+        }
+        $stmt->execute([
+            'uuid' => $userUuid,
+            'username' => $username,
+            'email' => $email,
+            'password' => $password,
+            'status' => isset($identity['status']) && is_string($identity['status']) && trim($identity['status']) !== ''
+                ? trim((string) $identity['status'])
+                : 'active',
+            'points' => 0,
+            'is_admin' => !empty($identity['is_admin']) ? 1 : 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return $this->findLocalUserById((int) $this->db->lastInsertId());
+    }
+
+    /**
+     * @param array<string, mixed> $identity
+     * @return array<string, mixed>|null
+     */
+    private function findBindableLocalUser(array $identity): ?array
+    {
+        $email = $this->prepareProvisionedEmail($identity['email'] ?? null);
+        if ($email !== null) {
+            $row = $this->findLocalUserByEmail($email);
+            if ($row !== null) {
+                return $row;
+            }
+        }
+
+        $username = isset($identity['username']) && is_string($identity['username'])
+            ? trim((string) $identity['username'])
+            : '';
+        if ($username !== '') {
+            return $this->findLocalUserByUsername($username);
+        }
+
+        return null;
+    }
+
+    private function prepareProvisionedEmail(mixed $email): ?string
+    {
+        if (!is_string($email)) {
+            return null;
+        }
+
+        $trimmed = trim($email);
+        if ($trimmed === '' || !filter_var($trimmed, FILTER_VALIDATE_EMAIL)) {
+            return null;
+        }
+
+        $existing = $this->findLocalUserByEmail($trimmed);
+        if ($existing !== null) {
+            $existingUuid = $this->normalizeUuidValue($existing['uuid'] ?? null);
+            if ($existingUuid !== null) {
+                return null;
+            }
+        }
+
+        return $trimmed;
+    }
+
+    private function prepareProvisionedUsername(mixed $username, string $userUuid): string
+    {
+        $base = is_string($username) ? trim($username) : '';
+        if ($base === '') {
+            $base = 'user-' . substr(str_replace('-', '', $userUuid), 0, 12);
+        }
+
+        $candidate = $base;
+        $suffix = 1;
+        while (!$this->isUsernameAvailable($candidate)) {
+            $candidate = $base . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findLocalUserById(int $userId): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+        if (!$stmt) {
+            return null;
+        }
+        $stmt->execute(['id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findLocalUserByUuid(string $userUuid): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE uuid = :uuid AND deleted_at IS NULL LIMIT 1');
+        if (!$stmt) {
+            return null;
+        }
+        $stmt->execute(['uuid' => $userUuid]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findLocalUserByEmail(string $email): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE email = :email AND deleted_at IS NULL LIMIT 1');
+        if (!$stmt) {
+            return null;
+        }
+        $stmt->execute(['email' => $email]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findLocalUserByUsername(string $username): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE username = :username AND deleted_at IS NULL LIMIT 1');
+        if (!$stmt) {
+            return null;
+        }
+        $stmt->execute(['username' => $username]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
     }
 
     private function logAudit(string $action, array $context = [], string $status = 'success'): void
