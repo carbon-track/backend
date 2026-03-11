@@ -921,8 +921,11 @@ class MessageControllerTest extends TestCase
 
         $pdo->exec('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
+            uuid TEXT,
             username TEXT,
-            email TEXT
+            email TEXT,
+            status TEXT,
+            is_admin INTEGER
         )');
 
         $title = 'Hello world';
@@ -975,10 +978,10 @@ class MessageControllerTest extends TestCase
         $msgStmt->execute([900, 1, $title, $content, 1, $createdAt, null]);
         $msgStmt->execute([901, 2, $title, $content, 0, $createdAt, null]);
 
-        $userStmt = $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)');
-        $userStmt->execute([42, 'AdminUser', 'admin@example.com']);
-        $userStmt->execute([1, 'Alice', 'alice@example.com']);
-        $userStmt->execute([2, 'Bob', 'bob@example.com']);
+        $userStmt = $pdo->prepare('INSERT INTO users (id, uuid, username, email, status, is_admin) VALUES (?,?,?,?,?,?)');
+        $userStmt->execute([42, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'AdminUser', 'admin@example.com', 'active', 1]);
+        $userStmt->execute([1, '11111111-1111-4111-8111-111111111111', 'Alice', 'alice@example.com', 'active', 0]);
+        $userStmt->execute([2, '22222222-2222-4222-8222-222222222222', 'Bob', 'bob@example.com', 'inactive', 0]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -1014,6 +1017,13 @@ class MessageControllerTest extends TestCase
         $this->assertSame('sent', $item['email_delivery']['status']);
         $this->assertSame([7], $item['email_delivery']['missing_email_user_ids']);
         $this->assertSame([], $item['email_delivery']['errors']);
+        $this->assertSame('11111111-1111-4111-8111-111111111111', $item['read_users'][0]['user_id']);
+        $this->assertSame('11111111-1111-4111-8111-111111111111', $item['read_users'][0]['uuid']);
+        $this->assertSame(1, $item['read_users'][0]['legacy_user_id']);
+        $this->assertSame('active', $item['read_users'][0]['status']);
+        $this->assertFalse($item['read_users'][0]['is_admin']);
+        $this->assertSame('22222222-2222-4222-8222-222222222222', $item['unread_users'][0]['user_id']);
+        $this->assertSame(2, $item['unread_users'][0]['legacy_user_id']);
     }
 
     public function testFlushBroadcastQueueMarksQueuedAsSentWithoutForce(): void
