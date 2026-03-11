@@ -19,16 +19,18 @@ class WebauthnChallenge
     {
         $stmt = $this->db->prepare(
             'INSERT INTO webauthn_challenges (
-                challenge_id, user_id, flow_type, challenge, request_id, context_json, expires_at, consumed_at, created_at, updated_at
+                challenge_id, user_uuid, flow_type, challenge, request_id, context_json, expires_at, consumed_at, created_at, updated_at
             ) VALUES (
-                :challenge_id, :user_id, :flow_type, :challenge, :request_id, :context_json, :expires_at, :consumed_at, :created_at, :updated_at
+                :challenge_id, :user_uuid, :flow_type, :challenge, :request_id, :context_json, :expires_at, :consumed_at, :created_at, :updated_at
             )'
         );
 
         $now = gmdate('Y-m-d H:i:s');
         $stmt->execute([
             'challenge_id' => (string) $record['challenge_id'],
-            'user_id' => $record['user_id'] ?? null,
+            'user_uuid' => isset($record['user_uuid']) && $record['user_uuid'] !== null
+                ? strtolower((string) $record['user_uuid'])
+                : null,
             'flow_type' => (string) $record['flow_type'],
             'challenge' => (string) $record['challenge'],
             'request_id' => $record['request_id'] ?? null,
@@ -43,7 +45,7 @@ class WebauthnChallenge
     /**
      * @return array<string, mixed>|null
      */
-    public function findActive(string $challengeId, string $flowType, ?int $userId = null): ?array
+    public function findActive(string $challengeId, string $flowType, ?string $userUuid = null): ?array
     {
         $sql = 'SELECT * FROM webauthn_challenges
                 WHERE challenge_id = :challenge_id
@@ -56,9 +58,9 @@ class WebauthnChallenge
             'current_time' => $this->utcNow(),
         ];
 
-        if ($userId !== null) {
-            $sql .= ' AND user_id = :user_id';
-            $params['user_id'] = $userId;
+        if ($userUuid !== null) {
+            $sql .= ' AND user_uuid = :user_uuid';
+            $params['user_uuid'] = strtolower($userUuid);
         }
 
         $sql .= ' ORDER BY id DESC LIMIT 1';
@@ -70,6 +72,9 @@ class WebauthnChallenge
             return null;
         }
 
+        if (isset($row['user_uuid']) && $row['user_uuid'] !== null) {
+            $row['user_uuid'] = strtolower((string) $row['user_uuid']);
+        }
         $row['context'] = $this->decodeJsonObject($row['context_json'] ?? null);
         return $row;
     }

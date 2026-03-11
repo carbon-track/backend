@@ -38,8 +38,8 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS carbon_records (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                activity_id TEXT,\n                amount REAL,\n                unit TEXT,\n                carbon_saved REAL,\n                points_earned INTEGER,\n                date TEXT,\n                description TEXT,\n                images TEXT,\n                proof_images TEXT,\n                status TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                approved_at TEXT,\n                deleted_at TEXT\n            )",
             // User check-ins
             "CREATE TABLE IF NOT EXISTS user_checkins (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                checkin_date TEXT,\n                source TEXT,\n                record_id TEXT,\n                notes TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(user_id, checkin_date)\n            )",
-            "CREATE TABLE IF NOT EXISTS user_passkeys (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER NOT NULL,\n                credential_id TEXT NOT NULL,\n                credential_id_hash TEXT NOT NULL,\n                credential_type TEXT DEFAULT 'public-key',\n                label TEXT,\n                public_key TEXT NOT NULL,\n                rp_id TEXT NOT NULL,\n                user_handle TEXT NOT NULL,\n                transports TEXT,\n                aaguid TEXT,\n                sign_count INTEGER DEFAULT 0,\n                attestation_format TEXT,\n                backup_eligible INTEGER DEFAULT 0,\n                backup_state INTEGER DEFAULT 0,\n                meta_json TEXT,\n                last_used_at TEXT,\n                attested_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                disabled_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(credential_id_hash)\n            )",
-            "CREATE TABLE IF NOT EXISTS webauthn_challenges (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                challenge_id TEXT NOT NULL,\n                user_id INTEGER,\n                flow_type TEXT NOT NULL,\n                challenge TEXT NOT NULL,\n                request_id TEXT,\n                context_json TEXT,\n                expires_at TEXT NOT NULL,\n                consumed_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(challenge_id)\n            )",
+            "CREATE TABLE IF NOT EXISTS user_passkeys (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_uuid TEXT NOT NULL,\n                credential_id TEXT NOT NULL,\n                credential_id_hash TEXT NOT NULL,\n                credential_type TEXT DEFAULT 'public-key',\n                label TEXT,\n                public_key TEXT NOT NULL,\n                rp_id TEXT NOT NULL,\n                user_handle TEXT NOT NULL,\n                transports TEXT,\n                aaguid TEXT,\n                sign_count INTEGER DEFAULT 0,\n                attestation_format TEXT,\n                backup_eligible INTEGER DEFAULT 0,\n                backup_state INTEGER DEFAULT 0,\n                meta_json TEXT,\n                last_used_at TEXT,\n                attested_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                disabled_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(credential_id_hash)\n            )",
+            "CREATE TABLE IF NOT EXISTS webauthn_challenges (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                challenge_id TEXT NOT NULL,\n                user_uuid TEXT,\n                flow_type TEXT NOT NULL,\n                challenge TEXT NOT NULL,\n                request_id TEXT,\n                context_json TEXT,\n                expires_at TEXT NOT NULL,\n                consumed_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(challenge_id)\n            )",
             // Schools (needed for registration validation when school_id provided)
             "CREATE TABLE IF NOT EXISTS schools (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                status TEXT DEFAULT 'active',\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Point exchanges
@@ -109,6 +109,8 @@ class TestSchemaBuilder
             'verification_last_sent_at TEXT'
         ]);
         self::ensureColumns($pdo, 'products', ['category_slug TEXT']);
+        self::ensureColumns($pdo, 'user_passkeys', ['user_uuid TEXT']);
+        self::ensureColumns($pdo, 'webauthn_challenges', ['user_uuid TEXT']);
         self::ensureColumns($pdo, 'audit_logs', [
             'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
@@ -122,6 +124,26 @@ class TestSchemaBuilder
             'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',
             'auth TEXT'
         ]);
+
+        try {
+            $pdo->exec("
+                UPDATE user_passkeys
+                SET user_uuid = LOWER((
+                    SELECT uuid FROM users WHERE users.id = user_passkeys.user_id
+                ))
+                WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
+            ");
+        } catch (\Throwable $e) { /* ignore */ }
+
+        try {
+            $pdo->exec("
+                UPDATE webauthn_challenges
+                SET user_uuid = LOWER((
+                    SELECT uuid FROM users WHERE users.id = webauthn_challenges.user_id
+                ))
+                WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
+            ");
+        } catch (\Throwable $e) { /* ignore */ }
 
         // Seed minimal reference data if absent
         self::seed($pdo);

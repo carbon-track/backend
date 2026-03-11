@@ -30,14 +30,14 @@ class WebauthnChallengeTest extends TestCase
     {
         $this->model->create([
             'challenge_id' => 'challenge-future',
-            'user_id' => 7,
+            'user_uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
             'flow_type' => 'registration',
             'challenge' => 'abc123',
             'context' => ['label' => 'Desk Key'],
             'expires_at' => gmdate('Y-m-d H:i:s', time() + 300),
         ]);
 
-        $record = $this->model->findActive('challenge-future', 'registration', 7);
+        $record = $this->model->findActive('challenge-future', 'registration', '550e8400-e29b-41d4-a716-4466554400aa');
 
         $this->assertIsArray($record);
         $this->assertSame('challenge-future', $record['challenge_id']);
@@ -48,13 +48,13 @@ class WebauthnChallengeTest extends TestCase
     {
         $this->model->create([
             'challenge_id' => 'challenge-expired',
-            'user_id' => 7,
+            'user_uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
             'flow_type' => 'registration',
             'challenge' => 'abc123',
             'expires_at' => gmdate('Y-m-d H:i:s', time() - 5),
         ]);
 
-        $record = $this->model->findActive('challenge-expired', 'registration', 7);
+        $record = $this->model->findActive('challenge-expired', 'registration', '550e8400-e29b-41d4-a716-4466554400aa');
 
         $this->assertNull($record);
     }
@@ -63,14 +63,14 @@ class WebauthnChallengeTest extends TestCase
     {
         $this->model->create([
             'challenge_id' => 'challenge-old',
-            'user_id' => 7,
+            'user_uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
             'flow_type' => 'registration',
             'challenge' => 'old',
             'expires_at' => gmdate('Y-m-d H:i:s', time() - 60),
         ]);
         $this->model->create([
             'challenge_id' => 'challenge-new',
-            'user_id' => 7,
+            'user_uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
             'flow_type' => 'registration',
             'challenge' => 'new',
             'expires_at' => gmdate('Y-m-d H:i:s', time() + 60),
@@ -79,7 +79,7 @@ class WebauthnChallengeTest extends TestCase
         $deleted = $this->model->deleteExpired();
 
         $this->assertSame(1, $deleted);
-        $this->assertNull($this->model->findActive('challenge-old', 'registration', 7));
-        $this->assertIsArray($this->model->findActive('challenge-new', 'registration', 7));
+        $this->assertNull($this->model->findActive('challenge-old', 'registration', '550e8400-e29b-41d4-a716-4466554400aa'));
+        $this->assertIsArray($this->model->findActive('challenge-new', 'registration', '550e8400-e29b-41d4-a716-4466554400aa'));
     }
 }

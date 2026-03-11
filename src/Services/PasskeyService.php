@@ -40,11 +40,14 @@ class PasskeyService
     }
 
     /**
+     * @param array<string, mixed> $user
      * @return array<int, array<string, mixed>>
      */
-    public function listForUser(int $userId): array
+    public function listForUser(array $user): array
     {
-        $passkeys = $this->userPasskeyModel->listActiveByUserId($userId);
+        $userId = $this->requireUserId($user);
+        $userUuid = $this->requireUserUuid($user);
+        $passkeys = $this->userPasskeyModel->listActiveByUserUuid($userUuid);
 
         $this->auditLogService->log([
             'action' => 'passkey_list_viewed',
@@ -70,10 +73,11 @@ class PasskeyService
         $this->ensureEnabled();
 
         $userId = $this->requireUserId($user);
+        $userUuid = $this->requireUserUuid($user);
         $this->challengeModel->deleteExpired();
 
         $label = $this->sanitizeLabel($payload['label'] ?? null);
-        $passkeys = $this->userPasskeyModel->listActiveByUserId($userId);
+        $passkeys = $this->userPasskeyModel->listActiveByUserUuid($userUuid);
         $challengeId = Uuid::generateV4();
         $challenge = Base64Url::encode(random_bytes(32));
         $userHandle = $this->resolveUserHandle($user);
@@ -81,7 +85,7 @@ class PasskeyService
 
         $this->challengeModel->create([
             'challenge_id' => $challengeId,
-            'user_id' => $userId,
+            'user_uuid' => $userUuid,
             'flow_type' => self::FLOW_REGISTRATION,
             'challenge' => $challenge,
             'request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? ($_SERVER['REQUEST_ID'] ?? null),
@@ -122,10 +126,11 @@ class PasskeyService
         $this->ensureEnabled();
 
         $userId = $this->requireUserId($user);
+        $userUuid = $this->requireUserUuid($user);
         $challengeId = $this->requireChallengeId($payload);
         $credential = $this->requireCredentialPayload($payload);
 
-        $challengeRecord = $this->challengeModel->findActive($challengeId, self::FLOW_REGISTRATION, $userId);
+        $challengeRecord = $this->challengeModel->findActive($challengeId, self::FLOW_REGISTRATION, $userUuid);
         if ($challengeRecord === null) {
             $this->logPasskeyEvent('passkey_registration_failed', $userId, 'failed', [
                 'challenge_id' => $challengeId,
@@ -161,7 +166,7 @@ class PasskeyService
 
         $context = is_array($challengeRecord['context'] ?? null) ? $challengeRecord['context'] : [];
         $created = $this->userPasskeyModel->create([
-            'user_id' => $userId,
+            'user_uuid' => $userUuid,
             'credential_id' => $credentialId,
             'credential_type' => $verified['credential_type'] ?? 'public-key',
             'label' => $this->sanitizeLabel($payload['label'] ?? ($context['label'] ?? null)),
@@ -204,15 +209,17 @@ class PasskeyService
         $identifier = $this->sanitizeIdentifier($payload['identifier'] ?? null);
         $user = null;
         $passkeys = [];
-        $userId = null;
+        $userUuid = null;
+        $auditUserId = null;
 
         if ($identifier !== null) {
             $user = $this->findUserByIdentifier($identifier);
             if ($user !== null && $this->userHasValidUuid($user)) {
-                $candidateUserId = (int) $user['id'];
-                $candidatePasskeys = $this->userPasskeyModel->listActiveByUserId($candidateUserId);
+                $candidateUserUuid = strtolower((string) $user['uuid']);
+                $candidatePasskeys = $this->userPasskeyModel->listActiveByUserUuid($candidateUserUuid);
                 if ($candidatePasskeys !== []) {
-                    $userId = $candidateUserId;
+                    $userUuid = $candidateUserUuid;
+                    $auditUserId = (int) $user['id'];
                     $passkeys = $candidatePasskeys;
                 }
             }
@@ -223,7 +230,7 @@ class PasskeyService
         $expiresAt = gmdate('Y-m-d H:i:s', time() + $this->config->getChallengeTtlSeconds());
         $this->challengeModel->create([
             'challenge_id' => $challengeId,
-            'user_id' => $userId,
+            'user_uuid' => $userUuid,
             'flow_type' => self::FLOW_AUTHENTICATION,
             'challenge' => $challenge,
             'request_id' => $_SERVER['HTTP_X_REQUEST_ID'] ?? ($_SERVER['REQUEST_ID'] ?? null),
@@ -234,11 +241,11 @@ class PasskeyService
             'expires_at' => $expiresAt,
         ]);
 
-        if ($userId !== null) {
+        if ($auditUserId !== null) {
             $this->auditLogService->log([
                 'action' => 'passkey_authentication_options_created',
                 'operation_category' => 'authentication',
-                'user_id' => $userId,
+                'user_id' => $auditUserId,
                 'actor_type' => 'user',
                 'affected_table' => 'webauthn_challenges',
                 'status' => 'success',
@@ -279,7 +286,11 @@ class PasskeyService
             throw new PasskeyOperationException('Passkey credential was not found.', 'PASSKEY_NOT_FOUND', 404);
         }
 
-        if (isset($challengeRecord['user_id']) && $challengeRecord['user_id'] !== null && (int) $challengeRecord['user_id'] !== (int) $passkey['user_id']) {
+        if (
+            isset($challengeRecord['user_uuid'])
+            && $challengeRecord['user_uuid'] !== null
+            && strcasecmp((string) $challengeRecord['user_uuid'], (string) ($passkey['user_uuid'] ?? '')) !== 0
+        ) {
             throw new PasskeyOperationException('Passkey credential does not match the challenged account.', 'PASSKEY_ACCOUNT_MISMATCH', 401);
         }
 
@@ -304,7 +315,7 @@ class PasskeyService
             throw new PasskeyOperationException('Passkey authentication state could not be updated.', 'PASSKEY_TOUCH_FAILED', 500);
         }
 
-        $user = $this->findUserDetailed((int) $passkey['user_id']);
+        $user = $this->findUserDetailedByUuid((string) ($passkey['user_uuid'] ?? ''));
         if ($user === null) {
             throw new PasskeyOperationException('The passkey owner account was not found.', 'PASSKEY_USER_NOT_FOUND', 404);
         }
@@ -352,16 +363,22 @@ class PasskeyService
         ];
     }
 
-    public function deleteForUser(int $userId, int $passkeyId): void
+    /**
+     * @param array<string, mixed> $user
+     */
+    public function deleteForUser(array $user, int $passkeyId): void
     {
         $this->ensureEnabled();
 
-        $passkey = $this->userPasskeyModel->findActiveByIdForUser($passkeyId, $userId);
+        $userId = $this->requireUserId($user);
+        $userUuid = $this->requireUserUuid($user);
+
+        $passkey = $this->userPasskeyModel->findActiveByIdForUserUuid($passkeyId, $userUuid);
         if ($passkey === null) {
             throw new PasskeyOperationException('Passkey was not found.', 'PASSKEY_NOT_FOUND', 404);
         }
 
-        if (!$this->userPasskeyModel->disable($passkeyId, $userId)) {
+        if (!$this->userPasskeyModel->disable($passkeyId, $userUuid)) {
             throw new PasskeyOperationException('Passkey could not be deleted.', 'PASSKEY_DELETE_FAILED', 500);
         }
 
@@ -372,11 +389,15 @@ class PasskeyService
     }
 
     /**
+     * @param array<string, mixed> $user
      * @return array<string, mixed>
      */
-    public function updateLabelForUser(int $userId, int $passkeyId, ?string $label): array
+    public function updateLabelForUser(array $user, int $passkeyId, ?string $label): array
     {
-        $passkey = $this->userPasskeyModel->findActiveByIdForUser($passkeyId, $userId);
+        $userId = $this->requireUserId($user);
+        $userUuid = $this->requireUserUuid($user);
+
+        $passkey = $this->userPasskeyModel->findActiveByIdForUserUuid($passkeyId, $userUuid);
         if ($passkey === null) {
             throw new PasskeyOperationException('Passkey was not found.', 'PASSKEY_NOT_FOUND', 404);
         }
@@ -387,7 +408,7 @@ class PasskeyService
             return $this->toPublicSummary($passkey);
         }
 
-        $updated = $this->userPasskeyModel->updateLabel($passkeyId, $userId, $sanitizedLabel);
+        $updated = $this->userPasskeyModel->updateLabel($passkeyId, $userUuid, $sanitizedLabel);
         if ($updated === null) {
             throw new PasskeyOperationException('Passkey label could not be updated.', 'PASSKEY_LABEL_UPDATE_FAILED', 500);
         }
@@ -477,9 +498,9 @@ class PasskeyService
     /**
      * @return array<string, mixed>
      */
-    public function getUserPasskeySummary(int $userId): array
+    public function getUserPasskeySummary(string $userUuid): array
     {
-        return $this->userPasskeyModel->getUserPasskeySummary($userId);
+        return $this->userPasskeyModel->getUserPasskeySummary($userUuid);
     }
 
     /**
@@ -758,17 +779,17 @@ class PasskeyService
     /**
      * @return array<string, mixed>|null
      */
-    private function findUserDetailed(int $userId): ?array
+    private function findUserDetailedByUuid(string $userUuid): ?array
     {
         $stmt = $this->db->prepare(
             'SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
              FROM users u
              LEFT JOIN schools s ON u.school_id = s.id
              LEFT JOIN avatars a ON u.avatar_id = a.id
-             WHERE u.id = ? AND u.deleted_at IS NULL
+             WHERE u.uuid = ? AND u.deleted_at IS NULL
              LIMIT 1'
         );
-        $stmt->execute([$userId]);
+        $stmt->execute([strtolower($userUuid)]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row ?: null;

@@ -92,7 +92,7 @@ class PasskeyServiceTest extends TestCase
 
         $this->assertNotFalse($stored);
         $this->assertSame('registration', $stored['flow_type']);
-        $this->assertSame('1', (string) $stored['user_id']);
+        $this->assertSame('550e8400-e29b-41d4-a716-4466554400aa', $stored['user_uuid']);
         $this->assertNotEmpty($stored['challenge']);
     }
 
@@ -334,7 +334,7 @@ class PasskeyServiceTest extends TestCase
             }))
             ->willReturn(true);
 
-        $updated = $this->service->updateLabelForUser(1, $passkeyId, str_repeat('A', 120));
+        $updated = $this->service->updateLabelForUser($this->userFixture(), $passkeyId, str_repeat('A', 120));
 
         $this->assertSame($expectedLabel, $updated['label']);
         $storedLabel = $this->pdo
@@ -355,7 +355,7 @@ class PasskeyServiceTest extends TestCase
 
         $this->auditLogService->expects($this->never())->method('log');
 
-        $updated = $this->service->updateLabelForUser(1, $passkeyId, '  Existing laptop  ');
+        $updated = $this->service->updateLabelForUser($this->userFixture(), $passkeyId, '  Existing laptop  ');
 
         $this->assertSame('Existing laptop', $updated['label']);
         $storedUpdatedAt = (string) $this->pdo
@@ -469,18 +469,18 @@ class PasskeyServiceTest extends TestCase
     ): void {
         $stmt = $this->pdo->prepare(
             'INSERT INTO user_passkeys (
-                user_id, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
+                user_uuid, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
                 transports, aaguid, sign_count, attestation_format, backup_eligible, backup_state, meta_json,
                 last_used_at, attested_at, created_at, updated_at
             ) VALUES (
-                :user_id, :credential_id, :credential_id_hash, :credential_type, :label, :public_key, :rp_id, :user_handle,
+                :user_uuid, :credential_id, :credential_id_hash, :credential_type, :label, :public_key, :rp_id, :user_handle,
                 :transports, :aaguid, :sign_count, :attestation_format, :backup_eligible, :backup_state, :meta_json,
                 :last_used_at, :attested_at, :created_at, :updated_at
             )'
         );
         $timestamp = $createdAt ?? gmdate('Y-m-d H:i:s');
         $stmt->execute([
-            'user_id' => $userId,
+            'user_uuid' => $this->userUuidForId($userId),
             'credential_id' => $credentialId,
             'credential_id_hash' => hash('sha256', $credentialId),
             'credential_type' => 'public-key',
@@ -500,6 +500,16 @@ class PasskeyServiceTest extends TestCase
             'created_at' => $timestamp,
             'updated_at' => $timestamp,
         ]);
+    }
+
+    private function userUuidForId(int $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT uuid FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+        $uuid = $stmt->fetchColumn();
+        $this->assertNotFalse($uuid);
+
+        return strtolower((string) $uuid);
     }
 
     /**

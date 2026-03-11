@@ -199,10 +199,10 @@ class AdminControllerTest extends TestCase
 
         $pdo->exec("
             INSERT INTO user_passkeys (
-                user_id, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
+                user_uuid, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
                 transports, sign_count, backup_eligible, backup_state, last_used_at, attested_at, created_at, updated_at
             ) VALUES (
-                1, 'cred-admin', '" . hash('sha256', 'cred-admin') . "', 'public-key', 'Admin Laptop', '{\"alg\":-7}',
+                '550e8400-e29b-41d4-a716-4466554400aa', 'cred-admin', '" . hash('sha256', 'cred-admin') . "', 'public-key', 'Admin Laptop', '{\"alg\":-7}',
                 'app.example.test', 'dGVzdA==', '[\"internal\"]', 5, 1, 1,
                 '" . gmdate('Y-m-d H:i:s', strtotime('-1 day')) . "',
                 '" . gmdate('Y-m-d H:i:s', strtotime('-5 days')) . "',
