@@ -35,6 +35,19 @@ class UserController
         'passkey_deleted',
         'passkey_label_updated',
     ];
+    private const SECURITY_ACTIVITY_TYPE_FILTERS = [
+        'all' => self::SECURITY_ACTIVITY_ACTIONS,
+        'sign_ins' => ['login', 'passkey_login'],
+        'passkey_changes' => ['passkey_registered', 'passkey_deleted', 'passkey_label_updated'],
+        'password_changes' => ['password_change'],
+        'logouts' => ['logout'],
+    ];
+    private const SECURITY_ACTIVITY_PERIOD_FILTERS = [
+        'all' => null,
+        '7d' => 7,
+        '30d' => 30,
+        '90d' => 90,
+    ];
 
     private AuthService $authService;
     private AuditLogService $auditLogService;
@@ -513,8 +526,9 @@ class UserController
             $page = max(1, (int) ($query['page'] ?? 1));
             $limit = min(100, max(1, (int) ($query['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
+            $filters = $this->resolveSecurityActivityFilters($query);
 
-            $result = $this->fetchSecurityActivityTimeline((int) $user['id'], $limit, $offset);
+            $result = $this->fetchSecurityActivityTimeline((int) $user['id'], $filters, $limit, $offset);
 
             $this->auditLogService->log([
                 'action' => 'user_security_activity_viewed',
@@ -527,6 +541,8 @@ class UserController
                 'data' => [
                     'page' => $page,
                     'limit' => $limit,
+                    'type' => $filters['type'],
+                    'period' => $filters['period'],
                     'count' => count($result['items']),
                 ],
             ]);
@@ -535,6 +551,10 @@ class UserController
                 'success' => true,
                 'data' => [
                     'items' => $result['items'],
+                    'filters' => [
+                        'type' => $filters['type'],
+                        'period' => $filters['period'],
+                    ],
                     'pagination' => [
                         'current_page' => $page,
                         'per_page' => $limit,
@@ -2083,18 +2103,53 @@ class UserController
     }
 
     /**
+     * @param array<string, mixed> $query
+     * @return array{type: string, period: string, actions: array<int, string>, days: int|null}
+     */
+    private function resolveSecurityActivityFilters(array $query): array
+    {
+        $type = (string) ($query['type'] ?? 'all');
+        if (!isset(self::SECURITY_ACTIVITY_TYPE_FILTERS[$type])) {
+            $type = 'all';
+        }
+
+        $period = (string) ($query['period'] ?? 'all');
+        if (!array_key_exists($period, self::SECURITY_ACTIVITY_PERIOD_FILTERS)) {
+            $period = 'all';
+        }
+
+        $days = self::SECURITY_ACTIVITY_PERIOD_FILTERS[$period];
+
+        return [
+            'type' => $type,
+            'period' => $period,
+            'actions' => self::SECURITY_ACTIVITY_TYPE_FILTERS[$type],
+            'days' => is_int($days) ? $days : null,
+        ];
+    }
+
+    /**
      * @return array{items: array<int, array<string, mixed>>, total: int}
      */
-    private function fetchSecurityActivityTimeline(int $userId, int $limit, int $offset): array
+    private function fetchSecurityActivityTimeline(int $userId, array $filters, int $limit, int $offset): array
     {
-        $placeholders = implode(', ', array_fill(0, count(self::SECURITY_ACTIVITY_ACTIONS), '?'));
-        $baseParams = array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS);
+        $actions = $filters['actions'] ?? self::SECURITY_ACTIVITY_ACTIONS;
+        $placeholders = implode(', ', array_fill(0, count($actions), '?'));
+        $where = [
+            'user_id = ?',
+            "action IN ({$placeholders})",
+        ];
+        $baseParams = array_merge([$userId], $actions);
+        $days = isset($filters['days']) && is_int($filters['days']) ? $filters['days'] : null;
+        if ($days !== null) {
+            $where[] = $this->buildSecurityActivityPeriodClause($days);
+        }
+        $whereSql = implode(' AND ', $where);
 
         $listStmt = $this->db->prepare(
             "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
              FROM audit_logs
-             WHERE user_id = ?
-               AND action IN ({$placeholders})
+             WHERE {$whereSql}
              ORDER BY created_at DESC, id DESC
              LIMIT ? OFFSET ?"
         );
@@ -2104,8 +2159,7 @@ class UserController
         $countStmt = $this->db->prepare(
             "SELECT COUNT(*)
              FROM audit_logs
-             WHERE user_id = ?
-               AND action IN ({$placeholders})"
+             WHERE {$whereSql}"
         );
         $countStmt->execute($baseParams);
 
@@ -2113,6 +2167,18 @@ class UserController
             'items' => array_map([$this, 'normalizeSecurityActivityRow'], $rows),
             'total' => (int) $countStmt->fetchColumn(),
         ];
+    }
+
+    private function buildSecurityActivityPeriodClause(int $days): string
+    {
+        $safeDays = max(1, $days);
+        $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+
+        if ($driver === 'sqlite') {
+            return sprintf("created_at >= datetime('now', '-%d days')", $safeDays);
+        }
+
+        return sprintf('created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)', $safeDays);
     }
 
     /**

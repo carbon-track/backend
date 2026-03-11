@@ -1233,10 +1233,120 @@ class UserControllerTest extends TestCase
         $this->assertTrue($payload['success']);
         $this->assertSame(2, $payload['data']['pagination']['total_items']);
         $this->assertCount(2, $payload['data']['items']);
+        $this->assertSame('all', $payload['data']['filters']['type']);
+        $this->assertSame('all', $payload['data']['filters']['period']);
         $this->assertSame('passkey_label_updated', $payload['data']['items'][0]['action']);
         $this->assertSame('New', $payload['data']['items'][0]['metadata']['new_label']);
         $this->assertSame('login', $payload['data']['items'][1]['action']);
         $this->assertSame('1.1.1.1', $payload['data']['items'][1]['ip_address']);
+    }
+
+    public function testGetSecurityActivityAppliesTypeAndPeriodFilters(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $insert = $pdo->prepare(
+            'INSERT INTO audit_logs (user_id, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $insert->execute([1, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-45 days'))]);
+        $insert->execute([1, 'user', 'passkey_login', 'success', json_encode(['label' => 'Phone']), gmdate('Y-m-d H:i:s', strtotime('-3 days'))]);
+        $insert->execute([1, 'user', 'password_change', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('log')
+            ->with($this->callback(function (array $payload): bool {
+                $this->assertSame('sign_ins', $payload['data']['type']);
+                $this->assertSame('30d', $payload['data']['period']);
+                $this->assertSame(1, $payload['data']['count']);
+                return true;
+            }))
+            ->willReturn(true);
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            null,
+            $logger,
+            $pdo,
+            $errorLog,
+            null,
+            $region
+        );
+
+        $response = $controller->getSecurityActivity(
+            makeRequest('GET', '/users/me/security-activity', null, ['page' => 1, 'limit' => 10, 'type' => 'sign_ins', 'period' => '30d']),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame('sign_ins', $payload['data']['filters']['type']);
+        $this->assertSame('30d', $payload['data']['filters']['period']);
+        $this->assertSame(1, $payload['data']['pagination']['total_items']);
+        $this->assertCount(1, $payload['data']['items']);
+        $this->assertSame('passkey_login', $payload['data']['items'][0]['action']);
+    }
+
+    public function testBuildSecurityActivityPeriodClauseUsesDatabaseClockForSqlite(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $turnstile = $this->mockTurnstile();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            null,
+            $logger,
+            $pdo,
+            $errorLog,
+            null,
+            $region
+        );
+
+        $method = new \ReflectionMethod($controller, 'buildSecurityActivityPeriodClause');
+        $method->setAccessible(true);
+
+        $this->assertSame(
+            "created_at >= datetime('now', '-30 days')",
+            $method->invoke($controller, 30)
+        );
     }
 
     private function mockTurnstile(bool $configured = false)

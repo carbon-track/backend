@@ -123,12 +123,18 @@ class PasskeyControllerTest extends TestCase
     public function testUpdateReturnsUpdatedPasskey(): void
     {
         $authService = $this->createMock(AuthService::class);
-        $authService->method('getCurrentUser')->willReturn(['id' => 5]);
+        $authService->method('getCurrentUser')->willReturn([
+            'id' => 5,
+            'uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
+        ]);
 
         $passkeyService = $this->createMock(PasskeyService::class);
         $passkeyService->expects($this->once())
             ->method('updateLabelForUser')
-            ->with(5, 11, 'Office Key')
+            ->with([
+                'id' => 5,
+                'uuid' => '550e8400-e29b-41d4-a716-4466554400aa',
+            ], 11, 'Office Key')
             ->willReturn([
                 'id' => 11,
                 'label' => 'Office Key',

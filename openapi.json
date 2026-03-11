@@ -2090,6 +2090,37 @@
               "default": 20,
               "maximum": 100
             }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "安全活动类型筛选。",
+            "schema": {
+              "type": "string",
+              "default": "all",
+              "enum": [
+                "all",
+                "sign_ins",
+                "passkey_changes",
+                "password_changes",
+                "logouts"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "description": "安全活动时间范围筛选。",
+            "schema": {
+              "type": "string",
+              "default": "all",
+              "enum": [
+                "all",
+                "7d",
+                "30d",
+                "90d"
+              ]
+            }
           }
         ],
         "responses": {
@@ -19217,6 +19248,30 @@
           }
         }
       },
+      "SecurityActivityFilters": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "all",
+              "sign_ins",
+              "passkey_changes",
+              "password_changes",
+              "logouts"
+            ]
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "all",
+              "7d",
+              "30d",
+              "90d"
+            ]
+          }
+        }
+      },
       "SecurityActivityListResponse": {
         "type": "object",
         "properties": {
@@ -19232,6 +19287,9 @@
                 "items": {
                   "$ref": "#/components/schemas/SecurityActivityItem"
                 }
+              },
+              "filters": {
+                "$ref": "#/components/schemas/SecurityActivityFilters"
               },
               "pagination": {
                 "$ref": "#/components/schemas/StandardPagination"
@@ -19315,6 +19373,12 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "user_uuid": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "用户UUID，作为 Passkey 归属的稳定标识"
           }
         }
       },

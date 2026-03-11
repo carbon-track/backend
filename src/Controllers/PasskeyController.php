@@ -37,7 +37,7 @@ class PasskeyController
             return $this->jsonResponse($response, [
                 'success' => true,
                 'data' => [
-                    'passkeys' => $this->passkeyService->listForUser((int) $user['id']),
+                    'passkeys' => $this->passkeyService->listForUser($user),
                 ],
             ]);
         } catch (PasskeyOperationException $exception) {
@@ -212,7 +212,7 @@ class PasskeyController
                 ], 400);
             }
 
-            $this->passkeyService->deleteForUser((int) $user['id'], $passkeyId);
+            $this->passkeyService->deleteForUser($user, $passkeyId);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -259,7 +259,7 @@ class PasskeyController
             $body = $request->getParsedBody();
             $payload = is_array($body) ? $body : [];
             $passkey = $this->passkeyService->updateLabelForUser(
-                (int) $user['id'],
+                $user,
                 $passkeyId,
                 isset($payload['label']) ? (string) $payload['label'] : null
             );

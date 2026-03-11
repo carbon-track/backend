@@ -316,7 +316,7 @@ CREATE TABLE `user_checkins` (
 
 CREATE TABLE `user_passkeys` (
   `id` bigint(20) UNSIGNED NOT NULL,
-  `user_id` int(11) NOT NULL,
+  `user_uuid` char(36) NOT NULL,
   `credential_id` varchar(1024) NOT NULL,
   `credential_id_hash` char(64) NOT NULL,
   `credential_type` varchar(32) NOT NULL DEFAULT 'public-key',
@@ -347,7 +347,7 @@ CREATE TABLE `user_passkeys` (
 CREATE TABLE `webauthn_challenges` (
   `id` bigint(20) UNSIGNED NOT NULL,
   `challenge_id` char(36) NOT NULL,
-  `user_id` int(11) DEFAULT NULL,
+  `user_uuid` char(36) DEFAULT NULL,
   `flow_type` varchar(32) NOT NULL,
   `challenge` varchar(255) NOT NULL,
   `request_id` varchar(64) DEFAULT NULL,
@@ -893,7 +893,7 @@ ALTER TABLE `user_checkins`
 ALTER TABLE `user_passkeys`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `uniq_user_passkeys_credential_id_hash` (`credential_id_hash`),
-  ADD KEY `idx_user_passkeys_user_id` (`user_id`),
+  ADD KEY `idx_user_passkeys_user_uuid` (`user_uuid`),
   ADD KEY `idx_user_passkeys_rp_id` (`rp_id`),
   ADD KEY `idx_user_passkeys_disabled_at` (`disabled_at`),
   ADD KEY `idx_user_passkeys_last_used_at` (`last_used_at`);
@@ -904,7 +904,7 @@ ALTER TABLE `user_passkeys`
 ALTER TABLE `webauthn_challenges`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `uniq_webauthn_challenges_challenge_id` (`challenge_id`),
-  ADD KEY `idx_webauthn_challenges_user_id` (`user_id`),
+  ADD KEY `idx_webauthn_challenges_user_uuid` (`user_uuid`),
   ADD KEY `idx_webauthn_challenges_flow_type` (`flow_type`),
   ADD KEY `idx_webauthn_challenges_expires_at` (`expires_at`),
   ADD KEY `idx_webauthn_challenges_request_id` (`request_id`);

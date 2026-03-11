@@ -127,7 +127,7 @@ class AdminController
 
 $sql = "
                 SELECT
-                    u.id, u.username, u.email, u.school_id,
+                    u.id, u.uuid, u.username, u.email, u.school_id,
                     u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
                     u.group_id, u.quota_override, u.admin_notes,
                     {$lastLoginSelect},
@@ -167,13 +167,13 @@ $sql = "
                 ) uc ON u.id = uc.user_id
                 LEFT JOIN (
                     SELECT
-                        user_id,
+                        user_uuid,
                         COUNT(*) AS passkey_count,
                         MAX(last_used_at) AS last_passkey_used_at
                     FROM user_passkeys
                     WHERE disabled_at IS NULL
-                    GROUP BY user_id
-                ) pk ON u.id = pk.user_id
+                    GROUP BY user_uuid
+                ) pk ON u.uuid = pk.user_uuid
                 LEFT JOIN (
                     SELECT user_id,
                         COUNT(*) AS badge_records,
@@ -331,15 +331,15 @@ $sql = "
             $metrics = $this->badgeService->compileUserMetrics($userId);
             $badgePayload = $this->buildUserBadgePayload($userId, true);
             $checkinStats = $this->checkinService->getUserStreakStats($userId);
-            $payload = [
-                'user' => $userRow,
-                'metrics' => $metrics,
-                'badge_summary' => $badgePayload['summary'],
-                'recent_badges' => array_slice($badgePayload['items'], 0, 5),
-                'checkin_stats' => $checkinStats,
-                'passkey_summary' => $this->getUserPasskeySummary($userId),
-                'recent_security_activity' => $this->getRecentSecurityActivity($userId, 10),
-            ];
+              $payload = [
+                  'user' => $userRow,
+                  'metrics' => $metrics,
+                  'badge_summary' => $badgePayload['summary'],
+                  'recent_badges' => array_slice($badgePayload['items'], 0, 5),
+                  'checkin_stats' => $checkinStats,
+                  'passkey_summary' => $this->getUserPasskeySummary((string) ($userRow['uuid'] ?? '')),
+                  'recent_security_activity' => $this->getRecentSecurityActivity($userId, 10),
+              ];
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);
         } catch (\Throwable $e) {
@@ -693,8 +693,9 @@ $sql = "
     {
         $lastLoginSelect = $this->buildLastLoginSelect('u');
         $stmt = $this->db->prepare(
-            'SELECT
+              'SELECT
                 u.id,
+                u.uuid,
                 u.username,
                 u.email,
                 u.status,
@@ -710,11 +711,11 @@ $sql = "
              FROM users u
              LEFT JOIN schools s ON u.school_id = s.id
              LEFT JOIN (
-                SELECT user_id, COUNT(*) AS passkey_count, MAX(last_used_at) AS last_passkey_used_at
+                SELECT user_uuid, COUNT(*) AS passkey_count, MAX(last_used_at) AS last_passkey_used_at
                 FROM user_passkeys
                 WHERE disabled_at IS NULL
-                GROUP BY user_id
-             ) pk ON pk.user_id = u.id
+                GROUP BY user_uuid
+             ) pk ON pk.user_uuid = u.uuid
              WHERE u.id = :id AND u.deleted_at IS NULL
              LIMIT 1'
         );
@@ -736,7 +737,7 @@ $sql = "
     /**
      * @return array<string, mixed>
      */
-    private function getUserPasskeySummary(int $userId): array
+    private function getUserPasskeySummary(string $userUuid): array
     {
         $stmt = $this->db->prepare(
             'SELECT
@@ -746,9 +747,9 @@ $sql = "
                 MAX(last_used_at) AS last_used_at,
                 MAX(created_at) AS last_registered_at
              FROM user_passkeys
-             WHERE user_id = :user_id AND disabled_at IS NULL'
+             WHERE user_uuid = :user_uuid AND disabled_at IS NULL'
         );
-        $stmt->execute(['user_id' => $userId]);
+        $stmt->execute(['user_uuid' => strtolower($userUuid)]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
         return [
