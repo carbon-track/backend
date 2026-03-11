@@ -217,8 +217,10 @@ return function (App $app) {
 
             $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/badges', [AdminController::class, 'getUserBadges']);
             $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/overview', [AdminController::class, 'getUserOverview']);
+            $admin->get(PATH_USERS . PATTERN_ID_NUMERIC . '/security-activity', [AdminController::class, 'getUserSecurityActivity']);
             $admin->get(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/badges', [AdminController::class, 'getUserBadgesByUuid']);
             $admin->get(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/overview', [AdminController::class, 'getUserOverviewByUuid']);
+            $admin->get(PATH_USERS . '/by-uuid/{uuid:[0-9a-fA-F\\-]+}/security-activity', [AdminController::class, 'getUserSecurityActivityByUuid']);
             // 用户管理
             $admin->put(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'updateUser']);
             $admin->delete(PATH_USERS . PATTERN_ID_NUMERIC, [AdminController::class, 'deleteUser']);
