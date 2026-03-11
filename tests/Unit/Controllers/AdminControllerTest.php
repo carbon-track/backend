@@ -296,5 +296,69 @@ class AdminControllerTest extends TestCase
         $this->assertSame('550e8400-e29b-41d4-a716-4466554400aa', $json['data']['user']['uuid']);
     }
 
+    public function testGetUserSecurityActivityAppliesFiltersAndPagination(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $insert = $pdo->prepare(
+            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, operation_category, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $userUuid = '550e8400-e29b-41d4-a716-4466554400aa';
+        $insert->execute([1, $userUuid, 'user', 'passkey_registered', 'success', json_encode(['label' => 'Laptop']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $insert->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-1 days'))]);
+        $insert->execute([1, null, 'user', 'logout', 'success', json_encode([]), 'authentication', gmdate('Y-m-d H:i:s', strtotime('-120 days'))]);
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => 1]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logDataChange')
+            ->with(
+                'admin',
+                'user_security_activity_viewed',
+                9,
+                'admin',
+                'audit_logs',
+                1,
+                null,
+                $this->callback(fn ($data) => $data['type'] === 'passkey_changes' && $data['period'] === '30d' && $data['count'] === 1),
+                $this->callback(fn ($context) => $context['change_type'] === 'read')
+            );
+        $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $quotaConfigService = new QuotaConfigService();
+
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'lastlgn');
+
+        $request = makeRequest('GET', '/admin/users/1/security-activity', null, [
+            'page' => 1,
+            'limit' => 1,
+            'type' => 'passkey_changes',
+            'period' => '30d',
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getUserSecurityActivity($request, $response, ['id' => 1]);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('passkey_changes', $json['data']['filters']['type']);
+        $this->assertSame('30d', $json['data']['filters']['period']);
+        $this->assertSame(1, $json['data']['pagination']['per_page']);
+        $this->assertSame(1, $json['data']['pagination']['total_items']);
+        $this->assertCount(1, $json['data']['items']);
+        $this->assertSame('passkey_registered', $json['data']['items'][0]['action']);
+    }
+
 }
 

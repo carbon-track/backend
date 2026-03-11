@@ -31,6 +31,19 @@ class AdminController
         'passkey_deleted',
         'passkey_label_updated',
     ];
+    private const SECURITY_ACTIVITY_TYPE_FILTERS = [
+        'all' => self::SECURITY_ACTIVITY_ACTIONS,
+        'sign_ins' => ['login', 'passkey_login'],
+        'passkey_changes' => ['passkey_registered', 'passkey_deleted', 'passkey_label_updated'],
+        'password_changes' => ['password_change'],
+        'logouts' => ['logout'],
+    ];
+    private const SECURITY_ACTIVITY_PERIOD_FILTERS = [
+        'all' => null,
+        '7d' => 7,
+        '30d' => 30,
+        '90d' => 90,
+    ];
 
     private UserProfileViewService $userProfileViewService;
 
@@ -305,6 +318,16 @@ $sql = "
     public function getUserOverviewByUuid(Request $request, Response $response, array $args): Response
     {
         return $this->getUserOverviewForTarget($request, $response, $args);
+    }
+
+    public function getUserSecurityActivity(Request $request, Response $response, array $args): Response
+    {
+        return $this->getUserSecurityActivityForTarget($request, $response, $args);
+    }
+
+    public function getUserSecurityActivityByUuid(Request $request, Response $response, array $args): Response
+    {
+        return $this->getUserSecurityActivityForTarget($request, $response, $args);
     }
 
     private function getUserBadgesForTarget(Request $request, Response $response, array $args): Response
@@ -680,6 +703,76 @@ $sql = "
         }
     }
 
+    private function getUserSecurityActivityForTarget(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $admin = $this->authService->getCurrentUser($request);
+            if (!$admin || !$this->authService->isAdminUser($admin)) {
+                return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
+            }
+
+            $target = $this->resolveUserTarget($args);
+            if ($target['error'] !== null) {
+                return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
+            }
+
+            $query = $request->getQueryParams();
+            $page = max(1, (int) ($query['page'] ?? 1));
+            $limit = min(100, max(1, (int) ($query['limit'] ?? 20)));
+            $offset = ($page - 1) * $limit;
+            $filters = $this->resolveSecurityActivityFilters($query);
+            $userRow = $target['user'];
+            $result = $this->fetchSecurityActivityTimeline(
+                (int) $userRow['id'],
+                isset($userRow['uuid']) ? (string) $userRow['uuid'] : null,
+                $filters,
+                $limit,
+                $offset
+            );
+
+            $this->auditLog->logDataChange(
+                'admin',
+                'user_security_activity_viewed',
+                (int) ($admin['id'] ?? 0),
+                'admin',
+                'audit_logs',
+                (int) $userRow['id'],
+                null,
+                [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'type' => $filters['type'],
+                    'period' => $filters['period'],
+                    'count' => count($result['items']),
+                ],
+                ['change_type' => 'read']
+            );
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'data' => [
+                    'items' => $result['items'],
+                    'filters' => [
+                        'type' => $filters['type'],
+                        'period' => $filters['period'],
+                    ],
+                    'pagination' => [
+                        'current_page' => $page,
+                        'per_page' => $limit,
+                        'total_items' => $result['total'],
+                        'total_pages' => $result['total'] > 0 ? (int) ceil($result['total'] / $limit) : 0,
+                    ],
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            if (($_ENV['APP_ENV'] ?? '') === 'testing') {
+                throw $e;
+            }
+            $this->logExceptionWithFallback($e, $request);
+            return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
+        }
+    }
+
     public function deleteUser(Request $request, Response $response, array $args): Response
     {
         return $this->deleteUserForTarget($request, $response, $args);
@@ -1002,32 +1095,108 @@ $sql = "
      */
     private function getRecentSecurityActivity(int $userId, ?string $userUuid, int $limit): array
     {
-        $placeholders = implode(', ', array_fill(0, count(self::SECURITY_ACTIVITY_ACTIONS), '?'));
+        $result = $this->fetchSecurityActivityTimeline(
+            $userId,
+            $userUuid,
+            [
+                'type' => 'all',
+                'period' => 'all',
+                'actions' => self::SECURITY_ACTIVITY_ACTIONS,
+                'days' => null,
+            ],
+            $limit,
+            0
+        );
+
+        return $result['items'];
+    }
+
+    /**
+     * @param array<string, mixed> $query
+     * @return array{type: string, period: string, actions: array<int, string>, days: int|null}
+     */
+    private function resolveSecurityActivityFilters(array $query): array
+    {
+        $type = (string) ($query['type'] ?? 'all');
+        if (!isset(self::SECURITY_ACTIVITY_TYPE_FILTERS[$type])) {
+            $type = 'all';
+        }
+
+        $period = (string) ($query['period'] ?? 'all');
+        if (!array_key_exists($period, self::SECURITY_ACTIVITY_PERIOD_FILTERS)) {
+            $period = 'all';
+        }
+
+        $days = self::SECURITY_ACTIVITY_PERIOD_FILTERS[$period];
+
+        return [
+            'type' => $type,
+            'period' => $period,
+            'actions' => self::SECURITY_ACTIVITY_TYPE_FILTERS[$type],
+            'days' => is_int($days) ? $days : null,
+        ];
+    }
+
+    /**
+     * @return array{items: array<int, array<string, mixed>>, total: int}
+     */
+    private function fetchSecurityActivityTimeline(int $userId, ?string $userUuid, array $filters, int $limit, int $offset): array
+    {
+        $actions = $filters['actions'] ?? self::SECURITY_ACTIVITY_ACTIONS;
+        $placeholders = implode(', ', array_fill(0, count($actions), '?'));
         $normalizedUuid = is_string($userUuid) && trim($userUuid) !== '' ? strtolower(trim($userUuid)) : null;
         if ($normalizedUuid !== null) {
-            $stmt = $this->db->prepare(
-                "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
-                 FROM audit_logs
-                 WHERE (user_uuid = ? OR (user_uuid IS NULL AND user_id = ?))
-                   AND action IN ({$placeholders})
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT ?"
-            );
-            $stmt->execute(array_merge([$normalizedUuid, $userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+            $where = [
+                '(user_uuid = ? OR (user_uuid IS NULL AND user_id = ?))',
+                "action IN ({$placeholders})",
+            ];
+            $baseParams = array_merge([$normalizedUuid, $userId], $actions);
         } else {
-            $stmt = $this->db->prepare(
-                "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
-                 FROM audit_logs
-                 WHERE user_id = ?
-                   AND action IN ({$placeholders})
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT ?"
-            );
-            $stmt->execute(array_merge([$userId], self::SECURITY_ACTIVITY_ACTIONS, [$limit]));
+            $where = [
+                'user_id = ?',
+                "action IN ({$placeholders})",
+            ];
+            $baseParams = array_merge([$userId], $actions);
         }
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $days = isset($filters['days']) && is_int($filters['days']) ? $filters['days'] : null;
+        if ($days !== null) {
+            $where[] = $this->buildSecurityActivityPeriodClause($days);
+        }
+        $whereSql = implode(' AND ', $where);
 
-        return array_map([$this, 'normalizeSecurityActivityRow'], $rows);
+        $listStmt = $this->db->prepare(
+            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+             FROM audit_logs
+             WHERE {$whereSql}
+             ORDER BY created_at DESC, id DESC
+             LIMIT ? OFFSET ?"
+        );
+        $listStmt->execute(array_merge($baseParams, [$limit, $offset]));
+        $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $countStmt = $this->db->prepare(
+            "SELECT COUNT(*)
+             FROM audit_logs
+             WHERE {$whereSql}"
+        );
+        $countStmt->execute($baseParams);
+
+        return [
+            'items' => array_map([$this, 'normalizeSecurityActivityRow'], $rows),
+            'total' => (int) $countStmt->fetchColumn(),
+        ];
+    }
+
+    private function buildSecurityActivityPeriodClause(int $days): string
+    {
+        $safeDays = max(1, $days);
+        $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+
+        if ($driver === 'sqlite') {
+            return sprintf("created_at >= datetime('now', '-%d days')", $safeDays);
+        }
+
+        return sprintf('created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)', $safeDays);
     }
 
     /**
