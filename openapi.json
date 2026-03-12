@@ -1515,7 +1515,8 @@
             "description": "记录不存在"
           }
         },
-        "operationId": "adminCarbonTrackReviewRecord"
+        "operationId": "adminCarbonTrackReviewRecord",
+        "description": "审核碳记录 (别名)详细信息。"
       }
     },
     "/api/v1/admin/activities/review": {
@@ -1591,7 +1592,8 @@
             }
           }
         },
-        "operationId": "adminCarbonTrackReviewRecordsBulk"
+        "operationId": "adminCarbonTrackReviewRecordsBulk",
+        "description": "批量审核碳减排记录详细信息。"
       }
     },
     "/api/v1/admin/ai/announcement-drafts": {
@@ -2821,7 +2823,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeList"
+        "operationId": "adminBadgeList",
+        "description": "List badges (admin)详细信息。"
       },
       "post": {
         "tags": [
@@ -2896,7 +2899,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeCreate"
+        "operationId": "adminBadgeCreate",
+        "description": "Create badge详细信息。"
       }
     },
     "/api/v1/admin/badges/{id}": {
@@ -2973,7 +2977,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeDetail"
+        "operationId": "adminBadgeDetail",
+        "description": "Get badge detail详细信息。"
       },
       "put": {
         "tags": [
@@ -3068,7 +3073,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeUpdate"
+        "operationId": "adminBadgeUpdate",
+        "description": "Update badge详细信息。"
       }
     },
     "/api/v1/admin/badges/{id}/award": {
@@ -3165,7 +3171,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeAward"
+        "operationId": "adminBadgeAward",
+        "description": "Award badge to user详细信息。"
       }
     },
     "/api/v1/admin/badges/{id}/recipients": {
@@ -3257,7 +3264,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "List badge recipients详细信息。"
       }
     },
     "/api/v1/admin/badges/{id}/revoke": {
@@ -3354,7 +3362,8 @@
             "bearerAuth": []
           }
         ],
-        "operationId": "adminBadgeRevoke"
+        "operationId": "adminBadgeRevoke",
+        "description": "Revoke badge from user详细信息。"
       }
     },
     "/api/v1/admin/badges/auto-trigger": {
@@ -3462,7 +3471,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityGetActivitiesForAdmin"
+        "operationId": "adminCarbonActivityGetActivitiesForAdmin",
+        "description": "获取碳活动列表 (管理员)详细信息。"
       },
       "post": {
         "tags": [
@@ -3510,7 +3520,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityCreateActivity"
+        "operationId": "adminCarbonActivityCreateActivity",
+        "description": "创建碳活动 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-activities/{id}": {
@@ -3570,7 +3581,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityUpdateActivity"
+        "operationId": "adminCarbonActivityUpdateActivity",
+        "description": "更新碳活动 (管理员)详细信息。"
       },
       "delete": {
         "tags": [
@@ -3618,7 +3630,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityDeleteActivity"
+        "operationId": "adminCarbonActivityDeleteActivity",
+        "description": "删除碳活动 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-activities/{id}/restore": {
@@ -3668,7 +3681,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityRestoreActivity"
+        "operationId": "adminCarbonActivityRestoreActivity",
+        "description": "恢复碳活动 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-activities/{id}/statistics": {
@@ -3718,7 +3732,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityGetActivityStatistics"
+        "operationId": "adminCarbonActivityGetActivityStatistics",
+        "description": "获取单个活动统计 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-activities/pending": {
@@ -3975,7 +3990,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityUpdateSortOrders"
+        "operationId": "adminCarbonActivityUpdateSortOrders",
+        "description": "更新活动排序 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-activities/statistics": {
@@ -4015,7 +4031,8 @@
             }
           }
         },
-        "operationId": "adminCarbonActivityGetActivityStatisticsCarbonActivitiesStatistics"
+        "operationId": "adminCarbonActivityGetActivityStatisticsCarbonActivitiesStatistics",
+        "description": "获取碳活动统计 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/carbon-records": {
@@ -4962,7 +4979,8 @@
             }
           }
         },
-        "operationId": "adminLlmUsageSummary"
+        "operationId": "adminLlmUsageSummary",
+        "description": "LLM 使用额度统计详细信息。"
       }
     },
     "/api/v1/admin/llm-usage/analytics": {
@@ -5043,7 +5061,8 @@
             }
           }
         },
-        "operationId": "adminLlmUsageAnalytics"
+        "operationId": "adminLlmUsageAnalytics",
+        "description": "LLM 使用统计趋势与洞察详细信息。"
       }
     },
     "/api/v1/admin/llm-usage/logs/{id}": {
@@ -5130,7 +5149,8 @@
             }
           }
         },
-        "operationId": "adminLlmUsageLogDetail"
+        "operationId": "adminLlmUsageLogDetail",
+        "description": "LLM 调用日志详情详细信息。"
       }
     },
     "/api/v1/admin/logs": {
@@ -5170,7 +5190,8 @@
             }
           }
         },
-        "operationId": "adminGetLogs"
+        "operationId": "adminGetLogs",
+        "description": "获取系统日志 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/logs/export": {
@@ -5252,7 +5273,8 @@
             }
           }
         },
-        "operationId": "adminLogSearchExport"
+        "operationId": "adminLogSearchExport",
+        "description": "导出日志详细信息。"
       }
     },
     "/api/v1/admin/logs/related": {
@@ -5309,7 +5331,8 @@
             }
           }
         },
-        "operationId": "adminLogSearchRelated"
+        "operationId": "adminLogSearchRelated",
+        "description": "按 request_id 查询关联日志详细信息。"
       }
     },
     "/api/v1/admin/logs/search": {
@@ -5531,7 +5554,8 @@
             }
           }
         },
-        "operationId": "adminLogSearchSearch"
+        "operationId": "adminLogSearchSearch",
+        "description": "统一日志检索详细信息。"
       }
     },
     "/api/v1/admin/messages/broadcast": {
@@ -6476,7 +6500,8 @@
             }
           }
         },
-        "operationId": "adminProductSearchProductTags"
+        "operationId": "adminProductSearchProductTags",
+        "description": "搜索产品标签 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/schools": {
@@ -6526,7 +6551,8 @@
             }
           }
         },
-        "operationId": "adminSchoolStore"
+        "operationId": "adminSchoolStore",
+        "description": "创建学校 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/schools/{id}": {
@@ -6589,7 +6615,8 @@
             "description": "学校不存在"
           }
         },
-        "operationId": "adminSchoolUpdate"
+        "operationId": "adminSchoolUpdate",
+        "description": "更新学校 (管理员)详细信息。"
       },
       "delete": {
         "tags": [
@@ -6640,7 +6667,8 @@
             "description": "学校不存在"
           }
         },
-        "operationId": "adminSchoolDelete"
+        "operationId": "adminSchoolDelete",
+        "description": "删除学校 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/stats": {
@@ -7236,7 +7264,8 @@
             }
           }
         },
-        "operationId": "adminGetStats"
+        "operationId": "adminGetStats",
+        "description": "获取后台统计 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/system-logs": {
@@ -7501,7 +7530,8 @@
             }
           }
         },
-        "operationId": "adminGetPendingTransactions"
+        "operationId": "adminGetPendingTransactions",
+        "description": "获取待审核碳记录 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/users": {
@@ -7748,7 +7778,8 @@
             "description": "用户不存在"
           }
         },
-        "operationId": "adminUpdateUser"
+        "operationId": "adminUpdateUser",
+        "description": "更新用户 (管理员)详细信息。"
       },
       "delete": {
         "tags": [
@@ -7798,7 +7829,8 @@
             "description": "用户不存在"
           }
         },
-        "operationId": "adminDeleteUser"
+        "operationId": "adminDeleteUser",
+        "description": "删除用户 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/users/{id}/badges": {
@@ -7853,7 +7885,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "List badges for a specific user (admin)详细信息。"
       }
     },
     "/api/v1/admin/users/{id}/overview": {
@@ -7901,7 +7934,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "Get user overview with metrics详细信息。"
       }
     },
     "/api/v1/admin/users/{id}/points/adjust": {
@@ -8068,7 +8102,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "Get user security activity timeline详细信息。"
       }
     },
     "/api/v1/admin/users/by-uuid/{uuid}": {
@@ -8131,7 +8166,8 @@
             "description": "用户不存在"
           }
         },
-        "operationId": "adminUpdateUserByUuid"
+        "operationId": "adminUpdateUserByUuid",
+        "description": "按 UUID 更新用户 (管理员)详细信息。"
       },
       "delete": {
         "tags": [
@@ -8182,7 +8218,8 @@
             "description": "用户不存在"
           }
         },
-        "operationId": "adminDeleteUserByUuid"
+        "operationId": "adminDeleteUserByUuid",
+        "description": "按 UUID 删除用户 (管理员)详细信息。"
       }
     },
     "/api/v1/admin/users/by-uuid/{uuid}/badges": {
@@ -8238,7 +8275,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "List badges for a specific user by UUID (admin)详细信息。"
       }
     },
     "/api/v1/admin/users/by-uuid/{uuid}/overview": {
@@ -8287,7 +8325,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "Get user overview with metrics by UUID详细信息。"
       }
     },
     "/api/v1/admin/users/by-uuid/{uuid}/points/adjust": {
@@ -8445,7 +8484,8 @@
           {
             "bearerAuth": []
           }
-        ]
+        ],
+        "description": "Get user security activity timeline by UUID详细信息。"
       }
     },
     "/api/v1/admin/users/groups": {
@@ -8502,7 +8542,8 @@
             }
           }
         },
-        "operationId": "adminUserGroupList"
+        "operationId": "adminUserGroupList",
+        "description": "List User Groups详细信息。"
       },
       "post": {
         "tags": [
@@ -8564,7 +8605,8 @@
             }
           }
         },
-        "operationId": "adminUserGroupCreate"
+        "operationId": "adminUserGroupCreate",
+        "description": "Create User Group详细信息。"
       }
     },
     "/api/v1/admin/users/groups/{id}": {
@@ -8638,7 +8680,8 @@
             }
           }
         },
-        "operationId": "adminUserGroupUpdate"
+        "operationId": "adminUserGroupUpdate",
+        "description": "Update User Group详细信息。"
       },
       "delete": {
         "tags": [
@@ -8697,7 +8740,8 @@
             }
           }
         },
-        "operationId": "adminUserGroupDelete"
+        "operationId": "adminUserGroupDelete",
+        "description": "Delete User Group详细信息。"
       }
     },
     "/api/v1/admin/users/groups/meta": {
@@ -8759,7 +8803,8 @@
             }
           }
         },
-        "operationId": "adminUserGroupMeta"
+        "operationId": "adminUserGroupMeta",
+        "description": "Get User Group Metadata详细信息。"
       }
     },
     "/api/v1/ai/suggest-activity": {
@@ -10189,7 +10234,8 @@
             }
           }
         },
-        "operationId": "carbonTrackGetCarbonFactors"
+        "operationId": "carbonTrackGetCarbonFactors",
+        "description": "获取碳因子配置详细信息。"
       }
     },
     "/api/v1/carbon-track/record": {
@@ -10316,7 +10362,8 @@
             }
           }
         },
-        "operationId": "carbonTrackGetUserStats"
+        "operationId": "carbonTrackGetUserStats",
+        "description": "获取用户碳统计详细信息。"
       }
     },
     "/api/v1/carbon-track/transactions": {
@@ -13105,7 +13152,8 @@
             }
           }
         },
-        "operationId": "schoolCreateOrFetch"
+        "operationId": "schoolCreateOrFetch",
+        "description": "Create or fetch school详细信息。"
       }
     },
     "/api/v1/schools/{id}/classes": {
@@ -13389,7 +13437,8 @@
           }
         },
         "operationId": "statsGetPublicSummary",
-        "security": []
+        "security": [],
+        "description": "Get public community statistics详细信息。"
       }
     },
     "/api/v1/users/me": {
@@ -14386,7 +14435,8 @@
             }
           }
         },
-        "operationId": "userDelete"
+        "operationId": "userDelete",
+        "description": "删除当前用户的 Passkey详细信息。"
       }
     },
     "/api/v1/users/me/passkeys/registration/options": {
