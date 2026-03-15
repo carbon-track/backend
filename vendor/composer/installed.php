@@ -1,9 +1,9 @@
 <?php return array(
     'root' => array(
         'name' => 'carbontrack/backend',
-        'pretty_version' => 'dev-main',
-        'version' => 'dev-main',
-        'reference' => '9cf382e82371ba3a9d2540abb3d57e8390a8d373',
+        'pretty_version' => 'dev-dev',
+        'version' => 'dev-dev',
+        'reference' => '617abebd000fef6d642fa83169e3815e2c0d6756',
         'type' => 'project',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -38,9 +38,9 @@
             'dev_requirement' => false,
         ),
         'carbontrack/backend' => array(
-            'pretty_version' => 'dev-main',
-            'version' => 'dev-main',
-            'reference' => '9cf382e82371ba3a9d2540abb3d57e8390a8d373',
+            'pretty_version' => 'dev-dev',
+            'version' => 'dev-dev',
+            'reference' => '617abebd000fef6d642fa83169e3815e2c0d6756',
             'type' => 'project',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),

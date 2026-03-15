@@ -1,12 +1,10 @@
 
-# Backend CI for target repo - installs PHP & composer, runs phpunit and optional static analysis
+# Backend CI for mirror repo - runs push-time smoke checks after monorepo sync
 name: Backend CI
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
   install-deps:
@@ -16,18 +14,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y php-cli unzip git curl
-
-      - name: Install Composer
-        run: |
-          curl -sS https://getcomposer.org/installer | php
-          sudo mv composer.phar /usr/local/bin/composer
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
 
       - name: Install PHP dependencies
-        run: composer install --no-interaction --prefer-dist || true
+        run: composer install --no-interaction --prefer-dist
 
   phpunit:
     name: backend:phpunit
@@ -37,13 +32,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+
       - name: Run phpunit
         run: |
           if [ -f vendor/bin/phpunit ]; then
-            vendor/bin/phpunit || true
+            vendor/bin/phpunit
           else
             echo "phpunit binary not found; attempting global phpunit or composer test"
-            composer test || true
+            composer test
           fi
 
   static-analysis:
@@ -54,10 +59,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+
       - name: Try PHPStan (if available)
         run: |
           if [ -f vendor/bin/phpstan ]; then
-            vendor/bin/phpstan analyse || true
+            vendor/bin/phpstan analyse
           else
             echo "phpstan not installed; skipping static analysis"
           fi
