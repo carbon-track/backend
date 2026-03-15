@@ -447,4 +447,94 @@ class AuthControllerTest extends TestCase
         $this->assertFalse($json['success']);
         $this->assertSame('TURNSTILE_FAILED', $json['code']);
     }
+
+    public function testRegisterRejectsFailedTurnstileVerification(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockTurnstileService->expects($this->once())
+            ->method('verify')
+            ->with('bad-token')
+            ->willReturn(['success' => false, 'error' => 'invalid-input-secret']);
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $request = makeRequest('POST', '/auth/register', [
+            'username' => 'john',
+            'email' => 'john@example.com',
+            'password' => 'secret123',
+            'confirm_password' => 'secret123',
+            'cf_turnstile_response' => 'bad-token',
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->register($request, $response);
+        $this->assertSame(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
+
+    public function testLoginRejectsFailedTurnstileVerification(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockTurnstileService->expects($this->once())
+            ->method('verify')
+            ->with('bad-token')
+            ->willReturn(['success' => false, 'error' => 'invalid-input-secret']);
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $request = makeRequest('POST', '/auth/login', [
+            'identifier' => 'john@example.com',
+            'password' => 'secret123',
+            'cf_turnstile_response' => 'bad-token',
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->login($request, $response);
+        $this->assertSame(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
 }

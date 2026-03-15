@@ -435,7 +435,13 @@ class FileUploadControllerTest extends TestCase
 
         $created = new File();
         $created->reference_count = 1;
-        $created->sha256 = null;
+        $created->sha256 = hash('sha256', json_encode([
+            'file_path' => self::FOREIGN_DUPLICATE_PATH,
+            'etag' => '',
+            'size' => 10,
+            'mime_type' => self::MIME_JPEG,
+            'original_name' => 'foreign-owned.jpg',
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
 
         $fileMeta = $this->createMock(FileMetadataService::class);
         $fileMeta->expects($this->once())
@@ -451,7 +457,9 @@ class FileUploadControllerTest extends TestCase
             ->with($this->callback(function(array $data): bool {
                 return ($data['file_path'] ?? null) === self::FOREIGN_DUPLICATE_PATH
                     && ($data['user_id'] ?? null) === 32
-                    && !array_key_exists('sha256', $data);
+                    && is_string($data['sha256'] ?? null)
+                    && preg_match('/^[a-f0-9]{64}$/', $data['sha256']) === 1
+                    && ($data['sha256'] ?? null) !== str_repeat('e', 64);
             }))
             ->willReturn($created);
 
@@ -459,7 +467,10 @@ class FileUploadControllerTest extends TestCase
             $r2->method('getFileInfo')->willReturn([
                 'file_path' => self::FOREIGN_DUPLICATE_PATH,
                 'size' => 10,
-                'mime_type' => self::MIME_JPEG
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => [
+                    'sha256' => str_repeat('e', 64),
+                ],
             ]);
         }, $fileMeta);
 
@@ -472,7 +483,7 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
         $payload = json_decode((string) $resp->getBody(), true);
         $this->assertFalse($payload['data']['duplicate']);
-        $this->assertNull($payload['data']['sha256']);
+        $this->assertSame($created->sha256, $payload['data']['sha256']);
         $this->assertSame(1, $payload['data']['reference_count']);
     }
 
@@ -500,11 +511,13 @@ class FileUploadControllerTest extends TestCase
                 return ($data['file_path'] ?? null) === self::EXISTING_OK_PATH
                     && ($data['user_id'] ?? null) === 13
                     && ($data['original_name'] ?? null) === 'ok.jpg'
-                    && !array_key_exists('sha256', $data);
+                    && is_string($data['sha256'] ?? null)
+                    && preg_match('/^[a-f0-9]{64}$/', $data['sha256']) === 1;
             }))
             ->willReturn((function() {
                 $file = new File();
                 $file->reference_count = 1;
+                $file->sha256 = str_repeat('f', 64);
                 return $file;
             })());
 
@@ -561,6 +574,7 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(self::MIME_JPEG, $existing->mime_type);
         $this->assertSame(2048, $existing->size);
         $this->assertSame(1, $existing->reference_count);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', (string) $existing->sha256);
     }
 
     public function testConfirmReturnsConflictWhenExistingFileBelongsToAnotherUser(): void
@@ -726,7 +740,9 @@ class FileUploadControllerTest extends TestCase
             ->with($this->callback(function(array $data): bool {
                 return ($data['file_path'] ?? null) === self::MULTIPART_FILE_PATH
                     && ($data['user_id'] ?? null) === 42
-                    && !array_key_exists('sha256', $data);
+                    && is_string($data['sha256'] ?? null)
+                    && preg_match('/^[a-f0-9]{64}$/', $data['sha256']) === 1
+                    && ($data['sha256'] ?? null) !== self::MULTIPART_SHA256;
             }))
             ->willReturn(new File());
 
@@ -743,7 +759,10 @@ class FileUploadControllerTest extends TestCase
                 'file_path' => self::MULTIPART_FILE_PATH,
                 'size' => 98765,
                 'mime_type' => self::MIME_JPEG,
-                'metadata' => ['original_name' => 'big.jpg']
+                'metadata' => [
+                    'original_name' => 'big.jpg',
+                    'sha256' => self::MULTIPART_SHA256,
+                ]
             ]);
         }, $fileMeta, $multipart);
 
