@@ -13,6 +13,7 @@ use CarbonTrack\Services\PasskeyConfig;
 use CarbonTrack\Services\PasskeyOperationException;
 use CarbonTrack\Services\PasskeyService;
 use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\WebauthnProviderInterface;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use Monolog\Logger;
 use PDO;
@@ -24,6 +25,7 @@ class PasskeyServiceTest extends TestCase
     private PasskeyConfig $config;
     private PasskeyService $service;
     private AuditLogService $auditLogService;
+    private RegionService $regionService;
 
     protected function setUp(): void
     {
@@ -47,27 +49,15 @@ class PasskeyServiceTest extends TestCase
         $this->auditLogService = $this->createMock(AuditLogService::class);
         $this->auditLogService->method('log')->willReturn(true);
 
-        $regionService = $this->createMock(RegionService::class);
-        $regionService->method('getRegionContext')->willReturn([
+        $this->regionService = $this->createMock(RegionService::class);
+        $this->regionService->method('getRegionContext')->willReturn([
             'region_code' => null,
             'region_label' => null,
             'country_code' => null,
             'state_code' => null,
         ]);
 
-        $this->service = new PasskeyService(
-            $this->config,
-            new UserPasskey($this->pdo),
-            new WebauthnChallenge($this->pdo),
-            new NativeWebauthnProvider(),
-            $this->auditLogService,
-            $this->pdo,
-            $regionService,
-            null,
-            null,
-            $this->createMock(ErrorLogService::class),
-            $this->createMock(Logger::class)
-        );
+        $this->service = $this->createService(new NativeWebauthnProvider());
     }
 
     public function testBeginRegistrationStoresChallengeAndBuildsOptions(): void
@@ -255,39 +245,45 @@ class PasskeyServiceTest extends TestCase
 
     public function testCompleteAuthenticationRejectsCredentialWhenIdentifierDoesNotMatch(): void
     {
-        $registration = $this->service->beginRegistration($this->userFixture(), [
-            'label' => 'Phone',
+        $credentialId = 'credential-auth-mismatch';
+        $mockProvider = $this->createMock(WebauthnProviderInterface::class);
+        $mockProvider->method('isAvailable')->willReturn(true);
+        $mockProvider->method('getMetadata')->willReturn([
+            'available' => true,
+            'implementation' => 'mock',
         ]);
-        $keyPair = $this->generateEcKeyPair();
-        $credentialIdBytes = 'credential-auth-mismatch';
-        $credentialId = $this->base64UrlEncode($credentialIdBytes);
+        $mockProvider->expects($this->once())
+            ->method('verifyAuthenticationResponse')
+            ->with(
+                $this->callback(static fn (array $credential): bool => ($credential['id'] ?? null) === $credentialId),
+                $this->isType('array'),
+                $this->callback(static fn (array $passkey): bool => ($passkey['credential_id'] ?? null) === $credentialId),
+                $this->isInstanceOf(PasskeyConfig::class)
+            )
+            ->willReturn([
+                'credential_id' => $credentialId,
+                'sign_count' => 2,
+                'backup_state' => false,
+                'last_used_at' => gmdate('Y-m-d H:i:s'),
+            ]);
+        $mockProvider->expects($this->never())->method('verifyRegistrationResponse');
 
-        $this->service->completeRegistration($this->userFixture(), [
-            'challenge_id' => $registration['challenge_id'],
-            'credential' => $this->buildRegistrationCredential(
-                $registration['public_key']['challenge'],
-                'https://app.example.test',
-                $keyPair['x'],
-                $keyPair['y'],
-                $credentialIdBytes
-            ),
-        ]);
+        $service = $this->createService($mockProvider);
+        $this->insertPasskeyForUser(1, $credentialId, 'Phone', 1);
 
-        $authentication = $this->service->beginAuthentication([
+        $authentication = $service->beginAuthentication([
             'identifier' => 'missing@testdomain.com',
         ]);
 
         try {
-            $this->service->completeAuthentication([
+            $service->completeAuthentication([
                 'challenge_id' => $authentication['challenge_id'],
-                'credential' => $this->buildAuthenticationCredential(
-                    $authentication['public_key']['challenge'],
-                    'https://app.example.test',
-                    $credentialId,
-                    $keyPair['private_key'],
-                    'NTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMGFh',
-                    2
-                ),
+                'credential' => [
+                    'id' => $credentialId,
+                    'rawId' => $credentialId,
+                    'type' => 'public-key',
+                    'response' => [],
+                ],
             ]);
             $this->fail('Expected PasskeyOperationException was not thrown.');
         } catch (PasskeyOperationException $exception) {
@@ -452,6 +448,23 @@ class PasskeyServiceTest extends TestCase
             'points' => 1000,
             'is_admin' => true,
         ];
+    }
+
+    private function createService(WebauthnProviderInterface $webauthnProvider): PasskeyService
+    {
+        return new PasskeyService(
+            $this->config,
+            new UserPasskey($this->pdo),
+            new WebauthnChallenge($this->pdo),
+            $webauthnProvider,
+            $this->auditLogService,
+            $this->pdo,
+            $this->regionService,
+            null,
+            null,
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(Logger::class)
+        );
     }
 
     private function insertExistingPasskey(): void

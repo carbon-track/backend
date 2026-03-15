@@ -88,8 +88,7 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-            if (empty($data['cf_turnstile_response'])
-                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Turnstile verification failed',
@@ -245,7 +244,7 @@ class AuthController
                 ], 400);
             }
             if (!empty($data['cf_turnstile_response'])) {
-                if (!$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'])) {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Turnstile verification failed',
@@ -387,8 +386,7 @@ class AuthController
                 ], 400);
             }
 
-            if (empty($data['cf_turnstile_response'])
-                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Turnstile verification failed',
@@ -482,8 +480,7 @@ class AuthController
                 $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code_expires_at FROM users WHERE verification_token = ? AND deleted_at IS NULL LIMIT 1');
                 $stmt->execute([$token]);
             } else {
-                if (empty($data['cf_turnstile_response'])
-                    || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+                if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Turnstile verification failed',
@@ -642,8 +639,7 @@ class AuthController
                     'code' => 'MISSING_EMAIL'
                 ], 400);
             }
-            if (empty($data['cf_turnstile_response'])
-                || !$this->turnstileService->verify((string)$data['cf_turnstile_response'])) {
+            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Turnstile verification failed',
@@ -1191,6 +1187,19 @@ class AuthController
         $now = date('Y-m-d H:i:s');
         $stmt = $this->db->prepare('UPDATE users SET email_verified_at = ?, verification_code = NULL, verification_token = NULL, verification_code_expires_at = NULL, verification_attempts = 0, verification_send_count = 0, verification_last_sent_at = NULL, updated_at = ? WHERE id = ?');
         $stmt->execute([$now, $now, $userId]);
+    }
+
+    private function isTurnstileVerificationSuccessful($token): bool
+    {
+        $token = is_string($token) ? trim($token) : '';
+        if ($token === '') {
+            return false;
+        }
+
+        // TurnstileService::verify() returns a structured array, not a boolean.
+        $verification = $this->turnstileService->verify($token);
+
+        return is_array($verification) && !empty($verification['success']);
     }
 
     private function updateVerificationAttempts(int $userId, int $attempts): void

@@ -28,11 +28,28 @@ if (!$allowLiveEmails) {
     putenv('MAIL_SIMULATE=true');
 }
 
-if (!isset($_ENV['MAIL_SMTP_DEBUG'])) {
-    $_ENV['MAIL_SMTP_DEBUG'] = '0';
+// CI often runs without backend/.env, so provide safe mail defaults for container wiring.
+$mailDefaults = [
+    'MAIL_HOST' => 'localhost',
+    'MAIL_PORT' => '1025',
+    'MAIL_USERNAME' => 'test',
+    'MAIL_PASSWORD' => 'test',
+    'MAIL_ENCRYPTION' => 'tls',
+    'MAIL_FROM_ADDRESS' => 'noreply@carbontrack.test',
+    'MAIL_FROM_NAME' => 'CarbonTrack Test',
+    'MAIL_SMTP_DEBUG' => '0',
+    'SUPPORT_EMAIL' => 'support@carbontrack.test',
+    'FRONTEND_URL' => 'http://localhost:5173',
+];
+
+foreach ($mailDefaults as $key => $value) {
+    if (!isset($_ENV[$key])) {
+        $_ENV[$key] = $value;
+    }
+
+    $_SERVER[$key] = $_ENV[$key];
+    putenv($key . '=' . $_ENV[$key]);
 }
-$_SERVER['MAIL_SMTP_DEBUG'] = $_ENV['MAIL_SMTP_DEBUG'];
-putenv('MAIL_SMTP_DEBUG=' . $_ENV['MAIL_SMTP_DEBUG']);
 
 // Set test environment variables if not already set
 $_ENV['APP_ENV'] = $_ENV['APP_ENV'] ?? 'testing';
