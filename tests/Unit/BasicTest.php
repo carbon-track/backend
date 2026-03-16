@@ -10,7 +10,7 @@ class BasicTest extends TestCase
 {
     public function testPhpVersion(): void
     {
-        $this->assertGreaterThanOrEqual('7.4', PHP_VERSION);
+        $this->assertGreaterThanOrEqual('8.2', PHP_VERSION);
     }
 
     public function testEnvironmentVariables(): void

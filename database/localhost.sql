@@ -5,7 +5,7 @@
 -- 主机： localhost:3306
 -- 生成日期： 2025-09-16 09:14:07
 -- 服务器版本： 5.6.51-log
--- PHP 版本： 7.4.33
+-- PHP 版本： 8.2.0
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;

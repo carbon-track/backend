@@ -3,7 +3,7 @@
     "description": "CarbonTrack Backend API using Slim Framework",
     "type": "project",
     "require": {
-        "php": ">=7.4",
+        "php": ">=8.2",
         "aws/aws-sdk-php": "^3.0",
         "firebase/php-jwt": "^6.0",
         "guzzlehttp/guzzle": "7.10",
