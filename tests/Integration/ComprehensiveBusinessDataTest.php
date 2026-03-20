@@ -47,7 +47,7 @@ class ComprehensiveBusinessDataTest extends TestCase
         }
         $_ENV['DB_CONNECTION'] = 'sqlite';
         $_ENV['DB_DATABASE'] = $_ENV['DATABASE_PATH'];
-        $_ENV['JWT_SECRET'] = 'test_secret_key_for_jwt_token_generation';
+        $_ENV['JWT_SECRET'] = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
         $_ENV['JWT_ALGORITHM'] = 'HS256';
         $_ENV['JWT_EXPIRATION'] = '86400';
         $_ENV['TURNSTILE_SECRET_KEY'] = 'test_turnstile_secret';

@@ -20,7 +20,7 @@ class BasicTest extends TestCase
             $_ENV['APP_ENV'] = 'testing';
         }
         if (!isset($_ENV['JWT_SECRET'])) {
-            $_ENV['JWT_SECRET'] = 'test_secret';
+            $_ENV['JWT_SECRET'] = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
         }
         
         $this->assertNotEmpty($_ENV['JWT_SECRET']);

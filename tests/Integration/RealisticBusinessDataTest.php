@@ -28,7 +28,7 @@ class RealisticBusinessDataTest extends TestCase
         $_ENV['DATABASE_PATH'] = __DIR__ . '/../../test.db';
         $_ENV['DB_CONNECTION'] = 'sqlite';
         $_ENV['DB_DATABASE'] = $_ENV['DATABASE_PATH'];
-        $_ENV['JWT_SECRET'] = 'test_jwt_secret_for_testing';
+        $_ENV['JWT_SECRET'] = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
         $_ENV['TURNSTILE_SECRET_KEY'] = 'test_turnstile_secret';
     // Provide dummy Cloudflare R2 env vars so CloudflareR2Service can be constructed without throwing
     $_ENV['R2_ACCESS_KEY_ID'] = 'test_access_key';

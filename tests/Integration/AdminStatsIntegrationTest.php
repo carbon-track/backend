@@ -60,7 +60,7 @@ class AdminStatsIntegrationTest extends TestCase
             ($adminId, 3, 'Reminder', 'Update profile', 'normal', 1, datetime('now','-3 day')),
             ($adminId, 4, 'Alert', 'Pending action', 'high', 0, datetime('now','-1 day'))");
 
-        $authService = new class('test-secret', 'HS256', 3600) extends AuthService {
+        $authService = new class('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600) extends AuthService {
             private array $admin;
             public function __construct($secret, $alg, $exp)
             {

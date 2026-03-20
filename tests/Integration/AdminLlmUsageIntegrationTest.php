@@ -15,7 +15,7 @@ class AdminLlmUsageIntegrationTest extends TestCase
 {
     private function makeController(PDO $pdo): AdminLlmUsageController
     {
-        $authService = new class('test-secret', 'HS256', 3600) extends AuthService {
+        $authService = new class('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600) extends AuthService {
             private array $admin = [
                 'id' => 1,
                 'is_admin' => true,

@@ -210,7 +210,7 @@ class ProductExchangeQueryTest extends TestCase
             'is_admin' => false
         ];
 
-        return new class('secret', 'HS256', 3600, $userRow) extends AuthService {
+        return new class('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600, $userRow) extends AuthService {
             private array $user;
 
             public function __construct(string $secret, string $alg, int $exp, array $user)
@@ -241,7 +241,7 @@ class ProductExchangeQueryTest extends TestCase
             'is_admin' => true
         ];
 
-        return new class('secret', 'HS256', 3600, $adminUser) extends AuthService {
+        return new class('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600, $adminUser) extends AuthService {
             private array $user;
 
             public function __construct(string $secret, string $alg, int $exp, array $user)
