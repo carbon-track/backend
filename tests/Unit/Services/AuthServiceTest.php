@@ -14,7 +14,7 @@ use PDO;
 class AuthServiceTest extends TestCase
 {
     private AuthService $authService;
-    private string $jwtSecret = 'test-jwt-secret-key';
+    private string $jwtSecret = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
     private AuditLogService $auditLogService;
     private ErrorLogService $errorLogService;
 

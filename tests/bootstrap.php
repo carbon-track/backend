@@ -54,7 +54,7 @@ foreach ($mailDefaults as $key => $value) {
 // Set test environment variables if not already set
 $_ENV['APP_ENV'] = $_ENV['APP_ENV'] ?? 'testing';
 $_ENV['DB_DATABASE'] = $_ENV['DB_DATABASE'] ?? 'carbontrack_test';
-$_ENV['JWT_SECRET'] = $_ENV['JWT_SECRET'] ?? 'test-jwt-secret-key';
+$_ENV['JWT_SECRET'] = $_ENV['JWT_SECRET'] ?? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 $_ENV['JWT_EXPIRES_IN'] = $_ENV['JWT_EXPIRES_IN'] ?? '3600';
 
 // Disable error reporting for cleaner test output

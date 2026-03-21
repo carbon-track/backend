@@ -102,7 +102,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             'is_admin' => false
         ];
 
-        $authService = new class('secret', 'HS256', 3600, $userPayload) extends AuthService {
+        $authService = new class('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600, $userPayload) extends AuthService {
             private array $mockUser;
 
             public function __construct($secret, $alg, $exp, array $user)

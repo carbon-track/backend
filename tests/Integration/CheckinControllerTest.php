@@ -175,7 +175,7 @@ class CheckinControllerTest extends TestCase
 
             public function __construct(User $user)
             {
-                parent::__construct('test-secret', 'HS256', 3600);
+            parent::__construct('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'HS256', 3600);
                 $this->user = $user;
             }
 
