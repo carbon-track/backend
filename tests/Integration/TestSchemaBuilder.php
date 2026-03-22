@@ -82,6 +82,8 @@ class TestSchemaBuilder
             // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
             // Only a subset of data is critical for tests; optional columns kept nullable.
             "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                user_uuid TEXT,\n                conversation_id TEXT,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                request_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS admin_ai_conversations (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                conversation_id TEXT NOT NULL UNIQUE,\n                admin_id INTEGER,\n                title TEXT,\n                last_message_preview TEXT,\n                started_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                last_activity_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS admin_ai_messages (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                conversation_id TEXT NOT NULL,\n                kind TEXT NOT NULL,\n                role TEXT,\n                action TEXT,\n                status TEXT DEFAULT 'success',\n                content TEXT,\n                request_id TEXT,\n                response_code INTEGER,\n                meta_json TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Login attempts
             "CREATE TABLE IF NOT EXISTS login_attempts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT,\n                ip_address TEXT,\n                success INTEGER,\n                attempted_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Error logs (simplified)
@@ -134,6 +136,12 @@ class TestSchemaBuilder
             'user_uuid TEXT', 'conversation_id TEXT', 'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
             'referrer TEXT', 'operation_category TEXT', 'operation_subtype TEXT', 'change_type TEXT'
+        ]);
+        self::ensureColumns($pdo, 'admin_ai_conversations', [
+            'admin_id INTEGER', 'title TEXT', 'last_message_preview TEXT', 'started_at TEXT', 'last_activity_at TEXT', 'created_at TEXT', 'updated_at TEXT'
+        ]);
+        self::ensureColumns($pdo, 'admin_ai_messages', [
+            'kind TEXT', 'role TEXT', 'action TEXT', 'status TEXT', 'content TEXT', 'request_id TEXT', 'response_code INTEGER', 'meta_json TEXT', 'created_at TEXT', 'updated_at TEXT'
         ]);
         self::ensureColumns($pdo, 'system_logs', ['user_uuid TEXT', 'server_meta TEXT']);
         self::ensureColumns($pdo, 'error_logs', ['request_id TEXT']);

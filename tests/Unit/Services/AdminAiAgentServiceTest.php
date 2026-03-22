@@ -83,9 +83,84 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertStringContainsString('待处理记录', $result['message']);
         $this->assertSame(1, $result['conversation']['summary']['llm_calls']);
         $this->assertCount(2, array_filter($result['conversation']['messages'], static fn (array $item): bool => ($item['kind'] ?? null) === 'message'));
+        $conversationCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_conversations WHERE conversation_id IS NOT NULL")->fetchColumn();
+        $messageCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id IS NOT NULL")->fetchColumn();
+        $this->assertSame(1, $conversationCount);
+        $this->assertSame(3, $messageCount);
 
         $llmCount = (int) $pdo->query("SELECT COUNT(*) FROM llm_logs WHERE conversation_id IS NOT NULL")->fetchColumn();
         $this->assertSame(1, $llmCount);
+    }
+
+    public function testChatRestoresConversationFromLlmLogsWhenAuditWritesFail(): void
+    {
+        $pdo = $this->makePdo();
+        $llmLogService = new LlmLogService($pdo, new Logger('test'));
+        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+
+        $activityId = '550e8400-e29b-41d4-a716-446655440001';
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b4')");
+        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-2', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
+
+        $auditLogService = $this->getMockBuilder(AuditLogService::class)
+            ->setConstructorArgs([$pdo, new Logger('test')])
+            ->onlyMethods(['logAdminOperation', 'getLastInsertId'])
+            ->getMock();
+        $auditLogService->method('logAdminOperation')->willReturn(false);
+        $auditLogService->method('getLastInsertId')->willReturn(null);
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'get_pending_carbon_records',
+                    'payload' => [
+                        'limit' => 5,
+                    ],
+                ]),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12],
+                'managementActions' => [
+                    [
+                        'name' => 'get_pending_carbon_records',
+                        'label' => 'Get pending carbon records',
+                        'description' => 'Read pending carbon records.',
+                        'api' => ['payloadTemplate' => ['status' => 'pending', 'limit' => 5, 'record_ids' => []]],
+                        'requires' => [],
+                        'contextHints' => [],
+                        'risk_level' => 'read',
+                        'requires_confirmation' => false,
+                    ],
+                ],
+            ],
+            $llmLogService,
+            $auditLogService,
+            $errorLogService
+        );
+
+        $result = $service->chat(null, '查看待审核碳记录', [], null, [
+            'request_id' => 'req-read-fallback-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+
+        $this->assertTrue($result['success']);
+        $visibleMessages = array_values(array_filter($result['conversation']['messages'], static fn (array $item): bool => ($item['kind'] ?? null) === 'message'));
+        $this->assertCount(2, $visibleMessages);
+        $this->assertSame('查看待审核碳记录', $visibleMessages[0]['content']);
+        $this->assertStringContainsString('待处理记录', (string) $visibleMessages[1]['content']);
+
+        $conversations = $service->listConversations(['admin_id' => 1]);
+        $this->assertCount(1, $conversations);
+        $this->assertSame($result['conversation_id'], $conversations[0]['conversation_id']);
+        $this->assertSame(2, $conversations[0]['message_count']);
+        $this->assertStringContainsString('待处理记录', (string) $conversations[0]['last_message_preview']);
+        $storedCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id = '{$result['conversation_id']}'")->fetchColumn();
+        $this->assertSame(3, $storedCount);
     }
 
     public function testWriteActionRequiresConfirmationAndExecutesAfterDecision(): void
@@ -194,11 +269,17 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $pdo->exec("
-            INSERT INTO audit_logs (user_id, conversation_id, actor_type, action, status, operation_category, data, created_at)
+            INSERT INTO admin_ai_conversations (conversation_id, admin_id, title, last_message_preview, started_at, last_activity_at)
             VALUES
-            (7, 'admin-ai-11111111', 'admin', 'admin_ai_user_message', 'success', 'admin_ai', '{\"visible_text\":\"会话一\"}', '2026-03-20 10:00:00'),
-            (7, 'admin-ai-11111111', 'admin', 'admin_ai_action_proposed', 'pending', 'admin_ai', '{\"visible_text\":\"待确认\"}', '2026-03-20 10:05:00'),
-            (9, 'admin-ai-22222222', 'admin', 'admin_ai_user_message', 'success', 'admin_ai', '{\"visible_text\":\"会话二\"}', '2026-03-18 09:00:00')
+            ('admin-ai-11111111', 7, '会话一', '待确认', '2026-03-20 10:00:00', '2026-03-20 10:05:00'),
+            ('admin-ai-22222222', 9, '会话二', '会话二', '2026-03-18 09:00:00', '2026-03-18 09:00:00')
+        ");
+        $pdo->exec("
+            INSERT INTO admin_ai_messages (conversation_id, kind, role, action, status, content, meta_json, created_at)
+            VALUES
+            ('admin-ai-11111111', 'message', 'user', 'admin_ai_user_message', 'success', '会话一', '{\"data\":{\"visible_text\":\"会话一\"}}', '2026-03-20 10:00:00'),
+            ('admin-ai-11111111', 'action_proposed', NULL, 'admin_ai_action_proposed', 'pending', '待确认', '{\"data\":{\"action_name\":\"approve_carbon_records\",\"label\":\"Approve\",\"summary\":\"待确认\",\"payload\":{\"record_ids\":[\"rec-1\"]},\"risk_level\":\"write\"}}', '2026-03-20 10:05:00'),
+            ('admin-ai-22222222', 'message', 'user', 'admin_ai_user_message', 'success', '会话二', '{\"data\":{\"visible_text\":\"会话二\"}}', '2026-03-18 09:00:00')
         ");
         $pdo->exec("
             INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, created_at)

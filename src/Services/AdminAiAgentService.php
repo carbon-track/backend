@@ -109,9 +109,10 @@ class AdminAiAgentService
         ];
 
         $startedAt = microtime(true);
+        $llmLogId = null;
         try {
             $rawResponse = $this->client->createChatCompletion($payload);
-            $this->logLlmCall($payload['messages'], $rawResponse, $logContext, $normalizedContext, $conversationId, $turnNo, $startedAt);
+            $llmLogId = $this->logLlmCall($payload['messages'], $rawResponse, $logContext, $normalizedContext, $conversationId, $turnNo, $startedAt);
         } catch (\Throwable $exception) {
             $this->logLlmFailure($payload['messages'], $logContext, $normalizedContext, $conversationId, $turnNo, $startedAt, $exception);
             $this->logError($exception, $logContext, [
@@ -123,6 +124,7 @@ class AdminAiAgentService
         }
 
         $outcome = $this->processModelResponse($conversationId, $normalizedContext, $logContext, $rawResponse);
+        $this->updateLlmConversationSnapshot($llmLogId, $normalizedMessage, $outcome, $normalizedContext);
 
         if (($outcome['assistant_text'] ?? '') !== '') {
             $this->logConversationEvent('admin_ai_assistant_message', $logContext, [
@@ -153,6 +155,15 @@ class AdminAiAgentService
      */
     public function listConversations(array $filters = []): array
     {
+        return $this->listStoredConversations($filters);
+    }
+
+    /**
+     * @param array<string,mixed> $filters
+     * @return array<int,array<string,mixed>>
+     */
+    private function listStoredConversations(array $filters = []): array
+    {
         $limit = max(1, min(50, (int) ($filters['limit'] ?? 20)));
         $actorId = isset($filters['actor_id']) && is_numeric((string) $filters['actor_id'])
             ? (int) $filters['actor_id']
@@ -165,46 +176,30 @@ class AdminAiAgentService
         $conversationIdFilter = $this->normalizeConversationId(isset($filters['conversation_id']) ? (string) $filters['conversation_id'] : null);
 
         $sql = "SELECT
-                    base.conversation_id,
-                    base.started_at,
-                    base.last_activity_at,
-                    base.admin_id,
+                    c.conversation_id,
+                    c.started_at,
+                    c.last_activity_at,
+                    c.admin_id,
+                    c.title,
+                    c.last_message_preview,
+                    COALESCE(msg.message_count, 0) AS message_count,
                     COALESCE(pending.pending_action_count, 0) AS pending_action_count,
                     COALESCE(llm.llm_calls, 0) AS llm_calls,
                     COALESCE(llm.total_tokens, 0) AS total_tokens,
                     llm.last_model
-                FROM (
-                    SELECT
-                        conversation_id,
-                        MIN(created_at) AS started_at,
-                        MAX(created_at) AS last_activity_at,
-                        MAX(user_id) AS admin_id
-                    FROM audit_logs
-                    WHERE actor_type = 'admin'
-                      AND operation_category = 'admin_ai'
-                      AND conversation_id IS NOT NULL
-                      AND conversation_id <> ''";
-        /** @var array<string,array{0:mixed,1:int}> $params */
-        $params = [];
-        if ($actorId !== null) {
-            $sql .= " AND user_id = :actor_id";
-            $params[':actor_id'] = [$actorId, PDO::PARAM_INT];
-        }
-        if ($conversationIdFilter !== null) {
-            $sql .= " AND conversation_id = :conversation_id";
-            $params[':conversation_id'] = [$conversationIdFilter, PDO::PARAM_STR];
-        }
-        $sql .= " GROUP BY conversation_id
-                ) base
+                FROM admin_ai_conversations c
+                LEFT JOIN (
+                    SELECT conversation_id, COUNT(*) AS message_count
+                    FROM admin_ai_messages
+                    WHERE kind = 'message'
+                    GROUP BY conversation_id
+                ) msg ON msg.conversation_id = c.conversation_id
                 LEFT JOIN (
                     SELECT conversation_id, COUNT(*) AS pending_action_count
-                    FROM audit_logs
-                    WHERE action = 'admin_ai_action_proposed'
-                      AND status = 'pending'
-                      AND conversation_id IS NOT NULL
-                      AND conversation_id <> ''
+                    FROM admin_ai_messages
+                    WHERE kind = 'action_proposed' AND status = 'pending'
                     GROUP BY conversation_id
-                ) pending ON pending.conversation_id = base.conversation_id
+                ) pending ON pending.conversation_id = c.conversation_id
                 LEFT JOIN (
                     SELECT
                         logs.conversation_id,
@@ -221,15 +216,24 @@ class AdminAiAgentService
                     WHERE logs.conversation_id IS NOT NULL
                       AND logs.conversation_id <> ''
                     GROUP BY logs.conversation_id
-                ) llm ON llm.conversation_id = base.conversation_id
+                ) llm ON llm.conversation_id = c.conversation_id
                 WHERE 1 = 1";
-
+        /** @var array<string,array{0:mixed,1:int}> $params */
+        $params = [];
+        if ($actorId !== null) {
+            $sql .= " AND c.admin_id = :actor_id";
+            $params[':actor_id'] = [$actorId, PDO::PARAM_INT];
+        }
+        if ($conversationIdFilter !== null) {
+            $sql .= " AND c.conversation_id = :conversation_id";
+            $params[':conversation_id'] = [$conversationIdFilter, PDO::PARAM_STR];
+        }
         if ($dateFrom !== null) {
-            $sql .= " AND base.last_activity_at >= :date_from";
+            $sql .= " AND c.last_activity_at >= :date_from";
             $params[':date_from'] = [$dateFrom, PDO::PARAM_STR];
         }
         if ($dateTo !== null) {
-            $sql .= " AND base.last_activity_at <= :date_to";
+            $sql .= " AND c.last_activity_at <= :date_to";
             $params[':date_to'] = [$dateTo, PDO::PARAM_STR];
         }
         if ($model !== null && $model !== '') {
@@ -247,41 +251,49 @@ class AdminAiAgentService
             $sql .= " AND COALESCE(pending.pending_action_count, 0) = 0";
         }
 
-        $sql .= " ORDER BY base.last_activity_at DESC LIMIT :limit";
+        $sql .= " ORDER BY c.last_activity_at DESC LIMIT :limit";
 
-        $stmt = $this->db->prepare($sql);
-        foreach ($params as $key => [$value, $type]) {
-            $stmt->bindValue($key, $value, $type);
-        }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
-
-        $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-            $conversationId = (string) ($row['conversation_id'] ?? '');
-            if ($conversationId === '') {
-                continue;
+        try {
+            $stmt = $this->db->prepare($sql);
+            foreach ($params as $key => [$value, $type]) {
+                $stmt->bindValue($key, $value, $type);
             }
-            $preview = $this->fetchConversationPreview($conversationId);
-            $pendingCount = (int) ($row['pending_action_count'] ?? 0);
-            $items[] = [
-                'conversation_id' => $conversationId,
-                'started_at' => $row['started_at'] ?? null,
-                'last_activity_at' => $row['last_activity_at'] ?? null,
-                'admin_id' => $row['admin_id'] !== null ? (int) $row['admin_id'] : null,
-                'message_count' => (int) ($preview['message_count'] ?? 0),
-                'total_tokens' => (int) ($row['total_tokens'] ?? 0),
-                'llm_calls' => (int) ($row['llm_calls'] ?? 0),
-                'last_model' => $row['last_model'] ?? null,
-                'status' => $pendingCount > 0 ? 'waiting_confirmation' : 'active',
-                'pending_action_count' => $pendingCount,
-                'title' => $preview['title'] ?? null,
-                'last_message_preview' => $preview['last_message_preview'] ?? null,
-            ];
-        }
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
 
-        return $items;
+            $items = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $conversationId = (string) ($row['conversation_id'] ?? '');
+                if ($conversationId === '') {
+                    continue;
+                }
+
+                $pendingCount = (int) ($row['pending_action_count'] ?? 0);
+                $items[] = [
+                    'conversation_id' => $conversationId,
+                    'started_at' => $row['started_at'] ?? null,
+                    'last_activity_at' => $row['last_activity_at'] ?? null,
+                    'admin_id' => $row['admin_id'] !== null ? (int) $row['admin_id'] : null,
+                    'message_count' => (int) ($row['message_count'] ?? 0),
+                    'total_tokens' => (int) ($row['total_tokens'] ?? 0),
+                    'llm_calls' => (int) ($row['llm_calls'] ?? 0),
+                    'last_model' => $row['last_model'] ?? null,
+                    'status' => $pendingCount > 0 ? 'waiting_confirmation' : 'active',
+                    'pending_action_count' => $pendingCount,
+                    'title' => $row['title'] ?? null,
+                    'last_message_preview' => $row['last_message_preview'] ?? null,
+                ];
+            }
+
+            return $items;
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to list admin AI conversations from dedicated store.', [
+                'error' => $exception->getMessage(),
+            ]);
+            return [];
+        }
     }
+
 
     /**
      * @return array<string,mixed>
@@ -652,13 +664,12 @@ class AdminAiAgentService
             'requires_confirmation' => true,
         ];
 
-        $this->logConversationEvent('admin_ai_action_proposed', $logContext, [
+        $proposalId = $this->logConversationEvent('admin_ai_action_proposed', $logContext, [
             'conversation_id' => $conversationId,
             'visible_text' => $summary,
             'request_data' => $proposalData,
             'status' => 'pending',
         ]);
-        $proposalId = $this->auditLogService?->getLastInsertId();
 
         return [
             'assistant_text' => sprintf("已整理待执行操作：%s\n如需执行，请确认。", $summary),
@@ -2498,23 +2509,18 @@ class AdminAiAgentService
 
     private function fetchHistoryMessages(string $conversationId): array
     {
-        $stmt = $this->db->prepare("SELECT action, data
-            FROM audit_logs
-            WHERE conversation_id = :conversation_id
-              AND action IN ('admin_ai_user_message', 'admin_ai_assistant_message', 'admin_ai_summary_snapshot')
-            ORDER BY created_at ASC, id ASC");
-        $stmt->execute([':conversation_id' => $conversationId]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-
+        $timeline = $this->fetchStoredConversationTimeline($conversationId);
         $history = [];
-        foreach ($rows as $row) {
-            $data = $this->decodeJson($row['data'] ?? null);
-            $content = trim((string) ($data['visible_text'] ?? ''));
+        foreach ($timeline as $item) {
+            if (($item['kind'] ?? null) !== 'message') {
+                continue;
+            }
+            $content = trim((string) ($item['content'] ?? ''));
             if ($content === '') {
                 continue;
             }
             $history[] = [
-                'role' => ($row['action'] ?? '') === 'admin_ai_user_message' ? 'user' : 'assistant',
+                'role' => ($item['role'] ?? null) === 'user' ? 'user' : 'assistant',
                 'content' => $content,
             ];
         }
@@ -2525,64 +2531,7 @@ class AdminAiAgentService
 
     private function fetchConversationTimeline(string $conversationId): array
     {
-        $stmt = $this->db->prepare("SELECT *
-            FROM audit_logs
-            WHERE conversation_id = :conversation_id
-              AND operation_category = 'admin_ai'
-            ORDER BY created_at ASC, id ASC");
-        $stmt->execute([':conversation_id' => $conversationId]);
-
-        $messages = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-            $data = $this->decodeJson($row['data'] ?? null);
-            $kind = 'event';
-            $role = 'assistant';
-            $action = (string) ($row['action'] ?? '');
-            if ($action === 'admin_ai_user_message') {
-                $kind = 'message';
-                $role = 'user';
-            } elseif ($action === 'admin_ai_assistant_message') {
-                $kind = 'message';
-                $role = 'assistant';
-            } elseif ($action === 'admin_ai_action_proposed') {
-                $kind = 'action_proposed';
-            } elseif (str_starts_with($action, 'admin_ai_action_')) {
-                $kind = 'action_event';
-            } elseif ($action === 'admin_ai_tool_invocation') {
-                $kind = 'tool';
-            }
-
-            $proposal = null;
-            if ($action === 'admin_ai_action_proposed') {
-                $proposal = [
-                    'proposal_id' => (int) ($row['id'] ?? 0),
-                    'action_name' => $data['action_name'] ?? null,
-                    'label' => $data['label'] ?? null,
-                    'summary' => $data['summary'] ?? ($data['visible_text'] ?? null),
-                    'payload' => $data['payload'] ?? null,
-                    'risk_level' => $data['risk_level'] ?? null,
-                    'status' => $row['status'] ?? null,
-                ];
-            }
-
-            $messages[] = [
-                'id' => (int) ($row['id'] ?? 0),
-                'kind' => $kind,
-                'role' => $role,
-                'action' => $action,
-                'status' => $row['status'] ?? null,
-                'content' => $data['visible_text'] ?? null,
-                'proposal' => $proposal,
-                'meta' => [
-                    'request_id' => $row['request_id'] ?? null,
-                    'response_code' => $row['response_code'] !== null ? (int) $row['response_code'] : null,
-                    'data' => $data,
-                ],
-                'created_at' => $row['created_at'] ?? null,
-            ];
-        }
-
-        return $messages;
+        return $this->fetchStoredConversationTimeline($conversationId);
     }
 
     private function fetchConversationLlmCalls(string $conversationId): array
@@ -2631,88 +2580,88 @@ class AdminAiAgentService
 
     private function fetchConversationPreview(string $conversationId): array
     {
-        $stmt = $this->db->prepare("SELECT action, data
-            FROM audit_logs
-            WHERE conversation_id = :conversation_id
-              AND action IN ('admin_ai_user_message', 'admin_ai_assistant_message')
-            ORDER BY created_at ASC, id ASC");
-        $stmt->execute([':conversation_id' => $conversationId]);
-
-        $title = null;
-        $lastMessage = null;
-        $messageCount = 0;
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
-            $data = $this->decodeJson($row['data'] ?? null);
-            $visibleText = trim((string) ($data['visible_text'] ?? ''));
-            if ($visibleText === '') {
-                continue;
-            }
-            $messageCount++;
-            if ($title === null && ($row['action'] ?? '') === 'admin_ai_user_message') {
-                $title = $this->buildPreview($visibleText, 80);
-            }
-            $lastMessage = $this->buildPreview($visibleText, 120);
-        }
-
-        return [
-            'title' => $title,
-            'last_message_preview' => $lastMessage,
-            'message_count' => $messageCount,
-        ];
+        return $this->fetchStoredConversationPreview($conversationId);
     }
 
     private function countPendingActions(string $conversationId): int
     {
-        $stmt = $this->db->prepare("SELECT COUNT(*) FROM audit_logs
-            WHERE conversation_id = :conversation_id
-              AND action = 'admin_ai_action_proposed'
-              AND status = 'pending'");
-        $stmt->execute([':conversation_id' => $conversationId]);
-        return (int) $stmt->fetchColumn();
+        try {
+            $stmt = $this->db->prepare("SELECT COUNT(*) FROM admin_ai_messages
+                WHERE conversation_id = :conversation_id
+                  AND kind = 'action_proposed'
+                  AND status = 'pending'");
+            $stmt->execute([':conversation_id' => $conversationId]);
+            $count = (int) $stmt->fetchColumn();
+            return $count;
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to count admin AI pending actions from dedicated store.', [
+                'conversation_id' => $conversationId,
+                'error' => $exception->getMessage(),
+            ]);
+            return 0;
+        }
     }
 
     private function findProposal(string $conversationId, int $proposalId): ?array
     {
-        $stmt = $this->db->prepare("SELECT * FROM audit_logs
-            WHERE id = :id
-              AND conversation_id = :conversation_id
-              AND action = 'admin_ai_action_proposed'");
-        $stmt->execute([':id' => $proposalId, ':conversation_id' => $conversationId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!is_array($row)) {
-            return null;
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM admin_ai_messages
+                WHERE id = :id
+                  AND conversation_id = :conversation_id
+                  AND kind = 'action_proposed'");
+            $stmt->execute([':id' => $proposalId, ':conversation_id' => $conversationId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($row)) {
+                $meta = $this->decodeJson($row['meta_json'] ?? null);
+                $data = isset($meta['data']) && is_array($meta['data']) ? $meta['data'] : $meta;
+                return [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'status' => $row['status'] ?? null,
+                    'action_name' => $data['action_name'] ?? null,
+                    'payload' => $data['payload'] ?? null,
+                ];
+            }
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to load admin AI proposal from dedicated store.', [
+                'conversation_id' => $conversationId,
+                'proposal_id' => $proposalId,
+                'error' => $exception->getMessage(),
+            ]);
         }
-
-        $data = $this->decodeJson($row['data'] ?? null);
-        return [
-            'id' => (int) ($row['id'] ?? 0),
-            'status' => $row['status'] ?? null,
-            'action_name' => $data['action_name'] ?? null,
-            'payload' => $data['payload'] ?? null,
-        ];
+        return null;
     }
 
     private function updateProposalStatus(int $proposalId, string $status, array $meta = []): void
     {
-        $stmt = $this->db->prepare("SELECT data FROM audit_logs WHERE id = :id");
-        $stmt->execute([':id' => $proposalId]);
-        $existing = $this->decodeJson($stmt->fetchColumn() ?: null);
-        $merged = array_merge($existing, ['decision_meta' => $meta]);
+        try {
+            $stmt = $this->db->prepare("SELECT meta_json FROM admin_ai_messages WHERE id = :id");
+            $stmt->execute([':id' => $proposalId]);
+            $existingRaw = $stmt->fetchColumn();
+            if ($existingRaw !== false) {
+                $existing = $this->decodeJson(is_string($existingRaw) ? $existingRaw : null);
+                $existing['data'] = isset($existing['data']) && is_array($existing['data']) ? $existing['data'] : [];
+                $existing['data']['decision_meta'] = $meta;
 
-        $update = $this->db->prepare("UPDATE audit_logs SET status = :status, data = :data WHERE id = :id");
-        $update->execute([
-            ':status' => $status,
-            ':data' => json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-            ':id' => $proposalId,
-        ]);
+                $update = $this->db->prepare("UPDATE admin_ai_messages
+                    SET status = :status, meta_json = :meta_json, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :id");
+                $update->execute([
+                    ':status' => $status,
+                    ':meta_json' => json_encode($existing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ':id' => $proposalId,
+                ]);
+                return;
+            }
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to update admin AI proposal in dedicated store.', [
+                'proposal_id' => $proposalId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
-    private function logConversationEvent(string $action, array $logContext, array $payload): void
+    private function logConversationEvent(string $action, array $logContext, array $payload): ?int
     {
-        if ($this->auditLogService === null) {
-            return;
-        }
-
         $conversationId = $payload['conversation_id'] ?? ($logContext['conversation_id'] ?? null);
         $visibleText = isset($payload['visible_text']) ? trim((string) $payload['visible_text']) : null;
         $requestPayload = isset($payload['request_data']) && is_array($payload['request_data']) ? $payload['request_data'] : [];
@@ -2740,29 +2689,287 @@ class AdminAiAgentService
             $requestData = array_merge($requestData, ['request_payload' => $requestPayload]);
         }
 
+        $storedMessageId = $this->storeConversationEvent($action, $logContext, [
+            'conversation_id' => $conversationId,
+            'visible_text' => $visibleText,
+            'status' => $payload['status'] ?? 'success',
+            'request_data' => $requestData,
+            'response_code' => $payload['response_code'] ?? null,
+        ]);
+
+        if ($this->auditLogService !== null) {
+            try {
+                $this->auditLogService->logAdminOperation(
+                    $action,
+                    isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null,
+                    'admin_ai',
+                    [
+                        'request_id' => $logContext['request_id'] ?? null,
+                        'endpoint' => $logContext['source'] ?? '/admin/ai/chat',
+                        'request_method' => 'POST',
+                        'status' => $payload['status'] ?? 'success',
+                        'conversation_id' => is_string($conversationId) ? $conversationId : null,
+                        'request_data' => $requestData,
+                        'new_data' => isset($payload['new_data']) && is_array($payload['new_data']) ? $payload['new_data'] : null,
+                        'record_id' => isset($payload['proposal_id']) ? (int) $payload['proposal_id'] : $storedMessageId,
+                        'table' => 'audit_logs',
+                    ]
+                );
+            } catch (\Throwable $exception) {
+                $this->logger->warning('Failed to write admin AI conversation audit log.', [
+                    'action' => $action,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return $storedMessageId;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function storeConversationEvent(string $action, array $logContext, array $payload): ?int
+    {
+        $conversationId = $this->normalizeConversationId(isset($payload['conversation_id']) ? (string) $payload['conversation_id'] : null);
+        if ($conversationId === null) {
+            return null;
+        }
+
+        $kind = $this->mapConversationActionToKind($action);
+        $role = $this->mapConversationActionToRole($action);
+        $content = isset($payload['visible_text']) ? trim((string) $payload['visible_text']) : null;
+        $requestData = isset($payload['request_data']) && is_array($payload['request_data']) ? $payload['request_data'] : [];
+        $status = isset($payload['status']) ? trim((string) $payload['status']) : 'success';
+        $responseCode = isset($payload['response_code']) && is_numeric((string) $payload['response_code'])
+            ? (int) $payload['response_code']
+            : null;
+
+        $metaJson = json_encode([
+            'request_id' => $logContext['request_id'] ?? null,
+            'response_code' => $responseCode,
+            'data' => $requestData,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
         try {
-            $this->auditLogService->logAdminOperation(
-                $action,
+            $this->ensureConversationRecord(
+                $conversationId,
                 isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null,
-                'admin_ai',
-                [
-                    'request_id' => $logContext['request_id'] ?? null,
-                    'endpoint' => $logContext['source'] ?? '/admin/ai/chat',
-                    'request_method' => 'POST',
-                    'status' => $payload['status'] ?? 'success',
-                    'conversation_id' => is_string($conversationId) ? $conversationId : null,
-                    'request_data' => $requestData,
-                    'new_data' => isset($payload['new_data']) && is_array($payload['new_data']) ? $payload['new_data'] : null,
-                    'record_id' => isset($payload['proposal_id']) ? (int) $payload['proposal_id'] : null,
-                    'table' => 'audit_logs',
-                ]
+                $content,
+                $kind,
+                $role
             );
+
+            $stmt = $this->db->prepare("INSERT INTO admin_ai_messages (
+                conversation_id, kind, role, action, status, content, request_id, response_code, meta_json
+            ) VALUES (
+                :conversation_id, :kind, :role, :action, :status, :content, :request_id, :response_code, :meta_json
+            )");
+            $stmt->execute([
+                ':conversation_id' => $conversationId,
+                ':kind' => $kind,
+                ':role' => $role,
+                ':action' => $action,
+                ':status' => $status !== '' ? $status : 'success',
+                ':content' => $content !== '' ? $content : null,
+                ':request_id' => $logContext['request_id'] ?? null,
+                ':response_code' => $responseCode,
+                ':meta_json' => $metaJson,
+            ]);
+
+            $messageId = (int) $this->db->lastInsertId();
+            $this->touchConversationRecord($conversationId, $content, $kind, $role);
+            return $messageId > 0 ? $messageId : null;
         } catch (\Throwable $exception) {
-            $this->logger->warning('Failed to write admin AI conversation audit log.', [
+            $this->logger->warning('Failed to write admin AI conversation store record.', [
                 'action' => $action,
+                'conversation_id' => $conversationId,
                 'error' => $exception->getMessage(),
             ]);
+            return null;
         }
+    }
+
+    private function ensureConversationRecord(
+        string $conversationId,
+        ?int $adminId,
+        ?string $content,
+        string $kind,
+        ?string $role
+    ): void {
+        $title = $kind === 'message' && $role === 'user' ? $this->buildPreview($content, 80) : null;
+        $preview = $kind === 'message' ? $this->buildPreview($content, 120) : null;
+        $existsStmt = $this->db->prepare("SELECT id FROM admin_ai_conversations WHERE conversation_id = :conversation_id LIMIT 1");
+        $existsStmt->execute([':conversation_id' => $conversationId]);
+        $exists = $existsStmt->fetchColumn();
+
+        if ($exists === false) {
+            $insert = $this->db->prepare("INSERT INTO admin_ai_conversations (
+                conversation_id, admin_id, title, last_message_preview
+            ) VALUES (
+                :conversation_id, :admin_id, :title, :last_message_preview
+            )");
+            $insert->execute([
+                ':conversation_id' => $conversationId,
+                ':admin_id' => $adminId,
+                ':title' => $title,
+                ':last_message_preview' => $preview,
+            ]);
+            return;
+        }
+
+        $update = $this->db->prepare("UPDATE admin_ai_conversations
+            SET
+                admin_id = COALESCE(admin_id, :admin_id),
+                title = COALESCE(title, :title),
+                last_message_preview = COALESCE(:last_message_preview, last_message_preview),
+                last_activity_at = CURRENT_TIMESTAMP
+            WHERE conversation_id = :conversation_id");
+        $update->execute([
+            ':admin_id' => $adminId,
+            ':title' => $title,
+            ':last_message_preview' => $preview,
+            ':conversation_id' => $conversationId,
+        ]);
+    }
+
+    private function touchConversationRecord(string $conversationId, ?string $content, string $kind, ?string $role): void
+    {
+        $title = $kind === 'message' && $role === 'user' ? $this->buildPreview($content, 80) : null;
+        $preview = $kind === 'message' ? $this->buildPreview($content, 120) : null;
+
+        $stmt = $this->db->prepare("UPDATE admin_ai_conversations
+            SET
+                title = COALESCE(title, :title),
+                last_message_preview = COALESCE(:last_message_preview, last_message_preview),
+                last_activity_at = CURRENT_TIMESTAMP
+            WHERE conversation_id = :conversation_id");
+        $stmt->execute([
+            ':title' => $title,
+            ':last_message_preview' => $preview,
+            ':conversation_id' => $conversationId,
+        ]);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function fetchStoredConversationTimeline(string $conversationId): array
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT id, kind, role, action, status, content, request_id, response_code, meta_json, created_at
+                FROM admin_ai_messages
+                WHERE conversation_id = :conversation_id
+                ORDER BY created_at ASC, id ASC");
+            $stmt->execute([':conversation_id' => $conversationId]);
+
+            $messages = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+                $meta = $this->decodeJson($row['meta_json'] ?? null);
+                $data = isset($meta['data']) && is_array($meta['data']) ? $meta['data'] : [];
+                $proposal = null;
+                if (($row['kind'] ?? null) === 'action_proposed') {
+                    $proposal = [
+                        'proposal_id' => (int) ($row['id'] ?? 0),
+                        'action_name' => $data['action_name'] ?? null,
+                        'label' => $data['label'] ?? null,
+                        'summary' => $data['summary'] ?? ($row['content'] ?? null),
+                        'payload' => $data['payload'] ?? null,
+                        'risk_level' => $data['risk_level'] ?? null,
+                        'status' => $row['status'] ?? null,
+                    ];
+                }
+
+                $messages[] = [
+                    'id' => (int) ($row['id'] ?? 0),
+                    'kind' => $row['kind'] ?? 'event',
+                    'role' => $row['role'] ?? 'assistant',
+                    'action' => $row['action'] ?? null,
+                    'status' => $row['status'] ?? null,
+                    'content' => $row['content'] ?? null,
+                    'proposal' => $proposal,
+                    'meta' => [
+                        'request_id' => $meta['request_id'] ?? ($row['request_id'] ?? null),
+                        'response_code' => $meta['response_code'] ?? ($row['response_code'] !== null ? (int) $row['response_code'] : null),
+                        'data' => $data,
+                    ],
+                    'created_at' => $row['created_at'] ?? null,
+                ];
+            }
+
+            return $messages;
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to fetch admin AI conversation timeline from dedicated store.', [
+                'conversation_id' => $conversationId,
+                'error' => $exception->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    /**
+     * @return array{title:?string,last_message_preview:?string,message_count:int}
+     */
+    private function fetchStoredConversationPreview(string $conversationId): array
+    {
+        try {
+            $stmt = $this->db->prepare("SELECT
+                    c.title,
+                    c.last_message_preview,
+                    (
+                        SELECT COUNT(*) FROM admin_ai_messages
+                        WHERE conversation_id = c.conversation_id
+                          AND kind = 'message'
+                    ) AS message_count
+                FROM admin_ai_conversations c
+                WHERE c.conversation_id = :conversation_id
+                LIMIT 1");
+            $stmt->execute([':conversation_id' => $conversationId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!is_array($row)) {
+                return [
+                    'title' => null,
+                    'last_message_preview' => null,
+                    'message_count' => 0,
+                ];
+            }
+
+            return [
+                'title' => $row['title'] ?? null,
+                'last_message_preview' => $row['last_message_preview'] ?? null,
+                'message_count' => (int) ($row['message_count'] ?? 0),
+            ];
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to fetch admin AI conversation preview from dedicated store.', [
+                'conversation_id' => $conversationId,
+                'error' => $exception->getMessage(),
+            ]);
+            return [
+                'title' => null,
+                'last_message_preview' => null,
+                'message_count' => 0,
+            ];
+        }
+    }
+
+    private function mapConversationActionToKind(string $action): string
+    {
+        return match (true) {
+            $action === 'admin_ai_user_message', $action === 'admin_ai_assistant_message' => 'message',
+            $action === 'admin_ai_action_proposed' => 'action_proposed',
+            $action === 'admin_ai_tool_invocation' => 'tool',
+            str_starts_with($action, 'admin_ai_action_') => 'action_event',
+            default => 'event',
+        };
+    }
+
+    private function mapConversationActionToRole(string $action): ?string
+    {
+        return match ($action) {
+            'admin_ai_user_message' => 'user',
+            'admin_ai_assistant_message' => 'assistant',
+            default => null,
+        };
     }
 
     private function logLlmCall(
@@ -2773,9 +2980,9 @@ class AdminAiAgentService
         string $conversationId,
         int $turnNo,
         float $startedAt
-    ): void {
+    ): ?int {
         if ($this->llmLogService === null) {
-            return;
+            return null;
         }
 
         $choice = $rawResponse['choices'][0] ?? [];
@@ -2783,7 +2990,7 @@ class AdminAiAgentService
         $responseId = $rawResponse['id'] ?? ($rawResponse['response_id'] ?? null);
         $responseText = isset($message['content']) ? (string) $message['content'] : json_encode($rawResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        $this->llmLogService->log([
+        return $this->llmLogService->log([
             'request_id' => $logContext['request_id'] ?? null,
             'actor_type' => $logContext['actor_type'] ?? 'admin',
             'actor_id' => $logContext['actor_id'] ?? null,
@@ -2855,6 +3062,46 @@ class AdminAiAgentService
             $this->logger->warning('Failed to persist admin AI error log.', [
                 'error' => $loggingError->getMessage(),
                 'original_error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $outcome
+     * @param array<string,mixed> $context
+     */
+    private function updateLlmConversationSnapshot(?int $llmLogId, string $userMessage, array $outcome, array $context): void
+    {
+        if ($llmLogId === null) {
+            return;
+        }
+
+        try {
+            $stmt = $this->db->prepare('SELECT context_json FROM llm_logs WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $llmLogId]);
+            $existing = $this->decodeJson($stmt->fetchColumn() ?: null);
+            $existing['conversation_context'] = $context;
+            $existing['conversation_snapshot'] = array_filter([
+                'user_message' => $userMessage !== '' ? $userMessage : null,
+                'assistant_message' => isset($outcome['assistant_text']) && trim((string) $outcome['assistant_text']) !== ''
+                    ? trim((string) $outcome['assistant_text'])
+                    : null,
+                'suggestion' => isset($outcome['suggestion']) && is_array($outcome['suggestion']) ? $outcome['suggestion'] : null,
+                'proposal' => isset($outcome['proposal']) && is_array($outcome['proposal']) ? $outcome['proposal'] : null,
+                'result' => isset($outcome['result']) && is_array($outcome['result']) ? $outcome['result'] : null,
+                'meta' => isset($outcome['meta']) && is_array($outcome['meta']) ? $outcome['meta'] : null,
+                'metadata' => isset($outcome['metadata']) && is_array($outcome['metadata']) ? $outcome['metadata'] : null,
+            ], static fn ($value) => $value !== null && $value !== '');
+
+            $update = $this->db->prepare('UPDATE llm_logs SET context_json = :context_json WHERE id = :id');
+            $update->execute([
+                ':context_json' => json_encode($existing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ':id' => $llmLogId,
+            ]);
+        } catch (\Throwable $exception) {
+            $this->logger->warning('Failed to update admin AI LLM conversation snapshot.', [
+                'llm_log_id' => $llmLogId,
+                'error' => $exception->getMessage(),
             ]);
         }
     }
