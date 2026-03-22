@@ -47,6 +47,7 @@ use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAiAgentService;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
@@ -536,6 +537,31 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(AdminAiAgentService::class, function (ContainerInterface $c) {
+        /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
+        $llmClient = $c->get('ai.llmClient');
+
+        $config = [
+            'model' => $_ENV['LLM_API_MODEL'] ?? null,
+            'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
+            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+        ];
+
+        return new AdminAiAgentService(
+            $c->get(PDO::class),
+            $llmClient,
+            $c->get(LoggerInterface::class),
+            $config,
+            $c->get(AdminAiCommandRepository::class)->getConfig(),
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(StatisticsService::class),
+            $c->get(MessageService::class),
+            $c->get(BadgeService::class)
+        );
+    });
+
     $container->set(UserAiController::class, function (ContainerInterface $c) {
         return new UserAiController(
             $c->get(UserAiService::class),
@@ -812,6 +838,19 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(AdminAiController::class, function (ContainerInterface $c) {
+        return new AdminAiController(
+            $c->get(AuthService::class),
+            $c->get(AdminAiIntentService::class),
+            $c->get(AdminAnnouncementAiService::class),
+            $c->get(AdminAiCommandRepository::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AdminAiAgentService::class)
         );
     });
 

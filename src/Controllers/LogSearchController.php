@@ -32,7 +32,6 @@ class LogSearchController
     private const KW_WHERE = 'WHERE ';
     private const LIMIT_PARAM = ':limit';
     private const OFFSET_PARAM = ':offset';
-    private const FOUND_ROWS_SQL = 'SELECT FOUND_ROWS()';
 
     public function __construct(PDO $db, AuthService $authService, AuditLogService $auditLogService, ErrorLogService $errorLogService = null)
     {
@@ -61,6 +60,10 @@ class LogSearchController
             $llmPage = max(1, (int)($q['llm_page'] ?? 1));
             $dateFrom = $q['date_from'] ?? null;
             $dateTo = $q['date_to'] ?? null;
+            $conversationId = $this->normalizeConversationId($q['conversation_id'] ?? null);
+            $conversationRequestIds = $conversationId !== null
+                ? $this->findRequestIdsByConversation($conversationId)
+                : [];
 
             // new explicit filter params
             $systemFilters = [
@@ -71,16 +74,21 @@ class LogSearchController
                 'path' => $q['path'] ?? null,
                 'min_duration' => $q['min_duration'] ?? null,
                 'max_duration' => $q['max_duration'] ?? null,
+                'conversation_id' => $conversationId,
+                'request_ids' => $conversationRequestIds,
             ];
             $auditFilters = [
                 'user_id' => $q['user_id'] ?? null,
                 'action' => $q['action'] ?? null,
                 'status' => $q['audit_status'] ?? null,
                 'request_id' => $q['request_id'] ?? null,
+                'conversation_id' => $conversationId,
             ];
             $errorFilters = [
                 'error_type' => $q['error_type'] ?? null,
                 'request_id' => $q['request_id'] ?? null,
+                'conversation_id' => $conversationId,
+                'request_ids' => $conversationRequestIds,
             ];
             $llmFilters = [
                 'actor_type' => $q['actor_type'] ?? null,
@@ -89,6 +97,8 @@ class LogSearchController
                 'model' => $q['model'] ?? null,
                 'source' => $q['source'] ?? null,
                 'request_id' => $q['request_id'] ?? null,
+                'conversation_id' => $conversationId,
+                'turn_no' => $q['turn_no'] ?? null,
             ];
 
             $result = [];
@@ -142,6 +152,10 @@ class LogSearchController
                 $keyword = trim((string)($q['q'] ?? ''));
                 $dateFrom = $q['date_from'] ?? null;
                 $dateTo = $q['date_to'] ?? null;
+                $conversationId = $this->normalizeConversationId($q['conversation_id'] ?? null);
+                $conversationRequestIds = $conversationId !== null
+                    ? $this->findRequestIdsByConversation($conversationId)
+                    : [];
                 $types = isset($q['types']) && $q['types'] !== '' ? array_values(array_filter(array_map('trim', explode(',', $q['types'])))) : ['system','audit','error','llm'];
                 $allowed = ['system','audit','error','llm'];
                 $types = array_values(array_intersect($types, $allowed));
@@ -153,7 +167,21 @@ class LogSearchController
 
                 $datasets = [];
                 foreach ($types as $t) {
-                    $datasets[$t] = $this->exportFetch($t, $keyword, $dateFrom, $dateTo, $perTypeCap);
+                    $datasets[$t] = $this->exportFetch($t, $keyword, $dateFrom, $dateTo, $perTypeCap, [
+                        'request_id' => $q['request_id'] ?? null,
+                        'conversation_id' => $conversationId,
+                        'request_ids' => $conversationRequestIds,
+                        'actor_type' => $q['actor_type'] ?? null,
+                        'actor_id' => $q['actor_id'] ?? ($q['user_id'] ?? null),
+                        'status' => $q['llm_status'] ?? null,
+                        'model' => $q['model'] ?? null,
+                        'source' => $q['source'] ?? null,
+                        'turn_no' => $q['turn_no'] ?? null,
+                        'user_id' => $q['user_id'] ?? null,
+                        'action' => $q['action'] ?? null,
+                        'audit_status' => $q['audit_status'] ?? null,
+                        'error_type' => $q['error_type'] ?? null,
+                    ]);
                 }
 
                 $this->logAudit('admin_logs_exported', $admin, $request, [
@@ -171,7 +199,7 @@ class LogSearchController
                     $fh = fopen('php://temp','w+');
                     // 统一列: type,id,request_id,method,path,status_code,user_id,duration_ms,created_at,action,operation_category,actor_type,audit_status,error_type,error_message,error_file,error_line,error_time,actor_id,source,model,llm_status,prompt,response_id,prompt_tokens,completion_tokens,total_tokens,latency_ms
                     $header = [
-                        'type','id','request_id','method','path','status_code','user_id','duration_ms','created_at',
+                        'type','id','conversation_id','turn_no','request_id','method','path','status_code','user_id','duration_ms','created_at',
                         'action','operation_category','actor_type','audit_status','error_type','error_message','error_file',
                         'error_line','error_time','actor_id','source','model','llm_status','prompt','response_id',
                         'prompt_tokens','completion_tokens','total_tokens','latency_ms'
@@ -182,6 +210,8 @@ class LogSearchController
                             fputcsv($fh, [
                                 $type,
                                 $r['id'] ?? null,
+                                $r['conversation_id'] ?? null,
+                                $r['turn_no'] ?? null,
                                 $r['request_id'] ?? null,
                                 $r['method'] ?? null,
                                 $r['path'] ?? null,
@@ -255,9 +285,9 @@ class LogSearchController
                     return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
                 }
                 $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
-                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
+                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','conversation_id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
                 $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
-                $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
+                $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','conversation_id','turn_no','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
 
                 $this->logAudit('admin_logs_related_viewed', $admin, $request, [
                     'data' => ['request_id' => $rid],
@@ -305,30 +335,55 @@ class LogSearchController
             return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
         }
 
-        private function exportFetch(string $type, string $kw, ?string $from, ?string $to, int $limit): array
+        private function exportFetch(string $type, string $kw, ?string $from, ?string $to, int $limit, array $filters = []): array
         {
             switch ($type) {
                 case 'system':
-                    return $this->rawFetch('system_logs', ['id','request_id','method','path','status_code','user_id','duration_ms','created_at'], ['method','path','request_body','response_body','error_message','server_meta'], $kw, $limit, ['from'=>$from,'to'=>$to,'date'=>'created_at']);
+                    return $this->rawFetch(
+                        'system_logs',
+                        ['id','request_id','method','path','status_code','user_id','duration_ms','created_at'],
+                        ['method','path','request_body','response_body','error_message','server_meta'],
+                        $kw,
+                        $limit,
+                        ['from'=>$from,'to'=>$to,'date'=>'created_at'],
+                        $filters
+                    );
                 case 'audit':
-                    return $this->rawFetch('audit_logs', ['id','action','operation_category','actor_type','status','user_id','ip_address','created_at','request_id'], ['action','operation_category','details_raw','summary','old_data','new_data'], $kw, $limit, ['from'=>$from,'to'=>$to,'date'=>'created_at']);
+                    return $this->rawFetch(
+                        'audit_logs',
+                        ['id','conversation_id','action','operation_category','actor_type','status','user_id','ip_address','created_at','request_id'],
+                        ['action','operation_category','details_raw','summary','old_data','new_data'],
+                        $kw,
+                        $limit,
+                        ['from'=>$from,'to'=>$to,'date'=>'created_at'],
+                        $filters
+                    );
                 case 'error':
-                    return $this->rawFetch('error_logs', ['id','error_type','error_message','error_file','error_line','error_time','request_id'], ['error_type','error_message','error_file','stack_trace'], $kw, $limit, ['from'=>$from,'to'=>$to,'date'=>'error_time']);
+                    return $this->rawFetch(
+                        'error_logs',
+                        ['id','error_type','error_message','error_file','error_line','error_time','request_id'],
+                        ['error_type','error_message','error_file','stack_trace'],
+                        $kw,
+                        $limit,
+                        ['from'=>$from,'to'=>$to,'date'=>'error_time'],
+                        $filters
+                    );
                 case 'llm':
                     return $this->rawFetch(
                         'llm_logs',
-                        ['id','request_id','actor_type','actor_id','source','model','status','prompt','response_id','prompt_tokens','completion_tokens','total_tokens','latency_ms','created_at'],
+                        ['id','conversation_id','turn_no','request_id','actor_type','actor_id','source','model','status','prompt','response_id','prompt_tokens','completion_tokens','total_tokens','latency_ms','created_at'],
                         ['prompt','response_raw','source','model','error_message','request_id'],
                         $kw,
                         $limit,
-                        ['from'=>$from,'to'=>$to,'date'=>'created_at']
+                        ['from'=>$from,'to'=>$to,'date'=>'created_at'],
+                        $filters
                     );
                 default:
                     return [];
             }
         }
 
-        private function rawFetch(string $table, array $selectCols, array $likeCols, string $kw, int $limit, array $dateFilter): array
+        private function rawFetch(string $table, array $selectCols, array $likeCols, string $kw, int $limit, array $dateFilter, array $filters = []): array
         {
             $conditions = [];
             $params = [];
@@ -346,6 +401,7 @@ class LogSearchController
             }
             if ($from) { $conditions[] = "$dateColumn >= :dfrom"; $params['dfrom'] = $from . ' 00:00:00'; }
             if ($to) { $conditions[] = "$dateColumn <= :dto"; $params['dto'] = $to . ' 23:59:59'; }
+            $this->applyRawFetchFilters($table, $conditions, $params, $filters);
             $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
             $cols = implode(',', $selectCols);
             $sql = "SELECT $cols FROM {$table} $where ORDER BY id DESC LIMIT :limit";
@@ -360,6 +416,7 @@ class LogSearchController
     {
         $conditions = [];
         $params = [];
+        $conversationId = $this->normalizeConversationId($filters['conversation_id'] ?? null);
         if ($kw !== '') {
             $likeCols = ['path','request_id','method','user_agent','ip_address','request_body','response_body','server_meta'];
             $likeParts = [];
@@ -383,16 +440,23 @@ class LogSearchController
         if (!empty($filters['path'])) { $conditions[] = 'path LIKE :f_path'; $params['f_path'] = '%' . $filters['path'] . '%'; }
         if (!empty($filters['min_duration'])) { $conditions[] = 'duration_ms >= :f_min_d'; $params['f_min_d'] = (int)$filters['min_duration']; }
         if (!empty($filters['max_duration'])) { $conditions[] = 'duration_ms <= :f_max_d'; $params['f_max_d'] = (int)$filters['max_duration']; }
+        if ($conversationId !== null) {
+            $requestIds = is_array($filters['request_ids'] ?? null) ? array_values(array_filter($filters['request_ids'], static fn ($id) => is_string($id) && $id !== '')) : [];
+            if ($requestIds === []) {
+                return [ 'items' => [], 'count' => 0, 'page' => $page, 'pages' => 0, 'limit' => $limit ];
+            }
+            $this->appendInCondition($conditions, $params, 'request_id', $requestIds, 'sys_conv_req');
+        }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, method, path, status_code, user_id, duration_ms, created_at FROM system_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT id, request_id, method, path, status_code, user_id, duration_ms, created_at FROM system_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
         $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->countRows('system_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
@@ -400,6 +464,7 @@ class LogSearchController
     {
         $conditions = [];
         $params = [];
+        $conversationId = $this->normalizeConversationId($filters['conversation_id'] ?? null);
         if ($kw !== '') {
             $likeCols = ['action','operation_category','operation_subtype','endpoint','ip_address','data','old_data','new_data'];
             $likeParts = [];
@@ -415,6 +480,7 @@ class LogSearchController
         if (!empty($filters['user_id'])) { $conditions[] = 'user_id = :a_user'; $params['a_user'] = (int)$filters['user_id']; }
         if (!empty($filters['action'])) { $conditions[] = 'action = :a_action'; $params['a_action'] = $filters['action']; }
         if (!empty($filters['status'])) { $conditions[] = 'status = :a_status'; $params['a_status'] = $filters['status']; }
+        if ($conversationId !== null) { $conditions[] = 'conversation_id = :a_conversation_id'; $params['a_conversation_id'] = $conversationId; }
         $rid = RequestIdNormalizer::normalize($filters['request_id'] ?? null);
         if ($rid !== null) {
             $conditions[] = 'request_id = :a_rid';
@@ -423,14 +489,14 @@ class LogSearchController
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
     // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
-    $sql = "SELECT SQL_CALC_FOUND_ROWS id, user_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+    $sql = "SELECT id, user_id, conversation_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
         $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->countRows('audit_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
@@ -438,6 +504,7 @@ class LogSearchController
     {
         $conditions = [];
         $params = [];
+        $conversationId = $this->normalizeConversationId($filters['conversation_id'] ?? null);
         if ($kw !== '') {
             $likeCols = ['error_type','error_message','error_file','script_name','client_get','client_post'];
             $likeParts = [];
@@ -456,16 +523,23 @@ class LogSearchController
             $conditions[] = 'request_id = :e_rid';
             $params['e_rid'] = $rid;
         }
+        if ($conversationId !== null) {
+            $requestIds = is_array($filters['request_ids'] ?? null) ? array_values(array_filter($filters['request_ids'], static fn ($id) => is_string($id) && $id !== '')) : [];
+            if ($requestIds === []) {
+                return [ 'items' => [], 'count' => 0, 'page' => $page, 'pages' => 0, 'limit' => $limit ];
+            }
+            $this->appendInCondition($conditions, $params, 'request_id', $requestIds, 'err_conv_req');
+        }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT id, request_id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
         $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->countRows('error_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
 
@@ -473,6 +547,7 @@ class LogSearchController
     {
         $conditions = [];
         $params = [];
+        $conversationId = $this->normalizeConversationId($filters['conversation_id'] ?? null);
         if ($kw !== '') {
             $likeCols = ['prompt','response_raw','source','model','error_message','request_id'];
             $likeParts = [];
@@ -490,6 +565,11 @@ class LogSearchController
         if (!empty($filters['status'])) { $conditions[] = 'status = :l_status'; $params['l_status'] = $filters['status']; }
         if (!empty($filters['model'])) { $conditions[] = 'model LIKE :l_model'; $params['l_model'] = '%' . $filters['model'] . '%'; }
         if (!empty($filters['source'])) { $conditions[] = 'source LIKE :l_source'; $params['l_source'] = '%' . $filters['source'] . '%'; }
+        if ($conversationId !== null) { $conditions[] = 'conversation_id = :l_conversation_id'; $params['l_conversation_id'] = $conversationId; }
+        if (!empty($filters['turn_no']) && is_numeric((string) $filters['turn_no'])) {
+            $conditions[] = 'turn_no = :l_turn_no';
+            $params['l_turn_no'] = (int) $filters['turn_no'];
+        }
         $rid = RequestIdNormalizer::normalize($filters['request_id'] ?? null);
         if ($rid !== null) {
             $conditions[] = 'request_id = :l_rid';
@@ -497,7 +577,7 @@ class LogSearchController
         }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT SQL_CALC_FOUND_ROWS id, request_id, actor_type, actor_id, source, model, status, response_id, total_tokens, latency_ms, created_at, prompt, error_message
+        $sql = "SELECT id, conversation_id, turn_no, request_id, actor_type, actor_id, source, model, status, response_id, total_tokens, latency_ms, created_at, prompt, error_message
                 FROM llm_logs {$where}
                 ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
@@ -506,8 +586,161 @@ class LogSearchController
         $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        $total = $this->db->query(self::FOUND_ROWS_SQL)->fetchColumn() ?: count($rows);
+        $total = $this->countRows('llm_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
+    }
+
+    private function normalizeConversationId(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        return preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $value) === 1 ? $value : null;
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function findRequestIdsByConversation(string $conversationId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT DISTINCT request_id
+            FROM (
+                SELECT request_id FROM audit_logs WHERE conversation_id = :conversation_id
+                UNION
+                SELECT request_id FROM llm_logs WHERE conversation_id = :conversation_id
+            ) requests
+            WHERE request_id IS NOT NULL AND request_id <> ''
+        ");
+        $stmt->execute([':conversation_id' => $conversationId]);
+        return array_values(array_filter(array_map(
+            static fn ($value): ?string => is_string($value) && trim($value) !== '' ? trim($value) : null,
+            $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []
+        )));
+    }
+
+    /**
+     * @param array<int,string> $conditions
+     * @param array<string,mixed> $params
+     * @param array<int,string> $values
+     */
+    private function appendInCondition(array &$conditions, array &$params, string $column, array $values, string $prefix): void
+    {
+        if ($values === []) {
+            return;
+        }
+
+        $placeholders = [];
+        foreach (array_values($values) as $index => $value) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $placeholders[] = $placeholder;
+            $params[substr($placeholder, 1)] = $value;
+        }
+
+        $conditions[] = sprintf('%s IN (%s)', $column, implode(', ', $placeholders));
+    }
+
+    /**
+     * @param array<int,string> $conditions
+     * @param array<string,mixed> $params
+     * @param array<string,mixed> $filters
+     */
+    private function applyRawFetchFilters(string $table, array &$conditions, array &$params, array $filters): void
+    {
+        $conversationId = $this->normalizeConversationId($filters['conversation_id'] ?? null);
+        $requestId = RequestIdNormalizer::normalize($filters['request_id'] ?? null);
+
+        if ($requestId !== null) {
+            $conditions[] = 'request_id = :f_request_id';
+            $params['f_request_id'] = $requestId;
+        }
+
+        if ($table === 'system_logs' || $table === 'error_logs') {
+            if ($conversationId !== null) {
+                $requestIds = is_array($filters['request_ids'] ?? null) ? array_values(array_filter($filters['request_ids'], static fn ($id) => is_string($id) && $id !== '')) : [];
+                if ($requestIds === []) {
+                    $conditions[] = '1 = 0';
+                    return;
+                }
+                $this->appendInCondition($conditions, $params, 'request_id', $requestIds, $table === 'system_logs' ? 'raw_sys_conv_req' : 'raw_err_conv_req');
+            }
+        }
+
+        if ($table === 'audit_logs') {
+            if (!empty($filters['user_id']) && is_numeric((string) $filters['user_id'])) {
+                $conditions[] = 'user_id = :f_a_user';
+                $params['f_a_user'] = (int) $filters['user_id'];
+            }
+            if (!empty($filters['action'])) {
+                $conditions[] = 'action = :f_a_action';
+                $params['f_a_action'] = (string) $filters['action'];
+            }
+            if (!empty($filters['audit_status'])) {
+                $conditions[] = 'status = :f_a_status';
+                $params['f_a_status'] = (string) $filters['audit_status'];
+            }
+            if ($conversationId !== null) {
+                $conditions[] = 'conversation_id = :f_a_conversation_id';
+                $params['f_a_conversation_id'] = $conversationId;
+            }
+        }
+
+        if ($table === 'error_logs') {
+            if (!empty($filters['error_type'])) {
+                $conditions[] = 'error_type = :f_e_type';
+                $params['f_e_type'] = (string) $filters['error_type'];
+            }
+        }
+
+        if ($table === 'llm_logs') {
+            if (!empty($filters['actor_type'])) {
+                $conditions[] = 'actor_type = :f_l_actor_type';
+                $params['f_l_actor_type'] = (string) $filters['actor_type'];
+            }
+            if (!empty($filters['actor_id']) && is_numeric((string) $filters['actor_id'])) {
+                $conditions[] = 'actor_id = :f_l_actor_id';
+                $params['f_l_actor_id'] = (int) $filters['actor_id'];
+            }
+            if (!empty($filters['status'])) {
+                $conditions[] = 'status = :f_l_status';
+                $params['f_l_status'] = (string) $filters['status'];
+            }
+            if (!empty($filters['model'])) {
+                $conditions[] = 'model LIKE :f_l_model';
+                $params['f_l_model'] = '%' . (string) $filters['model'] . '%';
+            }
+            if (!empty($filters['source'])) {
+                $conditions[] = 'source LIKE :f_l_source';
+                $params['f_l_source'] = '%' . (string) $filters['source'] . '%';
+            }
+            if ($conversationId !== null) {
+                $conditions[] = 'conversation_id = :f_l_conversation_id';
+                $params['f_l_conversation_id'] = $conversationId;
+            }
+            if (!empty($filters['turn_no']) && is_numeric((string) $filters['turn_no'])) {
+                $conditions[] = 'turn_no = :f_l_turn_no';
+                $params['f_l_turn_no'] = (int) $filters['turn_no'];
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $params
+     */
+    private function countRows(string $table, string $whereClause, array $params): int
+    {
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM {$table} {$whereClause}");
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value);
+        }
+        $stmt->execute();
+        return (int) ($stmt->fetchColumn() ?: 0);
     }
 
     private function normalizeStart(string $d): string

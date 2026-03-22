@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAiAgentService;
 use CarbonTrack\Services\AdminAnnouncementAiException;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Services\AdminAnnouncementAiUnavailableException;
@@ -25,8 +26,219 @@ class AdminAiController
         private AdminAiCommandRepository $commandRepository,
         private AuditLogService $auditLogService,
         private ?ErrorLogService $errorLogService = null,
-        private ?LoggerInterface $logger = null
+        private ?LoggerInterface $logger = null,
+        private ?AdminAiAgentService $agentService = null
     ) {
+    }
+
+    public function chat(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Admin access required',
+                ], 403);
+            }
+
+            if ($this->agentService === null || !$this->agentService->isEnabled()) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'AI assistant is not configured. Please set LLM_API_KEY on the server.',
+                    'code' => 'AI_DISABLED',
+                ], 503);
+            }
+
+            $data = $request->getParsedBody();
+            if (!is_array($data)) {
+                $data = [];
+            }
+
+            $message = isset($data['message']) ? trim((string) $data['message']) : null;
+            $conversationId = isset($data['conversation_id']) ? trim((string) $data['conversation_id']) : null;
+            $context = isset($data['context']) && is_array($data['context']) ? $data['context'] : [];
+            $decision = isset($data['decision']) && is_array($data['decision']) ? $data['decision'] : null;
+            $source = isset($data['source']) && is_string($data['source']) ? trim($data['source']) : null;
+            if (($source === null || $source === '') && isset($context['activeRoute']) && is_string($context['activeRoute'])) {
+                $source = trim($context['activeRoute']);
+            }
+
+            if (($message === null || $message === '') && $decision === null) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Either message or decision is required.',
+                    'code' => 'INVALID_INPUT',
+                ], 422);
+            }
+
+            $result = $this->agentService->chat($conversationId, $message, $context, $decision, [
+                'request_id' => $request->getAttribute('request_id'),
+                'actor_type' => 'admin',
+                'actor_id' => $user['id'] ?? null,
+                'source' => $source ?? $request->getUri()->getPath(),
+            ]);
+
+            $this->logAdminAudit('admin_ai_chat_completed', $user, $request, [
+                'conversation_id' => $result['conversation_id'] ?? null,
+                'data' => [
+                    'has_decision' => $decision !== null,
+                    'source' => $source ?? $request->getUri()->getPath(),
+                ],
+            ]);
+
+            return $this->json($response, $result);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->json($response, [
+                'success' => false,
+                'error' => $exception->getMessage(),
+                'code' => 'INVALID_INPUT',
+            ], 422);
+        } catch (\RuntimeException $runtimeException) {
+            if ($runtimeException->getMessage() === 'LLM_UNAVAILABLE') {
+                $this->logException($runtimeException, $request, 'AdminAI chat unavailable');
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'AI provider is temporarily unavailable. Please try again later.',
+                    'code' => 'AI_UNAVAILABLE',
+                ], 503);
+            }
+
+            if ($runtimeException->getMessage() === 'PROPOSAL_NOT_FOUND') {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Proposal not found for this conversation.',
+                    'code' => 'PROPOSAL_NOT_FOUND',
+                ], 404);
+            }
+
+            $this->logException($runtimeException, $request, 'AdminAI chat runtime error');
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Failed to process the admin AI request',
+                'code' => 'AI_CHAT_ERROR',
+            ], 500);
+        } catch (\Throwable $throwable) {
+            $this->logException($throwable, $request, 'AdminAI chat unexpected error');
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Unexpected server error',
+                'code' => 'AI_CHAT_SERVER_ERROR',
+            ], 500);
+        }
+    }
+
+    public function conversations(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Admin access required',
+                ], 403);
+            }
+
+            if ($this->agentService === null) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'AI assistant is not configured.',
+                    'code' => 'AI_DISABLED',
+                ], 503);
+            }
+
+            $query = $request->getQueryParams();
+            $items = $this->agentService->listConversations([
+                'limit' => $query['limit'] ?? 20,
+                'actor_id' => $query['actor_id'] ?? null,
+                'admin_id' => $query['admin_id'] ?? null,
+                'status' => $query['status'] ?? null,
+                'model' => $query['model'] ?? null,
+                'date_from' => $query['date_from'] ?? null,
+                'date_to' => $query['date_to'] ?? null,
+                'has_pending_action' => $query['has_pending_action'] ?? null,
+                'conversation_id' => $query['conversation_id'] ?? null,
+            ]);
+
+            $this->logAdminAudit('admin_ai_conversations_viewed', $user, $request, [
+                'data' => [
+                    'limit' => $query['limit'] ?? 20,
+                    'actor_id' => $query['actor_id'] ?? null,
+                    'status' => $query['status'] ?? null,
+                    'model' => $query['model'] ?? null,
+                    'date_from' => $query['date_from'] ?? null,
+                    'date_to' => $query['date_to'] ?? null,
+                    'has_pending_action' => $query['has_pending_action'] ?? null,
+                    'conversation_id' => $query['conversation_id'] ?? null,
+                ],
+            ]);
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $items,
+            ]);
+        } catch (\Throwable $throwable) {
+            $this->logException($throwable, $request, 'AdminAI conversation list error');
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Failed to fetch AI conversation history',
+                'code' => 'AI_CONVERSATIONS_ERROR',
+            ], 500);
+        }
+    }
+
+    public function conversationDetail(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Admin access required',
+                ], 403);
+            }
+
+            if ($this->agentService === null) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'AI assistant is not configured.',
+                    'code' => 'AI_DISABLED',
+                ], 503);
+            }
+
+            $conversationId = isset($args['conversation_id']) ? trim((string) $args['conversation_id']) : '';
+            if ($conversationId === '') {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'conversation_id is required',
+                    'code' => 'INVALID_CONVERSATION_ID',
+                ], 422);
+            }
+
+            $detail = $this->agentService->getConversationDetail($conversationId);
+            $this->logAdminAudit('admin_ai_conversation_viewed', $user, $request, [
+                'conversation_id' => $conversationId,
+                'data' => ['conversation_id' => $conversationId],
+            ]);
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $detail,
+            ]);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->json($response, [
+                'success' => false,
+                'error' => $exception->getMessage(),
+                'code' => 'INVALID_CONVERSATION_ID',
+            ], 422);
+        } catch (\Throwable $throwable) {
+            $this->logException($throwable, $request, 'AdminAI conversation detail error');
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Failed to fetch AI conversation detail',
+                'code' => 'AI_CONVERSATION_DETAIL_ERROR',
+            ], 500);
+        }
     }
 
     public function generateAnnouncementDraft(Request $request, Response $response): Response
@@ -373,6 +585,7 @@ class AdminAiController
                 'request_method' => $request->getMethod(),
                 'endpoint' => (string)$request->getUri()->getPath(),
                 'status' => $status,
+                'conversation_id' => $context['conversation_id'] ?? null,
                 'request_data' => $context['data'] ?? null,
             ], $context));
         } catch (\Throwable $ignore) {

@@ -126,11 +126,11 @@ class AuditLogService
 
             $stmt = $this->db->prepare(
                 "INSERT INTO audit_logs (
-                    user_id, user_uuid, actor_type, action, data, ip_address, user_agent,
+                    user_id, user_uuid, conversation_id, actor_type, action, data, ip_address, user_agent,
                     request_method, endpoint, old_data, new_data, affected_table,
                     affected_id, status, response_code, session_id, referrer,
                     operation_category, operation_subtype, change_type, request_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             );
 
             // request_id 优先来自显式字段，其次全局 $_SERVER（由中间件注入）
@@ -140,6 +140,7 @@ class AuditLogService
             $ok = $stmt->execute([
                 $data['user_id'] ?? null,
                 $userUuid,
+                $data['conversation_id'] ?? null,
                 $data['actor_type'] ?? 'user',
                 $data['action'],
                 $data['data'] ?? null,
@@ -207,6 +208,7 @@ class AuditLogService
             'operation_category' => $category,
             'user_id' => $userId,
             'user_uuid' => $context['user_uuid'] ?? ($context['uuid'] ?? null),
+            'conversation_id' => $context['conversation_id'] ?? null,
             'actor_type' => $actorType,
             'affected_table' => $table,
             'affected_id' => $affectedId,

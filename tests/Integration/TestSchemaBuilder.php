@@ -35,7 +35,7 @@ class TestSchemaBuilder
             // Carbon activities (align with production columns subset used by model & controllers)
             "CREATE TABLE IF NOT EXISTS carbon_activities (\n                id TEXT PRIMARY KEY,\n                name_zh TEXT,\n                name_en TEXT,\n                category TEXT,\n                carbon_factor REAL,\n                unit TEXT,\n                description_zh TEXT,\n                description_en TEXT,\n                icon TEXT,\n                is_active INTEGER DEFAULT 1,\n                sort_order INTEGER DEFAULT 0,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                deleted_at TEXT\n            )",
             // Carbon records
-            "CREATE TABLE IF NOT EXISTS carbon_records (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                activity_id TEXT,\n                amount REAL,\n                unit TEXT,\n                carbon_saved REAL,\n                points_earned INTEGER,\n                date TEXT,\n                description TEXT,\n                images TEXT,\n                proof_images TEXT,\n                status TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                approved_at TEXT,\n                deleted_at TEXT\n            )",
+            "CREATE TABLE IF NOT EXISTS carbon_records (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                activity_id TEXT,\n                amount REAL,\n                unit TEXT,\n                carbon_saved REAL,\n                points_earned INTEGER,\n                date TEXT,\n                description TEXT,\n                images TEXT,\n                proof_images TEXT,\n                status TEXT,\n                review_note TEXT,\n                reviewed_by INTEGER,\n                reviewed_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                approved_at TEXT,\n                deleted_at TEXT\n            )",
             // User check-ins
             "CREATE TABLE IF NOT EXISTS user_checkins (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                checkin_date TEXT,\n                source TEXT,\n                record_id TEXT,\n                notes TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(user_id, checkin_date)\n            )",
             "CREATE TABLE IF NOT EXISTS user_passkeys (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_uuid TEXT NOT NULL,\n                credential_id TEXT NOT NULL,\n                credential_id_hash TEXT NOT NULL,\n                credential_type TEXT DEFAULT 'public-key',\n                label TEXT,\n                public_key TEXT NOT NULL,\n                rp_id TEXT NOT NULL,\n                user_handle TEXT NOT NULL,\n                transports TEXT,\n                aaguid TEXT,\n                sign_count INTEGER DEFAULT 0,\n                attestation_format TEXT,\n                backup_eligible INTEGER DEFAULT 0,\n                backup_state INTEGER DEFAULT 0,\n                meta_json TEXT,\n                last_used_at TEXT,\n                attested_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                disabled_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(credential_id_hash)\n            )",
@@ -44,12 +44,31 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS schools (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                status TEXT DEFAULT 'active',\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Point exchanges
             "CREATE TABLE IF NOT EXISTS point_exchanges (\n                id TEXT PRIMARY KEY,\n                user_id INTEGER,\n                product_id INTEGER,\n                quantity INTEGER,\n                points_used INTEGER,\n                product_name TEXT,\n                product_price INTEGER,\n                delivery_address TEXT,\n                contact_area_code TEXT,\n                contact_phone TEXT,\n                notes TEXT,\n                status TEXT,\n                tracking_number TEXT,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT\n            )",
+            "CREATE TABLE IF NOT EXISTS achievement_badges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT,
+                code TEXT,
+                name_zh TEXT,
+                name_en TEXT,
+                is_active INTEGER DEFAULT 1,
+                deleted_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )",
             "CREATE TABLE IF NOT EXISTS user_badges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 badge_id INTEGER,
                 status TEXT DEFAULT 'active',
-                awarded_at TEXT DEFAULT CURRENT_TIMESTAMP
+                awarded_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                awarded_by INTEGER,
+                revoked_at TEXT,
+                revoked_by INTEGER,
+                source TEXT,
+                notes TEXT,
+                meta TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )",
             // Points transactions (expanded to satisfy AdminController & joins)
             // Production table has many columns; we include the ones accessed in tests/controllers.
@@ -62,7 +81,7 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS message_broadcasts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                audit_log_id INTEGER,\n                system_log_id INTEGER,\n                error_log_ids TEXT,\n                title TEXT NOT NULL,\n                content TEXT NOT NULL,\n                priority TEXT DEFAULT 'normal',\n                scope TEXT DEFAULT 'all',\n                target_count INTEGER DEFAULT 0,\n                sent_count INTEGER DEFAULT 0,\n                invalid_user_ids TEXT,\n                failed_user_ids TEXT,\n                message_ids_snapshot TEXT,\n                message_map_snapshot TEXT,\n                message_id_count INTEGER,\n                content_hash TEXT,\n                email_delivery_snapshot TEXT,\n                filters_snapshot TEXT,\n                meta TEXT,\n                created_by INTEGER,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
             // Only a subset of data is critical for tests; optional columns kept nullable.
-            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                user_uuid TEXT,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                request_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS audit_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER,\n                user_uuid TEXT,\n                conversation_id TEXT,\n                actor_type TEXT,\n                action TEXT,\n                data TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                request_method TEXT,\n                endpoint TEXT,\n                old_data TEXT,\n                new_data TEXT,\n                affected_table TEXT,\n                affected_id INTEGER,\n                status TEXT,\n                response_code INTEGER,\n                session_id TEXT,\n                request_id TEXT,\n                referrer TEXT,\n                operation_category TEXT,\n                operation_subtype TEXT,\n                change_type TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Login attempts
             "CREATE TABLE IF NOT EXISTS login_attempts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT,\n                ip_address TEXT,\n                success INTEGER,\n                attempted_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Error logs (simplified)
@@ -82,7 +101,7 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS system_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                method TEXT,\n                path TEXT,\n                status_code INTEGER,\n                user_id INTEGER,\n                user_uuid TEXT,\n                ip_address TEXT,\n                user_agent TEXT,\n                duration_ms REAL,\n                request_body TEXT,\n                response_body TEXT,\n                server_meta TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )"
             ,
             // LLM logs table for audit trails
-            "CREATE TABLE IF NOT EXISTS llm_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                actor_type TEXT,\n                actor_id INTEGER,\n                source TEXT,\n                model TEXT,\n                prompt TEXT,\n                response_raw TEXT,\n                response_id TEXT,\n                status TEXT,\n                error_message TEXT,\n                prompt_tokens INTEGER,\n                completion_tokens INTEGER,\n                total_tokens INTEGER,\n                latency_ms REAL,\n                usage_json TEXT,\n                context_json TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS llm_logs (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                actor_type TEXT,\n                actor_id INTEGER,\n                conversation_id TEXT,\n                turn_no INTEGER,\n                source TEXT,\n                model TEXT,\n                prompt TEXT,\n                response_raw TEXT,\n                response_id TEXT,\n                status TEXT,\n                error_message TEXT,\n                prompt_tokens INTEGER,\n                completion_tokens INTEGER,\n                total_tokens INTEGER,\n                latency_ms REAL,\n                usage_json TEXT,\n                context_json TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // User usage stats for quota tracking
             "CREATE TABLE IF NOT EXISTS user_usage_stats (\n                user_id INTEGER,\n                resource_key TEXT,\n                counter REAL,\n                last_updated_at TEXT,\n                reset_at TEXT,\n                PRIMARY KEY (user_id, resource_key)\n            )"
         ];
@@ -112,13 +131,13 @@ class TestSchemaBuilder
         self::ensureColumns($pdo, 'user_passkeys', ['user_uuid TEXT']);
         self::ensureColumns($pdo, 'webauthn_challenges', ['user_uuid TEXT']);
         self::ensureColumns($pdo, 'audit_logs', [
-            'user_uuid TEXT', 'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
+            'user_uuid TEXT', 'conversation_id TEXT', 'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
             'referrer TEXT', 'operation_category TEXT', 'operation_subtype TEXT', 'change_type TEXT'
         ]);
         self::ensureColumns($pdo, 'system_logs', ['user_uuid TEXT', 'server_meta TEXT']);
         self::ensureColumns($pdo, 'error_logs', ['request_id TEXT']);
-        self::ensureColumns($pdo, 'llm_logs', ['context_json TEXT']);
+        self::ensureColumns($pdo, 'llm_logs', ['conversation_id TEXT', 'turn_no INTEGER', 'context_json TEXT']);
         self::ensureColumns($pdo, 'points_transactions', [
             'uid INTEGER', 'raw REAL', 'act TEXT', 'description TEXT', 'status TEXT', 'img TEXT', 'notes TEXT', 'activity_id TEXT',
             'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',

@@ -57,6 +57,7 @@ CREATE TABLE `audit_logs` (
   `id` int(11) NOT NULL,
   `user_id` int(11) DEFAULT NULL,
   `user_uuid` char(36) DEFAULT NULL,
+  `conversation_id` varchar(64) DEFAULT NULL,
   `actor_type` enum('user','admin','system') NOT NULL DEFAULT 'user',
   `action` varchar(100) NOT NULL COMMENT 'Specific action name (e.g., user_login, admin_user_update)',
   `data` longtext COMMENT 'Original request/response data as JSON',
@@ -705,6 +706,8 @@ CREATE TABLE `llm_logs` (
   `request_id` varchar(64) DEFAULT NULL,
   `actor_type` varchar(20) NOT NULL,
   `actor_id` int(11) DEFAULT NULL,
+  `conversation_id` varchar(64) DEFAULT NULL,
+  `turn_no` int(11) DEFAULT NULL,
   `source` varchar(120) DEFAULT NULL,
   `model` varchar(120) DEFAULT NULL,
   `prompt` mediumtext,
@@ -845,6 +848,7 @@ ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
   ADD KEY `idx_audit_logs_user_uuid` (`user_uuid`),
+  ADD KEY `idx_audit_logs_conversation_id` (`conversation_id`),
   ADD KEY `idx_audit_logs_created_at` (`created_at`),
   ADD KEY `idx_audit_logs_actor_type` (`actor_type`),
   ADD KEY `idx_audit_logs_endpoint` (`endpoint`(191)),
@@ -853,7 +857,8 @@ ALTER TABLE `audit_logs`
   ADD KEY `idx_audit_logs_user_id_actor` (`user_id`,`actor_type`),
   ADD KEY `idx_audit_logs_operation_category` (`operation_category`),
   ADD KEY `idx_audit_logs_change_type` (`change_type`),
-  ADD KEY `idx_audit_logs_request_id` (`request_id`);
+  ADD KEY `idx_audit_logs_request_id` (`request_id`),
+  ADD KEY `idx_audit_logs_actor_conversation_created` (`actor_type`,`user_id`,`conversation_id`,`created_at`);
 
 --
 -- 表的索引 `avatars`
@@ -1055,9 +1060,12 @@ ALTER TABLE `llm_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_llm_logs_request_id` (`request_id`),
   ADD KEY `idx_llm_logs_actor` (`actor_type`,`actor_id`),
+  ADD KEY `idx_llm_logs_conversation_id` (`conversation_id`),
+  ADD KEY `idx_llm_logs_turn_no` (`turn_no`),
   ADD KEY `idx_llm_logs_created_at` (`created_at`),
   ADD KEY `idx_llm_logs_status` (`status`),
-  ADD KEY `idx_llm_logs_model` (`model`(50));
+  ADD KEY `idx_llm_logs_model` (`model`(50)),
+  ADD KEY `idx_llm_logs_actor_conversation_created` (`actor_type`,`actor_id`,`conversation_id`,`created_at`);
 
 --
 -- 表的索引 `system_logs`
