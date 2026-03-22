@@ -158,6 +158,63 @@ class AdminProductExchangeFlowTest extends TestCase
         $this->assertSame('发货完成', $dbExchange['notes']);
     }
 
+    public function testAdminCanRejectExchangeStatus(): void
+    {
+        $pdo = $this->createConnection();
+        $this->createSchema($pdo);
+        $this->seedUsers($pdo);
+        $this->seedProduct($pdo);
+        $this->seedExchange($pdo);
+
+        $messageService = $this->createMock(MessageService::class);
+        $messageService->expects($this->once())
+            ->method('sendMessage')
+            ->with(
+                $this->equalTo(2),
+                $this->equalTo('exchange_status_updated'),
+                $this->equalTo('您的兑换订单已被驳回'),
+                $this->logicalAnd(
+                    $this->stringContains('您的兑换订单（Eco Bottle x1）状态已更新为：您的兑换订单已被驳回'),
+                    $this->stringContains('备注：库存不足')
+                ),
+                $this->equalTo('normal')
+            );
+
+        $messageService->expects($this->once())
+            ->method('sendExchangeStatusUpdateEmailToUser')
+            ->with(
+                $this->equalTo(2),
+                $this->equalTo('Eco Bottle'),
+                $this->equalTo('rejected'),
+                $this->equalTo(null),
+                $this->equalTo('库存不足'),
+                $this->anything(),
+                $this->anything()
+            );
+
+        $auditLog = $this->createMock(AuditLogService::class);
+        $auditLog->method('log')->willReturn(true);
+
+        $authService = $this->makeAdminAuthService();
+        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+
+        $request = makeRequest('PUT', '/admin/exchanges/ex-1', [
+            'status' => 'rejected',
+            'admin_notes' => '库存不足'
+        ]);
+        $response = new Response();
+
+        $result = $controller->updateExchangeStatus($request, $response, ['id' => 'ex-1']);
+        $this->assertSame(200, $result->getStatusCode(), (string) $result->getBody());
+
+        $payload = json_decode((string)$result->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertTrue($payload['success']);
+
+        $dbExchange = $pdo->query("SELECT status, tracking_number, notes FROM point_exchanges WHERE id = 'ex-1'")->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('rejected', $dbExchange['status']);
+        $this->assertNull($dbExchange['tracking_number']);
+        $this->assertSame('库存不足', $dbExchange['notes']);
+    }
     public function testAdminExchangeListSupportsSearchAndSort(): void
     {
         $pdo = $this->createConnection();

@@ -509,13 +509,14 @@ class ProductController
 
             $search = trim((string) ($params['search'] ?? ''));
             if ($search !== '') {
-                $where[] = '(
-                    LOWER(e.id) LIKE :search
-                    OR LOWER(COALESCE(e.product_name, \'\')) LIKE :search
-                    OR LOWER(COALESCE(e.tracking_number, \'\')) LIKE :search
-                    OR LOWER(COALESCE(e.notes, \'\')) LIKE :search
-                )';
-                $bindings['search'] = '%' . strtolower($search) . '%';
+                [$searchClause, $searchBindings] = $this->buildNamedLikeClause([
+                    'LOWER(e.id)',
+                    'LOWER(COALESCE(e.product_name, \'\'))',
+                    'LOWER(COALESCE(e.tracking_number, \'\'))',
+                    'LOWER(COALESCE(e.notes, \'\'))',
+                ], $search, 'exchange_search');
+                $where[] = $searchClause;
+                $bindings = array_merge($bindings, $searchBindings);
             }
 
             $dateFrom = trim((string) ($params['date_from'] ?? ''));
@@ -627,15 +628,16 @@ class ProductController
 
             $search = trim((string) ($params['search'] ?? ''));
             if ($search !== '') {
-                $where[] = '(
-                    LOWER(e.id) LIKE :search
-                    OR LOWER(COALESCE(e.product_name, \'\')) LIKE :search
-                    OR LOWER(COALESCE(e.tracking_number, \'\')) LIKE :search
-                    OR LOWER(COALESCE(e.contact_phone, \'\')) LIKE :search
-                    OR LOWER(COALESCE(u.username, \'\')) LIKE :search
-                    OR LOWER(COALESCE(u.email, \'\')) LIKE :search
-                )';
-                $bindings['search'] = '%' . strtolower($search) . '%';
+                [$searchClause, $searchBindings] = $this->buildNamedLikeClause([
+                    'LOWER(e.id)',
+                    'LOWER(COALESCE(e.product_name, \'\'))',
+                    'LOWER(COALESCE(e.tracking_number, \'\'))',
+                    'LOWER(COALESCE(e.contact_phone, \'\'))',
+                    'LOWER(COALESCE(u.username, \'\'))',
+                    'LOWER(COALESCE(u.email, \'\'))',
+                ], $search, 'exchange_search');
+                $where[] = $searchClause;
+                $bindings = array_merge($bindings, $searchBindings);
             }
 
             $whereClause = implode(' AND ', $where);
@@ -2642,6 +2644,20 @@ class ProductController
         }
     }
 
+    private function buildNamedLikeClause(array $expressions, string $search, string $prefix = 'search'): array
+    {
+        $term = '%' . strtolower($search) . '%';
+        $clauses = [];
+        $bindings = [];
+
+        foreach (array_values($expressions) as $index => $expression) {
+            $param = $prefix . '_' . $index;
+            $clauses[] = $expression . ' LIKE :' . $param;
+            $bindings[$param] = $term;
+        }
+
+        return ['(' . implode("\n                    OR ", $clauses) . "\n                )", $bindings];
+    }
     /**
      * 获取兑换记录
      */
