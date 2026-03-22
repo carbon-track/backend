@@ -326,6 +326,44 @@ class ProductControllerTest extends TestCase
         $this->assertEquals(1, $json['pagination']['total']);
     }
 
+    public function testGetExchangeRecordsSearchUsesDistinctBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->expects($this->once())
+            ->method('execute')
+            ->with($this->callback(function ($params) {
+                foreach (['exchange_search_0', 'exchange_search_1', 'exchange_search_2', 'exchange_search_3', 'exchange_search_4', 'exchange_search_5'] as $key) {
+                    if (!array_key_exists($key, $params)) {
+                        return false;
+                    }
+                }
+                return !array_key_exists('search', $params);
+            }))
+            ->willReturn(true);
+        $countStmt->method('fetch')->willReturn(['total' => 0]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->method('bindValue')->willReturn(true);
+        $listStmt->method('execute')->willReturn(true);
+        $listStmt->method('fetchAll')->willReturn([]);
+
+        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/admin/exchanges', null, ['search' => '599ef56d-13ad-47ee-8f91-beb85d2d3b67']);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getExchangeRecords($request, $response);
+
+        $this->assertEquals(200, $resp->getStatusCode());
+    }
+
     public function testUpdateExchangeStatusInvalid(): void
     {
         $pdo = $this->createMock(\PDO::class);

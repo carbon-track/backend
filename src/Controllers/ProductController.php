@@ -155,6 +155,8 @@ class ProductController
             $countStmt->execute($bindings);
             $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
 
+            $orderByClause = $this->buildProductOrderByClause($params['sort'] ?? null);
+
             // 获取商品列表
             $sql = "
                 SELECT 
@@ -168,7 +170,7 @@ class ProductController
                     GROUP BY product_id
                 ) e ON p.id = e.product_id
                 WHERE {$whereClause}
-                ORDER BY p.sort_order ASC, p.created_at DESC
+                ORDER BY {$orderByClause}
                 LIMIT :limit OFFSET :offset
             ";
 
@@ -492,15 +494,54 @@ class ProductController
             $limit = min(50, max(10, intval($params['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
 
+            $where = [
+                $this->pointExchangeUserColumn('e') . ' = :user_id',
+                'e.deleted_at IS NULL',
+            ];
+            $bindings = [
+                'user_id' => (int) $user['id'],
+            ];
+
+            if (!empty($params['status'])) {
+                $where[] = 'e.status = :status';
+                $bindings['status'] = trim((string) $params['status']);
+            }
+
+            $search = trim((string) ($params['search'] ?? ''));
+            if ($search !== '') {
+                [$searchClause, $searchBindings] = $this->buildNamedLikeClause([
+                    'LOWER(e.id)',
+                    'LOWER(COALESCE(e.product_name, \'\'))',
+                    'LOWER(COALESCE(e.tracking_number, \'\'))',
+                    'LOWER(COALESCE(e.notes, \'\'))',
+                ], $search, 'exchange_search');
+                $where[] = $searchClause;
+                $bindings = array_merge($bindings, $searchBindings);
+            }
+
+            $dateFrom = trim((string) ($params['date_from'] ?? ''));
+            if ($dateFrom !== '') {
+                $where[] = 'e.created_at >= :date_from';
+                $bindings['date_from'] = $dateFrom . ' 00:00:00';
+            }
+
+            $dateTo = trim((string) ($params['date_to'] ?? ''));
+            if ($dateTo !== '') {
+                $where[] = 'e.created_at <= :date_to';
+                $bindings['date_to'] = $dateTo . ' 23:59:59';
+            }
+
+            $whereClause = implode(' AND ', $where);
+            $orderByClause = $this->buildExchangeOrderByClause($params['sort'] ?? null, 'e');
+
             // 获取总数
-            $userColumn = $this->pointExchangeUserColumn();
             $countSql = "
                 SELECT COUNT(*) as total
-                FROM point_exchanges 
-                WHERE {$userColumn} = :user_id AND deleted_at IS NULL
+                FROM point_exchanges e
+                WHERE {$whereClause}
             ";
             $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute(['user_id' => $user['id']]);
+            $countStmt->execute($bindings);
             $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
 
             // 获取兑换记录
@@ -511,13 +552,15 @@ class ProductController
                     p.images as current_product_images
                 FROM point_exchanges e
                 LEFT JOIN products p ON e.product_id = p.id
-                WHERE " . $this->pointExchangeUserColumn('e') . " = :user_id AND e.deleted_at IS NULL
-                ORDER BY e.created_at DESC
+                WHERE {$whereClause}
+                ORDER BY {$orderByClause}
                 LIMIT :limit OFFSET :offset
             ";
 
             $stmt = $this->db->prepare($sql);
-            $stmt->bindValue('user_id', $user['id']);
+            foreach ($bindings as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
             $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
             $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
             $stmt->execute();
@@ -538,7 +581,11 @@ class ProductController
                     'page' => $page,
                     'limit' => $limit,
                     'total' => intval($total),
-                    'pages' => ceil($total / $limit)
+                    'pages' => (int) ceil($total / $limit),
+                    'current_page' => $page,
+                    'per_page' => $limit,
+                    'total_items' => intval($total),
+                    'total_pages' => (int) ceil($total / $limit),
                 ]
             ]);
 
@@ -567,6 +614,7 @@ class ProductController
             // 构建查询条件
             $where = ['e.deleted_at IS NULL'];
             $bindings = [];
+            $userJoinSql = 'LEFT JOIN users u ON ' . $this->pointExchangeUserColumn('e') . ' = u.id';
 
             if (!empty($params['status'])) {
                 $where[] = 'e.status = :status';
@@ -578,10 +626,30 @@ class ProductController
                 $bindings['user_id'] = $params['user_id'];
             }
 
+            $search = trim((string) ($params['search'] ?? ''));
+            if ($search !== '') {
+                [$searchClause, $searchBindings] = $this->buildNamedLikeClause([
+                    'LOWER(e.id)',
+                    'LOWER(COALESCE(e.product_name, \'\'))',
+                    'LOWER(COALESCE(e.tracking_number, \'\'))',
+                    'LOWER(COALESCE(e.contact_phone, \'\'))',
+                    'LOWER(COALESCE(u.username, \'\'))',
+                    'LOWER(COALESCE(u.email, \'\'))',
+                ], $search, 'exchange_search');
+                $where[] = $searchClause;
+                $bindings = array_merge($bindings, $searchBindings);
+            }
+
             $whereClause = implode(' AND ', $where);
+            $orderByClause = $this->buildExchangeOrderByClause($params['sort'] ?? null, 'e');
 
             // 获取总数
-            $countSql = "SELECT COUNT(*) as total FROM point_exchanges e WHERE {$whereClause}";
+            $countSql = "
+                SELECT COUNT(*) as total
+                FROM point_exchanges e
+                {$userJoinSql}
+                WHERE {$whereClause}
+            ";
             $countStmt = $this->db->prepare($countSql);
             $countStmt->execute($bindings);
             $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
@@ -596,10 +664,10 @@ class ProductController
                     p.image_path as current_product_image_path,
                     p.images as current_product_images
                 FROM point_exchanges e
-                LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
+                {$userJoinSql}
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE {$whereClause}
-                ORDER BY e.created_at DESC
+                ORDER BY {$orderByClause}
                 LIMIT :limit OFFSET :offset
             ";
 
@@ -759,12 +827,12 @@ class ProductController
             $exchangeId = $args['id'];
             $data = $request->getParsedBody();
 
-            if (!isset($data['status']) || !in_array($data['status'], ['processing', 'shipped', 'completed', 'cancelled'])) {
+            if (!isset($data['status']) || !in_array($data['status'], ['processing', 'shipped', 'completed', 'cancelled', 'rejected'], true)) {
                 return $this->json($response, ['error' => 'Invalid status'], 400);
             }
 
             $status = $data['status'];
-            $notes = $data['notes'] ?? null;
+            $notes = $data['notes'] ?? ($data['admin_notes'] ?? null);
             $trackingNumber = $data['tracking_number'] ?? null;
 
             // 更新兑换状态
@@ -2530,6 +2598,66 @@ class ProductController
         return $this->pointsTransactionUserIdColumn = $detected;
     }
 
+    private function buildProductOrderByClause($sort): string
+    {
+        $normalizedSort = is_string($sort) ? trim($sort) : '';
+
+        switch ($normalizedSort) {
+            case 'created_at':
+            case 'created_at_desc':
+                return 'p.created_at DESC, p.id DESC';
+            case 'created_at_asc':
+                return 'p.created_at ASC, p.id ASC';
+            case 'points_asc':
+                return 'p.points_required ASC, p.created_at DESC, p.id DESC';
+            case 'points_desc':
+                return 'p.points_required DESC, p.created_at DESC, p.id DESC';
+            case 'popular':
+                return 'COALESCE(e.total_exchanged, 0) DESC, p.created_at DESC, p.id DESC';
+            case 'name':
+                return 'p.name ASC, p.created_at DESC, p.id DESC';
+            default:
+                return 'p.sort_order ASC, p.created_at DESC, p.id DESC';
+        }
+    }
+
+    private function buildExchangeOrderByClause($sort, string $alias = 'e'): string
+    {
+        $normalizedSort = is_string($sort) ? trim($sort) : '';
+        $columnPrefix = $alias !== '' ? $alias . '.' : '';
+
+        switch ($normalizedSort) {
+            case 'created_at_asc':
+                return $columnPrefix . 'created_at ASC, ' . $columnPrefix . 'id ASC';
+            case 'points_asc':
+                return $columnPrefix . 'points_used ASC, ' . $columnPrefix . 'created_at DESC';
+            case 'points_desc':
+                return $columnPrefix . 'points_used DESC, ' . $columnPrefix . 'created_at DESC';
+            case 'status_asc':
+                return $columnPrefix . 'status ASC, ' . $columnPrefix . 'created_at DESC';
+            case 'status_desc':
+                return $columnPrefix . 'status DESC, ' . $columnPrefix . 'created_at DESC';
+            case 'created_at_desc':
+            case 'created_at':
+            default:
+                return $columnPrefix . 'created_at DESC, ' . $columnPrefix . 'id DESC';
+        }
+    }
+
+    private function buildNamedLikeClause(array $expressions, string $search, string $prefix = 'search'): array
+    {
+        $term = '%' . strtolower($search) . '%';
+        $clauses = [];
+        $bindings = [];
+
+        foreach (array_values($expressions) as $index => $expression) {
+            $param = $prefix . '_' . $index;
+            $clauses[] = $expression . ' LIKE :' . $param;
+            $bindings[$param] = $term;
+        }
+
+        return ['(' . implode("\n                    OR ", $clauses) . "\n                )", $bindings];
+    }
     /**
      * 获取兑换记录
      */
@@ -2587,7 +2715,8 @@ class ProductController
             'processing' => '您的兑换订单正在处理中',
             'shipped' => '您的兑换商品已发货',
             'completed' => '您的兑换订单已完成',
-            'cancelled' => '您的兑换订单已取消'
+            'cancelled' => '您的兑换订单已取消',
+            'rejected' => '您的兑换订单已被驳回',
         ];
 
         $title = $statusMessages[$status] ?? '兑换状态更新';

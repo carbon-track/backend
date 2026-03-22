@@ -4249,7 +4249,7 @@
           "Exchange"
         ],
         "summary": "获取兑换记录列表 (管理员)",
-        "description": "管理员分页获取兑换记录列表，可按状态、用户和商品筛选，用于兑换履约与售后处理。",
+        "description": "管理员分页获取兑换记录列表，可按状态、关键词和排序方式筛选，用于兑换履约与售后处理。",
         "security": [
           {
             "bearerAuth": []
@@ -4279,9 +4279,36 @@
               "type": "string",
               "enum": [
                 "pending",
+                "processing",
+                "shipped",
                 "completed",
+                "rejected",
                 "cancelled"
               ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按兑换 UUID、商品名、物流单号、联系电话、用户名或邮箱搜索"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at_desc",
+                "created_at_asc",
+                "points_desc",
+                "points_asc",
+                "status_desc",
+                "status_asc"
+              ],
+              "default": "created_at_desc"
             }
           },
           {
@@ -4464,6 +4491,7 @@
                       "processing",
                       "shipped",
                       "completed",
+                      "rejected",
                       "cancelled"
                     ],
                     "description": "新的状态"
@@ -4471,6 +4499,10 @@
                   "admin_notes": {
                     "type": "string",
                     "description": "管理员备注，可选"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "管理员备注别名，可选"
                   },
                   "tracking_number": {
                     "type": "string",
@@ -4596,7 +4628,10 @@
                     "type": "string",
                     "enum": [
                       "pending",
+                      "processing",
+                      "shipped",
                       "completed",
+                      "rejected",
                       "cancelled"
                     ],
                     "description": "新的状态"
@@ -4604,6 +4639,14 @@
                   "admin_notes": {
                     "type": "string",
                     "description": "管理员备注，可选"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "管理员备注别名，可选"
+                  },
+                  "tracking_number": {
+                    "type": "string",
+                    "description": "物流单号，可选"
                   }
                 }
               }
@@ -10892,7 +10935,7 @@
           "Exchange"
         ],
         "summary": "获取用户兑换记录",
-        "description": "分页获取当前登录用户的兑换记录列表。",
+        "description": "分页获取当前登录用户的兑换记录列表，支持按关键词、状态、日期范围和排序方式筛选。",
         "security": [
           {
             "bearerAuth": []
@@ -10913,6 +10956,61 @@
             "schema": {
               "type": "integer",
               "default": 20
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "按兑换 UUID、商品名、物流单号或备注搜索"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "shipped",
+                "completed",
+                "rejected",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at_desc",
+                "created_at_asc",
+                "points_desc",
+                "points_asc",
+                "status_desc",
+                "status_asc"
+              ],
+              "default": "created_at_desc"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
             }
           }
         ],
@@ -12716,6 +12814,40 @@
               "type": "string"
             },
             "description": "按标签筛选，接受以逗号分隔的标签 slug 列表"
+          },
+          {
+            "name": "min_points",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "max_points",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at",
+                "created_at_desc",
+                "created_at_asc",
+                "points_asc",
+                "points_desc",
+                "popular",
+                "name"
+              ],
+              "default": "created_at"
+            },
+            "description": "商品排序方式"
           }
         ],
         "responses": {

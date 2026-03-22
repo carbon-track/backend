@@ -66,6 +66,47 @@ class ProductExchangeQueryTest extends TestCase
         $this->assertSame(404, $otherResult->getStatusCode());
     }
 
+    public function testUserExchangeHistorySupportsSearchStatusAndSort(): void
+    {
+        $pdo = $this->createConnection();
+        $this->createSchema($pdo);
+        $this->seedUsers($pdo);
+        $this->seedProducts($pdo);
+        $this->seedUserExchanges($pdo);
+
+        $messageService = $this->createMock(MessageService::class);
+        $auditLog = $this->createMock(AuditLogService::class);
+        $authService = $this->makeUserAuthService(10);
+
+        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+
+        $filteredRequest = makeRequest('GET', '/me/exchanges', null, [
+            'status' => 'completed',
+            'search' => 'solar',
+            'sort' => 'points_desc',
+            'limit' => 10,
+        ]);
+        $filteredResponse = new Response();
+        $filteredResult = $controller->getExchangeTransactions($filteredRequest, $filteredResponse);
+
+        $this->assertSame(200, $filteredResult->getStatusCode(), (string) $filteredResult->getBody());
+        $filteredPayload = json_decode((string) $filteredResult->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertTrue($filteredPayload['success']);
+        $this->assertSame(1, $filteredPayload['pagination']['total']);
+        $this->assertSame(['ex-user-2'], array_column($filteredPayload['data'], 'id'));
+
+        $sortedRequest = makeRequest('GET', '/me/exchanges', null, [
+            'sort' => 'points_asc',
+            'limit' => 10,
+        ]);
+        $sortedResponse = new Response();
+        $sortedResult = $controller->getExchangeTransactions($sortedRequest, $sortedResponse);
+
+        $this->assertSame(200, $sortedResult->getStatusCode(), (string) $sortedResult->getBody());
+        $sortedPayload = json_decode((string) $sortedResult->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame(['ex-user-1', 'ex-user-2'], array_column($sortedPayload['data'], 'id'));
+    }
+
     public function testAdminCanViewExchangeRecordDetail(): void
     {
         $pdo = $this->createConnection();
@@ -178,11 +219,11 @@ class ProductExchangeQueryTest extends TestCase
         $now = date('Y-m-d H:i:s');
         $pdo->exec("INSERT INTO point_exchanges (
             id, user_id, product_id, quantity, points_used, product_name, product_price,
-            status, created_at
+            status, tracking_number, notes, created_at
         ) VALUES
-            ('ex-user-1', 10, 100, 1, 150, 'Eco Bottle', 150, 'pending', '$now'),
-            ('ex-user-2', 10, 101, 2, 400, 'Solar Charger', 200, 'completed', datetime('$now','-1 day')),
-            ('ex-other', 11, 100, 1, 150, 'Eco Bottle', 150, 'pending', datetime('$now','-2 day'))
+            ('ex-user-1', 10, 100, 1, 150, 'Eco Bottle', 150, 'pending', 'TRACK-USER-1', 'Awaiting dispatch', '$now'),
+            ('ex-user-2', 10, 101, 2, 400, 'Solar Charger', 200, 'completed', 'TRACK-SOLAR', 'Delivered to dorm', datetime('$now','-1 day')),
+            ('ex-other', 11, 100, 1, 150, 'Eco Bottle', 150, 'pending', 'TRACK-OTHER', 'Other user order', datetime('$now','-2 day'))
         ");
     }
 
