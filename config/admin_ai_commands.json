@@ -160,6 +160,21 @@
       ]
     },
     {
+      "id": "aiWorkspace",
+      "label": "AI Workspace",
+      "route": "/admin/ai",
+      "description": "Work inside the dedicated admin AI workspace for governance chat, confirmations, and recent session continuity.",
+      "keywords": [
+        "ai workspace",
+        "assistant workspace",
+        "admin ai",
+        "copilot",
+        "工作台",
+        "AI 工作台",
+        "智能助手"
+      ]
+    },
+    {
       "id": "llmUsage",
       "label": "LLM Usage",
       "route": "/admin/llm-usage",
@@ -192,6 +207,24 @@
     }
   ],
   "quickActions": [
+    {
+      "id": "open-ai-workspace",
+      "label": "Open AI workspace",
+      "description": "Jump directly into the dedicated admin AI workspace.",
+      "routeId": "aiWorkspace",
+      "route": "/admin/ai",
+      "mode": "shortcut",
+      "query": {
+        "focus": "composer"
+      },
+      "keywords": [
+        "open ai workspace",
+        "assistant workspace",
+        "admin ai",
+        "工作台",
+        "打开 AI 工作台"
+      ]
+    },
     {
       "id": "search-users",
       "label": "Search users",

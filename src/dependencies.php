@@ -48,6 +48,10 @@ use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
 use CarbonTrack\Services\AdminAiAgentService;
+use CarbonTrack\Services\AdminAiConversationStoreService;
+use CarbonTrack\Services\AdminAiReadModelService;
+use CarbonTrack\Services\AdminAiResultFormatterService;
+use CarbonTrack\Services\AdminAiWriteActionService;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
@@ -423,6 +427,34 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(AdminAiReadModelService::class, function (ContainerInterface $c) {
+        return new AdminAiReadModelService(
+            $c->get(PDO::class),
+            $c->get(StatisticsService::class)
+        );
+    });
+
+    $container->set(AdminAiConversationStoreService::class, function (ContainerInterface $c) {
+        return new AdminAiConversationStoreService(
+            $c->get(PDO::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AuditLogService::class)
+        );
+    });
+
+    $container->set(AdminAiWriteActionService::class, function (ContainerInterface $c) {
+        return new AdminAiWriteActionService(
+            $c->get(PDO::class),
+            $c->get(AuditLogService::class),
+            $c->get(MessageService::class),
+            $c->get(BadgeService::class)
+        );
+    });
+
+    $container->set(AdminAiResultFormatterService::class, function () {
+        return new AdminAiResultFormatterService();
+    });
+
     $container->set(UserAiService::class, function (ContainerInterface $c) {
         /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
         $llmClient = $c->get('ai.llmClient');
@@ -558,7 +590,11 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(StatisticsService::class),
             $c->get(MessageService::class),
-            $c->get(BadgeService::class)
+            $c->get(BadgeService::class),
+            $c->get(AdminAiReadModelService::class),
+            $c->get(AdminAiWriteActionService::class),
+            $c->get(AdminAiConversationStoreService::class),
+            $c->get(AdminAiResultFormatterService::class)
         );
     });
 

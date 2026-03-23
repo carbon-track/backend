@@ -142,6 +142,103 @@ class AdminAiControllerTest extends TestCase
         $this->assertSame('admin-ai-12345678', $payload['conversation_id']);
     }
 
+    public function testWorkspaceReturnsBootstrapPayload(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $intentService = $this->createMock(AdminAiIntentService::class);
+        $intentService->method('isEnabled')->willReturn(true);
+
+        $commandRepo = $this->createMock(AdminAiCommandRepository::class);
+        $commandRepo->method('getConfig')->willReturn([
+            'agent' => [
+                'default_confirmation_policy' => 'write_requires_confirmation',
+                'max_history_messages' => 12,
+                'max_auto_read_steps' => 1,
+                'systemBehavior' => ['Keep responses concise.'],
+            ],
+            'navigationTargets' => [
+                [
+                    'id' => 'aiWorkspace',
+                    'label' => 'AI Workspace',
+                    'route' => '/admin/ai',
+                    'description' => 'Unified admin AI workspace.',
+                ],
+            ],
+            'quickActions' => [
+                [
+                    'id' => 'open-ai-workspace',
+                    'label' => 'Open AI workspace',
+                    'description' => 'Jump to the admin AI workspace.',
+                    'routeId' => 'aiWorkspace',
+                    'route' => '/admin/ai',
+                    'mode' => 'shortcut',
+                    'query' => ['focus' => 'composer'],
+                ],
+            ],
+            'managementActions' => [
+                [
+                    'name' => 'generate_admin_report',
+                    'label' => 'Generate admin report',
+                    'description' => 'Summarize admin operations.',
+                    'risk_level' => 'read',
+                    'requires_confirmation' => false,
+                    'contextHints' => ['selectedUserId'],
+                    'requires' => [],
+                ],
+            ],
+        ]);
+        $commandRepo->method('getFingerprint')->willReturn('workspace-fingerprint');
+        $commandRepo->method('getActivePath')->willReturn(self::ACTIVE_CONFIG_PATH);
+        $commandRepo->method('getLastModified')->willReturn(1234567890);
+
+        $agentService = $this->createMock(AdminAiAgentService::class);
+        $agentService->method('isEnabled')->willReturn(true);
+        $agentService->expects($this->once())
+            ->method('listConversations')
+            ->with([
+                'limit' => 8,
+                'admin_id' => 1,
+            ])
+            ->willReturn([
+                [
+                    'conversation_id' => 'admin-ai-recent-1',
+                    'title' => 'Recent thread',
+                    'message_count' => 3,
+                ],
+            ]);
+
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+
+        $controller = new AdminAiController(
+            $authService,
+            $intentService,
+            $this->createMock(AdminAnnouncementAiService::class),
+            $commandRepo,
+            $auditLogService,
+            $this->createMock(ErrorLogService::class),
+            new NullLogger(),
+            $agentService
+        );
+
+        $request = makeRequest('GET', '/admin/ai/workspace');
+        $response = $controller->workspace($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertTrue($payload['data']['assistant']['chat_enabled']);
+        $this->assertSame('workspace-fingerprint', $payload['data']['assistant']['commands_fingerprint']);
+        $this->assertSame('/admin/ai', $payload['data']['navigation_targets'][0]['route']);
+        $this->assertSame('open-ai-workspace', $payload['data']['quick_actions'][0]['id']);
+        $this->assertSame('generate_admin_report', $payload['data']['management_actions'][0]['name']);
+        $this->assertSame('admin-ai-recent-1', $payload['data']['recent_conversations'][0]['conversation_id']);
+        $this->assertNotEmpty($payload['data']['starter_prompts']);
+    }
+
     public function testConversationsReturnsSessionList(): void
     {
         $authService = $this->createMock(AuthService::class);

@@ -128,6 +128,73 @@ class AdminAiController
         }
     }
 
+    public function workspace(Request $request, Response $response): Response
+    {
+        try {
+            $user = $this->authService->getCurrentUser($request);
+            if (!$user || !$this->authService->isAdminUser($user)) {
+                return $this->json($response, [
+                    'success' => false,
+                    'error' => 'Admin access required',
+                ], 403);
+            }
+
+            $config = $this->commandRepository->getConfig();
+            $agentConfig = isset($config['agent']) && is_array($config['agent']) ? $config['agent'] : [];
+            $adminId = isset($user['id']) && is_numeric((string) $user['id']) ? (int) $user['id'] : null;
+            $recentConversations = $this->agentService !== null
+                ? $this->agentService->listConversations([
+                    'limit' => 8,
+                    'admin_id' => $adminId,
+                ])
+                : [];
+
+            $data = [
+                'assistant' => [
+                    'chat_enabled' => $this->agentService?->isEnabled() ?? false,
+                    'intent_enabled' => $this->intentService->isEnabled(),
+                    'default_confirmation_policy' => isset($agentConfig['default_confirmation_policy']) && is_string($agentConfig['default_confirmation_policy'])
+                        ? $agentConfig['default_confirmation_policy']
+                        : null,
+                    'max_history_messages' => isset($agentConfig['max_history_messages']) ? (int) $agentConfig['max_history_messages'] : null,
+                    'max_auto_read_steps' => isset($agentConfig['max_auto_read_steps']) ? (int) $agentConfig['max_auto_read_steps'] : null,
+                    'system_behavior' => array_values(array_filter(
+                        isset($agentConfig['systemBehavior']) && is_array($agentConfig['systemBehavior']) ? $agentConfig['systemBehavior'] : [],
+                        static fn ($item): bool => is_string($item) && trim($item) !== ''
+                    )),
+                    'commands_fingerprint' => $this->commandRepository->getFingerprint(),
+                    'commands_source' => $this->commandRepository->getActivePath(),
+                    'commands_last_modified' => $this->commandRepository->getLastModified(),
+                ],
+                'navigation_targets' => $this->normalizeWorkspaceNavigationTargets($config['navigationTargets'] ?? []),
+                'quick_actions' => $this->normalizeWorkspaceQuickActions($config['quickActions'] ?? []),
+                'management_actions' => $this->normalizeWorkspaceManagementActions($config['managementActions'] ?? []),
+                'starter_prompts' => $this->buildWorkspaceStarterPrompts($config['managementActions'] ?? []),
+                'recent_conversations' => $recentConversations,
+            ];
+
+            $this->logAdminAudit('admin_ai_workspace_viewed', $user, $request, [
+                'data' => [
+                    'recent_conversation_count' => count($recentConversations),
+                    'chat_enabled' => $data['assistant']['chat_enabled'],
+                    'intent_enabled' => $data['assistant']['intent_enabled'],
+                ],
+            ]);
+
+            return $this->json($response, [
+                'success' => true,
+                'data' => $data,
+            ]);
+        } catch (\Throwable $throwable) {
+            $this->logException($throwable, $request, 'AdminAI workspace error');
+            return $this->json($response, [
+                'success' => false,
+                'error' => 'Failed to load the admin AI workspace',
+                'code' => 'AI_WORKSPACE_ERROR',
+            ], 500);
+        }
+    }
+
     public function conversations(Request $request, Response $response): Response
     {
         try {
@@ -574,6 +641,223 @@ class AdminAiController
         return $response
             ->withHeader('Content-Type', 'application/json')
             ->withStatus($status);
+    }
+
+    /**
+     * @param mixed $targets
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeWorkspaceNavigationTargets(mixed $targets): array
+    {
+        if (!is_array($targets)) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($targets as $target) {
+            if (!is_array($target)) {
+                continue;
+            }
+
+            $route = isset($target['route']) && is_string($target['route']) ? trim($target['route']) : '';
+            if ($route === '') {
+                continue;
+            }
+
+            $items[] = [
+                'id' => isset($target['id']) && is_string($target['id']) ? $target['id'] : $route,
+                'label' => isset($target['label']) && is_string($target['label']) ? $target['label'] : $route,
+                'description' => isset($target['description']) && is_string($target['description']) ? $target['description'] : null,
+                'route' => $route,
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param mixed $actions
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeWorkspaceQuickActions(mixed $actions): array
+    {
+        if (!is_array($actions)) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($actions as $action) {
+            if (!is_array($action)) {
+                continue;
+            }
+
+            $route = isset($action['route']) && is_string($action['route']) ? trim($action['route']) : '';
+            if ($route === '') {
+                continue;
+            }
+
+            $query = isset($action['query']) && is_array($action['query']) ? $action['query'] : [];
+            $items[] = [
+                'id' => isset($action['id']) && is_string($action['id']) ? $action['id'] : $route,
+                'label' => isset($action['label']) && is_string($action['label']) ? $action['label'] : $route,
+                'description' => isset($action['description']) && is_string($action['description']) ? $action['description'] : null,
+                'route_id' => isset($action['routeId']) && is_string($action['routeId']) ? $action['routeId'] : null,
+                'route' => $route,
+                'mode' => isset($action['mode']) && is_string($action['mode']) ? $action['mode'] : 'shortcut',
+                'query' => $query,
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param mixed $actions
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeWorkspaceManagementActions(mixed $actions): array
+    {
+        if (!is_array($actions)) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($actions as $action) {
+            if (!is_array($action)) {
+                continue;
+            }
+
+            $name = isset($action['name']) && is_string($action['name']) ? trim($action['name']) : '';
+            if ($name === '') {
+                continue;
+            }
+
+            $items[] = [
+                'name' => $name,
+                'label' => isset($action['label']) && is_string($action['label']) ? $action['label'] : $name,
+                'description' => isset($action['description']) && is_string($action['description']) ? $action['description'] : null,
+                'risk_level' => isset($action['risk_level']) && is_string($action['risk_level']) ? $action['risk_level'] : null,
+                'requires_confirmation' => !empty($action['requires_confirmation']),
+                'context_hints' => array_values(array_filter(
+                    isset($action['contextHints']) && is_array($action['contextHints']) ? $action['contextHints'] : [],
+                    static fn ($item): bool => is_string($item) && trim($item) !== ''
+                )),
+                'requirements' => $this->normalizeWorkspaceRequirements($action['requires'] ?? []),
+            ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param mixed $requirements
+     * @return array<int,string>
+     */
+    private function normalizeWorkspaceRequirements(mixed $requirements): array
+    {
+        if (!is_array($requirements)) {
+            return [];
+        }
+
+        $labels = [];
+        foreach ($requirements as $requirement) {
+            if (is_string($requirement) && trim($requirement) !== '') {
+                $labels[] = trim($requirement);
+                continue;
+            }
+
+            if (!is_array($requirement)) {
+                continue;
+            }
+
+            if (isset($requirement['label']) && is_string($requirement['label']) && trim($requirement['label']) !== '') {
+                $labels[] = trim($requirement['label']);
+                continue;
+            }
+
+            $anyOf = isset($requirement['anyOf']) && is_array($requirement['anyOf']) ? $requirement['anyOf'] : [];
+            $alternatives = array_values(array_filter($anyOf, static fn ($item): bool => is_string($item) && trim($item) !== ''));
+            if ($alternatives !== []) {
+                $labels[] = implode(' / ', $alternatives);
+            }
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    /**
+     * @param mixed $managementActions
+     * @return array<int,array<string,string>>
+     */
+    private function buildWorkspaceStarterPrompts(mixed $managementActions): array
+    {
+        $actionNames = [];
+        if (is_array($managementActions)) {
+            foreach ($managementActions as $action) {
+                if (is_array($action) && isset($action['name']) && is_string($action['name']) && trim($action['name']) !== '') {
+                    $actionNames[] = trim($action['name']);
+                }
+            }
+        }
+
+        $actionNames = array_values(array_unique($actionNames));
+        $prompts = [];
+        $catalog = [
+            'generate_admin_report' => [
+                'id' => 'daily-ops-brief',
+                'label' => '生成运营简报',
+                'prompt' => '帮我总结最近 7 天后台运营、待处理事项和 AI 使用情况，给我一个简洁的管理简报。',
+            ],
+            'get_pending_carbon_records' => [
+                'id' => 'pending-carbon-review',
+                'label' => '梳理待审碳记录',
+                'prompt' => '帮我查看当前待审核的碳记录，并按优先级告诉我先处理哪些。',
+            ],
+            'search_users' => [
+                'id' => 'user-investigation',
+                'label' => '定位用户问题',
+                'prompt' => '帮我搜索用户，并告诉我排查用户账号问题时最先应该看哪些信息。',
+            ],
+            'get_exchange_orders' => [
+                'id' => 'pending-exchanges',
+                'label' => '处理兑换订单',
+                'prompt' => '帮我查看当前待处理的兑换订单，并总结每单需要的下一步动作。',
+            ],
+            'search_system_logs' => [
+                'id' => 'trace-request',
+                'label' => '追踪异常请求',
+                'prompt' => '帮我搜索最近的系统日志，并告诉我定位一次后台异常最有效的检索方式。',
+            ],
+            'get_llm_usage_analytics' => [
+                'id' => 'llm-usage',
+                'label' => '检查 AI 用量',
+                'prompt' => '帮我总结最近 30 天管理员 AI 的会话量、模型分布和异常信号。',
+            ],
+            'create_user' => [
+                'id' => 'create-admin-account',
+                'label' => '创建账号模板',
+                'prompt' => '我要创建一个新后台账号。先告诉我需要准备哪些字段，再帮我生成可执行的操作草案。',
+            ],
+        ];
+
+        foreach ($actionNames as $actionName) {
+            if (isset($catalog[$actionName])) {
+                $prompts[] = $catalog[$actionName];
+            }
+            if (count($prompts) >= 6) {
+                break;
+            }
+        }
+
+        if ($prompts === []) {
+            $prompts[] = [
+                'id' => 'generic-admin-ai',
+                'label' => '开始一个治理会话',
+                'prompt' => '帮我看看当前后台最值得优先处理的任务，并给我一个可执行的下一步建议。',
+            ];
+        }
+
+        return $prompts;
     }
 
     private function logAdminAudit(string $action, ?array $user, Request $request, array $context = [], string $status = 'success'): void
