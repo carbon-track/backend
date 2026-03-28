@@ -1798,6 +1798,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Tests\\Unit\\Services\\AdminAiResultFormatterServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/AdminAiResultFormatterServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\AdminAiWriteActionServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/AdminAiWriteActionServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\AdminAnnouncementAiServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/AdminAnnouncementAiServiceTest.php',
+        'CarbonTrack\\Tests\\Unit\\Services\\Ai\\OpenAiClientAdapterTest' => __DIR__ . '/../..' . '/tests/Unit/Services/Ai/OpenAiClientAdapterTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\AuditLogServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/AuditLogServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\AuthServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/AuthServiceTest.php',
         'CarbonTrack\\Tests\\Unit\\Services\\CarbonCalculatorServiceTest' => __DIR__ . '/../..' . '/tests/Unit/Services/CarbonCalculatorServiceTest.php',

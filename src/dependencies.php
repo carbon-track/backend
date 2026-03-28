@@ -300,8 +300,11 @@ $__deps_initializer = function (Container $container) {
             $handlerStack = HandlerStack::create();
 
             $handlerStack->push(Middleware::mapResponse(function (ResponseInterface $response) {
-                $headers = $response->getHeader('x-request-id');
-                if (!empty($headers)) {
+                $headers = array_filter(
+                    array_map(static fn (string $value): string => trim($value), $response->getHeader('x-request-id')),
+                    static fn (string $value): bool => $value !== ''
+                );
+                if ($headers !== []) {
                     return $response;
                 }
 
@@ -356,7 +359,13 @@ $__deps_initializer = function (Container $container) {
             return null;
         }
 
-        return new OpenAiClientAdapter($client);
+        return new OpenAiClientAdapter(
+            $client,
+            $httpClient,
+            $baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1',
+            $apiKey,
+            $organization !== '' ? $organization : null
+        );
     });
 
     $container->set(AdminAiCommandRepository::class, function (ContainerInterface $c) {

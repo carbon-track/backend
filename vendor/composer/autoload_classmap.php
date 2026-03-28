@@ -1390,6 +1390,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\AdminAiResultFormatterServiceTest' => $baseDir . '/tests/Unit/Services/AdminAiResultFormatterServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AdminAiWriteActionServiceTest' => $baseDir . '/tests/Unit/Services/AdminAiWriteActionServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AdminAnnouncementAiServiceTest' => $baseDir . '/tests/Unit/Services/AdminAnnouncementAiServiceTest.php',
+    'CarbonTrack\\Tests\\Unit\\Services\\Ai\\OpenAiClientAdapterTest' => $baseDir . '/tests/Unit/Services/Ai/OpenAiClientAdapterTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AuditLogServiceTest' => $baseDir . '/tests/Unit/Services/AuditLogServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\AuthServiceTest' => $baseDir . '/tests/Unit/Services/AuthServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\CarbonCalculatorServiceTest' => $baseDir . '/tests/Unit/Services/CarbonCalculatorServiceTest.php',
