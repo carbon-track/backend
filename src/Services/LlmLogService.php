@@ -36,6 +36,8 @@ class LlmLogService
             $requestId = $this->trimString($data['request_id'] ?? null, 64);
             $actorType = $this->trimString($data['actor_type'] ?? null, 20) ?? 'user';
             $actorId = isset($data['actor_id']) ? (int) $data['actor_id'] : null;
+            $conversationId = $this->trimString($data['conversation_id'] ?? null, 64);
+            $turnNo = isset($data['turn_no']) && is_numeric($data['turn_no']) ? (int) $data['turn_no'] : null;
             $source = $this->trimString($data['source'] ?? null, 120);
             $model = $this->trimString($data['model'] ?? null, 120);
             $prompt = $this->normalizeText($data['prompt'] ?? null, $this->maxPromptLength);
@@ -52,14 +54,16 @@ class LlmLogService
             $latencyMs = isset($data['latency_ms']) ? (float) $data['latency_ms'] : null;
 
             $stmt = $this->db->prepare("INSERT INTO llm_logs (
-                request_id, actor_type, actor_id, source, model, prompt, response_raw, response_id,
+                request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, response_id,
                 status, error_message, prompt_tokens, completion_tokens, total_tokens, latency_ms, usage_json, context_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
 
             $stmt->execute([
                 $requestId,
                 $actorType,
                 $actorId,
+                $conversationId,
+                $turnNo,
                 $source,
                 $model,
                 $prompt,

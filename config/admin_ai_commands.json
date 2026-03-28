@@ -1,4 +1,15 @@
 {
+  "agent": {
+    "max_history_messages": 12,
+    "default_confirmation_policy": "write_requires_confirmation",
+    "max_auto_read_steps": 1,
+    "systemBehavior": [
+      "Use tools for navigation, analytics, approvals, and audit-friendly admin work.",
+      "Ask follow-up questions when required fields are missing.",
+      "Never execute write actions without explicit admin confirmation.",
+      "Keep responses concise and operational."
+    ]
+  },
   "navigationTargets": [
     {
       "id": "dashboard",
@@ -149,10 +160,25 @@
       ]
     },
     {
+      "id": "aiWorkspace",
+      "label": "AI Workspace",
+      "route": "/admin/ai",
+      "description": "Work inside the dedicated admin AI workspace for governance chat, confirmations, and recent session continuity.",
+      "keywords": [
+        "ai workspace",
+        "assistant workspace",
+        "admin ai",
+        "copilot",
+        "工作台",
+        "AI 工作台",
+        "智能助手"
+      ]
+    },
+    {
       "id": "llmUsage",
       "label": "LLM Usage",
       "route": "/admin/llm-usage",
-      "description": "Monitor LLM quota usage, tokens, and prompt audits.",
+      "description": "Monitor LLM quota usage, agent sessions, tokens, and prompt audits.",
       "keywords": [
         "llm",
         "ai usage",
@@ -160,7 +186,9 @@
         "额度",
         "调用",
         "模型",
-        "日志"
+        "日志",
+        "agent",
+        "会话历史"
       ]
     },
     {
@@ -179,6 +207,24 @@
     }
   ],
   "quickActions": [
+    {
+      "id": "open-ai-workspace",
+      "label": "Open AI workspace",
+      "description": "Jump directly into the dedicated admin AI workspace.",
+      "routeId": "aiWorkspace",
+      "route": "/admin/ai",
+      "mode": "shortcut",
+      "query": {
+        "focus": "composer"
+      },
+      "keywords": [
+        "open ai workspace",
+        "assistant workspace",
+        "admin ai",
+        "工作台",
+        "打开 AI 工作台"
+      ]
+    },
     {
       "id": "search-users",
       "label": "Search users",
@@ -330,6 +376,118 @@
   ],
   "managementActions": [
     {
+      "name": "get_admin_stats",
+      "label": "Get admin statistics",
+      "description": "Read the dashboard-level admin metrics.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/stats",
+        "payloadTemplate": {}
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "admin stats",
+        "dashboard stats",
+        "后台统计",
+        "总览数据"
+      ]
+    },
+    {
+      "name": "get_pending_carbon_records",
+      "label": "Get pending carbon records",
+      "description": "Read pending carbon records for review.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/carbon-records",
+        "payloadTemplate": {
+          "status": "pending",
+          "limit": 5,
+          "record_ids": []
+        }
+      },
+      "requires": [],
+      "contextHints": [
+        "selectedRecordIds"
+      ],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "pending records",
+        "待审核记录",
+        "碳记录列表",
+        "待审批"
+      ]
+    },
+    {
+      "name": "get_llm_usage_analytics",
+      "label": "Get LLM usage analytics",
+      "description": "Read LLM usage analytics and session trends.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/llm-usage/analytics",
+        "payloadTemplate": {
+          "days": 30
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "llm analytics",
+        "ai usage analytics",
+        "会话统计",
+        "token 趋势"
+      ]
+    },
+    {
+      "name": "get_activity_statistics",
+      "label": "Get activity statistics",
+      "description": "Read ranked activity statistics for carbon reduction records.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/carbon-activities/statistics",
+        "payloadTemplate": {
+          "activity_id": null
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "activity statistics",
+        "活动统计",
+        "碳活动排行"
+      ]
+    },
+    {
+      "name": "generate_admin_report",
+      "label": "Generate admin report",
+      "description": "Build a concise admin report that summarizes key stats, pending items, and AI usage.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/ai/chat",
+        "payloadTemplate": {
+          "days": 30
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "admin report",
+        "汇报分析",
+        "日报",
+        "周报",
+        "总结"
+      ]
+    },
+    {
       "name": "approve_carbon_records",
       "label": "Approve carbon reduction records",
       "description": "Approve one or more pending carbon reduction activity submissions by record id.",
@@ -348,7 +506,8 @@
       "contextHints": [
         "selectedRecordIds"
       ],
-      "autoExecute": true,
+      "risk_level": "write",
+      "requires_confirmation": true,
       "keywords": [
         "approve",
         "通过记录",
@@ -376,13 +535,561 @@
       "contextHints": [
         "selectedRecordIds"
       ],
-      "autoExecute": true,
+      "risk_level": "write",
+      "requires_confirmation": true,
       "keywords": [
         "reject",
         "驳回记录",
         "拒绝碳记录",
         "审核拒绝",
         "reject carbon records"
+      ]
+    },
+    {
+      "name": "search_users",
+      "label": "Search users",
+      "description": "Search admin users list with status, role, school, or keyword filters.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/users",
+        "payloadTemplate": {
+          "search": "",
+          "status": null,
+          "school_id": null,
+          "role": null,
+          "user_uuid": null,
+          "limit": 10,
+          "sort": "created_at_desc"
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "search users",
+        "find user",
+        "查用户",
+        "搜索用户",
+        "用户列表"
+      ]
+    },
+    {
+      "name": "get_user_overview",
+      "label": "Get user overview",
+      "description": "Read a single user's admin overview, including points, badges, passkeys, and carbon metrics.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/users/{id}/overview",
+        "payloadTemplate": {
+          "user_id": null,
+          "user_uuid": null
+        }
+      },
+      "requires": [
+        {
+          "anyOf": [
+            "user_id",
+            "user_uuid"
+          ],
+          "label": "user_id_or_uuid"
+        }
+      ],
+      "contextHints": [
+        "selectedUserId"
+      ],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "user overview",
+        "user profile",
+        "用户概览",
+        "用户详情",
+        "账号画像"
+      ]
+    },
+    {
+      "name": "adjust_user_points",
+      "label": "Adjust user points",
+      "description": "Adjust a user's points balance by a positive or negative delta.",
+      "api": {
+        "method": "POST",
+        "path": "/api/v1/admin/users/{id}/points/adjust",
+        "payloadTemplate": {
+          "user_id": null,
+          "user_uuid": null,
+          "delta": null,
+          "reason": null
+        }
+      },
+      "requires": [
+        {
+          "anyOf": [
+            "user_id",
+            "user_uuid"
+          ],
+          "label": "user_id_or_uuid"
+        },
+        "delta"
+      ],
+      "contextHints": [
+        "selectedUserId"
+      ],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "adjust points",
+        "grant points",
+        "deduct points",
+        "调整积分",
+        "补积分",
+        "扣积分"
+      ]
+    },
+    {
+      "name": "create_user",
+      "label": "Create user",
+      "description": "Create a new user account with login credentials and optional admin metadata.",
+      "api": {
+        "method": "POST",
+        "path": "/api/v1/admin/users",
+        "payloadTemplate": {
+          "username": null,
+          "email": null,
+          "password": null,
+          "status": "active",
+          "is_admin": false,
+          "school_id": null,
+          "group_id": null,
+          "region_code": null,
+          "admin_notes": null
+        }
+      },
+      "requires": [
+        "username",
+        "email",
+        "password"
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "create user",
+        "add user",
+        "new account",
+        "新增用户",
+        "创建用户",
+        "添加账号"
+      ]
+    },
+    {
+      "name": "update_user_status",
+      "label": "Update user status",
+      "description": "Update a user's account status and optional admin notes.",
+      "api": {
+        "method": "PUT",
+        "path": "/api/v1/admin/users/{id}",
+        "payloadTemplate": {
+          "user_id": null,
+          "user_uuid": null,
+          "status": null,
+          "admin_notes": null
+        }
+      },
+      "requires": [
+        {
+          "anyOf": [
+            "user_id",
+            "user_uuid"
+          ],
+          "label": "user_id_or_uuid"
+        },
+        "status"
+      ],
+      "contextHints": [
+        "selectedUserId"
+      ],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "update user status",
+        "ban user",
+        "suspend user",
+        "deactivate user",
+        "修改用户状态",
+        "封禁用户",
+        "禁用用户",
+        "冻结账号"
+      ]
+    },
+    {
+      "name": "award_badge_to_user",
+      "label": "Award badge to user",
+      "description": "Manually grant a badge to a user.",
+      "api": {
+        "method": "POST",
+        "path": "/api/v1/admin/badges/{id}/award",
+        "payloadTemplate": {
+          "badge_id": null,
+          "user_id": null,
+          "user_uuid": null,
+          "notes": null
+        }
+      },
+      "requires": [
+        "badge_id",
+        {
+          "anyOf": [
+            "user_id",
+            "user_uuid"
+          ],
+          "label": "user_id_or_uuid"
+        }
+      ],
+      "contextHints": [
+        "selectedUserId"
+      ],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "award badge",
+        "grant badge",
+        "发放徽章",
+        "授予徽章",
+        "给用户发徽章"
+      ]
+    },
+    {
+      "name": "revoke_badge_from_user",
+      "label": "Revoke badge from user",
+      "description": "Manually revoke a previously awarded badge from a user.",
+      "api": {
+        "method": "POST",
+        "path": "/api/v1/admin/badges/{id}/revoke",
+        "payloadTemplate": {
+          "badge_id": null,
+          "user_id": null,
+          "user_uuid": null,
+          "notes": null
+        }
+      },
+      "requires": [
+        "badge_id",
+        {
+          "anyOf": [
+            "user_id",
+            "user_uuid"
+          ],
+          "label": "user_id_or_uuid"
+        }
+      ],
+      "contextHints": [
+        "selectedUserId"
+      ],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "revoke badge",
+        "remove badge",
+        "撤销徽章",
+        "移除徽章",
+        "收回徽章"
+      ]
+    },
+    {
+      "name": "get_exchange_orders",
+      "label": "Get exchange orders",
+      "description": "Read exchange orders with status, user, and keyword filters.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/exchanges",
+        "payloadTemplate": {
+          "status": null,
+          "user_id": null,
+          "search": "",
+          "limit": 10,
+          "sort": "created_at_desc"
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "exchange orders",
+        "reward orders",
+        "兑换单",
+        "兑换订单",
+        "待发货"
+      ]
+    },
+    {
+      "name": "get_exchange_order_detail",
+      "label": "Get exchange order detail",
+      "description": "Read a single exchange order in detail.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/exchanges/{id}",
+        "payloadTemplate": {
+          "exchange_id": null
+        }
+      },
+      "requires": [
+        "exchange_id"
+      ],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "exchange detail",
+        "order detail",
+        "兑换单详情",
+        "订单详情"
+      ]
+    },
+    {
+      "name": "update_exchange_status",
+      "label": "Update exchange status",
+      "description": "Update an exchange order status and optional tracking information.",
+      "api": {
+        "method": "PUT",
+        "path": "/api/v1/admin/exchanges/{id}/status",
+        "payloadTemplate": {
+          "exchange_id": null,
+          "status": null,
+          "notes": null,
+          "tracking_number": null
+        }
+      },
+      "requires": [
+        "exchange_id",
+        "status"
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "update exchange",
+        "ship order",
+        "complete order",
+        "更新兑换状态",
+        "发货",
+        "完成兑换"
+      ]
+    },
+    {
+      "name": "get_product_catalog",
+      "label": "Get product catalog",
+      "description": "Read reward products with category, status, and keyword filters.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/products",
+        "payloadTemplate": {
+          "status": null,
+          "category": null,
+          "search": "",
+          "limit": 10,
+          "sort": "created_at_desc"
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "products",
+        "catalog",
+        "reward store",
+        "商品列表",
+        "奖励目录"
+      ]
+    },
+    {
+      "name": "update_product_status",
+      "label": "Update product status",
+      "description": "Set a reward product to active or inactive.",
+      "api": {
+        "method": "PUT",
+        "path": "/api/v1/admin/products/{id}",
+        "payloadTemplate": {
+          "product_id": null,
+          "status": null
+        }
+      },
+      "requires": [
+        "product_id",
+        "status"
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "update product status",
+        "publish product",
+        "unpublish product",
+        "商品上架",
+        "商品下架",
+        "启用商品",
+        "停用商品"
+      ]
+    },
+    {
+      "name": "adjust_product_inventory",
+      "label": "Adjust product inventory",
+      "description": "Increase, decrease, or set a reward product's stock.",
+      "api": {
+        "method": "PUT",
+        "path": "/api/v1/admin/products/{id}",
+        "payloadTemplate": {
+          "product_id": null,
+          "stock_delta": null,
+          "target_stock": null,
+          "reason": null
+        }
+      },
+      "requires": [
+        "product_id",
+        {
+          "anyOf": [
+            "stock_delta",
+            "target_stock"
+          ],
+          "label": "stock_delta_or_target_stock"
+        }
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "adjust inventory",
+        "restock product",
+        "set stock",
+        "调整库存",
+        "补货",
+        "扣减库存",
+        "设置库存"
+      ]
+    },
+    {
+      "name": "get_passkey_admin_stats",
+      "label": "Get passkey admin stats",
+      "description": "Read passkey adoption and security posture metrics for admins.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/passkeys/stats",
+        "payloadTemplate": {}
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "passkey stats",
+        "webauthn stats",
+        "通行密钥统计",
+        "认证器统计"
+      ]
+    },
+    {
+      "name": "get_passkey_admin_list",
+      "label": "Get passkey admin list",
+      "description": "Read passkey registrations with keyword and user filters.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/passkeys",
+        "payloadTemplate": {
+          "search": "",
+          "user_id": null,
+          "limit": 10,
+          "sort": "last_used_at_desc"
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "passkey list",
+        "webauthn list",
+        "通行密钥列表",
+        "认证器列表"
+      ]
+    },
+    {
+      "name": "search_system_logs",
+      "label": "Search system logs",
+      "description": "Search admin audit, LLM, and error logs by keyword, conversation, or request id.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/logs/search",
+        "payloadTemplate": {
+          "types": [
+            "audit",
+            "llm",
+            "error"
+          ],
+          "q": "",
+          "conversation_id": null,
+          "request_id": null,
+          "limit": 10
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "log search",
+        "system logs",
+        "trace logs",
+        "日志检索",
+        "查日志"
+      ]
+    },
+    {
+      "name": "get_broadcast_history",
+      "label": "Get broadcast history",
+      "description": "Read recent admin broadcast history and delivery stats.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/messages/broadcasts",
+        "payloadTemplate": {
+          "limit": 10
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "broadcast history",
+        "announcement history",
+        "广播历史",
+        "公告历史"
+      ]
+    },
+    {
+      "name": "search_broadcast_recipients",
+      "label": "Search broadcast recipients",
+      "description": "Search broadcast recipient candidates by keyword or status.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/messages/broadcast/recipients",
+        "payloadTemplate": {
+          "search": "",
+          "status": "active",
+          "limit": 20
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "broadcast recipients",
+        "recipient search",
+        "广播接收人",
+        "目标用户"
       ]
     }
   ]

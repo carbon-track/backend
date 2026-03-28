@@ -47,6 +47,11 @@ use CarbonTrack\Services\LeaderboardService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\AdminAiIntentService;
+use CarbonTrack\Services\AdminAiAgentService;
+use CarbonTrack\Services\AdminAiConversationStoreService;
+use CarbonTrack\Services\AdminAiReadModelService;
+use CarbonTrack\Services\AdminAiResultFormatterService;
+use CarbonTrack\Services\AdminAiWriteActionService;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
 use CarbonTrack\Controllers\AdminBadgeController;
@@ -295,8 +300,11 @@ $__deps_initializer = function (Container $container) {
             $handlerStack = HandlerStack::create();
 
             $handlerStack->push(Middleware::mapResponse(function (ResponseInterface $response) {
-                $headers = $response->getHeader('x-request-id');
-                if (!empty($headers)) {
+                $headers = array_filter(
+                    array_map(static fn (string $value): string => trim($value), $response->getHeader('x-request-id')),
+                    static fn (string $value): bool => $value !== ''
+                );
+                if ($headers !== []) {
                     return $response;
                 }
 
@@ -351,7 +359,13 @@ $__deps_initializer = function (Container $container) {
             return null;
         }
 
-        return new OpenAiClientAdapter($client);
+        return new OpenAiClientAdapter(
+            $client,
+            $httpClient,
+            $baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1',
+            $apiKey,
+            $organization !== '' ? $organization : null
+        );
     });
 
     $container->set(AdminAiCommandRepository::class, function (ContainerInterface $c) {
@@ -420,6 +434,34 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
         );
+    });
+
+    $container->set(AdminAiReadModelService::class, function (ContainerInterface $c) {
+        return new AdminAiReadModelService(
+            $c->get(PDO::class),
+            $c->get(StatisticsService::class)
+        );
+    });
+
+    $container->set(AdminAiConversationStoreService::class, function (ContainerInterface $c) {
+        return new AdminAiConversationStoreService(
+            $c->get(PDO::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AuditLogService::class)
+        );
+    });
+
+    $container->set(AdminAiWriteActionService::class, function (ContainerInterface $c) {
+        return new AdminAiWriteActionService(
+            $c->get(PDO::class),
+            $c->get(AuditLogService::class),
+            $c->get(MessageService::class),
+            $c->get(BadgeService::class)
+        );
+    });
+
+    $container->set(AdminAiResultFormatterService::class, function () {
+        return new AdminAiResultFormatterService();
     });
 
     $container->set(UserAiService::class, function (ContainerInterface $c) {
@@ -533,6 +575,35 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(Logger::class),
             $c->get(UserProfileViewService::class)
+        );
+    });
+
+    $container->set(AdminAiAgentService::class, function (ContainerInterface $c) {
+        /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
+        $llmClient = $c->get('ai.llmClient');
+
+        $config = [
+            'model' => $_ENV['LLM_API_MODEL'] ?? null,
+            'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
+            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+        ];
+
+        return new AdminAiAgentService(
+            $c->get(PDO::class),
+            $llmClient,
+            $c->get(LoggerInterface::class),
+            $config,
+            $c->get(AdminAiCommandRepository::class)->getConfig(),
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(StatisticsService::class),
+            $c->get(MessageService::class),
+            $c->get(BadgeService::class),
+            $c->get(AdminAiReadModelService::class),
+            $c->get(AdminAiWriteActionService::class),
+            $c->get(AdminAiConversationStoreService::class),
+            $c->get(AdminAiResultFormatterService::class)
         );
     });
 
@@ -812,6 +883,19 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(AdminAiController::class, function (ContainerInterface $c) {
+        return new AdminAiController(
+            $c->get(AuthService::class),
+            $c->get(AdminAiIntentService::class),
+            $c->get(AdminAnnouncementAiService::class),
+            $c->get(AdminAiCommandRepository::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AdminAiAgentService::class)
         );
     });
 

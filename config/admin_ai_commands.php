@@ -6,6 +6,7 @@ $path = __DIR__ . '/admin_ai_commands.json';
 
 if (!is_file($path) || !is_readable($path)) {
     return [
+        'agent' => [],
         'navigationTargets' => [],
         'quickActions' => [],
         'managementActions' => [],
@@ -16,6 +17,7 @@ $contents = file_get_contents($path);
 
 if ($contents === false) {
     return [
+        'agent' => [],
         'navigationTargets' => [],
         'quickActions' => [],
         'managementActions' => [],

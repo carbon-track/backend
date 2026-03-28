@@ -231,6 +231,10 @@ return function (App $app) {
             $admin->get('/transactions/pending', [AdminController::class, 'getPendingTransactions']);
             $admin->get(PATH_STATS, [AdminController::class, 'getStats']);
             $admin->get('/logs', [AdminController::class, 'getLogs']);
+            $admin->get('/ai/workspace', [AdminAiController::class, 'workspace']);
+            $admin->post('/ai/chat', [AdminAiController::class, 'chat']);
+            $admin->get('/ai/conversations', [AdminAiController::class, 'conversations']);
+            $admin->get('/ai/conversations/{conversation_id}', [AdminAiController::class, 'conversationDetail']);
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
             $admin->post('/ai/announcement-drafts', [AdminAiController::class, 'generateAnnouncementDraft']);
             $admin->get('/ai/diagnostics', [AdminAiController::class, 'diagnostics']);

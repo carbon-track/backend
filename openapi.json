@@ -1851,6 +1851,287 @@
         "operationId": "adminAiAnalyze"
       }
     },
+    "/api/v1/admin/ai/chat": {
+      "post": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "管理员多轮 AI 会话入口",
+        "description": "发送管理员 AI 消息、继续既有会话，或对待执行提案提交确认/拒绝决定。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAiChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "管理员 AI 会话处理成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAiChatResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求缺少必要字段或会话参数无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI 服务暂时不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiChat"
+      }
+    },
+    "/api/v1/admin/ai/conversations": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "查询管理员 AI 会话历史",
+        "description": "基于日志聚合返回管理员 AI 会话列表，用于审计和续聊。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "actor_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "admin_id",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "waiting_confirmation"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "has_pending_action",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "true",
+                    "false",
+                    "1",
+                    "0"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "会话历史获取成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAiConversationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiConversationList"
+      }
+    },
+    "/api/v1/admin/ai/conversations/{conversation_id}": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "查询管理员 AI 会话详情",
+        "description": "返回单个管理员 AI 会话的时间线、待确认动作与关联 LLM 调用摘要。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "会话详情获取成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAiConversationDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "conversation_id 无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiConversationDetail"
+      }
+    },
     "/api/v1/admin/avatars": {
       "get": {
         "tags": [
@@ -5277,6 +5558,21 @@
               "type": "integer",
               "default": 1000
             }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "turn_no",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         ],
         "responses": {
@@ -5562,6 +5858,21 @@
             "in": "query",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "turn_no",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
             }
           }
         ],
@@ -15030,6 +15341,64 @@
         },
         "operationId": "userGetUserStats"
       }
+    },
+    "/api/v1/admin/ai/workspace": {
+      "get": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "加载管理员 AI 工作台",
+        "description": "返回管理员 AI 工作台所需的能力目录、推荐提示与当前管理员最近会话，用于统一前端工作台入口。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "工作台数据加载成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAiWorkspaceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "工作台数据加载失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiWorkspace"
+      }
     }
   },
   "components": {
@@ -20959,6 +21328,47 @@
           }
         }
       },
+      "AdminAiDecision": {
+        "type": "object",
+        "required": [
+          "proposal_id",
+          "outcome"
+        ],
+        "properties": {
+          "proposal_id": {
+            "type": "integer"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "confirm",
+              "reject"
+            ]
+          }
+        }
+      },
+      "AdminAiChatRequest": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "decision": {
+            "$ref": "#/components/schemas/AdminAiDecision"
+          }
+        },
+        "additionalProperties": false
+      },
       "AdminAnnouncementDraftRequest": {
         "type": "object",
         "properties": {
@@ -21129,6 +21539,289 @@
               }
             },
             "additionalProperties": true
+          }
+        }
+      },
+      "AdminAiConversationSummary": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_activity_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "admin_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message_count": {
+            "type": "integer"
+          },
+          "total_tokens": {
+            "type": "integer"
+          },
+          "llm_calls": {
+            "type": "integer"
+          },
+          "last_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "pending_action_count": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_message_preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminAiPendingAction": {
+        "type": "object",
+        "properties": {
+          "proposal_id": {
+            "type": "integer"
+          },
+          "action_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "risk_level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminAiConversationMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proposal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdminAiPendingAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminAiConversationLlmCall": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "turn_no": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latency_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminAiConversationDetail": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiConversationMessage"
+            }
+          },
+          "llm_calls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiConversationLlmCall"
+            }
+          },
+          "pending_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiPendingAction"
+            }
+          }
+        }
+      },
+      "AdminAiChatResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "conversation": {
+            "$ref": "#/components/schemas/AdminAiConversationDetail"
+          }
+        }
+      },
+      "AdminAiConversationListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiConversationSummary"
+            }
+          }
+        }
+      },
+      "AdminAiConversationDetailResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/AdminAiConversationDetail"
           }
         }
       },
@@ -23517,6 +24210,222 @@
           "message",
           "data"
         ]
+      },
+      "AdminAiWorkspaceAssistant": {
+        "type": "object",
+        "properties": {
+          "chat_enabled": {
+            "type": "boolean"
+          },
+          "intent_enabled": {
+            "type": "boolean"
+          },
+          "default_confirmation_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_history_messages": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_auto_read_steps": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "system_behavior": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands_fingerprint": {
+            "type": "string"
+          },
+          "commands_source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commands_last_modified": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminAiWorkspaceNavigationTarget": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "route": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminAiWorkspaceQuickAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "route_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "route": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "AdminAiWorkspaceManagementAction": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "risk_level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requires_confirmation": {
+            "type": "boolean"
+          },
+          "context_hints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdminAiWorkspaceStarterPrompt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminAiWorkspaceData": {
+        "type": "object",
+        "required": [
+          "assistant",
+          "navigation_targets",
+          "quick_actions",
+          "management_actions",
+          "starter_prompts",
+          "recent_conversations"
+        ],
+        "properties": {
+          "assistant": {
+            "$ref": "#/components/schemas/AdminAiWorkspaceAssistant"
+          },
+          "navigation_targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiWorkspaceNavigationTarget"
+            }
+          },
+          "quick_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiWorkspaceQuickAction"
+            }
+          },
+          "management_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiWorkspaceManagementAction"
+            }
+          },
+          "starter_prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiWorkspaceStarterPrompt"
+            }
+          },
+          "recent_conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiConversationSummary"
+            }
+          }
+        }
+      },
+      "AdminAiWorkspaceResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/AdminAiWorkspaceData"
+          }
+        }
       }
     },
     "securitySchemes": {

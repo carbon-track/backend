@@ -57,6 +57,7 @@ CREATE TABLE `audit_logs` (
   `id` int(11) NOT NULL,
   `user_id` int(11) DEFAULT NULL,
   `user_uuid` char(36) DEFAULT NULL,
+  `conversation_id` varchar(64) DEFAULT NULL,
   `actor_type` enum('user','admin','system') NOT NULL DEFAULT 'user',
   `action` varchar(100) NOT NULL COMMENT 'Specific action name (e.g., user_login, admin_user_update)',
   `data` longtext COMMENT 'Original request/response data as JSON',
@@ -77,6 +78,45 @@ CREATE TABLE `audit_logs` (
   `request_method` varchar(10) DEFAULT NULL,
   `endpoint` varchar(512) DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `admin_ai_conversations`
+--
+
+CREATE TABLE `admin_ai_conversations` (
+  `id` int(11) NOT NULL,
+  `conversation_id` varchar(64) NOT NULL,
+  `admin_id` int(11) DEFAULT NULL,
+  `title` varchar(255) DEFAULT NULL,
+  `last_message_preview` varchar(255) DEFAULT NULL,
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_activity_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `admin_ai_messages`
+--
+
+CREATE TABLE `admin_ai_messages` (
+  `id` int(11) NOT NULL,
+  `conversation_id` varchar(64) NOT NULL,
+  `kind` varchar(32) NOT NULL,
+  `role` varchar(20) DEFAULT NULL,
+  `action` varchar(100) DEFAULT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'success',
+  `content` longtext,
+  `request_id` varchar(64) DEFAULT NULL,
+  `response_code` int(11) DEFAULT NULL,
+  `meta_json` longtext,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- --------------------------------------------------------
@@ -705,6 +745,8 @@ CREATE TABLE `llm_logs` (
   `request_id` varchar(64) DEFAULT NULL,
   `actor_type` varchar(20) NOT NULL,
   `actor_id` int(11) DEFAULT NULL,
+  `conversation_id` varchar(64) DEFAULT NULL,
+  `turn_no` int(11) DEFAULT NULL,
   `source` varchar(120) DEFAULT NULL,
   `model` varchar(120) DEFAULT NULL,
   `prompt` mediumtext,
@@ -845,6 +887,7 @@ ALTER TABLE `audit_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_audit_logs_user` (`user_id`),
   ADD KEY `idx_audit_logs_user_uuid` (`user_uuid`),
+  ADD KEY `idx_audit_logs_conversation_id` (`conversation_id`),
   ADD KEY `idx_audit_logs_created_at` (`created_at`),
   ADD KEY `idx_audit_logs_actor_type` (`actor_type`),
   ADD KEY `idx_audit_logs_endpoint` (`endpoint`(191)),
@@ -853,7 +896,29 @@ ALTER TABLE `audit_logs`
   ADD KEY `idx_audit_logs_user_id_actor` (`user_id`,`actor_type`),
   ADD KEY `idx_audit_logs_operation_category` (`operation_category`),
   ADD KEY `idx_audit_logs_change_type` (`change_type`),
-  ADD KEY `idx_audit_logs_request_id` (`request_id`);
+  ADD KEY `idx_audit_logs_request_id` (`request_id`),
+  ADD KEY `idx_audit_logs_actor_conversation_created` (`actor_type`,`user_id`,`conversation_id`,`created_at`);
+
+--
+-- 表的索引 `admin_ai_conversations`
+--
+ALTER TABLE `admin_ai_conversations`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_admin_ai_conversations_conversation_id` (`conversation_id`),
+  ADD KEY `idx_admin_ai_conversations_admin_id` (`admin_id`),
+  ADD KEY `idx_admin_ai_conversations_last_activity_at` (`last_activity_at`);
+
+--
+-- 表的索引 `admin_ai_messages`
+--
+ALTER TABLE `admin_ai_messages`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_admin_ai_messages_conversation_id` (`conversation_id`),
+  ADD KEY `idx_admin_ai_messages_kind` (`kind`),
+  ADD KEY `idx_admin_ai_messages_status` (`status`),
+  ADD KEY `idx_admin_ai_messages_action` (`action`),
+  ADD KEY `idx_admin_ai_messages_created_at` (`created_at`),
+  ADD KEY `idx_admin_ai_messages_conversation_kind_created` (`conversation_id`,`kind`,`created_at`);
 
 --
 -- 表的索引 `avatars`
@@ -1055,9 +1120,12 @@ ALTER TABLE `llm_logs`
   ADD PRIMARY KEY (`id`),
   ADD KEY `idx_llm_logs_request_id` (`request_id`),
   ADD KEY `idx_llm_logs_actor` (`actor_type`,`actor_id`),
+  ADD KEY `idx_llm_logs_conversation_id` (`conversation_id`),
+  ADD KEY `idx_llm_logs_turn_no` (`turn_no`),
   ADD KEY `idx_llm_logs_created_at` (`created_at`),
   ADD KEY `idx_llm_logs_status` (`status`),
-  ADD KEY `idx_llm_logs_model` (`model`(50));
+  ADD KEY `idx_llm_logs_model` (`model`(50)),
+  ADD KEY `idx_llm_logs_actor_conversation_created` (`actor_type`,`actor_id`,`conversation_id`,`created_at`);
 
 --
 -- 表的索引 `system_logs`
@@ -1120,6 +1188,18 @@ ALTER TABLE `users`
 -- 使用表AUTO_INCREMENT `audit_logs`
 --
 ALTER TABLE `audit_logs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `admin_ai_conversations`
+--
+ALTER TABLE `admin_ai_conversations`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `admin_ai_messages`
+--
+ALTER TABLE `admin_ai_messages`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
