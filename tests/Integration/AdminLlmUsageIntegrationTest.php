@@ -94,10 +94,21 @@ class AdminLlmUsageIntegrationTest extends TestCase
         $pdo->exec("INSERT INTO users (id, username, email, status, is_admin) VALUES (2, 'user_a', 'usera@example.com', 'active', 0)");
 
         $logTime = date('Y-m-d H:i:s', strtotime('-1 day'));
+        $secondLogTime = date('Y-m-d H:i:s', strtotime('-2 hours'));
         $pdo->exec("INSERT INTO llm_logs (id, request_id, actor_type, actor_id, source, model, prompt, response_raw, status, total_tokens, latency_ms, created_at, context_json)
             VALUES (20, 'req-20', 'user', 2, 'smart-activity-input', 'model-x', 'hello', '{\"ok\":true}', 'success', 12, 900, '{$logTime}', '{\"client_timezone\":\"UTC\"}')");
+        $pdo->exec("INSERT INTO llm_logs (id, request_id, actor_type, actor_id, source, model, prompt, response_raw, status, total_tokens, latency_ms, created_at, context_json)
+            VALUES (21, 'req-21', 'user', 2, 'admin-ai', 'model-y', 'follow up', '{\"ok\":true}', 'failed', 18, 1200, '{$secondLogTime}', '{\"client_timezone\":\"Asia/Shanghai\"}')");
         $pdo->exec("INSERT INTO system_logs (request_id, method, path, status_code, created_at)
             VALUES ('req-20', 'POST', '/api/v1/ai/suggest-activity', 200, '{$logTime}')");
+        $pdo->exec("INSERT INTO system_logs (request_id, method, path, status_code, created_at)
+            VALUES ('req-20', 'POST', '/api/v1/ai/suggest-activity/retry', 202, '{$secondLogTime}')");
+        $pdo->exec("INSERT INTO audit_logs (request_id, action, status, created_at)
+            VALUES ('req-20', 'admin_llm_usage_analytics_viewed', 'success', '{$logTime}')");
+        $pdo->exec("INSERT INTO audit_logs (request_id, action, status, created_at)
+            VALUES ('req-21', 'admin_llm_usage_analytics_viewed', 'success', '{$secondLogTime}')");
+        $pdo->exec("INSERT INTO error_logs (request_id, error_type, error_message, created_at)
+            VALUES ('req-20', 'RuntimeException', 'boom', '{$secondLogTime}')");
 
         $controller = $this->makeController($pdo);
         $request = makeRequest('GET', '/admin/llm-usage/analytics', null, ['days' => 7, 'recent_limit' => 5]);
@@ -108,7 +119,21 @@ class AdminLlmUsageIntegrationTest extends TestCase
         $this->assertTrue($payload['success']);
         $this->assertNotEmpty($payload['data']['trends']);
         $this->assertNotEmpty($payload['data']['recent_conversations']);
-        $this->assertSame('req-20', $payload['data']['recent_conversations'][0]['request_id']);
-        $this->assertSame(1, $payload['data']['recent_conversations'][0]['related']['system']);
+        $recentByRequestId = [];
+        foreach ($payload['data']['recent_conversations'] as $conversation) {
+            $recentByRequestId[$conversation['request_id']] = $conversation;
+        }
+
+        $this->assertArrayHasKey('req-20', $recentByRequestId);
+        $this->assertArrayHasKey('req-21', $recentByRequestId);
+        $this->assertSame(2, $recentByRequestId['req-20']['related']['system']);
+        $this->assertSame(1, $recentByRequestId['req-20']['related']['audit']);
+        $this->assertSame(1, $recentByRequestId['req-20']['related']['error']);
+        $this->assertSame('/api/v1/ai/suggest-activity/retry', $recentByRequestId['req-20']['system_path']);
+        $this->assertSame(202, $recentByRequestId['req-20']['system_status_code']);
+        $this->assertSame(0, $recentByRequestId['req-21']['related']['system']);
+        $this->assertSame(1, $recentByRequestId['req-21']['related']['audit']);
+        $this->assertSame(0, $recentByRequestId['req-21']['related']['error']);
+        $this->assertNull($recentByRequestId['req-21']['system_path']);
     }
 }
