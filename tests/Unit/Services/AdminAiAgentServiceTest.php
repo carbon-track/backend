@@ -163,6 +163,63 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame(3, $storedCount);
     }
 
+    public function testChatFallsBackToKeywordMatchedActionWhenModelReturnsNoToolCall(): void
+    {
+        $pdo = $this->makePdo();
+        $logger = new Logger('test');
+        $auditLogService = new AuditLogService($pdo, $logger);
+        $llmLogService = new LlmLogService($pdo, $logger);
+        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+
+        $activityId = '550e8400-e29b-41d4-a716-446655440001';
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b7')");
+        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-3', 2, '{$activityId}', 'pending', '2026-03-20', 2.4, 6)");
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->plainTextResponse('我先想想。'),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12],
+                'managementActions' => [
+                    [
+                        'name' => 'get_pending_carbon_records',
+                        'label' => 'Get pending carbon records',
+                        'description' => 'Read pending carbon records.',
+                        'api' => ['payloadTemplate' => ['status' => 'pending', 'limit' => 5, 'record_ids' => []]],
+                        'requires' => [],
+                        'contextHints' => [],
+                        'risk_level' => 'read',
+                        'requires_confirmation' => false,
+                        'keywords' => ['待审核碳记录', '待审核记录', '碳记录', '待审批'],
+                    ],
+                ],
+            ],
+            $llmLogService,
+            $auditLogService,
+            $errorLogService
+        );
+
+        $result = $service->chat(null, '帮我查看当前待审核碳记录，并按优先级给出处理建议。', [], null, [
+            'request_id' => 'req-read-heuristic-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+
+        $this->assertTrue($result['success']);
+        $this->assertStringContainsString('待处理记录', $result['message']);
+        $toolEvents = array_values(array_filter(
+            $result['conversation']['messages'],
+            static fn (array $item): bool => ($item['kind'] ?? null) === 'tool'
+        ));
+        $this->assertCount(1, $toolEvents);
+        $this->assertSame('get_pending_carbon_records', $toolEvents[0]['meta']['data']['action_name']);
+    }
+
     public function testWriteActionRequiresConfirmationAndExecutesAfterDecision(): void
     {
         $pdo = $this->makePdo();
@@ -882,6 +939,22 @@ class AdminAiAgentServiceTest extends TestCase
                             'arguments' => json_encode($arguments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                         ],
                     ]],
+                ],
+            ]],
+        ];
+    }
+
+    private function plainTextResponse(string $content): array
+    {
+        return [
+            'id' => 'resp-test-text',
+            'model' => 'test-model',
+            'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 12, 'total_tokens' => 22],
+            'choices' => [[
+                'finish_reason' => 'stop',
+                'message' => [
+                    'role' => 'assistant',
+                    'content' => $content,
                 ],
             ]],
         ];
