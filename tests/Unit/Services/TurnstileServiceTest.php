@@ -52,6 +52,31 @@ class TurnstileServiceTest extends TestCase
             }
         }
     }
+
+    public function testApplyCertificateOptionsAddsConfiguredCaBundleAndNativeStore(): void
+    {
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $service = new TurnstileService(
+            'secret',
+            $logger,
+            null,
+            null,
+            'C:\\certs\\cacert.pem',
+            true
+        );
+
+        $method = new \ReflectionMethod(TurnstileService::class, 'applyCertificateOptions');
+        $method->setAccessible(true);
+
+        $options = [];
+        $method->invokeArgs($service, [&$options]);
+
+        $this->assertSame('C:\\certs\\cacert.pem', $options[CURLOPT_CAINFO]);
+
+        if (\defined('CURLOPT_SSL_OPTIONS') && \defined('CURLSSLOPT_NATIVE_CA')) {
+            $this->assertSame(CURLSSLOPT_NATIVE_CA, $options[CURLOPT_SSL_OPTIONS]);
+        }
+    }
 }
 
 

@@ -73,6 +73,7 @@ class LogSearchControllerIntegrationTest extends TestCase
 
         $this->assertCount(1, $payload['data']['audit']['items']);
         $this->assertSame('admin-ai-11111111', $payload['data']['audit']['items'][0]['conversation_id']);
+        $this->assertSame('req-conv-1', $payload['data']['audit']['items'][0]['request_id']);
 
         $this->assertCount(1, $payload['data']['llm']['items']);
         $this->assertSame('admin-ai-11111111', $payload['data']['llm']['items'][0]['conversation_id']);
@@ -80,5 +81,32 @@ class LogSearchControllerIntegrationTest extends TestCase
 
         $this->assertCount(1, $payload['data']['error']['items']);
         $this->assertSame('req-conv-1', $payload['data']['error']['items'][0]['request_id']);
+    }
+
+    public function testSearchFiltersAuditByRequestIdAndReturnsRequestIdColumn(): void
+    {
+        $pdo = new PDO('sqlite::memory:');
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        TestSchemaBuilder::init($pdo);
+
+        $pdo->exec("
+            INSERT INTO audit_logs (user_id, conversation_id, actor_type, action, status, operation_category, request_id, data, created_at)
+            VALUES
+            (1, 'admin-ai-33333333', 'admin', 'admin_ai_user_message', 'success', 'admin_ai', 'req-audit-1', '{\"visible_text\":\"命中\"}', '2026-03-22 10:00:00'),
+            (1, 'admin-ai-44444444', 'admin', 'admin_ai_user_message', 'success', 'admin_ai', 'req-audit-2', '{\"visible_text\":\"忽略\"}', '2026-03-22 10:05:00')
+        ");
+
+        $controller = $this->makeController($pdo);
+        $request = makeRequest('GET', '/admin/logs/search', null, [
+            'types' => 'audit',
+            'request_id' => 'req-audit-1',
+        ]);
+        $response = $controller->search($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertCount(1, $payload['data']['audit']['items']);
+        $this->assertSame('req-audit-1', $payload['data']['audit']['items'][0]['request_id']);
     }
 }

@@ -285,7 +285,7 @@ class LogSearchController
                     return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
                 }
                 $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
-                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','conversation_id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
+                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','conversation_id','request_id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
                 $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
                 $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','conversation_id','turn_no','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
 
@@ -489,7 +489,7 @@ class LogSearchController
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
     // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
-    $sql = "SELECT id, user_id, conversation_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+    $sql = "SELECT id, user_id, conversation_id, request_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($sql);
         foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
         $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
