@@ -280,7 +280,7 @@ class UserControllerTest extends TestCase
         $stmtList->method('execute')->willReturn(true);
         $stmtList->method('fetchAll')->willReturn([
             [
-                'id' => 't1', 'uuid' => 't1', 'type' => 'earn', 'points' => 100,
+                'id' => 't1', 'uuid' => null, 'type' => 'earn', 'points' => 100,
                 'description' => 'walk', 'status' => 'approved', 'activity_id' => 'a1',
                 'activity_name' => '步行', 'created_at' => '2025-01-01'
             ]
@@ -309,7 +309,7 @@ class UserControllerTest extends TestCase
         $this->assertEquals('approved', $json['data']['transactions'][0]['status']);
     }
 
-    public function testGetPointsHistorySupportsLegacyPointsTransactionSchema(): void
+    public function testGetPointsHistoryUsesCanonicalPointsTransactionSchema(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 2]);
@@ -422,9 +422,6 @@ class UserControllerTest extends TestCase
         $stmtRank->method('execute')->willReturn(true);
         $stmtRank->method('fetch')->willReturn(['rank' => 7]);
 
-        $stmtShowColumns = $this->createMock(\PDOStatement::class);
-        $stmtShowColumns->method('fetch')->willReturn(false);
-
         $stmtTotalUsers = $this->createMock(\PDOStatement::class);
         $stmtTotalUsers->expects($this->once())->method('fetch')->willReturn(['total' => 200]);
 
@@ -451,10 +448,7 @@ class UserControllerTest extends TestCase
             $stmtRecords,
             $stmtRank
         );
-        $pdo->method('query')->willReturnCallback(function ($sql) use ($stmtShowColumns, $stmtTotalUsers, $stmtLeaderboard) {
-            if (stripos($sql, 'SHOW COLUMNS FROM points_transactions') !== false) {
-                return $stmtShowColumns;
-            }
+        $pdo->method('query')->willReturnCallback(function ($sql) use ($stmtTotalUsers, $stmtLeaderboard) {
             if (stripos($sql, 'COUNT(*) AS total') !== false && stripos($sql, 'FROM users') !== false) {
                 return $stmtTotalUsers;
             }
@@ -994,6 +988,112 @@ class UserControllerTest extends TestCase
         $this->assertSame('activity', $json['data']['category']);
         $this->assertSame('activity', $json['data']['preview']['category']);
         $this->assertArrayHasKey('sample', $json['data']['preview']);
+    }
+
+    public function testSendNotificationTestEmailUsesCanonicalPointExchangeUserId(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn([
+            'id' => 11,
+            'email' => 'redeemer@example.com',
+            'username' => 'Redeemer',
+        ]);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logAuthOperation')
+            ->with(
+                'notification_test_email',
+                11,
+                true,
+                $this->callback(function (array $context): bool {
+                    $this->assertSame('transaction', $context['category']);
+                    $this->assertArrayHasKey('sample', $context);
+                    $this->assertFalse($context['sample']['generated']);
+                    $this->assertSame('Eco Bottle', $context['sample']['product']);
+                    return true;
+                })
+            );
+
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+
+        $emailService = $this->createMock(\CarbonTrack\Services\EmailService::class);
+        $emailService->expects($this->once())
+            ->method('sendExchangeConfirmation')
+            ->with('redeemer@example.com', 'Redeemer', 'Eco Bottle', 2, 180.0)
+            ->willReturn(true);
+        $emailService->expects($this->once())
+            ->method('dispatchAsyncEmail')
+            ->with(
+                $this->callback(static fn($callback): bool => is_callable($callback)),
+                $this->callback(function (array $context): bool {
+                    $this->assertSame('transaction', $context['category']);
+                    $this->assertFalse($context['sample']['generated']);
+                    return true;
+                }),
+                false
+            )
+            ->willReturnCallback(function (callable $callback, array $context, bool $preferAsync): bool {
+                $this->assertFalse($preferAsync);
+                return (bool) $callback(false);
+            });
+
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $prefs->method('allCategories')->willReturn([
+            'transaction' => ['label' => 'Reward exchanges', 'locked' => false],
+        ]);
+
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec("CREATE TABLE point_exchanges (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            points_used INTEGER NOT NULL,
+            product_name TEXT NOT NULL,
+            deleted_at TEXT,
+            created_at TEXT
+        )");
+        $pdo->exec("CREATE TABLE products (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL
+        )");
+        $pdo->exec("INSERT INTO products (id, name) VALUES (8, 'Eco Bottle')");
+        $pdo->exec("INSERT INTO point_exchanges (id, user_id, product_id, quantity, points_used, product_name, deleted_at, created_at)
+            VALUES ('ex-1', 11, 8, 2, 180, 'Eco Bottle', NULL, '2026-04-02 09:00:00')");
+
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $turnstile = $this->mockTurnstile();
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $controller = new UserController(
+            $auth,
+            $audit,
+            $messageService,
+            $avatar,
+            $prefs,
+            $turnstile,
+            $emailService,
+            $logger,
+            $pdo,
+            $errorLog,
+            null,
+            $region
+        );
+
+        $request = makeRequest('POST', '/users/me/notification-preferences/test-email', ['category' => 'transaction']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->sendNotificationTestEmail($request, $response);
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertTrue($json['data']['delivered']);
+        $this->assertFalse($json['data']['generated']);
+        $this->assertSame('Eco Bottle', $json['data']['preview']['sample']['product']);
     }
 
     public function testSendNotificationTestEmailMarksGeneratedSampleWhenMissingData(): void
