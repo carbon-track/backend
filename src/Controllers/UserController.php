@@ -65,6 +65,8 @@ class UserController
     private ?CheckinService $checkinService;
     private ?StreakLeaderboardService $streakLeaderboardService;
     private UserProfileViewService $userProfileViewService;
+    /** @var array<string, string[]> */
+    private array $tableColumnsCache = [];
 
     public function __construct(
         AuthService $authService,
@@ -74,16 +76,26 @@ class UserController
         NotificationPreferenceService $notificationPreferenceService,
         ?TurnstileService $turnstileService = null,
         ?EmailService $emailService = null,
-        Logger $logger,
-        PDO $db,
-        ErrorLogService $errorLogService = null,
-        CloudflareR2Service $r2Service = null,
-        RegionService $regionService,
+        ?Logger $logger = null,
+        ?PDO $db = null,
+        ?ErrorLogService $errorLogService = null,
+        ?CloudflareR2Service $r2Service = null,
+        ?RegionService $regionService = null,
         ?LeaderboardService $leaderboardService = null,
         ?CheckinService $checkinService = null,
         ?StreakLeaderboardService $streakLeaderboardService = null,
         ?UserProfileViewService $userProfileViewService = null
     ) {
+        if ($logger === null) {
+            throw new \InvalidArgumentException('UserController requires a logger instance.');
+        }
+        if ($db === null) {
+            throw new \InvalidArgumentException('UserController requires a PDO instance.');
+        }
+        if ($regionService === null) {
+            throw new \InvalidArgumentException('UserController requires a RegionService instance.');
+        }
+
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
@@ -1343,25 +1355,43 @@ class UserController
             $offset = ($page - 1) * $limit;
 
             // 兼容不同表结构的用户ID字段（user_id 或 uid）
-            $userIdColumn = $this->resolvePointsUserIdColumn();
+            $transactionColumns = $this->getTableColumns('points_transactions');
+            $userIdColumn = $this->resolvePointsUserIdColumn($transactionColumns);
+            $activityColumns = $this->getTableColumns('carbon_activities');
+            $activityJoinColumn = $this->resolveActivityJoinColumn($activityColumns);
+            $activityNameColumn = in_array('name_zh', $activityColumns, true)
+                ? 'ca.name_zh'
+                : (in_array('name_en', $activityColumns, true) ? 'ca.name_en' : 'NULL');
+            $descriptionColumn = $this->resolveFirstExistingColumn(
+                'pt',
+                $transactionColumns,
+                ['description', 'notes', 'act']
+            );
+            $adminNotesColumn = $this->resolveFirstExistingColumn(
+                'pt',
+                $transactionColumns,
+                ['admin_notes', 'notes']
+            );
+            $uuidColumn = $this->resolveFirstExistingColumn('pt', $transactionColumns, ['uuid']);
+            $rejectedAtColumn = $this->resolveFirstExistingColumn('pt', $transactionColumns, ['rejected_at']);
 
             // 获取积分历史记录
             $stmt = $this->db->prepare("
                 SELECT 
                     pt.id,
-                    pt.uuid,
+                    {$uuidColumn} AS uuid,
                     pt.type,
                     pt.points,
-                    pt.description,
+                    {$descriptionColumn} AS description,
                     pt.status,
                     pt.activity_id,
-                    ca.name_zh as activity_name,
+                    {$activityNameColumn} as activity_name,
                     pt.created_at,
                     pt.approved_at,
-                    pt.rejected_at,
-                    pt.admin_notes
+                    {$rejectedAtColumn} AS rejected_at,
+                    {$adminNotesColumn} AS admin_notes
                 FROM points_transactions pt
-                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
+                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.{$activityJoinColumn}
                 WHERE pt.{$userIdColumn} = ? AND pt.deleted_at IS NULL
                 ORDER BY pt.created_at DESC
                 LIMIT ? OFFSET ?
@@ -1887,39 +1917,88 @@ class UserController
     /**
      * 解析 points_transactions 表中用户ID列名（兼容 uid/user_id，适配 MySQL/SQLite）
      */
-    private function resolvePointsUserIdColumn(): string
+    private function resolvePointsUserIdColumn(?array $columns = null): string
     {
         try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
-            $column = 'uid'; // 默认更通用的列名
-
-            if ($driver === 'mysql') {
-                // MySQL: 使用 SHOW COLUMNS 检测列是否存在
-                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
-                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
-                $column = $hasUserId ? 'user_id' : 'uid';
-            } elseif ($driver === 'sqlite') {
-                // SQLite: 使用 PRAGMA table_info 检测列是否存在
-                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
-                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-                $names = array_map(static function ($c) { return $c['name'] ?? ''; }, $cols);
-                if (in_array('user_id', $names, true)) {
-                    $column = 'user_id';
-                } elseif (in_array('uid', $names, true)) {
-                    $column = 'uid';
-                } else {
-                    $column = 'uid';
-                }
-            } else {
-                // 其他驱动，尽量选择兼容性更高的 uid
-                $column = 'uid';
+            $columns ??= $this->getTableColumns('points_transactions');
+            if (in_array('user_id', $columns, true)) {
+                return 'user_id';
             }
-
-            return $column;
+            if (in_array('uid', $columns, true)) {
+                return 'uid';
+            }
+            return 'uid';
         } catch (\Throwable $e) {
             // 发生异常时使用 uid，避免 Unknown column 错误
             return 'uid';
         }
+    }
+
+    /**
+     * @return string[]
+     */
+    private function getTableColumns(string $table): array
+    {
+        if (isset($this->tableColumnsCache[$table])) {
+            return $this->tableColumnsCache[$table];
+        }
+
+        try {
+            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+
+            if ($driver === 'mysql') {
+                $stmt = $this->db->query("SHOW COLUMNS FROM {$table}");
+                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $resolved = array_values(array_filter(array_map(static function (array $column): string {
+                    return (string) ($column['Field'] ?? '');
+                }, $cols)));
+                return $this->tableColumnsCache[$table] = $resolved;
+            }
+
+            if ($driver === 'sqlite') {
+                $stmt = $this->db->query("PRAGMA table_info({$table})");
+                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $resolved = array_values(array_filter(array_map(static function (array $column): string {
+                    return (string) ($column['name'] ?? '');
+                }, $cols)));
+                return $this->tableColumnsCache[$table] = $resolved;
+            }
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        return $this->tableColumnsCache[$table] = [];
+    }
+
+    /**
+     * @param string[] $availableColumns
+     * @param string[] $candidates
+     */
+    private function resolveFirstExistingColumn(string $alias, array $availableColumns, array $candidates): string
+    {
+        foreach ($candidates as $candidate) {
+            if (in_array($candidate, $availableColumns, true)) {
+                return $alias . '.' . $candidate;
+            }
+        }
+
+        return 'NULL';
+    }
+
+    /**
+     * @param string[] $activityColumns
+     */
+    private function resolveActivityJoinColumn(array $activityColumns): string
+    {
+        if (in_array('id', $activityColumns, true)) {
+            return 'id';
+        }
+
+        if (in_array('uuid', $activityColumns, true)) {
+            return 'uuid';
+        }
+
+        return 'id';
     }
 
     /**

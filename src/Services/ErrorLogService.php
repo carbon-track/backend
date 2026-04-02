@@ -26,6 +26,10 @@ class ErrorLogService
      */
     public function logException(\Throwable $e, Request $request, array $extra = []): ?int
     {
+        if ($this->isWriteDisabled()) {
+            return null;
+        }
+
         return $this->insertLog([
             'error_type' => get_class($e),
             'error_message' => $e->getMessage(),
@@ -48,6 +52,10 @@ class ErrorLogService
      */
     public function logError(string $type, string $message, Request $request, array $context = []): ?int
     {
+        if ($this->isWriteDisabled()) {
+            return null;
+        }
+
         return $this->insertLog([
             'error_type' => $type,
             'error_message' => $message,
@@ -222,5 +230,25 @@ class ErrorLogService
             'uri' => $server['REQUEST_URI'] ?? null,
         ] + $extra;
         return $server;
+    }
+
+    private function isWriteDisabled(): bool
+    {
+        if ($this->isProductionEnvironment()) {
+            return false;
+        }
+
+        $raw = $_ENV['DISABLE_ERROR_LOG_WRITES'] ?? $_SERVER['DISABLE_ERROR_LOG_WRITES'] ?? null;
+        if (!is_string($raw) && !is_numeric($raw) && !is_bool($raw)) {
+            return false;
+        }
+
+        return filter_var($raw, FILTER_VALIDATE_BOOLEAN) === true;
+    }
+
+    private function isProductionEnvironment(): bool
+    {
+        $env = strtolower(trim((string) ($_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? '')));
+        return $env === 'production';
     }
 }

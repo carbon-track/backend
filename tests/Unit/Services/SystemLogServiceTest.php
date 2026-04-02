@@ -12,16 +12,48 @@ use PHPUnit\Framework\TestCase;
 class SystemLogServiceTest extends TestCase
 {
     private array $originalServer = [];
+    private mixed $previousDisableSystemWrites = null;
+    private mixed $previousDisableSystemWritesServer = null;
+    private mixed $previousAppEnv = null;
+    private mixed $previousAppEnvServer = null;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->originalServer = $_SERVER ?? [];
+        $this->previousDisableSystemWrites = $_ENV['DISABLE_SYSTEM_LOG_WRITES'] ?? null;
+        $this->previousDisableSystemWritesServer = $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] ?? null;
+        $this->previousAppEnv = $_ENV['APP_ENV'] ?? null;
+        $this->previousAppEnvServer = $_SERVER['APP_ENV'] ?? null;
+        unset($_ENV['DISABLE_SYSTEM_LOG_WRITES']);
+        unset($_SERVER['DISABLE_SYSTEM_LOG_WRITES']);
+        $_ENV['APP_ENV'] = 'development';
+        $_SERVER['APP_ENV'] = 'development';
     }
 
     protected function tearDown(): void
     {
         $_SERVER = $this->originalServer;
+        if ($this->previousDisableSystemWrites === null) {
+            unset($_ENV['DISABLE_SYSTEM_LOG_WRITES']);
+        } else {
+            $_ENV['DISABLE_SYSTEM_LOG_WRITES'] = $this->previousDisableSystemWrites;
+        }
+        if ($this->previousDisableSystemWritesServer === null) {
+            unset($_SERVER['DISABLE_SYSTEM_LOG_WRITES']);
+        } else {
+            $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] = $this->previousDisableSystemWritesServer;
+        }
+        if ($this->previousAppEnv === null) {
+            unset($_ENV['APP_ENV']);
+        } else {
+            $_ENV['APP_ENV'] = $this->previousAppEnv;
+        }
+        if ($this->previousAppEnvServer === null) {
+            unset($_SERVER['APP_ENV']);
+        } else {
+            $_SERVER['APP_ENV'] = $this->previousAppEnvServer;
+        }
         parent::tearDown();
     }
 
@@ -72,6 +104,49 @@ class SystemLogServiceTest extends TestCase
 
         $this->assertIsArray($meta);
         $this->assertSame('192.0.2.44', $meta['_summary']['ip']);
+    }
+
+    public function testLogReturnsNullWhenWritesDisabled(): void
+    {
+        $_ENV['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
+        $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
+
+        $pdo = $this->createMock(PDO::class);
+        $pdo->expects($this->never())->method('prepare');
+
+        $service = new SystemLogService($pdo, new Logger('test'));
+
+        $result = $service->log([
+            'request_id' => 'req-1',
+            'method' => 'GET',
+            'path' => '/api/test',
+        ]);
+
+        $this->assertNull($result);
+    }
+
+    public function testProductionEnvironmentIgnoresDisableFlag(): void
+    {
+        $_ENV['APP_ENV'] = 'production';
+        $_SERVER['APP_ENV'] = 'production';
+        $_ENV['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
+        $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
+
+        $pdo = $this->createMock(PDO::class);
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->method('execute')->willReturn(true);
+        $pdo->expects($this->once())->method('prepare')->willReturn($stmt);
+        $pdo->method('lastInsertId')->willReturn('1');
+
+        $service = new SystemLogService($pdo, new Logger('test'));
+
+        $result = $service->log([
+            'request_id' => 'req-1',
+            'method' => 'GET',
+            'path' => '/api/test',
+        ]);
+
+        $this->assertSame(1, $result);
     }
 
     private function makeService(): SystemLogService

@@ -309,6 +309,64 @@ class UserControllerTest extends TestCase
         $this->assertEquals('approved', $json['data']['transactions'][0]['status']);
     }
 
+    public function testGetPointsHistorySupportsLegacyPointsTransactionSchema(): void
+    {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 2]);
+
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->exec("CREATE TABLE points_transactions (
+            id TEXT PRIMARY KEY,
+            uid INTEGER,
+            points REAL,
+            act TEXT,
+            notes TEXT,
+            type TEXT,
+            status TEXT,
+            activity_id TEXT,
+            approved_at TEXT,
+            created_at TEXT,
+            deleted_at TEXT
+        )");
+        $pdo->exec("CREATE TABLE carbon_activities (
+            id TEXT PRIMARY KEY,
+            name_zh TEXT,
+            deleted_at TEXT
+        )");
+        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, deleted_at) VALUES ('act-1', '步行', NULL)");
+        $pdo->exec("INSERT INTO points_transactions (id, uid, points, act, notes, type, status, activity_id, approved_at, created_at, deleted_at)
+            VALUES ('pt-1', 2, 88, 'legacy-act', 'legacy-note', 'earn', 'approved', 'act-1', '2026-04-02 10:00:00', '2026-04-02 09:00:00', NULL)");
+
+        $controller = new UserController(
+            $auth,
+            $this->createMock(\CarbonTrack\Services\AuditLogService::class),
+            $this->createMock(\CarbonTrack\Services\MessageService::class),
+            $this->createMock(\CarbonTrack\Models\Avatar::class),
+            $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class),
+            $this->mockTurnstile(),
+            null,
+            $this->createMock(\Monolog\Logger::class),
+            $pdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            null,
+            $this->createMock(\CarbonTrack\Services\RegionService::class)
+        );
+
+        $request = makeRequest('GET', '/users/me/points-history');
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getPointsHistory($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertSame('pt-1', $json['data']['transactions'][0]['id']);
+        $this->assertNull($json['data']['transactions'][0]['uuid']);
+        $this->assertSame('legacy-note', $json['data']['transactions'][0]['description']);
+        $this->assertSame('步行', $json['data']['transactions'][0]['activity_name']);
+        $this->assertSame('legacy-note', $json['data']['transactions'][0]['admin_notes']);
+    }
+
     public function testGetUserStatsReturnsAggregates(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);

@@ -29,6 +29,12 @@ class AuditLogService
         'password','pass','token','authorization','auth','secret',
         'api_key','access_token','refresh_token','session_id','credit_card'
     ];
+    /** @var string[] */
+    private array $nullableIntegerFields = [
+        'user_id',
+        'affected_id',
+        'response_code',
+    ];
 
     public function __construct(PDO $db, Logger $logger)
     {
@@ -111,6 +117,10 @@ class AuditLogService
      */
     public function logAudit(array $logData): bool
     {
+        if ($this->isWriteDisabled()) {
+            return false;
+        }
+
         try {
             foreach (['action','operation_category'] as $req) {
                 if (empty($logData[$req])) {
@@ -401,6 +411,14 @@ class AuditLogService
                 $sanitized[$key] = '[REDACTED]';
                 continue;
             }
+            if ($value === null) {
+                $sanitized[$key] = null;
+                continue;
+            }
+            if (in_array($key, $this->nullableIntegerFields, true)) {
+                $sanitized[$key] = $this->normalizeNullableInteger($value);
+                continue;
+            }
             if (is_array($value) || is_object($value)) {
                 try {
                     $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
@@ -413,6 +431,39 @@ class AuditLogService
             }
         }
         return $sanitized;
+    }
+
+    private function normalizeNullableInteger(mixed $value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return null;
+            }
+            if (ctype_digit($trimmed) || preg_match('/^-?\d+$/', $trimmed) === 1) {
+                return (int) $trimmed;
+            }
+
+            return null;
+        }
+
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_float($value)) {
+            return (int) $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        return null;
     }
 
     private function sanitizeData(array $data): ?string
@@ -515,5 +566,25 @@ class AuditLogService
     public function getLastInsertId(): ?int
     {
         return $this->lastInsertId;
+    }
+
+    private function isWriteDisabled(): bool
+    {
+        if ($this->isProductionEnvironment()) {
+            return false;
+        }
+
+        $raw = $_ENV['DISABLE_AUDIT_LOG_WRITES'] ?? $_SERVER['DISABLE_AUDIT_LOG_WRITES'] ?? null;
+        if (!is_string($raw) && !is_numeric($raw) && !is_bool($raw)) {
+            return false;
+        }
+
+        return filter_var($raw, FILTER_VALIDATE_BOOLEAN) === true;
+    }
+
+    private function isProductionEnvironment(): bool
+    {
+        $env = strtolower(trim((string) ($_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? '')));
+        return $env === 'production';
     }
 }
