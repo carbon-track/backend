@@ -287,7 +287,7 @@ class LogSearchController
                 $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
                 $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','conversation_id','request_id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
                 $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
-                $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','conversation_id','turn_no','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
+                $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','conversation_id','request_id','turn_no','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
 
                 $this->logAudit('admin_logs_related_viewed', $admin, $request, [
                     'data' => ['request_id' => $rid],
