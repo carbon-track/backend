@@ -369,7 +369,7 @@ return function (App $app) {
 
         // Backward-compatible aliases for activities listing and categories
         $group->get('/activities', [CarbonTrackController::class, 'getUserRecords'])->add(AuthMiddleware::class);
-        $group->get('/activities/categories', [CarbonActivityController::class, 'getActivities']);
+        $group->get('/activities/categories', [CarbonActivityController::class, 'getCategories'])->add(AuthMiddleware::class);
 
         // AI Assistant
         $group->post('/ai/suggest-activity', [UserAiController::class, 'suggestActivity'])
