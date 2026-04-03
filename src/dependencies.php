@@ -656,11 +656,19 @@ $__deps_initializer = function (Container $container) {
 
     // Turnstile Service
     $container->set(TurnstileService::class, function (ContainerInterface $c) {
+        $caBundlePath = trim((string) ($_ENV['TURNSTILE_CA_BUNDLE'] ?? $_ENV['CURL_CA_BUNDLE'] ?? ''));
+        $useNativeCaStore = filter_var(
+            $_ENV['TURNSTILE_USE_NATIVE_CA_STORE'] ?? $_ENV['CURL_USE_NATIVE_CA_STORE'] ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        ) === true;
+
         return new TurnstileService(
             $_ENV['TURNSTILE_SECRET_KEY'] ?? '',
             $c->get(Logger::class),
             $c->get(AuditLogService::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $caBundlePath !== '' ? $caBundlePath : null,
+            $useNativeCaStore
         );
     });
 

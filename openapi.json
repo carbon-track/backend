@@ -19435,6 +19435,18 @@
                         "id": {
                           "type": "integer"
                         },
+                        "conversation_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "request_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "action": {
                           "type": "string"
                         },
@@ -19526,6 +19538,114 @@
                     }
                   }
                 }
+              },
+              "llm": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "integer"
+                  },
+                  "page": {
+                    "type": "integer"
+                  },
+                  "pages": {
+                    "type": "integer"
+                  },
+                  "limit": {
+                    "type": "integer"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer"
+                        },
+                        "conversation_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "turn_no": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "request_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "actor_type": {
+                          "type": "string"
+                        },
+                        "actor_id": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "source": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "model": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "status": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "response_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "total_tokens": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "latency_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "format": "float"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "prompt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "error_message": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -19544,6 +19664,49 @@
               "request_id": {
                 "type": "string"
               },
+              "system": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "request_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "status_code": {
+                      "type": "integer"
+                    },
+                    "user_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "duration_ms": {
+                      "type": [
+                        "integer",
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              },
               "audit": {
                 "type": "array",
                 "items": {
@@ -19551,6 +19714,18 @@
                   "properties": {
                     "id": {
                       "type": "integer"
+                    },
+                    "conversation_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "request_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "action": {
                       "type": "string"
@@ -19578,6 +19753,91 @@
                         "string",
                         "null"
                       ]
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              },
+              "llm": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "conversation_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "turn_no": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "actor_type": {
+                      "type": "string"
+                    },
+                    "actor_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "source": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "model": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "prompt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "response_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "request_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "total_tokens": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "latency_ms": {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "format": "float"
                     },
                     "created_at": {
                       "type": "string",

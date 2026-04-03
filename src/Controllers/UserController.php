@@ -65,7 +65,6 @@ class UserController
     private ?CheckinService $checkinService;
     private ?StreakLeaderboardService $streakLeaderboardService;
     private UserProfileViewService $userProfileViewService;
-
     public function __construct(
         AuthService $authService,
         AuditLogService $auditLogService,
@@ -74,16 +73,26 @@ class UserController
         NotificationPreferenceService $notificationPreferenceService,
         ?TurnstileService $turnstileService = null,
         ?EmailService $emailService = null,
-        Logger $logger,
-        PDO $db,
-        ErrorLogService $errorLogService = null,
-        CloudflareR2Service $r2Service = null,
-        RegionService $regionService,
+        ?Logger $logger = null,
+        ?PDO $db = null,
+        ?ErrorLogService $errorLogService = null,
+        ?CloudflareR2Service $r2Service = null,
+        ?RegionService $regionService = null,
         ?LeaderboardService $leaderboardService = null,
         ?CheckinService $checkinService = null,
         ?StreakLeaderboardService $streakLeaderboardService = null,
         ?UserProfileViewService $userProfileViewService = null
     ) {
+        if ($logger === null) {
+            throw new \InvalidArgumentException('UserController requires a logger instance.');
+        }
+        if ($db === null) {
+            throw new \InvalidArgumentException('UserController requires a PDO instance.');
+        }
+        if ($regionService === null) {
+            throw new \InvalidArgumentException('UserController requires a RegionService instance.');
+        }
+
         $this->authService = $authService;
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
@@ -327,16 +336,15 @@ class UserController
     private function fetchLatestExchangeSample(int $userId): array
     {
         try {
-            $userColumn = $this->resolvePointsUserIdColumn();
             $stmt = $this->db->prepare("
                 SELECT e.quantity, e.points_used, e.created_at, e.product_name, p.name AS product_name_fallback
                 FROM point_exchanges e
                 LEFT JOIN products p ON e.product_id = p.id
-                WHERE e.{$userColumn} = :uid AND e.deleted_at IS NULL
+                WHERE e.user_id = :user_id AND e.deleted_at IS NULL
                 ORDER BY e.created_at DESC
                 LIMIT 1
             ");
-            $stmt->execute(['uid' => $userId]);
+            $stmt->execute(['user_id' => $userId]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if ($row) {
@@ -467,12 +475,12 @@ class UserController
                 'school_id' => $profileFields['school_id'],
                 'school_name' => $profileFields['school_name'],
                 'points' => (int)$row['points'],
-                'is_admin' => (bool)($row['is_admin'] ?? ($row['role'] ?? '') === 'admin'),
+                'is_admin' => (bool)$row['is_admin'],
                 'email_verified_at' => $row['email_verified_at'] ?? null,
                 'avatar_id' => $row['avatar_id'],
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
-                'lastlgn' => $row['lastlgn'] ?? ($row['last_login_at'] ?? null),
+                'lastlgn' => $row['lastlgn'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
                 'region_code' => $profileFields['region_code'],
                 'region_label' => $profileFields['region_label'],
@@ -861,7 +869,7 @@ class UserController
                 'avatar_id' => $updatedUser['avatar_id'],
                 'avatar_path' => $updatedAvatar['avatar_path'],
                 'avatar_url' => $updatedAvatar['avatar_url'],
-                'lastlgn' => $updatedUser['lastlgn'] ?? ($updatedUser['last_login_at'] ?? null),
+                'lastlgn' => $updatedUser['lastlgn'] ?? null,
                 'updated_at' => $updatedUser['updated_at'],
                 'region_code' => $profileFields['region_code'],
                 'region_label' => $profileFields['region_label'],
@@ -1342,27 +1350,24 @@ class UserController
             $limit = min(100, max(10, (int)($queryParams['limit'] ?? 20)));
             $offset = ($page - 1) * $limit;
 
-            // 兼容不同表结构的用户ID字段（user_id 或 uid）
-            $userIdColumn = $this->resolvePointsUserIdColumn();
-
             // 获取积分历史记录
             $stmt = $this->db->prepare("
                 SELECT 
                     pt.id,
-                    pt.uuid,
+                    NULL AS uuid,
                     pt.type,
                     pt.points,
-                    pt.description,
+                    pt.notes AS description,
                     pt.status,
                     pt.activity_id,
-                    ca.name_zh as activity_name,
+                    ca.name_zh AS activity_name,
                     pt.created_at,
                     pt.approved_at,
-                    pt.rejected_at,
-                    pt.admin_notes
+                    NULL AS rejected_at,
+                    pt.notes AS admin_notes
                 FROM points_transactions pt
-                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.uuid
-                WHERE pt.{$userIdColumn} = ? AND pt.deleted_at IS NULL
+                LEFT JOIN carbon_activities ca ON pt.activity_id = ca.id
+                WHERE pt.uid = ? AND pt.deleted_at IS NULL
                 ORDER BY pt.created_at DESC
                 LIMIT ? OFFSET ?
             ");
@@ -1373,7 +1378,7 @@ class UserController
             $stmt = $this->db->prepare("
                 SELECT COUNT(*) as total
                 FROM points_transactions 
-                WHERE {$userIdColumn} = ? AND deleted_at IS NULL
+                WHERE uid = ? AND deleted_at IS NULL
             ");
             $stmt->execute([$user['id']]);
             $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
@@ -1428,15 +1433,13 @@ class UserController
             }
 
             // 1) 积分汇总（按单元测试约定的准备顺序）
-            // 兼容 points_transactions 的用户列：优先 user_id，不存在则回退 uid
-            $ptUserCol = $this->resolvePointsUserIdColumn();
             $pointsStmt = $this->db->prepare("SELECT 
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN points ELSE 0 END), 0) AS total_earned,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN -points ELSE 0 END), 0) AS total_spent,
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN 1 ELSE 0 END), 0) AS earn_count,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN 1 ELSE 0 END), 0) AS spend_count,
                     COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count
-                FROM points_transactions WHERE {$ptUserCol} = :uid AND deleted_at IS NULL");
+                FROM points_transactions WHERE uid = :uid AND deleted_at IS NULL");
             $pointsStmt->execute(['uid' => $user['id']]);
             $pointsRow = $pointsStmt->fetch(PDO::FETCH_ASSOC) ?: [
                 'total_earned' => 0,
@@ -1538,46 +1541,24 @@ class UserController
                 'total_carbon_saved' => 0.0,
                 'total_points_earned' => (float)($pointsRow['total_earned'] ?? 0),
             ];
-            try {
-                $recordStmt = $this->db->prepare("SELECT 
-                        COUNT(*) AS total_activities,
-                        SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
-                        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
-                        SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities,
-                        COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
-                        COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
-                    FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
-                $recordStmt->execute(['uid' => $user['id']]);
-                $recordRow = $recordStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-                $recStats = [
-                    'total_activities' => (int)($recordRow['total_activities'] ?? 0),
-                    'approved_activities' => (int)($recordRow['approved_activities'] ?? 0),
-                    'pending_activities' => (int)($recordRow['pending_activities'] ?? 0),
-                    'rejected_activities' => (int)($recordRow['rejected_activities'] ?? 0),
-                    'total_carbon_saved' => (float)($recordRow['total_carbon_saved'] ?? 0),
-                    'total_points_earned' => (float)($recordRow['total_points_earned'] ?? ($pointsRow['total_earned'] ?? 0)),
-                ];
-            } catch (\Throwable $e) {
-                // 部分测试或迁移环境可能缺少 carbon_saved / points_earned 列，此时仅统计数量以保证接口可用
-                try {
-                    $basicStmt = $this->db->prepare("SELECT 
-                            COUNT(*) AS total_activities,
-                            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
-                            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
-                            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities
-                        FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
-                    $basicStmt->execute(['uid' => $user['id']]);
-                    $basicRow = $basicStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-                    $recStats['total_activities'] = (int)($basicRow['total_activities'] ?? 0);
-                    $recStats['approved_activities'] = (int)($basicRow['approved_activities'] ?? 0);
-                    $recStats['pending_activities'] = (int)($basicRow['pending_activities'] ?? 0);
-                    $recStats['rejected_activities'] = (int)($basicRow['rejected_activities'] ?? 0);
-                    $recStats['total_carbon_saved'] = 0.0;
-                    $recStats['total_points_earned'] = (float)($pointsRow['total_earned'] ?? 0);
-                } catch (\Throwable $ignore) {
-                    $recStats['total_points_earned'] = (float)($pointsRow['total_earned'] ?? 0);
-                }
-            }
+            $recordStmt = $this->db->prepare("SELECT 
+                    COUNT(*) AS total_activities,
+                    SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
+                    SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
+                    COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
+                FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
+            $recordStmt->execute(['uid' => $user['id']]);
+            $recordRow = $recordStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $recStats = [
+                'total_activities' => (int)($recordRow['total_activities'] ?? 0),
+                'approved_activities' => (int)($recordRow['approved_activities'] ?? 0),
+                'pending_activities' => (int)($recordRow['pending_activities'] ?? 0),
+                'rejected_activities' => (int)($recordRow['rejected_activities'] ?? 0),
+                'total_carbon_saved' => (float)($recordRow['total_carbon_saved'] ?? 0),
+                'total_points_earned' => (float)($recordRow['total_points_earned'] ?? ($pointsRow['total_earned'] ?? 0)),
+            ];
 
             // 排名（按用户积分 points 降序）；这里避免额外 prepare 调用，直接置为 null 以兼容单元测试
             $rankRow = ['rank' => null];
@@ -1881,44 +1862,6 @@ class UserController
                 'success' => false,
                 'message' => 'Failed to get recent activities'
             ], 500);
-        }
-    }
-
-    /**
-     * 解析 points_transactions 表中用户ID列名（兼容 uid/user_id，适配 MySQL/SQLite）
-     */
-    private function resolvePointsUserIdColumn(): string
-    {
-        try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
-            $column = 'uid'; // 默认更通用的列名
-
-            if ($driver === 'mysql') {
-                // MySQL: 使用 SHOW COLUMNS 检测列是否存在
-                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
-                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
-                $column = $hasUserId ? 'user_id' : 'uid';
-            } elseif ($driver === 'sqlite') {
-                // SQLite: 使用 PRAGMA table_info 检测列是否存在
-                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
-                $cols = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-                $names = array_map(static function ($c) { return $c['name'] ?? ''; }, $cols);
-                if (in_array('user_id', $names, true)) {
-                    $column = 'user_id';
-                } elseif (in_array('uid', $names, true)) {
-                    $column = 'uid';
-                } else {
-                    $column = 'uid';
-                }
-            } else {
-                // 其他驱动，尽量选择兼容性更高的 uid
-                $column = 'uid';
-            }
-
-            return $column;
-        } catch (\Throwable $e) {
-            // 发生异常时使用 uid，避免 Unknown column 错误
-            return 'uid';
         }
     }
 

@@ -75,6 +75,65 @@ class CarbonActivityController
     }
 
     /**
+     * Get carbon activity categories list (legacy alias payload)
+     */
+    public function getCategories(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
+    {
+        $userIdAttr = $request->getAttribute('user_id');
+        $userId = (is_int($userIdAttr) || (is_string($userIdAttr) && ctype_digit($userIdAttr)))
+            ? (int) $userIdAttr
+            : null;
+        $requestId = $request->getHeaderLine('X-Request-ID') ?: null;
+
+        try {
+            $categories = $this->carbonCalculatorService->getCategories();
+
+            $this->auditLogService->logAudit([
+                'operation_category' => 'carbon_management',
+                'action' => 'carbon_activity_categories_alias_read',
+                'user_id' => $userId,
+                'actor_type' => 'user',
+                'change_type' => 'read',
+                'request_method' => 'GET',
+                'endpoint' => '/api/v1/activities/categories',
+                'status' => 'success',
+                'request_id' => $requestId,
+                'data' => [
+                    'deprecated_alias' => true,
+                    'category_count' => count($categories),
+                ],
+            ]);
+
+            $responseData = [
+                'success' => true,
+                'data' => $categories,
+            ];
+
+            $response->getBody()->write(json_encode($responseData));
+            return $response->withHeader('Content-Type', 'application/json');
+
+        } catch (\Exception $e) {
+            $this->auditLogService->logAudit([
+                'operation_category' => 'carbon_management',
+                'action' => 'carbon_activity_categories_alias_read',
+                'user_id' => $userId,
+                'actor_type' => 'user',
+                'change_type' => 'read',
+                'request_method' => 'GET',
+                'endpoint' => '/api/v1/activities/categories',
+                'status' => 'failed',
+                'request_id' => $requestId,
+                'data' => [
+                    'deprecated_alias' => true,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
+            $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getCategories error: ' . $e->getMessage());
+            return $this->errorResponse($response, 'Failed to fetch categories', 500);
+        }
+    }
+
+    /**
      * Get single carbon activity (public endpoint)
      */
     public function getActivity(ServerRequestInterface $request, ResponseInterface $response, array $args): ResponseInterface

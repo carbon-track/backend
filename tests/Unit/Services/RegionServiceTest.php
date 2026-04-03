@@ -107,4 +107,24 @@ class RegionServiceTest extends TestCase
             }
         }
     }
+
+    public function testRelativeEnvPathResolvesFromBackendDirectoryWhenPresent(): void
+    {
+        $previousRegionDataPath = $_ENV['REGION_DATA_PATH'] ?? null;
+        $_ENV['REGION_DATA_PATH'] = 'storage/data/states.json';
+
+        try {
+            $service = new RegionService(null, null);
+
+            $this->assertTrue($service->isReady());
+            $this->assertSame('CN', $service->normalizeCountryCode('cn'));
+            $this->assertTrue($service->isValidRegion('CN', 'GD'));
+        } finally {
+            if ($previousRegionDataPath !== null) {
+                $_ENV['REGION_DATA_PATH'] = $previousRegionDataPath;
+            } else {
+                unset($_ENV['REGION_DATA_PATH']);
+            }
+        }
+    }
 }

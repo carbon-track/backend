@@ -14,18 +14,24 @@ class TurnstileService
     private string $verifyUrl = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
     private ?AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
+    private ?string $caBundlePath;
+    private bool $useNativeCaStore;
 
     public function __construct(
         string $secretKey,
         Logger $logger,
         ?AuditLogService $auditLogService = null,
-        ?ErrorLogService $errorLogService = null
+        ?ErrorLogService $errorLogService = null,
+        ?string $caBundlePath = null,
+        bool $useNativeCaStore = false
     )
     {
         $this->secretKey = $secretKey;
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
+        $this->caBundlePath = is_string($caBundlePath) && trim($caBundlePath) !== '' ? trim($caBundlePath) : null;
+        $this->useNativeCaStore = $useNativeCaStore;
     }
 
     /**
@@ -63,7 +69,7 @@ class TurnstileService
 
         try {
             $ch = curl_init();
-            curl_setopt_array($ch, [
+            $curlOptions = [
                 CURLOPT_URL => $this->verifyUrl,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => http_build_query($postData),
@@ -76,7 +82,10 @@ class TurnstileService
                 ],
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2
-            ]);
+            ];
+
+            $this->applyCertificateOptions($curlOptions);
+            curl_setopt_array($ch, $curlOptions);
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -249,6 +258,25 @@ class TurnstileService
             $this->errorLogService->logException($e, $request, ['context_message' => $action] + $context);
         } catch (\Throwable $ignore) {
             // ignore error log failures for turnstile service
+        }
+    }
+
+    /**
+     * @param array<int|string, mixed> $curlOptions
+     */
+    private function applyCertificateOptions(array &$curlOptions): void
+    {
+        if ($this->caBundlePath !== null) {
+            $curlOptions[CURLOPT_CAINFO] = $this->caBundlePath;
+        }
+
+        if (
+            $this->useNativeCaStore
+            && \defined('CURLOPT_SSL_OPTIONS')
+            && \defined('CURLSSLOPT_NATIVE_CA')
+        ) {
+            $existingSslOptions = $curlOptions[CURLOPT_SSL_OPTIONS] ?? 0;
+            $curlOptions[CURLOPT_SSL_OPTIONS] = $existingSslOptions | CURLSSLOPT_NATIVE_CA;
         }
     }
 }

@@ -576,12 +576,7 @@ class AdminLlmUsageController
                     l.context_json,
                     l.created_at,
                     u.username AS actor_name,
-                    u.email AS actor_email,
-                    (SELECT COUNT(*) FROM system_logs s WHERE s.request_id = l.request_id) AS system_count,
-                    (SELECT COUNT(*) FROM audit_logs a WHERE a.request_id = l.request_id) AS audit_count,
-                    (SELECT COUNT(*) FROM error_logs e WHERE e.request_id = l.request_id) AS error_count,
-                    (SELECT path FROM system_logs s WHERE s.request_id = l.request_id ORDER BY id DESC LIMIT 1) AS system_path,
-                    (SELECT status_code FROM system_logs s WHERE s.request_id = l.request_id ORDER BY id DESC LIMIT 1) AS system_status_code
+                    u.email AS actor_email
                 FROM llm_logs l
                 LEFT JOIN users u ON u.id = l.actor_id
                 ORDER BY l.id DESC
@@ -592,8 +587,26 @@ class AdminLlmUsageController
         $stmt->execute();
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+        $requestIds = [];
+        foreach ($rows as $row) {
+            $requestId = isset($row['request_id']) ? trim((string) $row['request_id']) : '';
+            if ($requestId !== '') {
+                $requestIds[$requestId] = true;
+            }
+        }
+
+        $requestIdList = array_keys($requestIds);
+        $systemCounts = $this->fetchRequestIdCounts('system_logs', $requestIdList);
+        $auditCounts = $this->fetchRequestIdCounts('audit_logs', $requestIdList);
+        $errorCounts = $this->fetchRequestIdCounts('error_logs', $requestIdList);
+        $latestSystemLogs = $this->fetchLatestSystemLogsByRequestId($requestIdList);
+
         $result = [];
         foreach ($rows as $row) {
+            $requestId = isset($row['request_id']) ? trim((string) $row['request_id']) : '';
+            $requestId = $requestId !== '' ? $requestId : null;
+            $latestSystemLog = $requestId !== null ? ($latestSystemLogs[$requestId] ?? null) : null;
+
             $result[] = [
                 'id' => (int) $row['id'],
                 'created_at' => $row['created_at'] ?? null,
@@ -604,24 +617,119 @@ class AdminLlmUsageController
                 'source' => $row['source'] ?? null,
                 'model' => $row['model'] ?? null,
                 'status' => $row['status'] ?? null,
-                'request_id' => $row['request_id'] ?? null,
+                'request_id' => $requestId,
                 'response_id' => $row['response_id'] ?? null,
                 'total_tokens' => $row['total_tokens'] !== null ? (int) $row['total_tokens'] : null,
                 'latency_ms' => $row['latency_ms'] !== null ? (float) $row['latency_ms'] : null,
                 'prompt_preview' => $this->buildPreview($row['prompt'] ?? null, 200),
                 'response_preview' => $this->buildPreview($row['response_raw'] ?? null, 240),
                 'context' => $this->decodeJson($row['context_json'] ?? null),
-                'system_path' => $row['system_path'] ?? null,
-                'system_status_code' => $row['system_status_code'] !== null ? (int) $row['system_status_code'] : null,
+                'system_path' => $latestSystemLog['path'] ?? null,
+                'system_status_code' => isset($latestSystemLog['status_code']) ? (int) $latestSystemLog['status_code'] : null,
                 'related' => [
-                    'system' => (int) ($row['system_count'] ?? 0),
-                    'audit' => (int) ($row['audit_count'] ?? 0),
-                    'error' => (int) ($row['error_count'] ?? 0),
+                    'system' => $requestId !== null ? (int) ($systemCounts[$requestId] ?? 0) : 0,
+                    'audit' => $requestId !== null ? (int) ($auditCounts[$requestId] ?? 0) : 0,
+                    'error' => $requestId !== null ? (int) ($errorCounts[$requestId] ?? 0) : 0,
                 ],
             ];
         }
 
         return $result;
+    }
+
+    /**
+     * @param array<int, string> $requestIds
+     * @return array<string, int>
+     */
+    private function fetchRequestIdCounts(string $table, array $requestIds): array
+    {
+        $tableName = match ($table) {
+            'system_logs' => 'system_logs',
+            'audit_logs' => 'audit_logs',
+            'error_logs' => 'error_logs',
+            default => throw new \InvalidArgumentException('Unsupported request-id aggregate table.'),
+        };
+
+        if ($requestIds === []) {
+            return [];
+        }
+
+        $placeholders = $this->buildPositionalPlaceholders(count($requestIds));
+        $stmt = $this->db->prepare("SELECT request_id, COUNT(*) AS total
+            FROM {$tableName}
+            WHERE request_id IN ({$placeholders})
+            GROUP BY request_id");
+
+        foreach ($requestIds as $index => $requestId) {
+            $stmt->bindValue($index + 1, $requestId);
+        }
+
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $counts = [];
+        foreach ($rows as $row) {
+            $requestId = isset($row['request_id']) ? trim((string) $row['request_id']) : '';
+            if ($requestId === '') {
+                continue;
+            }
+            $counts[$requestId] = (int) ($row['total'] ?? 0);
+        }
+
+        return $counts;
+    }
+
+    /**
+     * @param array<int, string> $requestIds
+     * @return array<string, array{path:?string,status_code:?int}>
+     */
+    private function fetchLatestSystemLogsByRequestId(array $requestIds): array
+    {
+        if ($requestIds === []) {
+            return [];
+        }
+
+        $placeholders = $this->buildPositionalPlaceholders(count($requestIds));
+        $sql = "SELECT s.request_id, s.path, s.status_code
+                FROM system_logs s
+                INNER JOIN (
+                    SELECT request_id, MAX(id) AS latest_id
+                    FROM system_logs
+                    WHERE request_id IN ({$placeholders})
+                    GROUP BY request_id
+                ) latest ON latest.latest_id = s.id";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($requestIds as $index => $requestId) {
+            $stmt->bindValue($index + 1, $requestId);
+        }
+
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $items = [];
+        foreach ($rows as $row) {
+            $requestId = isset($row['request_id']) ? trim((string) $row['request_id']) : '';
+            if ($requestId === '') {
+                continue;
+            }
+
+            $items[$requestId] = [
+                'path' => $row['path'] ?? null,
+                'status_code' => $row['status_code'] !== null ? (int) $row['status_code'] : null,
+            ];
+        }
+
+        return $items;
+    }
+
+    private function buildPositionalPlaceholders(int $count): string
+    {
+        if ($count <= 0) {
+            throw new \InvalidArgumentException('Placeholder count must be positive.');
+        }
+
+        return implode(', ', array_fill(0, $count, '?'));
     }
 
     private function buildPreview($value, int $maxLength): ?string

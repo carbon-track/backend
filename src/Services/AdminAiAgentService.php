@@ -139,7 +139,7 @@ class AdminAiAgentService
             throw new \RuntimeException('LLM_UNAVAILABLE', 0, $exception);
         }
 
-        $outcome = $this->processModelResponse($conversationId, $normalizedContext, $logContext, $rawResponse);
+        $outcome = $this->processModelResponse($conversationId, $normalizedMessage, $normalizedContext, $logContext, $rawResponse);
         $this->updateLlmConversationSnapshot($llmLogId, $normalizedMessage, $outcome, $normalizedContext);
 
         if (($outcome['assistant_text'] ?? '') !== '') {
@@ -239,12 +239,21 @@ class AdminAiAgentService
             $lines[] = 'Available management actions:';
             foreach ($this->actionDefinitions as $name => $definition) {
                 $lines[] = sprintf(
-                    '- %s: %s [risk=%s, confirm=%s]',
+                    '- %s (%s): %s [risk=%s, confirm=%s]',
                     $name,
+                    (string) ($definition['label'] ?? $name),
                     (string) ($definition['description'] ?? $definition['label'] ?? $name),
                     (string) ($definition['risk_level'] ?? 'read'),
                     !empty($definition['requires_confirmation']) ? 'yes' : 'no'
                 );
+
+                $keywords = array_values(array_filter(
+                    is_array($definition['keywords'] ?? null) ? $definition['keywords'] : [],
+                    static fn ($item): bool => is_string($item) && trim($item) !== ''
+                ));
+                if ($keywords !== []) {
+                    $lines[] = '  keywords: ' . implode(', ', $keywords);
+                }
             }
         }
 
@@ -355,7 +364,7 @@ class AdminAiAgentService
         return $tools;
     }
 
-    private function processModelResponse(string $conversationId, array $context, array $logContext, array $rawResponse): array
+    private function processModelResponse(string $conversationId, string $userMessage, array $context, array $logContext, array $rawResponse): array
     {
         $choice = $rawResponse['choices'][0] ?? [];
         $message = $choice['message'] ?? [];
@@ -363,6 +372,11 @@ class AdminAiAgentService
         $content = isset($message['content']) ? trim((string) $message['content']) : '';
 
         if ($toolCalls === []) {
+            $fallback = $this->resolveKeywordFallbackAction($userMessage, $content);
+            if ($fallback !== null) {
+                return $this->handleManageAdminTool($conversationId, $fallback, $context, $logContext, $rawResponse);
+            }
+
             return [
                 'assistant_text' => $content !== '' ? $content : '我暂时无法完成这项操作，请再具体一些。',
                 'metadata' => $this->extractMetadata($rawResponse),
@@ -464,12 +478,22 @@ class AdminAiAgentService
         }
 
         $persistedPayload = $this->preparePersistedActionPayload($actionName, $payload);
+        $toolLabel = (string) ($definition['label'] ?? $actionName);
+        $toolSummary = $this->resultFormatterService->buildProposalSummary($definition, $payload);
 
         $this->conversationStoreService->logConversationEvent('admin_ai_tool_invocation', $logContext, [
             'conversation_id' => $conversationId,
-            'visible_text' => sprintf('调用工具：%s', $actionName),
+            'visible_text' => sprintf('调用工具：%s', $toolLabel),
             'tool_name' => $actionName,
-            'request_data' => $persistedPayload,
+            'action_name' => $actionName,
+            'label' => $toolLabel,
+            'summary' => $toolSummary,
+            'request_data' => [
+                'action_name' => $actionName,
+                'label' => $toolLabel,
+                'summary' => $toolSummary,
+                'payload' => $persistedPayload,
+            ],
         ]);
 
         $isReadAction = ($definition['risk_level'] ?? 'read') === 'read' && empty($definition['requires_confirmation']);
@@ -866,6 +890,77 @@ class AdminAiAgentService
         }
 
         return $normalized;
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function resolveKeywordFallbackAction(string $userMessage, string $assistantContent = ''): ?array
+    {
+        if ($this->actionDefinitions === []) {
+            return null;
+        }
+
+        $combined = trim($userMessage . ' ' . $assistantContent);
+        if ($combined === '') {
+            return null;
+        }
+
+        $normalizedText = $this->normalizeMatchText($combined);
+        $bestAction = null;
+        $bestScore = 0;
+
+        foreach ($this->actionDefinitions as $name => $definition) {
+            $score = $this->scoreActionKeywordMatch($normalizedText, $name, $definition);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $bestAction = $name;
+            }
+        }
+
+        if ($bestAction === null || $bestScore < 2) {
+            return null;
+        }
+
+        return [
+            'action' => $bestAction,
+            'payload' => [],
+        ];
+    }
+
+    private function scoreActionKeywordMatch(string $normalizedText, string $name, array $definition): int
+    {
+        $score = 0;
+        $terms = array_merge(
+            [$name],
+            [(string) ($definition['label'] ?? '')],
+            [(string) ($definition['description'] ?? '')],
+            is_array($definition['keywords'] ?? null) ? $definition['keywords'] : []
+        );
+
+        foreach ($terms as $term) {
+            if (!is_string($term)) {
+                continue;
+            }
+
+            $candidate = $this->normalizeMatchText($term);
+            if ($candidate === '' || mb_strlen($candidate, 'UTF-8') < 2) {
+                continue;
+            }
+
+            if (str_contains($normalizedText, $candidate)) {
+                $score += mb_strlen($candidate, 'UTF-8') >= 6 ? 3 : 2;
+            }
+        }
+
+        return $score;
+    }
+
+    private function normalizeMatchText(string $value): string
+    {
+        $lower = function_exists('mb_strtolower') ? mb_strtolower($value, 'UTF-8') : strtolower($value);
+        $normalized = preg_replace('/[\s\-_]+/u', '', $lower);
+        return is_string($normalized) ? $normalized : trim($lower);
     }
 
     private function normalizeConversationId(?string $conversationId): ?string

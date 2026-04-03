@@ -1137,6 +1137,7 @@ ALTER TABLE `system_logs`
   ADD KEY `idx_system_logs_method` (`method`),
   ADD KEY `idx_system_logs_user_id` (`user_id`),
   ADD KEY `idx_system_logs_user_uuid` (`user_uuid`),
+  ADD KEY `idx_system_logs_request_id_id` (`request_id`,`id`),
   ADD KEY `idx_system_logs_path` (`path`(100));
 
 --

@@ -30,14 +30,15 @@ class RegionService
     )
     {
         $projectRoot = dirname(__DIR__, 3);
+        $backendRoot = dirname(__DIR__, 2);
         $defaultPath = $projectRoot . DIRECTORY_SEPARATOR . 'frontend' . DIRECTORY_SEPARATOR . 'public'
             . DIRECTORY_SEPARATOR . 'locales' . DIRECTORY_SEPARATOR . 'states.json';
 
         $configured = trim((string) ($_ENV['REGION_DATA_PATH'] ?? ''));
         if ($configured !== '') {
-            $this->datasetPath = $this->normalizePath($configured, $projectRoot);
+            $this->datasetPath = $this->normalizePath($configured, $projectRoot, $backendRoot);
         } elseif ($datasetPath !== null && $datasetPath !== '') {
-            $this->datasetPath = $this->normalizePath($datasetPath, $projectRoot);
+            $this->datasetPath = $this->normalizePath($datasetPath, $projectRoot, $backendRoot);
         } else {
             $this->datasetPath = $defaultPath;
         }
@@ -254,13 +255,26 @@ class RegionService
         }
     }
 
-    private function normalizePath(string $path, string $projectRoot): string
+    private function normalizePath(string $path, string $projectRoot, string $backendRoot): string
     {
         if ($path[0] === '/' || $path[0] === '\\' || preg_match('/^[A-Za-z]:[\\\\\\/]/', $path)) {
             return $path;
         }
 
-        return rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR);
+        $trimmed = ltrim($path, "/\\");
+        $normalized = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $trimmed);
+
+        $projectResolved = rtrim($projectRoot, "/\\") . DIRECTORY_SEPARATOR . $normalized;
+        if (is_file($projectResolved)) {
+            return $projectResolved;
+        }
+
+        $backendResolved = rtrim($backendRoot, "/\\") . DIRECTORY_SEPARATOR . $normalized;
+        if (is_file($backendResolved)) {
+            return $backendResolved;
+        }
+
+        return $projectResolved;
     }
 
     private function log(string $level, string $message, array $context = []): void

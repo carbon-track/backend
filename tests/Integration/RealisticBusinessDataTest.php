@@ -216,6 +216,69 @@ class RealisticBusinessDataTest extends TestCase
         $response = $this->app->handle($request);
 
         $this->assertEquals(401, $response->getStatusCode());
+
+        // Legacy alias should also require auth when OpenAPI marks it as protected
+        $request = $this->createRequest('GET', '/api/v1/activities/categories');
+        $response = $this->app->handle($request);
+
+        $this->assertEquals(401, $response->getStatusCode());
+    }
+
+    public function testProtectedEndpointsRequireAuthentication(): void
+    {
+        $recordPayload = [
+            'activity_id' => '550e8400-e29b-41d4-a716-446655440001',
+            'amount' => 1,
+            'unit' => 'times',
+            'date' => date('Y-m-d'),
+            'description' => 'Auth consistency smoke test',
+            'proof_images' => ['/test/proof-image.jpg'],
+            'request_id' => 'auth-consistency-' . uniqid('', true),
+        ];
+
+        $cases = [
+            [
+                'method' => 'GET',
+                'uri' => '/api/v1/activities',
+                'data' => [],
+                'expected_status' => 401,
+            ],
+            [
+                'method' => 'GET',
+                'uri' => '/api/v1/activities/categories',
+                'data' => [],
+                'expected_status' => 401,
+            ],
+            [
+                'method' => 'POST',
+                'uri' => '/api/v1/carbon-track/record',
+                'data' => $recordPayload,
+                'expected_status' => 401,
+            ],
+            [
+                'method' => 'GET',
+                'uri' => '/api/v1/admin/carbon-activities/pending',
+                'data' => [],
+                'expected_status' => 401,
+            ],
+            [
+                'method' => 'GET',
+                'uri' => '/api/v1/admin/carbon-records',
+                'data' => [],
+                'expected_status' => 401,
+            ],
+        ];
+
+        foreach ($cases as $case) {
+            $request = $this->createRequest($case['method'], $case['uri'], $case['data']);
+            $response = $this->app->handle($request);
+
+            $this->assertSame(
+                $case['expected_status'],
+                $response->getStatusCode(),
+                sprintf('%s %s should reject unauthenticated access', $case['method'], $case['uri'])
+            );
+        }
     }
 
     public function testCarbonCalculationWithRealisticData(): void
