@@ -149,7 +149,8 @@ $errorMiddleware->setDefaultErrorHandler(
             $derivedStatus = (int) $exception->getCode();
         } elseif (method_exists($exception, 'getStatusCode')) {
             try {
-                $derivedStatus = (int) $exception->getStatusCode();
+                $statusGetter = 'getStatusCode';
+                $derivedStatus = (int) $exception->{$statusGetter}();
             } catch (\Throwable $statusEx) {
                 $derivedStatus = null;
             }
