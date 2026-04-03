@@ -79,34 +79,30 @@ class CarbonActivityController
      */
     public function getCategories(ServerRequestInterface $request, ResponseInterface $response): ResponseInterface
     {
+        $userIdAttr = $request->getAttribute('user_id');
+        $userId = (is_int($userIdAttr) || (is_string($userIdAttr) && ctype_digit($userIdAttr)))
+            ? (int) $userIdAttr
+            : null;
+        $requestId = $request->getHeaderLine('X-Request-ID') ?: null;
+
         try {
-            $userIdAttr = $request->getAttribute('user_id');
-            $userId = (is_int($userIdAttr) || (is_string($userIdAttr) && ctype_digit($userIdAttr)))
-                ? (int) $userIdAttr
-                : null;
             $categories = $this->carbonCalculatorService->getCategories();
 
-            $this->auditLogService->logDataChange(
-                'carbon_management',
-                'carbon_activity_categories_alias_read',
-                $userId,
-                'user',
-                null,
-                null,
-                null,
-                null,
-                [
-                    'request_method' => 'GET',
-                    'endpoint' => '/api/v1/activities/categories',
-                    'status' => 'success',
-                    'change_type' => 'read',
-                    'request_id' => $request->getHeaderLine('X-Request-ID') ?: null,
-                    'request_data' => [
-                        'deprecated_alias' => true,
-                        'category_count' => count($categories),
-                    ],
-                ]
-            );
+            $this->auditLogService->logAudit([
+                'operation_category' => 'carbon_management',
+                'action' => 'carbon_activity_categories_alias_read',
+                'user_id' => $userId,
+                'actor_type' => 'user',
+                'change_type' => 'read',
+                'request_method' => 'GET',
+                'endpoint' => '/api/v1/activities/categories',
+                'status' => 'success',
+                'request_id' => $requestId,
+                'data' => [
+                    'deprecated_alias' => true,
+                    'category_count' => count($categories),
+                ],
+            ]);
 
             $responseData = [
                 'success' => true,
@@ -117,29 +113,23 @@ class CarbonActivityController
             return $response->withHeader('Content-Type', 'application/json');
 
         } catch (\Exception $e) {
-            $this->auditLogService->logDataChange(
-                'carbon_management',
-                'carbon_activity_categories_alias_read',
-                null,
-                'user',
-                null,
-                null,
-                null,
-                null,
-                [
-                    'request_method' => 'GET',
-                    'endpoint' => '/api/v1/activities/categories',
-                    'status' => 'failed',
-                    'change_type' => 'read',
-                    'request_id' => $request->getHeaderLine('X-Request-ID') ?: null,
-                    'request_data' => [
-                        'deprecated_alias' => true,
-                        'error' => $e->getMessage(),
-                    ],
-                ]
-            );
+            $this->auditLogService->logAudit([
+                'operation_category' => 'carbon_management',
+                'action' => 'carbon_activity_categories_alias_read',
+                'user_id' => $userId,
+                'actor_type' => 'user',
+                'change_type' => 'read',
+                'request_method' => 'GET',
+                'endpoint' => '/api/v1/activities/categories',
+                'status' => 'failed',
+                'request_id' => $requestId,
+                'data' => [
+                    'deprecated_alias' => true,
+                    'error' => $e->getMessage(),
+                ],
+            ]);
             $this->logExceptionWithFallback($e, $request, 'CarbonActivityController::getCategories error: ' . $e->getMessage());
-            return $this->errorResponse($response, 'Failed to fetch categories: ' . $e->getMessage(), 500);
+            return $this->errorResponse($response, 'Failed to fetch categories', 500);
         }
     }
 
