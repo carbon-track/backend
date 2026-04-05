@@ -29,12 +29,25 @@ class SupportAutomationServiceTest extends TestCase
         self::$capsule->setAsGlobal();
         self::$capsule->bootEloquent();
 
+        self::$capsule->schema()->create('schools', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('name');
+        });
+
         self::$capsule->schema()->create('users', function (Blueprint $table): void {
             $table->increments('id');
+            $table->string('uuid')->nullable();
             $table->string('username')->nullable();
             $table->string('email')->nullable();
             $table->string('role')->default('user');
             $table->boolean('is_admin')->default(false);
+            $table->string('status')->default('active');
+            $table->integer('school_id')->nullable();
+            $table->string('region_code')->nullable();
+            $table->string('location')->nullable();
+            $table->integer('group_id')->nullable();
+            $table->timestamp('lastlgn')->nullable();
+            $table->text('admin_notes')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamp('created_at')->nullable();
             $table->timestamp('updated_at')->nullable();
@@ -109,10 +122,100 @@ class SupportAutomationServiceTest extends TestCase
             'support_ticket_tags',
             'support_ticket_automation_rules',
             'support_tickets',
+            'schools',
             'users',
         ] as $table) {
             self::$capsule->table($table)->delete();
         }
+    }
+
+    public function testListAssignableUsersUsesSchoolLookupWithoutLegacySchoolColumn(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('schools')->insert([
+            'id' => 9,
+            'name' => 'Green Academy',
+        ]);
+        self::$capsule->table('users')->insert([
+            'id' => 1,
+            'uuid' => 'requester-uuid',
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'is_admin' => 0,
+            'status' => 'active',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('users')->insert([
+            'id' => 2,
+            'uuid' => 'support-uuid',
+            'username' => 'supporter',
+            'email' => 'support@example.com',
+            'role' => 'support',
+            'is_admin' => 0,
+            'status' => 'active',
+            'school_id' => 9,
+            'region_code' => 'HK',
+            'location' => 'Hong Kong',
+            'group_id' => 1,
+            'lastlgn' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 10,
+            'user_id' => 1,
+            'subject' => 'Critical bug',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'urgent',
+            'assigned_to' => 2,
+            'assignment_source' => 'rule',
+            'assigned_rule_id' => 3,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $users = $this->makeService()->listAssignableUsers();
+
+        $this->assertCount(1, $users);
+        $this->assertSame('Green Academy', $users[0]['school']);
+        $this->assertSame(1, $users[0]['assigned_total_count']);
+        $this->assertSame(1, $users[0]['open_count']);
+    }
+
+    public function testGetAssignableUserDetailUsesSchoolLookupWithoutLegacySchoolColumn(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('schools')->insert([
+            'id' => 9,
+            'name' => 'Green Academy',
+        ]);
+        self::$capsule->table('users')->insert([
+            'id' => 2,
+            'uuid' => 'support-uuid',
+            'username' => 'supporter',
+            'email' => 'support@example.com',
+            'role' => 'support',
+            'is_admin' => 0,
+            'status' => 'active',
+            'school_id' => 9,
+            'region_code' => 'HK',
+            'location' => 'Hong Kong',
+            'group_id' => 1,
+            'lastlgn' => $now,
+            'admin_notes' => 'On-call this week',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $detail = $this->makeService()->getAssignableUserDetail(2);
+
+        $this->assertNotNull($detail);
+        $this->assertSame('Green Academy', $detail['school']);
+        $this->assertSame('On-call this week', $detail['admin_notes']);
+        $this->assertSame([], $detail['recent_tickets']);
     }
 
     public function testApplyRulesAssignsTicketAndAddsTags(): void

@@ -646,6 +646,15 @@ class AuthService
             $user['points'] = (int) ($user['points'] ?? 0);
         }
 
+        return $this->normalizeRoleFlags($user);
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     * @return array<string, mixed>
+     */
+    private function normalizeRoleFlags(array $user): array
+    {
         $explicitRole = is_string($user['role'] ?? null) ? strtolower(trim((string) $user['role'])) : '';
         if (!in_array($explicitRole, ['user', 'support', 'admin'], true)) {
             $explicitRole = '';
@@ -773,17 +782,18 @@ class AuthService
         if (!$stmt) {
             return null;
         }
+        $normalizedIdentity = $this->normalizeRoleFlags($identity);
         $stmt->execute([
             'uuid' => $userUuid,
             'username' => $username,
             'email' => $email,
             'password' => $password,
-            'role' => !empty($identity['is_admin']) ? 'admin' : (is_string($identity['role'] ?? null) ? (string) $identity['role'] : 'user'),
+            'role' => $normalizedIdentity['role'],
             'status' => isset($identity['status']) && is_string($identity['status']) && trim($identity['status']) !== ''
                 ? trim((string) $identity['status'])
                 : 'active',
             'points' => 0,
-            'is_admin' => !empty($identity['is_admin']) ? 1 : 0,
+            'is_admin' => !empty($normalizedIdentity['is_admin']) ? 1 : 0,
             'created_at' => $now,
             'updated_at' => $now,
         ]);

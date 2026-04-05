@@ -36,7 +36,7 @@ class SupportAutomationService
                 u.is_admin,
                 u.status,
                 u.school_id,
-                u.school,
+                s.name AS school_name,
                 u.region_code,
                 u.location,
                 u.group_id,
@@ -50,6 +50,7 @@ class SupportAutomationService
                 SUM(CASE WHEN t.status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
                 SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) AS closed_count
             FROM users u
+            LEFT JOIN schools s ON s.id = u.school_id
             LEFT JOIN support_tickets t ON t.assigned_to = u.id
             WHERE u.deleted_at IS NULL
               AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
@@ -62,7 +63,7 @@ class SupportAutomationService
                 u.is_admin,
                 u.status,
                 u.school_id,
-                u.school,
+                s.name,
                 u.region_code,
                 u.location,
                 u.group_id,
@@ -87,7 +88,7 @@ class SupportAutomationService
                 u.is_admin,
                 u.status,
                 u.school_id,
-                u.school,
+                s.name AS school_name,
                 u.region_code,
                 u.location,
                 u.group_id,
@@ -102,6 +103,7 @@ class SupportAutomationService
                 SUM(CASE WHEN t.status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
                 SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) AS closed_count
             FROM users u
+            LEFT JOIN schools s ON s.id = u.school_id
             LEFT JOIN support_tickets t ON t.assigned_to = u.id
             WHERE u.id = :id
               AND u.deleted_at IS NULL
@@ -115,7 +117,7 @@ class SupportAutomationService
                 u.is_admin,
                 u.status,
                 u.school_id,
-                u.school,
+                s.name,
                 u.region_code,
                 u.location,
                 u.group_id,
@@ -744,7 +746,7 @@ class SupportAutomationService
             'role' => !empty($row['is_admin']) ? 'admin' : strtolower((string) ($row['role'] ?? 'support')),
             'status' => $row['status'] ?? null,
             'school_id' => isset($row['school_id']) ? (int) $row['school_id'] : null,
-            'school' => $row['school'] ?? null,
+            'school' => $row['school_name'] ?? null,
             'region_code' => $row['region_code'] ?? null,
             'location' => $row['location'] ?? null,
             'group_id' => isset($row['group_id']) ? (int) $row['group_id'] : null,

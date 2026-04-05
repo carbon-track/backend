@@ -187,6 +187,34 @@ class AuthServiceTest extends TestCase
         $this->assertSame('new-sso-user', $pdo->query('SELECT username FROM users LIMIT 1')->fetchColumn());
     }
 
+    public function testValidateTokenProvisionLocalUserNormalizesUnknownRole(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        $token = JWT::encode([
+            'iss' => 'carbontrack',
+            'aud' => 'carbontrack-users',
+            'iat' => time(),
+            'exp' => time() + 3600,
+            'sub' => '550e8400-e29b-41d4-a716-4466554400ac',
+            'user' => [
+                'uuid' => '550e8400-e29b-41d4-a716-4466554400ac',
+                'username' => 'unknown-role-user',
+                'email' => 'unknown-role-user@example.com',
+                'role' => 'moderator',
+                'is_admin' => false,
+            ],
+        ], $this->jwtSecret, 'HS256');
+
+        $payload = $service->validateToken($token);
+
+        $this->assertSame('user', $payload['role']);
+        $this->assertSame('user', $pdo->query('SELECT role FROM users LIMIT 1')->fetchColumn());
+        $this->assertSame(0, (int) $pdo->query('SELECT is_admin FROM users LIMIT 1')->fetchColumn());
+    }
+
     public function testValidateJwtTokenWithInvalidToken(): void
     {
         $result = $this->authService->validateJwtToken('invalid.token.here');
