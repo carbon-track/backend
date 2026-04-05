@@ -20,7 +20,8 @@ class SupportAutomationService
         private PDO $db,
         private LoggerInterface $logger,
         private AuditLogService $auditLogService,
-        private ErrorLogService $errorLogService
+        private ErrorLogService $errorLogService,
+        private UserProfileViewService $userProfileViewService
     ) {
     }
 
@@ -38,7 +39,6 @@ class SupportAutomationService
                 u.school_id,
                 s.name AS school_name,
                 u.region_code,
-                u.location,
                 u.group_id,
                 u.lastlgn,
                 u.created_at,
@@ -65,7 +65,6 @@ class SupportAutomationService
                 u.school_id,
                 s.name,
                 u.region_code,
-                u.location,
                 u.group_id,
                 u.lastlgn,
                 u.created_at,
@@ -90,7 +89,6 @@ class SupportAutomationService
                 u.school_id,
                 s.name AS school_name,
                 u.region_code,
-                u.location,
                 u.group_id,
                 u.lastlgn,
                 u.created_at,
@@ -119,7 +117,6 @@ class SupportAutomationService
                 u.school_id,
                 s.name,
                 u.region_code,
-                u.location,
                 u.group_id,
                 u.lastlgn,
                 u.created_at,
@@ -738,6 +735,9 @@ class SupportAutomationService
 
     private function formatAssignableUser(array $row): array
     {
+        $profileFields = $this->userProfileViewService->buildProfileFields($row);
+        $legacyDisplayFields = $this->userProfileViewService->buildLegacyDisplayFields($row, $profileFields);
+
         return [
             'id' => (int) ($row['id'] ?? 0),
             'uuid' => $row['uuid'] ?? null,
@@ -745,10 +745,10 @@ class SupportAutomationService
             'email' => $row['email'] ?? null,
             'role' => !empty($row['is_admin']) ? 'admin' : strtolower((string) ($row['role'] ?? 'support')),
             'status' => $row['status'] ?? null,
-            'school_id' => isset($row['school_id']) ? (int) $row['school_id'] : null,
-            'school' => $row['school_name'] ?? null,
-            'region_code' => $row['region_code'] ?? null,
-            'location' => $row['location'] ?? null,
+            'school_id' => $profileFields['school_id'] ?? (isset($row['school_id']) ? (int) $row['school_id'] : null),
+            'school' => $legacyDisplayFields['school'] ?? null,
+            'region_code' => $profileFields['region_code'] ?? ($row['region_code'] ?? null),
+            'location' => $legacyDisplayFields['location'] ?? null,
             'group_id' => isset($row['group_id']) ? (int) $row['group_id'] : null,
             'last_login_at' => $row['lastlgn'] ?? null,
             'created_at' => $row['created_at'] ?? null,

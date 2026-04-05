@@ -1885,7 +1885,7 @@ $auditPayload = [
     private function normalizeUserRow(array $row): array
     {
         $profileFields = $this->userProfileViewService->buildProfileFields($row);
-        $legacyDisplayFields = $this->userProfileViewService->buildLegacyDisplayFields($row);
+        $legacyDisplayFields = $this->userProfileViewService->buildLegacyDisplayFields($row, $profileFields);
 
         return [
             'id' => isset($row['id']) ? (int)$row['id'] : null,

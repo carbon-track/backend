@@ -658,7 +658,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(PDO::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(UserProfileViewService::class)
         );
     });
 

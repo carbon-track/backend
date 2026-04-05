@@ -6,7 +6,9 @@ namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\SupportAutomationService;
+use CarbonTrack\Services\UserProfileViewService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Capsule\Manager as Capsule;
@@ -44,7 +46,6 @@ class SupportAutomationServiceTest extends TestCase
             $table->string('status')->default('active');
             $table->integer('school_id')->nullable();
             $table->string('region_code')->nullable();
-            $table->string('location')->nullable();
             $table->integer('group_id')->nullable();
             $table->timestamp('lastlgn')->nullable();
             $table->text('admin_notes')->nullable();
@@ -156,8 +157,7 @@ class SupportAutomationServiceTest extends TestCase
             'is_admin' => 0,
             'status' => 'active',
             'school_id' => 9,
-            'region_code' => 'HK',
-            'location' => 'Hong Kong',
+            'region_code' => 'US-CA',
             'group_id' => 1,
             'lastlgn' => $now,
             'created_at' => $now,
@@ -181,6 +181,8 @@ class SupportAutomationServiceTest extends TestCase
 
         $this->assertCount(1, $users);
         $this->assertSame('Green Academy', $users[0]['school']);
+        $this->assertSame('US-CA', $users[0]['region_code']);
+        $this->assertStringContainsString('California', (string) $users[0]['location']);
         $this->assertSame(1, $users[0]['assigned_total_count']);
         $this->assertSame(1, $users[0]['open_count']);
     }
@@ -201,8 +203,7 @@ class SupportAutomationServiceTest extends TestCase
             'is_admin' => 0,
             'status' => 'active',
             'school_id' => 9,
-            'region_code' => 'HK',
-            'location' => 'Hong Kong',
+            'region_code' => 'US-CA',
             'group_id' => 1,
             'lastlgn' => $now,
             'admin_notes' => 'On-call this week',
@@ -214,6 +215,8 @@ class SupportAutomationServiceTest extends TestCase
 
         $this->assertNotNull($detail);
         $this->assertSame('Green Academy', $detail['school']);
+        $this->assertSame('US-CA', $detail['region_code']);
+        $this->assertStringContainsString('California', (string) $detail['location']);
         $this->assertSame('On-call this week', $detail['admin_notes']);
         $this->assertSame([], $detail['recent_tickets']);
     }
@@ -365,7 +368,8 @@ class SupportAutomationServiceTest extends TestCase
             self::$capsule->getConnection()->getPdo(),
             $this->createMock(LoggerInterface::class),
             $audit,
-            $this->createMock(ErrorLogService::class)
+            $this->createMock(ErrorLogService::class),
+            new UserProfileViewService(new RegionService())
         );
     }
 }
