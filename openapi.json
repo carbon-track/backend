@@ -7958,11 +7958,12 @@
           {
             "name": "role",
             "in": "query",
-            "description": "按角色别名筛选；admin 对应管理员，user 对应普通用户。",
+            "description": "按角色筛选；支持 admin、support、user。",
             "schema": {
               "type": "string",
               "enum": [
                 "admin",
+                "support",
                 "user"
               ]
             }
@@ -8109,7 +8110,50 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "support",
+                      "admin"
+                    ],
+                    "description": "显式设置用户角色，并同步更新 is_admin。"
+                  },
+                  "is_admin": {
+                    "type": "boolean",
+                    "description": "兼容旧调用；true 会提升为 admin，false 会恢复为非管理员角色。"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "inactive"
+                    ]
+                  },
+                  "group_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "quota_override": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "quota_flat": {
+                    "type": "object"
+                  },
+                  "admin_notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -8497,7 +8541,50 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "support",
+                      "admin"
+                    ],
+                    "description": "显式设置用户角色，并同步更新 is_admin。"
+                  },
+                  "is_admin": {
+                    "type": "boolean",
+                    "description": "兼容旧调用；true 会提升为 admin，false 会恢复为非管理员角色。"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "inactive"
+                    ]
+                  },
+                  "group_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "quota_override": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "quota_flat": {
+                    "type": "object"
+                  },
+                  "admin_notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -15720,6 +15807,84 @@
           },
           "422": {
             "description": "工单状态或请求参数不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tickets/{ticketId}/feedback": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "提交工单服务评价",
+        "description": "当前登录用户可在工单进入 resolved 或 closed 后，为参与处理的客服分别提交评分与评论。",
+        "operationId": "supportSubmitMyTicketFeedback",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTicketFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "评价提交成功，返回最新工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在或不属于当前用户。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "工单尚未结束、评分非法，或目标客服不属于当前工单。",
             "content": {
               "application/json": {
                 "schema": {
@@ -25792,6 +25957,82 @@
           }
         }
       },
+      "SupportTicketParticipant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "support",
+              "admin"
+            ]
+          }
+        }
+      },
+      "SupportTicketFeedback": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ticket_id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "rated_user_id": {
+            "type": "integer"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/SupportTicketRequester"
+          },
+          "rated_user": {
+            "$ref": "#/components/schemas/SupportTicketParticipant"
+          }
+        }
+      },
       "SupportTicketAttachment": {
         "type": "object",
         "properties": {
@@ -26058,6 +26299,18 @@
                 "items": {
                   "$ref": "#/components/schemas/SupportTransferRequest"
                 }
+              },
+              "feedback_candidates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketParticipant"
+                }
+              },
+              "feedback": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketFeedback"
+                }
               }
             }
           }
@@ -26184,6 +26437,29 @@
           "cf_turnstile_response": {
             "type": "string",
             "description": "用户回复时必填；客服端回复不需要提供。"
+          }
+        }
+      },
+      "CreateSupportTicketFeedbackRequest": {
+        "type": "object",
+        "required": [
+          "rated_user_id",
+          "rating"
+        ],
+        "properties": {
+          "rated_user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "需要评价的客服或管理员用户 ID，必须参与过当前工单。"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 1000
           }
         }
       },

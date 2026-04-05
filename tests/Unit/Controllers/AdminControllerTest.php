@@ -118,7 +118,7 @@ class AdminControllerTest extends TestCase
             ->withConsecutive(
                 [
                     $this->callback(function ($sql) {
-                        $this->assertStringContainsString('u.is_admin = :is_admin', $sql);
+                        $this->assertStringContainsString('LOWER(COALESCE(u.role, \'user\')) = :role_user', $sql);
                         $this->assertStringContainsString('(u.username LIKE :search_username OR u.email LIKE :search_email OR u.uuid LIKE :search_uuid)', $sql);
                         return true;
                     })
@@ -148,7 +148,7 @@ class AdminControllerTest extends TestCase
         $this->assertEquals('%u%', $capturedParams[':search_email'] ?? null);
         $this->assertEquals('%u%', $capturedParams[':search_uuid'] ?? null);
         $this->assertEquals('active', $capturedParams[':status'] ?? null);
-        $this->assertSame(0, $capturedParams[':is_admin'] ?? null);
+        $this->assertSame('user', $capturedParams[':role_user'] ?? null);
     }
 
     public function testLoadUserRowUsesCanonicalSchoolName(): void
@@ -358,6 +358,95 @@ class AdminControllerTest extends TestCase
         $this->assertSame(1, $json['data']['pagination']['total_items']);
         $this->assertCount(1, $json['data']['items']);
         $this->assertSame('passkey_registered', $json['data']['items'][0]['action']);
+    }
+
+    public function testGetUsersCanFilterSupportRole(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $pdo->exec("INSERT INTO users (id, uuid, username, email, status, is_admin, role, created_at, updated_at) VALUES
+            (21, '11111111-1111-4111-8111-111111111111', 'supporter', 'support@example.com', 'active', 0, 'support', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+            (22, '22222222-2222-4222-8222-222222222222', 'regular', 'user@example.com', 'active', 0, 'user', '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+            (23, '33333333-3333-4333-8333-333333333333', 'adminish', 'admin@example.com', 'active', 1, 'admin', '2026-01-01 00:00:00', '2026-01-01 00:00:00')
+        ");
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1, 'role' => 'admin']);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $quotaConfigService = new QuotaConfigService();
+
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'lastlgn');
+
+        $request = makeRequest('GET', '/admin/users', null, ['role' => 'support', 'page' => 1, 'limit' => 10]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->getUsers($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertTrue($json['success']);
+        $this->assertCount(1, $json['data']['users']);
+        $this->assertSame('supporter', $json['data']['users'][0]['username']);
+        $this->assertSame('support', $json['data']['users'][0]['role']);
+    }
+
+    public function testUpdateUserCanSwitchExplicitRole(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
+        TestSchemaBuilder::init($pdo);
+
+        $pdo->exec("INSERT INTO users (id, uuid, username, email, status, is_admin, role, created_at, updated_at) VALUES
+            (31, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'target-user', 'target@example.com', 'active', 0, 'user', '2026-01-01 00:00:00', '2026-01-01 00:00:00')
+        ");
+
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1, 'role' => 'admin']);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logDataChange')
+            ->with(
+                'admin',
+                'user_update',
+                1,
+                'admin',
+                'users',
+                31,
+                null,
+                null,
+                $this->callback(fn (array $meta) => in_array('role', $meta['fields'] ?? [], true) && in_array('is_admin', $meta['fields'] ?? [], true))
+            );
+        $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $quotaConfigService = new QuotaConfigService();
+
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $prop = (new \ReflectionClass($controller))->getProperty('lastLoginColumn');
+        $prop->setAccessible(true);
+        $prop->setValue($controller, 'lastlgn');
+
+        $request = makeRequest('PUT', '/admin/users/31', ['role' => 'support']);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->updateUser($request, $response, ['id' => 31]);
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $row = $pdo->query("SELECT role, is_admin FROM users WHERE id = 31")->fetch();
+        $this->assertSame('support', $row['role']);
+        $this->assertSame(0, (int) $row['is_admin']);
     }
 
 }

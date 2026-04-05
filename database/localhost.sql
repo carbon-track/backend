@@ -235,6 +235,23 @@ CREATE TABLE `support_ticket_transfer_requests` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `support_ticket_feedback`
+--
+
+CREATE TABLE `support_ticket_feedback` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `rated_user_id` int(11) NOT NULL,
+  `rating` tinyint(3) UNSIGNED NOT NULL,
+  `comment` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `avatars`
 --
 
@@ -1158,6 +1175,16 @@ ALTER TABLE `support_ticket_transfer_requests`
   ADD KEY `idx_support_ticket_transfer_requests_to_assignee` (`to_assignee`);
 
 --
+-- 表的索引 `support_ticket_feedback`
+--
+ALTER TABLE `support_ticket_feedback`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_support_ticket_feedback_ticket_user_rated` (`ticket_id`,`user_id`,`rated_user_id`),
+  ADD KEY `idx_support_ticket_feedback_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_feedback_user_id` (`user_id`),
+  ADD KEY `idx_support_ticket_feedback_rated_user_id` (`rated_user_id`);
+
+--
 -- 表的索引 `points_transactions`
 --
 ALTER TABLE `points_transactions`
@@ -1393,6 +1420,12 @@ ALTER TABLE `support_ticket_attachments`
 -- 使用表AUTO_INCREMENT `support_ticket_transfer_requests`
 --
 ALTER TABLE `support_ticket_transfer_requests`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_feedback`
+--
+ALTER TABLE `support_ticket_feedback`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --

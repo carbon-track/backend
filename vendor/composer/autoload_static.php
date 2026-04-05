@@ -1694,6 +1694,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Models\\SupportTicket' => __DIR__ . '/../..' . '/src/Models/SupportTicket.php',
         'CarbonTrack\\Models\\SupportTicketAttachment' => __DIR__ . '/../..' . '/src/Models/SupportTicketAttachment.php',
         'CarbonTrack\\Models\\SupportTicketAutomationRule' => __DIR__ . '/../..' . '/src/Models/SupportTicketAutomationRule.php',
+        'CarbonTrack\\Models\\SupportTicketFeedback' => __DIR__ . '/../..' . '/src/Models/SupportTicketFeedback.php',
         'CarbonTrack\\Models\\SupportTicketMessage' => __DIR__ . '/../..' . '/src/Models/SupportTicketMessage.php',
         'CarbonTrack\\Models\\SupportTicketTag' => __DIR__ . '/../..' . '/src/Models/SupportTicketTag.php',
         'CarbonTrack\\Models\\SupportTicketTagAssignment' => __DIR__ . '/../..' . '/src/Models/SupportTicketTagAssignment.php',

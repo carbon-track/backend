@@ -90,15 +90,11 @@ class AdminController
             } elseif (isset($params['userUuid']) && is_string($params['userUuid'])) {
                 $userUuid = trim((string) $params['userUuid']);
             }
-            $isAdminParam = $params['is_admin'] ?? null;
-            if ($isAdminParam === null && isset($params['role'])) {
-                $role = strtolower(trim((string)$params['role']));
-                if ($role === 'admin') {
-                    $isAdminParam = '1';
-                } elseif ($role === 'user') {
-                    $isAdminParam = '0';
-                }
+            $roleFilter = isset($params['role']) ? strtolower(trim((string) $params['role'])) : '';
+            if (!in_array($roleFilter, ['user', 'support', 'admin'], true)) {
+                $roleFilter = '';
             }
+            $isAdminParam = $params['is_admin'] ?? null;
             $isAdmin  = $isAdminParam;
             if ($isAdmin !== null) {
                 $normalizedIsAdmin = (string)$isAdmin;
@@ -130,7 +126,16 @@ class AdminController
                 $where[] = 'u.school_id = :school_id';
                 $queryParams['school_id'] = $schoolId;
             }
-            if ($isAdmin !== null) {
+            if ($roleFilter === 'admin') {
+                $where[] = '(u.is_admin = 1 OR LOWER(COALESCE(u.role, \'user\')) = :role_admin)';
+                $queryParams['role_admin'] = 'admin';
+            } elseif ($roleFilter === 'support') {
+                $where[] = 'u.is_admin = 0 AND LOWER(COALESCE(u.role, \'user\')) = :role_support';
+                $queryParams['role_support'] = 'support';
+            } elseif ($roleFilter === 'user') {
+                $where[] = 'u.is_admin = 0 AND LOWER(COALESCE(u.role, \'user\')) = :role_user';
+                $queryParams['role_user'] = 'user';
+            } elseif ($isAdmin !== null) {
                 $where[] = 'u.is_admin = :is_admin';
                 $queryParams['is_admin'] = (int)$isAdmin;
             }
@@ -153,7 +158,7 @@ class AdminController
 $sql = "
                 SELECT
                     u.id, u.uuid, u.username, u.email, u.school_id,
-                    u.points, u.is_admin, u.status, u.avatar_id, u.created_at, u.updated_at,
+                    u.points, u.is_admin, u.role, u.status, u.avatar_id, u.created_at, u.updated_at,
                     u.group_id, u.quota_override, u.admin_notes,
                     {$lastLoginSelect},
                     s.name as school_name,
@@ -620,9 +625,22 @@ $sql = "
             $sets = [];
             $params = ['id' => $userId];
 
-            if (array_key_exists('is_admin', $payload)) {
+            if (array_key_exists('role', $payload)) {
+                $role = strtolower(trim((string) $payload['role']));
+                if (!in_array($role, ['user', 'support', 'admin'], true)) {
+                    return $this->jsonResponse($response, ['error' => 'Invalid role'], 422);
+                }
+                $sets[] = 'role = :role';
+                $params['role'] = $role;
+                $sets[] = 'is_admin = :is_admin';
+                $params['is_admin'] = $role === 'admin' ? 1 : 0;
+            } elseif (array_key_exists('is_admin', $payload)) {
                 $sets[] = 'is_admin = :is_admin';
                 $params['is_admin'] = (int)!!$payload['is_admin'];
+                $sets[] = 'role = :role';
+                $params['role'] = !empty($payload['is_admin'])
+                    ? 'admin'
+                    : (strtolower((string) ($userRow['role'] ?? 'user')) === 'support' ? 'support' : 'user');
             }
             if (array_key_exists('status', $payload)) {
                 $sets[] = 'status = :status';

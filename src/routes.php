@@ -208,6 +208,7 @@ return function (App $app) {
             $tickets->get('', [SupportTicketController::class, 'listMyTickets']);
             $tickets->get('/{ticketId:[0-9]+}', [SupportTicketController::class, 'getMyTicket']);
             $tickets->post('/{ticketId:[0-9]+}/messages', [SupportTicketController::class, 'addMyTicketMessage']);
+            $tickets->post('/{ticketId:[0-9]+}/feedback', [SupportTicketController::class, 'submitMyTicketFeedback']);
         })->add(AuthMiddleware::class);
     };
 

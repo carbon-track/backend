@@ -101,6 +101,26 @@ class SupportTicketController
         }
     }
 
+    public function submitMyTicketFeedback(Request $request, Response $response, array $args): Response
+    {
+        $actor = $this->currentUser($request);
+        if ($actor === null) {
+            return $this->json($response, ['success' => false, 'message' => 'Unauthorized', 'code' => 'UNAUTHORIZED'], 401);
+        }
+
+        try {
+            return $this->json($response, ['success' => true, 'data' => $this->supportTicketService->submitTicketFeedback($actor, $this->ticketId($args), $this->body($request))]);
+        } catch (\RuntimeException $e) {
+            $status = $e->getMessage() === 'Ticket not found' ? 404 : 422;
+            $code = $status === 404 ? 'TICKET_NOT_FOUND' : 'INVALID_TICKET_STATE';
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => $code], $status);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to submit support ticket feedback');
+        }
+    }
+
     public function listSupportTickets(Request $request, Response $response): Response
     {
         $actor = $this->currentUser($request);

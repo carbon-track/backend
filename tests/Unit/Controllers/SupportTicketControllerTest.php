@@ -164,6 +164,27 @@ class SupportTicketControllerTest extends TestCase
         $this->assertSame(403, $response->getStatusCode());
     }
 
+    public function testSubmitMyTicketFeedbackReturnsValidationError(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'role' => 'user']);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('submitTicketFeedback')
+            ->with(['id' => 9, 'role' => 'user'], 12, ['rated_user_id' => 5, 'rating' => 9])
+            ->willThrowException(new \InvalidArgumentException('rating must be between 1 and 5'));
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->submitMyTicketFeedback(
+            makeRequest('POST', '/api/v1/tickets/12/feedback', ['rated_user_id' => 5, 'rating' => 9]),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '12']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+    }
+
     public function testReviewTransferRequestReturnsValidationErrorForInvalidId(): void
     {
         $auth = $this->createMock(AuthService::class);

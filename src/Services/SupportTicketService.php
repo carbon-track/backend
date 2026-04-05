@@ -6,6 +6,7 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\SupportTicket;
 use CarbonTrack\Models\SupportTicketAttachment;
+use CarbonTrack\Models\SupportTicketFeedback;
 use CarbonTrack\Models\SupportTicketMessage;
 use CarbonTrack\Models\SupportTicketTransferRequest;
 use PDO;
@@ -38,6 +39,10 @@ class SupportTicketService
         self::TRANSFER_STATUS_APPROVED,
         self::TRANSFER_STATUS_REJECTED,
         self::TRANSFER_STATUS_CANCELLED,
+    ];
+    private const FEEDBACK_ALLOWED_STATUSES = [
+        self::STATUS_RESOLVED,
+        self::STATUS_CLOSED,
     ];
 
     public function __construct(
@@ -206,6 +211,69 @@ class SupportTicketService
             $this->recordFailure($e, 'support_ticket_reply_create_failed', $actor, $ticketId);
             throw $e;
         }
+    }
+
+    public function submitTicketFeedback(array $actor, int $ticketId, array $payload): array
+    {
+        $ticket = $this->findTicketForUser((int) $actor['id'], $ticketId);
+        if ($ticket === null) {
+            throw new \RuntimeException('Ticket not found');
+        }
+        if (!in_array((string) ($ticket['status'] ?? ''), self::FEEDBACK_ALLOWED_STATUSES, true)) {
+            throw new \RuntimeException('Feedback is only available after the ticket is resolved or closed');
+        }
+
+        $ratedUserId = (int) ($payload['rated_user_id'] ?? 0);
+        if ($ratedUserId <= 0) {
+            throw new \InvalidArgumentException('rated_user_id is required');
+        }
+
+        $candidate = $this->findFeedbackCandidate($ticketId, $ratedUserId);
+        if ($candidate === null) {
+            throw new \InvalidArgumentException('Rated user is not eligible for feedback on this ticket');
+        }
+
+        $rating = $this->normalizeRating($payload['rating'] ?? null);
+        $comment = $this->normalizeFeedbackComment($payload['comment'] ?? null);
+        $feedback = $this->findFeedbackRecord($ticketId, (int) $actor['id'], $ratedUserId);
+        $isNew = $feedback === null;
+        $now = $this->now();
+
+        if ($feedback === null) {
+            $feedback = SupportTicketFeedback::create([
+                'ticket_id' => $ticketId,
+                'user_id' => (int) $actor['id'],
+                'rated_user_id' => $ratedUserId,
+                'rating' => $rating,
+                'comment' => $comment,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        } else {
+            $feedback->fill([
+                'rating' => $rating,
+                'comment' => $comment,
+                'updated_at' => $now,
+            ]);
+            $feedback->save();
+        }
+
+        $this->auditLogService->log([
+            'user_id' => (int) $actor['id'],
+            'action' => $isNew ? 'support_ticket_feedback_created' : 'support_ticket_feedback_updated',
+            'operation_category' => 'support',
+            'actor_type' => 'user',
+            'affected_table' => 'support_ticket_feedback',
+            'affected_id' => (int) ($feedback->id ?? 0),
+            'status' => 'success',
+            'data' => [
+                'ticket_id' => $ticketId,
+                'rated_user_id' => $ratedUserId,
+                'rating' => $rating,
+            ],
+        ]);
+
+        return $this->getTicketDetailForUser((int) $actor['id'], $ticketId);
     }
 
     public function listSupportTickets(array $actor, array $query = []): array
@@ -639,6 +707,8 @@ class SupportTicketService
     {
         $detail = $this->formatTicketSummary($ticket, $includeRequester);
         $detail['messages'] = $this->messages((int) $ticket['id']);
+        $detail['feedback_candidates'] = $this->feedbackCandidates((int) $ticket['id']);
+        $detail['feedback'] = $this->feedback((int) $ticket['id']);
         if ($includeRequester && $this->supportAutomationService !== null) {
             $detail['tags'] = $this->supportAutomationService->getTagsForTicket((int) $ticket['id']);
         }
@@ -668,6 +738,113 @@ class SupportTicketService
                 'attachments' => $attachments[$messageId] ?? [],
             ];
         }, $rows);
+    }
+
+    private function feedbackCandidates(int $ticketId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT DISTINCT
+                u.id,
+                u.username,
+                u.email,
+                u.role,
+                u.is_admin
+            FROM users u
+            INNER JOIN (
+                SELECT sender_id AS participant_id
+                FROM support_ticket_messages
+                WHERE ticket_id = :message_ticket_id
+                  AND sender_id IS NOT NULL
+                  AND sender_role IN ('support', 'admin')
+                UNION
+                SELECT assigned_to AS participant_id
+                FROM support_tickets
+                WHERE id = :assigned_ticket_id
+                  AND assigned_to IS NOT NULL
+            ) participants ON participants.participant_id = u.id
+            WHERE u.deleted_at IS NULL
+              AND (u.is_admin = 1 OR LOWER(COALESCE(u.role, 'user')) IN ('support', 'admin'))
+            ORDER BY COALESCE(u.username, u.email, ''), u.id
+        ");
+        $stmt->execute([
+            'message_ticket_id' => $ticketId,
+            'assigned_ticket_id' => $ticketId,
+        ]);
+
+        return array_map(static function (array $row): array {
+            $role = !empty($row['is_admin']) ? 'admin' : strtolower((string) ($row['role'] ?? 'support'));
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'username' => $row['username'] ?? null,
+                'email' => $row['email'] ?? null,
+                'role' => $role,
+            ];
+        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
+    private function findFeedbackCandidate(int $ticketId, int $ratedUserId): ?array
+    {
+        foreach ($this->feedbackCandidates($ticketId) as $candidate) {
+            if ((int) ($candidate['id'] ?? 0) === $ratedUserId) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function feedback(int $ticketId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                f.*,
+                reviewer.username AS reviewer_username,
+                reviewer.email AS reviewer_email,
+                rated.username AS rated_username,
+                rated.email AS rated_email,
+                rated.role AS rated_role,
+                rated.is_admin AS rated_is_admin
+            FROM support_ticket_feedback f
+            INNER JOIN users reviewer ON reviewer.id = f.user_id
+            INNER JOIN users rated ON rated.id = f.rated_user_id
+            WHERE f.ticket_id = :ticket_id
+            ORDER BY f.id ASC
+        ");
+        $stmt->execute(['ticket_id' => $ticketId]);
+
+        return array_map(static function (array $row): array {
+            $ratedRole = !empty($row['rated_is_admin']) ? 'admin' : strtolower((string) ($row['rated_role'] ?? 'support'));
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'ticket_id' => (int) ($row['ticket_id'] ?? 0),
+                'user_id' => (int) ($row['user_id'] ?? 0),
+                'rated_user_id' => (int) ($row['rated_user_id'] ?? 0),
+                'rating' => (int) ($row['rating'] ?? 0),
+                'comment' => $row['comment'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+                'updated_at' => $row['updated_at'] ?? null,
+                'reviewer' => [
+                    'id' => (int) ($row['user_id'] ?? 0),
+                    'username' => $row['reviewer_username'] ?? null,
+                    'email' => $row['reviewer_email'] ?? null,
+                ],
+                'rated_user' => [
+                    'id' => (int) ($row['rated_user_id'] ?? 0),
+                    'username' => $row['rated_username'] ?? null,
+                    'email' => $row['rated_email'] ?? null,
+                    'role' => $ratedRole,
+                ],
+            ];
+        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
+    private function findFeedbackRecord(int $ticketId, int $userId, int $ratedUserId): ?SupportTicketFeedback
+    {
+        return SupportTicketFeedback::query()
+            ->where('ticket_id', $ticketId)
+            ->where('user_id', $userId)
+            ->where('rated_user_id', $ratedUserId)
+            ->first();
     }
 
     private function attachments(array $messageIds): array
@@ -1062,6 +1239,30 @@ class SupportTicketService
             throw new \InvalidArgumentException('Invalid transfer status');
         }
         return $status;
+    }
+
+    private function normalizeRating(mixed $value): int
+    {
+        if (!is_numeric($value)) {
+            throw new \InvalidArgumentException('rating is required');
+        }
+
+        $rating = (int) $value;
+        if ($rating < 1 || $rating > 5) {
+            throw new \InvalidArgumentException('rating must be between 1 and 5');
+        }
+
+        return $rating;
+    }
+
+    private function normalizeFeedbackComment(mixed $value): ?string
+    {
+        $comment = $this->nullableString($value);
+        if ($comment !== null && mb_strlen($comment) > 1000) {
+            throw new \InvalidArgumentException('comment must be 1000 characters or fewer');
+        }
+
+        return $comment;
     }
 
     private function requireString(mixed $value, string $field): string

@@ -1286,6 +1286,7 @@ return array(
     'CarbonTrack\\Models\\SupportTicket' => $baseDir . '/src/Models/SupportTicket.php',
     'CarbonTrack\\Models\\SupportTicketAttachment' => $baseDir . '/src/Models/SupportTicketAttachment.php',
     'CarbonTrack\\Models\\SupportTicketAutomationRule' => $baseDir . '/src/Models/SupportTicketAutomationRule.php',
+    'CarbonTrack\\Models\\SupportTicketFeedback' => $baseDir . '/src/Models/SupportTicketFeedback.php',
     'CarbonTrack\\Models\\SupportTicketMessage' => $baseDir . '/src/Models/SupportTicketMessage.php',
     'CarbonTrack\\Models\\SupportTicketTag' => $baseDir . '/src/Models/SupportTicketTag.php',
     'CarbonTrack\\Models\\SupportTicketTagAssignment' => $baseDir . '/src/Models/SupportTicketTagAssignment.php',

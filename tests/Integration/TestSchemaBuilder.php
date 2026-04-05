@@ -81,6 +81,7 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS support_tickets (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER NOT NULL,\n                subject TEXT NOT NULL,\n                category TEXT NOT NULL,\n                status TEXT NOT NULL DEFAULT 'open',\n                priority TEXT NOT NULL DEFAULT 'normal',\n                assigned_to INTEGER,\n                last_replied_at TEXT,\n                last_reply_by_role TEXT,\n                resolved_at TEXT,\n                closed_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             "CREATE TABLE IF NOT EXISTS support_ticket_messages (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                sender_id INTEGER,\n                sender_role TEXT NOT NULL,\n                sender_name TEXT,\n                body TEXT NOT NULL,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             "CREATE TABLE IF NOT EXISTS support_ticket_attachments (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                message_id INTEGER NOT NULL,\n                file_id INTEGER,\n                file_path TEXT NOT NULL,\n                original_name TEXT,\n                mime_type TEXT,\n                size INTEGER DEFAULT 0,\n                entity_type TEXT DEFAULT 'support_ticket_message',\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS support_ticket_feedback (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                user_id INTEGER NOT NULL,\n                rated_user_id INTEGER NOT NULL,\n                rating INTEGER NOT NULL,\n                comment TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(ticket_id, user_id, rated_user_id)\n            )",
             "CREATE TABLE IF NOT EXISTS message_broadcasts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                audit_log_id INTEGER,\n                system_log_id INTEGER,\n                error_log_ids TEXT,\n                title TEXT NOT NULL,\n                content TEXT NOT NULL,\n                priority TEXT DEFAULT 'normal',\n                scope TEXT DEFAULT 'all',\n                target_count INTEGER DEFAULT 0,\n                sent_count INTEGER DEFAULT 0,\n                invalid_user_ids TEXT,\n                failed_user_ids TEXT,\n                message_ids_snapshot TEXT,\n                message_map_snapshot TEXT,\n                message_id_count INTEGER,\n                content_hash TEXT,\n                email_delivery_snapshot TEXT,\n                filters_snapshot TEXT,\n                meta TEXT,\n                created_by INTEGER,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
             // Only a subset of data is critical for tests; optional columns kept nullable.
@@ -179,6 +180,15 @@ class TestSchemaBuilder
             'size INTEGER DEFAULT 0',
             "entity_type TEXT DEFAULT 'support_ticket_message'",
             'created_at TEXT'
+        ]);
+        self::ensureColumns($pdo, 'support_ticket_feedback', [
+            'ticket_id INTEGER',
+            'user_id INTEGER',
+            'rated_user_id INTEGER',
+            'rating INTEGER',
+            'comment TEXT',
+            'created_at TEXT',
+            'updated_at TEXT'
         ]);
 
         try {

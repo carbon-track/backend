@@ -96,6 +96,18 @@ class SupportTicketServiceTest extends TestCase
             $table->timestamp('created_at')->nullable();
         });
 
+        self::$capsule->schema()->create('support_ticket_feedback', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('user_id');
+            $table->integer('rated_user_id');
+            $table->integer('rating');
+            $table->text('comment')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+            $table->unique(['ticket_id', 'user_id', 'rated_user_id'], 'uniq_ticket_user_rated');
+        });
+
         self::$capsule->schema()->create('support_ticket_tags', function (Blueprint $table): void {
             $table->increments('id');
             $table->string('slug');
@@ -140,6 +152,7 @@ class SupportTicketServiceTest extends TestCase
             self::$capsule->table('support_ticket_transfer_requests')->delete();
             self::$capsule->table('support_ticket_tag_assignments')->delete();
             self::$capsule->table('support_ticket_tags')->delete();
+            self::$capsule->table('support_ticket_feedback')->delete();
             self::$capsule->table('support_ticket_attachments')->delete();
             self::$capsule->table('support_ticket_messages')->delete();
             self::$capsule->table('support_tickets')->delete();
@@ -504,5 +517,136 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame('approved', $result['status']);
         $this->assertSame((int) $supportB->id, $ticketRow->assigned_to);
         $this->assertSame('manual', $ticketRow->assignment_source);
+    }
+
+    public function testSubmitTicketFeedbackCreatesEntryForHandledSupportAgent(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 1,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Resolved issue',
+            'category' => 'account',
+            'status' => 'resolved',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'resolved_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 1,
+            'sender_id' => (int) $supportUser->id,
+            'sender_role' => 'support',
+            'sender_name' => 'support-a',
+            'body' => 'Issue fixed',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $audit->method('log')->willReturn(true);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata
+        );
+
+        $result = $service->submitTicketFeedback(
+            ['id' => (int) $requester->id, 'role' => 'user', 'username' => 'requester'],
+            1,
+            [
+                'rated_user_id' => (int) $supportUser->id,
+                'rating' => 5,
+                'comment' => '处理很快',
+            ]
+        );
+
+        $feedbackRow = self::$capsule->table('support_ticket_feedback')->where('ticket_id', 1)->first();
+
+        $this->assertNotNull($feedbackRow);
+        $this->assertSame(5, $feedbackRow->rating);
+        $this->assertSame('处理很快', $feedbackRow->comment);
+        $this->assertCount(1, $result['feedback']);
+        $this->assertSame((int) $supportUser->id, $result['feedback'][0]['rated_user_id']);
+        $this->assertSame((int) $supportUser->id, $result['feedback_candidates'][0]['id']);
+    }
+
+    public function testSubmitTicketFeedbackRequiresResolvedOrClosedTicket(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 2,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Still open',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $audit->method('log')->willReturn(true);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Feedback is only available after the ticket is resolved or closed');
+
+        $service->submitTicketFeedback(
+            ['id' => (int) $requester->id, 'role' => 'user', 'username' => 'requester'],
+            2,
+            [
+                'rated_user_id' => (int) $supportUser->id,
+                'rating' => 4,
+            ]
+        );
     }
 }

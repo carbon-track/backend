@@ -147,6 +147,40 @@
       ]
     },
     {
+      "id": "supportOps",
+      "label": "Support Operations",
+      "route": "/admin/support",
+      "description": "Configure support automation, tags, rules, and operational reporting.",
+      "keywords": [
+        "support ops",
+        "support automation",
+        "support rules",
+        "support tags",
+        "客服运营",
+        "客服规则",
+        "客服标签",
+        "派单规则",
+        "转单"
+      ]
+    },
+    {
+      "id": "supportPortal",
+      "label": "Support Desk",
+      "route": "/support/",
+      "description": "Open the live support workspace to manage ticket queues, assignments, and ticket conversations.",
+      "keywords": [
+        "support portal",
+        "support desk",
+        "support queue",
+        "ticket queue",
+        "客服台",
+        "客服工作台",
+        "工单队列",
+        "客服门户",
+        "客服工单"
+      ]
+    },
+    {
       "id": "systemLogs",
       "label": "System Logs",
       "route": "/admin/system-logs",
