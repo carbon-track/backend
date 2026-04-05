@@ -1777,6 +1777,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Tests\\Unit\\Controllers\\ProductControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/ProductControllerTest.php',
         'CarbonTrack\\Tests\\Unit\\Controllers\\SchoolControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/SchoolControllerTest.php',
         'CarbonTrack\\Tests\\Unit\\Controllers\\StatsControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/StatsControllerTest.php',
+        'CarbonTrack\\Tests\\Unit\\Controllers\\SystemLogControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/SystemLogControllerTest.php',
         'CarbonTrack\\Tests\\Unit\\Controllers\\UserAiControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/UserAiControllerTest.php',
         'CarbonTrack\\Tests\\Unit\\Controllers\\UserControllerTest' => __DIR__ . '/../..' . '/tests/Unit/Controllers/UserControllerTest.php',
         'CarbonTrack\\Tests\\Unit\\Middleware\\AdminMiddlewareTest' => __DIR__ . '/../..' . '/tests/Unit/Middleware/AdminMiddlewareTest.php',

@@ -906,8 +906,12 @@ class CarbonTrackController
                 $bindings['status'] = $status;
             }
             if ($search !== '') {
-                $where[] = '(u.username LIKE :search OR u.email LIKE :search OR a.name_zh LIKE :search OR a.name_en LIKE :search)';
-                $bindings['search'] = "%{$search}%";
+                $where[] = '(u.username LIKE :search_username OR u.email LIKE :search_email OR a.name_zh LIKE :search_name_zh OR a.name_en LIKE :search_name_en)';
+                $searchPattern = "%{$search}%";
+                $bindings['search_username'] = $searchPattern;
+                $bindings['search_email'] = $searchPattern;
+                $bindings['search_name_zh'] = $searchPattern;
+                $bindings['search_name_en'] = $searchPattern;
             }
             // 额外筛选条件
             if (!empty($params['activity_id'])) { $where[] = 'r.activity_id = :activity_id'; $bindings['activity_id'] = $params['activity_id']; }

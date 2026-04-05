@@ -78,6 +78,59 @@ class MessageControllerTest extends TestCase
         $this->assertFalse($json['data'][0]['is_read']);
     }
 
+    public function testGetUserMessagesUsesDistinctSearchBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1]);
+        $listBound = [];
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->expects($this->once())
+            ->method('execute')
+            ->with([
+                'user_id' => 1,
+                'search_title' => '%eco%',
+                'search_content' => '%eco%',
+            ])
+            ->willReturn(true);
+        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->expects($this->exactly(5))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+                $listBound[$key] = [$value, $type];
+                return true;
+            });
+        $listStmt->expects($this->once())->method('execute')->willReturn(true);
+        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use ($countStmt, $listStmt) {
+                static $prepareCalls = 0;
+                $prepareCalls++;
+                $this->assertStringContainsString('m.title LIKE :search_title', $sql);
+                $this->assertStringContainsString('m.content LIKE :search_content', $sql);
+                return $prepareCalls === 1 ? $countStmt : $listStmt;
+            });
+
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('GET', '/messages', null, ['search' => 'eco']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->getUserMessages($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $this->assertSame(1, $listBound['user_id'][0] ?? null);
+        $this->assertSame('%eco%', $listBound['search_title'][0] ?? null);
+        $this->assertSame('%eco%', $listBound['search_content'][0] ?? null);
+        $this->assertSame(20, $listBound['limit'][0] ?? null);
+        $this->assertSame(0, $listBound['offset'][0] ?? null);
+    }
+
     public function testGetMessageDetailMarksRead(): void
     {
         $pdo = $this->createMock(\PDO::class);
@@ -835,6 +888,55 @@ class MessageControllerTest extends TestCase
         $this->assertSame(1, $json['pagination']['page']);
         $this->assertSame('Canonical Green', $json['data'][0]['school']);
         $this->assertSame('US-UM-81', $json['data'][0]['location']);
+    }
+
+    public function testSearchBroadcastRecipientsUsesNamedSearchAndIdBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $svc = $this->createMock(MessageService::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $auth = $this->createMock(AuthService::class);
+        $bound = [];
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->exactly(6))
+            ->method('bindValue')
+            ->willReturnCallback(function ($key, $value, ?int $type = null) use (&$bound) {
+                $bound[$key] = [$value, $type];
+                return true;
+            });
+        $stmt->expects($this->once())->method('execute')->willReturn(true);
+        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->once())
+            ->method('prepare')
+            ->with($this->callback(static function (string $sql): bool {
+                return str_contains($sql, 'u.username LIKE :search_0')
+                    && str_contains($sql, 'u.email LIKE :search_1')
+                    && str_contains($sql, 'u.id IN (:include_id_0,:include_id_1)');
+            }))
+            ->willReturn($stmt);
+
+        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, [
+            'search' => 'alice',
+            'fields' => 'username,email',
+            'include_ids' => [10, 11],
+            'limit' => 1,
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->searchBroadcastRecipients($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $this->assertSame('%alice%', $bound[':search_0'][0] ?? null);
+        $this->assertSame('%alice%', $bound[':search_1'][0] ?? null);
+        $this->assertSame(10, $bound[':include_id_0'][0] ?? null);
+        $this->assertSame(11, $bound[':include_id_1'][0] ?? null);
+        $this->assertSame(2, $bound[':limit'][0] ?? null);
+        $this->assertSame(0, $bound[':offset'][0] ?? null);
     }
 
     public function testResolveExplicitRecipientsUsesDisplayAliasesFromCanonicalFields(): void

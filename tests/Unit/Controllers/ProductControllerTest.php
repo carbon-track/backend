@@ -69,6 +69,60 @@ class ProductControllerTest extends TestCase
         $this->assertEquals('Popular', $json['data']['products'][0]['tags'][0]['name']);
     }
 
+    public function testGetProductsUsesDistinctSearchBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $listBound = [];
+        $prepareCalls = 0;
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->expects($this->once())
+            ->method('execute')
+            ->with([
+                'search_name' => '%eco%',
+                'search_description' => '%eco%',
+            ])
+            ->willReturn(true);
+        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->expects($this->exactly(4))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+                $listBound[$key] = [$value, $type];
+                return true;
+            });
+        $listStmt->expects($this->once())->method('execute')->willReturn(true);
+        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $countStmt, $listStmt) {
+                $prepareCalls++;
+                $this->assertStringContainsString('p.name LIKE :search_name', $sql);
+                $this->assertStringContainsString('p.description LIKE :search_description', $sql);
+
+                return $prepareCalls === 1 ? $countStmt : $listStmt;
+            });
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/products', null, ['search' => 'eco']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->getProducts($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+
+        $this->assertSame('%eco%', $listBound['search_name'][0] ?? null);
+        $this->assertSame('%eco%', $listBound['search_description'][0] ?? null);
+        $this->assertSame(20, $listBound['limit'][0] ?? null);
+        $this->assertSame(\PDO::PARAM_INT, $listBound['limit'][1] ?? null);
+        $this->assertSame(0, $listBound['offset'][0] ?? null);
+        $this->assertSame(\PDO::PARAM_INT, $listBound['offset'][1] ?? null);
+    }
+
     public function testGetProductDetail(): void
     {
         $pdo = $this->createMock(\PDO::class);
@@ -126,6 +180,45 @@ class ProductControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertCount(2, $json['data']['tags']);
         $this->assertEquals('eco', $json['data']['tags'][0]['slug']);
+    }
+
+    public function testSearchProductTagsUsesDistinctSearchBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $bound = [];
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->exactly(3))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+                $bound[$key] = [$value, $type];
+                return true;
+            });
+        $stmt->expects($this->once())->method('execute')->willReturn(true);
+        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->once())
+            ->method('prepare')
+            ->with($this->callback(static function (string $sql): bool {
+                return str_contains($sql, 'name LIKE :search_name')
+                    && str_contains($sql, 'slug LIKE :search_slug')
+                    && !str_contains($sql, 'slug LIKE :search ');
+            }))
+            ->willReturn($stmt);
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/products/tags', null, ['search' => 'eco']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->searchProductTags($request, $response);
+        $this->assertEquals(200, $resp->getStatusCode());
+        $this->assertSame('%eco%', $bound['search_name'][0] ?? null);
+        $this->assertSame('%eco%', $bound['search_slug'][0] ?? null);
+        $this->assertSame(20, $bound['limit'][0] ?? null);
+        $this->assertSame(\PDO::PARAM_INT, $bound['limit'][1] ?? null);
     }
 
     public function testExchangeProductInsufficientStock(): void
@@ -658,6 +751,65 @@ class ProductControllerTest extends TestCase
         $names = array_column($categories, 'name');
         $this->assertContains('Eco Living', $names);
         $this->assertContains('手工材料', $names);
+    }
+
+    public function testGetCategoriesUsesDistinctSearchBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $errorLog->expects($this->never())->method('logException');
+        $categoryBound = [];
+        $prepareCalls = 0;
+
+        $categoryStmt = $this->createMock(\PDOStatement::class);
+        $categoryStmt->expects($this->exactly(3))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$categoryBound) {
+                $categoryBound[$key] = [$value, $type];
+                return true;
+            });
+        $categoryStmt->expects($this->once())->method('execute')->willReturn(true);
+        $categoryStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $fallbackStmt = $this->createMock(\PDOStatement::class);
+        $fallbackStmt->expects($this->once())
+            ->method('bindValue')
+            ->with('fallback_limit', 20, \PDO::PARAM_INT)
+            ->willReturn(true);
+        $fallbackStmt->expects($this->once())->method('execute')->willReturn(true);
+        $fallbackStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $categoryStmt, $fallbackStmt) {
+                $prepareCalls++;
+                if ($prepareCalls === 1) {
+                    $this->assertStringContainsString('pc.name LIKE :search_name', $sql);
+                    $this->assertStringContainsString('pc.slug LIKE :search_slug', $sql);
+                    $this->assertStringNotContainsString('pc.slug LIKE :search ', $sql);
+                    return $categoryStmt;
+                }
+
+                $this->assertStringContainsString('LIMIT :fallback_limit', $sql);
+                return $fallbackStmt;
+            });
+
+        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+        $request = makeRequest('GET', '/products/categories', null, ['search' => 'eco', 'limit' => 10]);
+        $response = new \Slim\Psr7\Response();
+
+        $result = $controller->getCategories($request, $response);
+        $this->assertEquals(200, $result->getStatusCode(), 'Unexpected response: ' . (string) $result->getBody());
+        $payload = json_decode((string) $result->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame([], $payload['data']['categories']);
+        $this->assertSame('%eco%', $categoryBound['search_name'][0] ?? null);
+        $this->assertSame('%eco%', $categoryBound['search_slug'][0] ?? null);
+        $this->assertSame(10, $categoryBound['limit'][0] ?? null);
+        $this->assertSame(\PDO::PARAM_INT, $categoryBound['limit'][1] ?? null);
     }
 
 }

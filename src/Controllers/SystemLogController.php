@@ -63,18 +63,27 @@ class SystemLogController
             if (!empty($q['date_to'])) { $conditions[] = 'created_at <= :date_to'; $params['date_to'] = $this->normalizeDateEnd($q['date_to']); }
             // super search q: 任意字段模糊匹配（大字段使用 LIKE 可能慢，可后续加全文索引）
             if (!empty($q['q'])) {
+                $searchPattern = '%' . $q['q'] . '%';
                 $conditions[] = '(
-                    request_id LIKE :q OR
-                    path LIKE :q OR
-                    method LIKE :q OR
-                    user_agent LIKE :q OR
-                    ip_address LIKE :q OR
-                    CAST(status_code AS CHAR) LIKE :q OR
-                    request_body LIKE :q OR
-                    response_body LIKE :q OR
-                    server_meta LIKE :q
+                    request_id LIKE :q_request_id OR
+                    path LIKE :q_path OR
+                    method LIKE :q_method OR
+                    user_agent LIKE :q_user_agent OR
+                    ip_address LIKE :q_ip_address OR
+                    CAST(status_code AS CHAR) LIKE :q_status_code OR
+                    request_body LIKE :q_request_body OR
+                    response_body LIKE :q_response_body OR
+                    server_meta LIKE :q_server_meta
                 )';
-                $params['q'] = '%' . $q['q'] . '%';
+                $params['q_request_id'] = $searchPattern;
+                $params['q_path'] = $searchPattern;
+                $params['q_method'] = $searchPattern;
+                $params['q_user_agent'] = $searchPattern;
+                $params['q_ip_address'] = $searchPattern;
+                $params['q_status_code'] = $searchPattern;
+                $params['q_request_body'] = $searchPattern;
+                $params['q_response_body'] = $searchPattern;
+                $params['q_server_meta'] = $searchPattern;
             }
 
             $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';

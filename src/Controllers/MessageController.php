@@ -78,8 +78,10 @@ class MessageController
 
             // 搜索：在 title 和 content 上模糊匹配
             if (!empty($params['search'])) {
-                $where[] = '(m.title LIKE :search OR m.content LIKE :search)';
-                $bindings['search'] = '%' . trim((string)$params['search']) . '%';
+                $where[] = '(m.title LIKE :search_title OR m.content LIKE :search_content)';
+                $searchPattern = '%' . trim((string)$params['search']) . '%';
+                $bindings['search_title'] = $searchPattern;
+                $bindings['search_content'] = $searchPattern;
             }
 
             $whereClause = implode(' AND ', $where);
@@ -1743,27 +1745,33 @@ $auditPayload = [
 
         if ($search !== '') {
             $searchParts = [];
+            $searchPattern = '%' . $search . '%';
+            $searchIndex = 0;
             foreach ($fields as $field) {
+                $placeholder = 'search_' . $searchIndex++;
                 if ($field === 'id') {
-                    $searchParts[] = 'CAST(u.id AS CHAR) LIKE :search';
+                    $searchParts[] = 'CAST(u.id AS CHAR) LIKE :' . $placeholder;
+                    $params[$placeholder] = $searchPattern;
                     continue;
                 }
                 if ($field === 'school') {
-                    $searchParts[] = 's.name LIKE :search';
+                    $searchParts[] = 's.name LIKE :' . $placeholder;
+                    $params[$placeholder] = $searchPattern;
                     continue;
                 }
                 if ($field === 'location') {
-                    $searchParts[] = 'u.region_code LIKE :search';
+                    $searchParts[] = 'u.region_code LIKE :' . $placeholder;
+                    $params[$placeholder] = $searchPattern;
                     continue;
                 }
                 if (!isset($fieldMap[$field])) {
                     continue;
                 }
-                $searchParts[] = $fieldMap[$field] . ' LIKE :search';
+                $searchParts[] = $fieldMap[$field] . ' LIKE :' . $placeholder;
+                $params[$placeholder] = $searchPattern;
             }
             if (!empty($searchParts)) {
                 $where[] = '(' . implode(' OR ', $searchParts) . ')';
-                $params['search'] = '%' . $search . '%';
             }
         }
 
@@ -1804,22 +1812,26 @@ $auditPayload = [
         if (!empty($criteria['include_ids']) && is_array($criteria['include_ids'])) {
             $clean = $this->sanitizeIdList($criteria['include_ids']);
             if (!empty($clean)) {
-                $placeholders = implode(',', array_fill(0, count($clean), '?'));
-                $where[] = 'u.id IN (' . $placeholders . ')';
-                foreach ($clean as $id) {
-                    $params[] = $id;
+                $placeholders = [];
+                foreach (array_values($clean) as $index => $id) {
+                    $placeholder = 'include_id_' . $index;
+                    $placeholders[] = ':' . $placeholder;
+                    $params[$placeholder] = $id;
                 }
+                $where[] = 'u.id IN (' . implode(',', $placeholders) . ')';
             }
         }
 
         if (!empty($criteria['exclude_ids']) && is_array($criteria['exclude_ids'])) {
             $clean = $this->sanitizeIdList($criteria['exclude_ids']);
             if (!empty($clean)) {
-                $placeholders = implode(',', array_fill(0, count($clean), '?'));
-                $where[] = 'u.id NOT IN (' . $placeholders . ')';
-                foreach ($clean as $id) {
-                    $params[] = $id;
+                $placeholders = [];
+                foreach (array_values($clean) as $index => $id) {
+                    $placeholder = 'exclude_id_' . $index;
+                    $placeholders[] = ':' . $placeholder;
+                    $params[$placeholder] = $id;
                 }
+                $where[] = 'u.id NOT IN (' . implode(',', $placeholders) . ')';
             }
         }
 
@@ -1838,23 +1850,13 @@ $auditPayload = [
                 return [];
             }
 
-            $paramIndex = 1;
             foreach ($params as $key => $value) {
-                if (is_int($key)) {
-                    $stmt->bindValue($paramIndex, $value, PDO::PARAM_INT);
-                    $paramIndex++;
+                $type = PDO::PARAM_STR;
+                if ($key === 'school_id' || str_starts_with($key, 'include_id_') || str_starts_with($key, 'exclude_id_')) {
+                    $type = PDO::PARAM_INT;
+                    $value = (int)$value;
                 }
-            }
-
-            foreach ($params as $key => $value) {
-                if (!is_int($key)) {
-                    $type = PDO::PARAM_STR;
-                    if (in_array($key, ['school_id'], true)) {
-                        $type = PDO::PARAM_INT;
-                        $value = (int)$value;
-                    }
-                    $stmt->bindValue(':' . $key, $value, $type);
-                }
+                $stmt->bindValue(':' . $key, $value, $type);
             }
 
             $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);

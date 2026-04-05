@@ -117,8 +117,10 @@ class ProductController
             }
 
             if (!empty($params['search'])) {
-                $where[] = '(p.name LIKE :search OR p.description LIKE :search)';
-                $bindings['search'] = '%' . $params['search'] . '%';
+                $where[] = '(p.name LIKE :search_name OR p.description LIKE :search_description)';
+                $searchPattern = '%' . $params['search'] . '%';
+                $bindings['search_name'] = $searchPattern;
+                $bindings['search_description'] = $searchPattern;
             }
 
             if (isset($params['min_points'])) {
@@ -908,8 +910,10 @@ class ProductController
 
             $bindings = [];
             if ($search !== '') {
-                $sql .= ' WHERE pc.name LIKE :search OR pc.slug LIKE :search';
-                $bindings['search'] = '%' . $search . '%';
+                $sql .= ' WHERE pc.name LIKE :search_name OR pc.slug LIKE :search_slug';
+                $searchPattern = '%' . $search . '%';
+                $bindings['search_name'] = $searchPattern;
+                $bindings['search_slug'] = $searchPattern;
             }
 
             $sql .= ' ORDER BY pc.name ASC LIMIT :limit';
@@ -1224,8 +1228,10 @@ class ProductController
             $sql = 'SELECT id, name, slug FROM product_tags';
             $bindings = [];
             if ($search !== '') {
-                $sql .= ' WHERE name LIKE :search OR slug LIKE :search';
-                $bindings['search'] = '%' . $search . '%';
+                $sql .= ' WHERE name LIKE :search_name OR slug LIKE :search_slug';
+                $searchPattern = '%' . $search . '%';
+                $bindings['search_name'] = $searchPattern;
+                $bindings['search_slug'] = $searchPattern;
             }
             $sql .= ' ORDER BY name ASC LIMIT :limit';
 

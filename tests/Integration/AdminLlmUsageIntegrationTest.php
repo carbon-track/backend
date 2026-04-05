@@ -64,6 +64,27 @@ class AdminLlmUsageIntegrationTest extends TestCase
         $this->assertSame(1, $payload['data']['summary']['calls_30d']);
     }
 
+    public function testSummarySupportsSearchQuery(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        TestSchemaBuilder::init($pdo);
+
+        $pdo->exec("INSERT INTO user_groups (id, name, code, config, is_default) VALUES (1, 'Free', 'free', '{\"llm\":{\"daily_limit\":10}}', 1)");
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, group_id) VALUES (2, 'target_user', 'target@example.com', 'active', 0, 1)");
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, group_id) VALUES (3, 'other_user', 'other@example.com', 'active', 0, 1)");
+
+        $controller = $this->makeController($pdo);
+        $request = makeRequest('GET', '/admin/llm-usage', null, ['q' => 'target']);
+        $response = $controller->summary($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertCount(1, $payload['data']['users']);
+        $this->assertSame('target_user', $payload['data']['users'][0]['username']);
+    }
+
     public function testLogDetailReturnsRecord(): void
     {
         $pdo = new \PDO('sqlite::memory:');

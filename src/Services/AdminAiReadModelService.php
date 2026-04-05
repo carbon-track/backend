@@ -226,8 +226,13 @@ class AdminAiReadModelService
         $where = ['u.deleted_at IS NULL'];
         $params = [];
         if ($search !== '') {
-            $where[] = '(u.username LIKE :search OR u.email LIKE :search OR u.uuid LIKE :search)';
-            $params[':search'] = '%' . $search . '%';
+            [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                ['u.username', 'u.email', 'u.uuid'],
+                'user_search',
+                '%' . $search . '%'
+            );
+            $where[] = $searchCondition;
+            $params += $searchParams;
         }
         if ($status !== '') {
             $where[] = 'u.status = :status';
@@ -398,8 +403,19 @@ class AdminAiReadModelService
             $params[':user_id'] = $userId;
         }
         if ($search !== '') {
-            $where[] = '(LOWER(e.id) LIKE :search OR LOWER(COALESCE(e.product_name, \'\')) LIKE :search OR LOWER(COALESCE(e.tracking_number, \'\')) LIKE :search OR LOWER(COALESCE(u.username, \'\')) LIKE :search OR LOWER(COALESCE(u.email, \'\')) LIKE :search)';
-            $params[':search'] = '%' . strtolower($search) . '%';
+            [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                [
+                    'LOWER(e.id)',
+                    'LOWER(COALESCE(e.product_name, \'\'))',
+                    'LOWER(COALESCE(e.tracking_number, \'\'))',
+                    'LOWER(COALESCE(u.username, \'\'))',
+                    'LOWER(COALESCE(u.email, \'\'))',
+                ],
+                'exchange_search',
+                '%' . strtolower($search) . '%'
+            );
+            $where[] = $searchCondition;
+            $params += $searchParams;
         }
 
         $sort = strtolower(trim((string) ($payload['sort'] ?? 'created_at_desc')));
@@ -521,8 +537,13 @@ class AdminAiReadModelService
             $params[':category_slug'] = strtolower($category);
         }
         if ($search !== '') {
-            $where[] = '(LOWER(p.name) LIKE :search OR LOWER(COALESCE(p.description, \'\')) LIKE :search)';
-            $params[':search'] = '%' . strtolower($search) . '%';
+            [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                ['LOWER(p.name)', 'LOWER(COALESCE(p.description, \'\'))'],
+                'product_search',
+                '%' . strtolower($search) . '%'
+            );
+            $where[] = $searchCondition;
+            $params += $searchParams;
         }
 
         $sort = strtolower(trim((string) ($payload['sort'] ?? 'created_at_desc')));
@@ -627,8 +648,18 @@ class AdminAiReadModelService
         $where = ['pk.disabled_at IS NULL'];
         $params = [];
         if ($search !== '') {
-            $where[] = '(LOWER(COALESCE(pk.label, \'\')) LIKE :search OR LOWER(COALESCE(u.username, \'\')) LIKE :search OR LOWER(COALESCE(u.email, \'\')) LIKE :search OR LOWER(COALESCE(pk.user_uuid, \'\')) LIKE :search)';
-            $params[':search'] = '%' . strtolower($search) . '%';
+            [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                [
+                    'LOWER(COALESCE(pk.label, \'\'))',
+                    'LOWER(COALESCE(u.username, \'\'))',
+                    'LOWER(COALESCE(u.email, \'\'))',
+                    'LOWER(COALESCE(pk.user_uuid, \'\'))',
+                ],
+                'passkey_search',
+                '%' . strtolower($search) . '%'
+            );
+            $where[] = $searchCondition;
+            $params += $searchParams;
         }
         if ($userId !== null && $userId > 0) {
             $where[] = 'u.id = :user_id';
@@ -723,8 +754,13 @@ class AdminAiReadModelService
                 $params[':conversation_id'] = $conversationId;
             }
             if ($searchLike !== null) {
-                $sql .= " AND (LOWER(action) LIKE :search OR LOWER(COALESCE(data, '')) LIKE :search)";
-                $params[':search'] = $searchLike;
+                [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                    ['LOWER(action)', 'LOWER(COALESCE(data, \'\'))'],
+                    'audit_search',
+                    $searchLike
+                );
+                $sql .= " AND {$searchCondition}";
+                $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
             $stmt = $this->db->prepare($sql);
@@ -760,8 +796,17 @@ class AdminAiReadModelService
                 $params[':conversation_id'] = $conversationId;
             }
             if ($searchLike !== null) {
-                $sql .= " AND (LOWER(COALESCE(model, '')) LIKE :search OR LOWER(COALESCE(prompt, '')) LIKE :search OR LOWER(COALESCE(response_raw, '')) LIKE :search)";
-                $params[':search'] = $searchLike;
+                [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                    [
+                        'LOWER(COALESCE(model, \'\'))',
+                        'LOWER(COALESCE(prompt, \'\'))',
+                        'LOWER(COALESCE(response_raw, \'\'))',
+                    ],
+                    'llm_search',
+                    $searchLike
+                );
+                $sql .= " AND {$searchCondition}";
+                $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
             $stmt = $this->db->prepare($sql);
@@ -793,8 +838,13 @@ class AdminAiReadModelService
                 $params[':request_id'] = $requestId;
             }
             if ($searchLike !== null) {
-                $sql .= " AND (LOWER(COALESCE(error_type, '')) LIKE :search OR LOWER(COALESCE(error_message, '')) LIKE :search)";
-                $params[':search'] = $searchLike;
+                [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                    ['LOWER(COALESCE(error_type, \'\'))', 'LOWER(COALESCE(error_message, \'\'))'],
+                    'error_search',
+                    $searchLike
+                );
+                $sql .= " AND {$searchCondition}";
+                $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
             $stmt = $this->db->prepare($sql);
@@ -824,8 +874,13 @@ class AdminAiReadModelService
                 $params[':request_id'] = $requestId;
             }
             if ($searchLike !== null) {
-                $sql .= " AND (LOWER(COALESCE(method, '')) LIKE :search OR LOWER(COALESCE(path, '')) LIKE :search)";
-                $params[':search'] = $searchLike;
+                [$searchCondition, $searchParams] = $this->buildLikeCondition(
+                    ['LOWER(COALESCE(method, \'\'))', 'LOWER(COALESCE(path, \'\'))'],
+                    'system_search',
+                    $searchLike
+                );
+                $sql .= " AND {$searchCondition}";
+                $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
             $stmt = $this->db->prepare($sql);
@@ -1016,5 +1071,23 @@ class AdminAiReadModelService
 
         $decoded = json_decode($raw, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<int,string> $expressions
+     * @return array{0:string,1:array<string,string>}
+     */
+    private function buildLikeCondition(array $expressions, string $prefix, string $pattern): array
+    {
+        $parts = [];
+        $params = [];
+
+        foreach (array_values($expressions) as $index => $expression) {
+            $placeholder = ':' . $prefix . '_' . $index;
+            $parts[] = $expression . ' LIKE ' . $placeholder;
+            $params[$placeholder] = $pattern;
+        }
+
+        return ['(' . implode(' OR ', $parts) . ')', $params];
     }
 }

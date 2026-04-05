@@ -1369,6 +1369,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Controllers\\ProductControllerTest' => $baseDir . '/tests/Unit/Controllers/ProductControllerTest.php',
     'CarbonTrack\\Tests\\Unit\\Controllers\\SchoolControllerTest' => $baseDir . '/tests/Unit/Controllers/SchoolControllerTest.php',
     'CarbonTrack\\Tests\\Unit\\Controllers\\StatsControllerTest' => $baseDir . '/tests/Unit/Controllers/StatsControllerTest.php',
+    'CarbonTrack\\Tests\\Unit\\Controllers\\SystemLogControllerTest' => $baseDir . '/tests/Unit/Controllers/SystemLogControllerTest.php',
     'CarbonTrack\\Tests\\Unit\\Controllers\\UserAiControllerTest' => $baseDir . '/tests/Unit/Controllers/UserAiControllerTest.php',
     'CarbonTrack\\Tests\\Unit\\Controllers\\UserControllerTest' => $baseDir . '/tests/Unit/Controllers/UserControllerTest.php',
     'CarbonTrack\\Tests\\Unit\\Middleware\\AdminMiddlewareTest' => $baseDir . '/tests/Unit/Middleware/AdminMiddlewareTest.php',
