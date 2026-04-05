@@ -90,6 +90,25 @@ class AuthServiceTest extends TestCase
         $this->assertSame($user['uuid'], $payload['user']['uuid']);
     }
 
+    public function testGenerateTokenMarksSupportUsers(): void
+    {
+        $user = [
+            'id' => 7,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440007',
+            'username' => 'support-user',
+            'email' => 'support@example.com',
+            'role' => 'support',
+            'is_admin' => false,
+        ];
+
+        $token = $this->authService->generateToken($user);
+        $payload = $this->authService->validateToken($token);
+
+        $this->assertSame('support', $payload['role']);
+        $this->assertTrue($payload['user']['is_support']);
+        $this->assertFalse($payload['user']['is_admin']);
+    }
+
     public function testGenerateJwtTokenUsesUuidAsSubjectWhenAvailable(): void
     {
         $user = [
@@ -242,6 +261,17 @@ class AuthServiceTest extends TestCase
         $this->assertFalse($this->authService->isAdminUser($regularUser));
     }
 
+    public function testIsSupportUserAcceptsSupportAndAdmin(): void
+    {
+        $supportUser = ['id' => 2, 'username' => 'support', 'role' => 'support', 'is_admin' => false];
+        $adminUser = ['id' => 1, 'username' => 'admin', 'role' => 'admin', 'is_admin' => true];
+        $regularUser = ['id' => 3, 'username' => 'user', 'role' => 'user', 'is_admin' => false];
+
+        $this->assertTrue($this->authService->isSupportUser($supportUser));
+        $this->assertTrue($this->authService->isSupportUser($adminUser));
+        $this->assertFalse($this->authService->isSupportUser($regularUser));
+    }
+
     public function testGenerateSecureToken(): void
     {
         $token1 = $this->authService->generateSecureToken();
@@ -290,6 +320,7 @@ class AuthServiceTest extends TestCase
                 username TEXT UNIQUE,
                 email TEXT UNIQUE,
                 password TEXT,
+                role TEXT DEFAULT "user",
                 status TEXT,
                 points INTEGER DEFAULT 0,
                 is_admin INTEGER DEFAULT 0,

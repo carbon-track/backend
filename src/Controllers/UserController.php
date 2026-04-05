@@ -282,6 +282,31 @@ class UserController
                     'generated' => $sample['generated'],
                 ];
             }
+
+            case NotificationPreferenceService::CATEGORY_SUPPORT: {
+                $subject = sprintf('[Test] %s support update', $this->emailService->getAppName());
+                $body = sprintf(
+                    "Hello %s,\n\nThis is a sample support ticket update email. "
+                    . "You will receive messages like this when a support agent changes ticket status, updates priority, or leaves an operational note.\n\n"
+                    . "You can manage this category from Notification Settings at any time.",
+                    $displayName
+                );
+
+                return [
+                    'callback' => function (bool $async) use ($email, $displayName, $subject, $body) {
+                        return $this->emailService->sendMessageNotification(
+                            $email,
+                            $displayName,
+                            $subject,
+                            $body,
+                            NotificationPreferenceService::CATEGORY_SUPPORT,
+                            Message::PRIORITY_LOW
+                        );
+                    },
+                    'context' => $baseContext,
+                    'generated' => true,
+                ];
+            }
         }
 
         return null;
@@ -467,16 +492,18 @@ class UserController
             $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
             $profileFields = $this->userProfileViewService->buildProfileFields($row);
 
-            $userInfo = [
-                'id' => $row['id'],
+                $userInfo = [
+                    'id' => $row['id'],
                 'uuid' => $row['uuid'] ?? null,
                 'username' => $row['username'],
                 'email' => $row['email'],
                 'school_id' => $profileFields['school_id'],
                 'school_name' => $profileFields['school_name'],
                 'points' => (int)$row['points'],
-                'is_admin' => (bool)$row['is_admin'],
-                'email_verified_at' => $row['email_verified_at'] ?? null,
+                    'role' => !empty($row['is_admin']) ? 'admin' : (($row['role'] ?? 'user') ?: 'user'),
+                    'is_admin' => (bool)$row['is_admin'],
+                    'is_support' => !empty($row['is_admin']) || (($row['role'] ?? 'user') === 'support'),
+                    'email_verified_at' => $row['email_verified_at'] ?? null,
                 'avatar_id' => $row['avatar_id'],
                 'avatar_path' => $avatar['avatar_path'],
                 'avatar_url' => $avatar['avatar_url'],
@@ -857,16 +884,18 @@ class UserController
             $profileFields = $this->userProfileViewService->buildProfileFields($updatedUser);
 
             // 准备返回的用户信息
-            $userInfo = [
-                'id' => $updatedUser['id'],
+                $userInfo = [
+                    'id' => $updatedUser['id'],
                 'uuid' => $updatedUser['uuid'],
                 'username' => $updatedUser['username'],
                 'email' => $updatedUser['email'],
                 'school_id' => $profileFields['school_id'],
                 'school_name' => $profileFields['school_name'],
                 'points' => $updatedUser['points'],
-                'is_admin' => (bool)$updatedUser['is_admin'],
-                'avatar_id' => $updatedUser['avatar_id'],
+                    'role' => !empty($updatedUser['is_admin']) ? 'admin' : (($updatedUser['role'] ?? 'user') ?: 'user'),
+                    'is_admin' => (bool)$updatedUser['is_admin'],
+                    'is_support' => !empty($updatedUser['is_admin']) || (($updatedUser['role'] ?? 'user') === 'support'),
+                    'avatar_id' => $updatedUser['avatar_id'],
                 'avatar_path' => $updatedAvatar['avatar_path'],
                 'avatar_url' => $updatedAvatar['avatar_url'],
                 'lastlgn' => $updatedUser['lastlgn'] ?? null,

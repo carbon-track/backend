@@ -1,0 +1,181 @@
+<?php
+
+declare(strict_types=1);
+
+namespace CarbonTrack\Tests\Unit\Controllers;
+
+use CarbonTrack\Controllers\SupportTicketController;
+use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\SupportTicketService;
+use CarbonTrack\Services\TurnstileService;
+use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
+
+class SupportTicketControllerTest extends TestCase
+{
+    private function makeController(
+        ?SupportTicketService $supportTicketService = null,
+        ?AuthService $authService = null,
+        ?TurnstileService $turnstileService = null
+    ): SupportTicketController {
+        return new SupportTicketController(
+            $supportTicketService ?? $this->createMock(SupportTicketService::class),
+            $authService ?? $this->createMock(AuthService::class),
+            $turnstileService ?? $this->createMock(TurnstileService::class),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(ErrorLogService::class)
+        );
+    }
+
+    public function testCreateTicketRequiresAuthentication(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(null);
+
+        $controller = $this->makeController(authService: $auth);
+        $response = $controller->createTicket(
+            makeRequest('POST', '/api/v1/tickets', ['subject' => 'Need help']),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(401, $response->getStatusCode());
+    }
+
+    public function testCreateTicketRejectsFailedTurnstile(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'user', 'email' => 'user@example.com']);
+
+        $turnstile = $this->createMock(TurnstileService::class);
+        $turnstile->expects($this->once())
+            ->method('verify')
+            ->with('bad-token', null)
+            ->willReturn(['success' => false]);
+
+        $controller = $this->makeController(authService: $auth, turnstileService: $turnstile);
+        $response = $controller->createTicket(
+            makeRequest('POST', '/api/v1/tickets', [
+                'subject' => 'Broken page',
+                'content' => 'Details',
+                'category' => 'website_bug',
+                'cf_turnstile_response' => 'bad-token',
+            ]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(403, $response->getStatusCode());
+    }
+
+    public function testListSupportTicketsRequiresAuthentication(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(null);
+
+        $controller = $this->makeController(authService: $auth);
+        $response = $controller->listSupportTickets(
+            makeRequest('GET', '/api/v1/support/tickets'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(401, $response->getStatusCode());
+    }
+
+    public function testGetSupportTicketReturnsNotFound(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'support', 'is_support' => true]);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('getTicketDetailForSupport')
+            ->with(['id' => 1, 'role' => 'support', 'is_support' => true], 42)
+            ->willThrowException(new \RuntimeException('Ticket not found'));
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->getSupportTicket(
+            makeRequest('GET', '/api/v1/support/tickets/42'),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '42']
+        );
+
+        $this->assertSame(404, $response->getStatusCode());
+    }
+
+    public function testUpdateSupportTicketReturnsValidationError(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 2, 'role' => 'support', 'is_support' => true]);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('updateTicketFromSupport')
+            ->willThrowException(new \InvalidArgumentException('Invalid status'));
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->updateSupportTicket(
+            makeRequest('PATCH', '/api/v1/support/tickets/12', ['status' => 'bad_status']),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '12']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+    }
+
+    public function testListSupportAssigneesReturnsSuccess(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 2, 'role' => 'support', 'is_support' => true]);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('listSupportAssignees')
+            ->with(['id' => 2, 'role' => 'support', 'is_support' => true])
+            ->willReturn([
+                ['id' => 5, 'username' => 'support-a', 'assigned_total_count' => 6, 'open_count' => 2, 'in_progress_count' => 3],
+            ]);
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->listSupportAssignees(
+            makeRequest('GET', '/api/v1/support/assignees'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function testCreateTransferRequestReturnsForbidden(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 2, 'role' => 'support', 'is_support' => true]);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('createTransferRequest')
+            ->willThrowException(new \DomainException('Only the current assignee can request a transfer'));
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->createTransferRequest(
+            makeRequest('POST', '/api/v1/support/tickets/12/transfer-requests', ['to_assignee' => 5]),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '12']
+        );
+
+        $this->assertSame(403, $response->getStatusCode());
+    }
+
+    public function testReviewTransferRequestReturnsValidationErrorForInvalidId(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin', 'is_admin' => true]);
+
+        $controller = $this->makeController(authService: $auth);
+        $response = $controller->reviewTransferRequest(
+            makeRequest('PATCH', '/api/v1/support/transfer-requests/bad', ['status' => 'approved']),
+            new \Slim\Psr7\Response(),
+            ['requestId' => 'bad']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+    }
+}

@@ -502,6 +502,11 @@ HTML;
         return $this->lastError;
     }
 
+    public function getSupportEmail(): string
+    {
+        return $this->supportEmail;
+    }
+
     private function buildAnnouncementSubject(string $title, string $priority): string
     {
         $prefix = '';

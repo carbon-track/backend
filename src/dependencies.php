@@ -23,6 +23,8 @@ use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\MultipartUploadService;
+use CarbonTrack\Services\SupportAutomationService;
+use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Services\FileMetadataService;
@@ -59,7 +61,9 @@ use CarbonTrack\Middleware\RequestLoggingMiddleware;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Services\Ai\OpenAiClientAdapter;
 use CarbonTrack\Controllers\AdminAiController;
+use CarbonTrack\Controllers\AdminSupportController;
 use CarbonTrack\Controllers\UserAiController;
+use CarbonTrack\Controllers\SupportTicketController;
 use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\UserAiService;
 use CarbonTrack\Services\QuotaService;
@@ -75,6 +79,7 @@ use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Controllers\PasskeyController;
 use CarbonTrack\Models\UserPasskey;
 use CarbonTrack\Models\WebauthnChallenge;
+use CarbonTrack\Middleware\SupportMiddleware;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
@@ -210,6 +215,13 @@ $__deps_initializer = function (Container $container) {
         $authService->setDatabase($db);
         
         return $authService;
+    });
+
+    $container->set(SupportMiddleware::class, function (ContainerInterface $c) {
+        return new SupportMiddleware(
+            $c->get(AuthService::class),
+            $c->get(ErrorLogService::class)
+        );
     });
 
     // Carbon Calculator Service
@@ -641,6 +653,29 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(SupportAutomationService::class, function (ContainerInterface $c) {
+        return new SupportAutomationService(
+            $c->get(PDO::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(SupportTicketService::class, function (ContainerInterface $c) {
+        return new SupportTicketService(
+            $c->get(PDO::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(FileMetadataService::class),
+            $c->get(EmailService::class),
+            $c->get(MessageService::class),
+            $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
+            $c->get(SupportAutomationService::class)
+        );
+    });
+
     // Notification preferences
     $container->set(NotificationPreferenceService::class, function (ContainerInterface $c) {
         return new NotificationPreferenceService(
@@ -924,6 +959,25 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(FileMetadataService::class),
             $c->get(MultipartUploadService::class)
+        );
+    });
+
+    $container->set(SupportTicketController::class, function (ContainerInterface $c) {
+        return new SupportTicketController(
+            $c->get(SupportTicketService::class),
+            $c->get(AuthService::class),
+            $c->get(TurnstileService::class),
+            $c->get(LoggerInterface::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(AdminSupportController::class, function (ContainerInterface $c) {
+        return new AdminSupportController(
+            $c->get(SupportAutomationService::class),
+            $c->get(AuthService::class),
+            $c->get(LoggerInterface::class),
+            $c->get(ErrorLogService::class)
         );
     });
 

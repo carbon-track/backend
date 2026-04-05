@@ -17,6 +17,7 @@ class NotificationPreferenceService
     public const CATEGORY_ACTIVITY = 'activity';
     public const CATEGORY_ANNOUNCEMENT = 'announcement';
     public const CATEGORY_MESSAGE = 'message';
+    public const CATEGORY_SUPPORT = 'support';
 
     /**
      * @var array<string, array{label:string, locked:bool}>
@@ -29,6 +30,7 @@ class NotificationPreferenceService
         self::CATEGORY_ACTIVITY => ['label' => 'Activity reviews', 'locked' => false],
         self::CATEGORY_ANNOUNCEMENT => ['label' => 'Announcements', 'locked' => false],
         self::CATEGORY_MESSAGE => ['label' => 'Direct messages', 'locked' => true],
+        self::CATEGORY_SUPPORT => ['label' => 'Support tickets', 'locked' => false],
     ];
 
     /**
@@ -42,6 +44,7 @@ class NotificationPreferenceService
         self::CATEGORY_TRANSACTION => 1 << 1,
         self::CATEGORY_ACTIVITY => 1 << 2,
         self::CATEGORY_ANNOUNCEMENT => 1 << 3,
+        self::CATEGORY_SUPPORT => 1 << 4,
     ];
 
     /**

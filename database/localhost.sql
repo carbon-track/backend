@@ -24,7 +24,7 @@ SET time_zone = "+00:00";
 CREATE TABLE `admin_operations` (
 `id` int(11)
 ,`user_id` int(11)
-,`actor_type` enum('user','admin','system')
+,`actor_type` enum('user','support','admin','system')
 ,`action` varchar(100)
 ,`data` longtext
 ,`old_data` longtext
@@ -58,7 +58,7 @@ CREATE TABLE `audit_logs` (
   `user_id` int(11) DEFAULT NULL,
   `user_uuid` char(36) DEFAULT NULL,
   `conversation_id` varchar(64) DEFAULT NULL,
-  `actor_type` enum('user','admin','system') NOT NULL DEFAULT 'user',
+  `actor_type` enum('user','support','admin','system') NOT NULL DEFAULT 'user',
   `action` varchar(100) NOT NULL COMMENT 'Specific action name (e.g., user_login, admin_user_update)',
   `data` longtext COMMENT 'Original request/response data as JSON',
   `old_data` longtext COMMENT 'Previous state data before operation as JSON',
@@ -147,6 +147,87 @@ CREATE TABLE `message_broadcasts` (
   `filters_snapshot` longtext DEFAULT NULL,
   `meta` longtext DEFAULT NULL,
   `created_by` int(11) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_tickets`
+--
+
+CREATE TABLE `support_tickets` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `subject` varchar(255) NOT NULL,
+  `category` varchar(64) NOT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'open',
+  `priority` varchar(32) NOT NULL DEFAULT 'normal',
+  `assigned_to` int(11) DEFAULT NULL,
+  `assignment_source` varchar(32) DEFAULT NULL,
+  `assigned_rule_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `last_replied_at` datetime DEFAULT NULL,
+  `last_reply_by_role` varchar(32) DEFAULT NULL,
+  `resolved_at` datetime DEFAULT NULL,
+  `closed_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_messages`
+--
+
+CREATE TABLE `support_ticket_messages` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `sender_id` int(11) DEFAULT NULL,
+  `sender_role` varchar(32) NOT NULL,
+  `sender_name` varchar(255) DEFAULT NULL,
+  `body` text NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_attachments`
+--
+
+CREATE TABLE `support_ticket_attachments` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `message_id` bigint(20) UNSIGNED NOT NULL,
+  `file_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `file_path` varchar(191) NOT NULL,
+  `original_name` varchar(255) DEFAULT NULL,
+  `mime_type` varchar(128) DEFAULT NULL,
+  `size` bigint(20) UNSIGNED NOT NULL DEFAULT '0',
+  `entity_type` varchar(64) NOT NULL DEFAULT 'support_ticket_message',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_transfer_requests`
+--
+
+CREATE TABLE `support_ticket_transfer_requests` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `requested_by` int(11) NOT NULL,
+  `from_assignee` int(11) DEFAULT NULL,
+  `to_assignee` int(11) NOT NULL,
+  `reason` text DEFAULT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'pending',
+  `review_note` text DEFAULT NULL,
+  `reviewed_by` int(11) DEFAULT NULL,
+  `reviewed_at` datetime DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -649,7 +730,7 @@ CREATE TABLE `product_categories` (
 --
 CREATE TABLE `recent_audit_activities` (
 `id` int(11)
-,`actor_type` enum('user','admin','system')
+,`actor_type` enum('user','support','admin','system')
 ,`user_id` int(11)
 ,`action` varchar(100)
 ,`operation_category` varchar(100)
@@ -826,6 +907,7 @@ CREATE TABLE `users` (
   `deleted_at` datetime DEFAULT NULL,
   `status` enum('active','inactive','suspended') NOT NULL DEFAULT 'active',
   `is_admin` tinyint(1) NOT NULL DEFAULT '0',
+  `role` enum('user','support','admin') NOT NULL DEFAULT 'user',
   `class_name` varchar(100) DEFAULT NULL,
   `school_id` int(11) DEFAULT NULL,
   `avatar_id` int(11) DEFAULT NULL,
@@ -1039,6 +1121,43 @@ ALTER TABLE `message_broadcasts`
   ADD KEY `idx_message_broadcasts_created_at` (`created_at`);
 
 --
+-- 表的索引 `support_tickets`
+--
+ALTER TABLE `support_tickets`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_tickets_user_id` (`user_id`),
+  ADD KEY `idx_support_tickets_status` (`status`),
+  ADD KEY `idx_support_tickets_assigned_to` (`assigned_to`),
+  ADD KEY `idx_support_tickets_last_replied_at` (`last_replied_at`);
+
+--
+-- 表的索引 `support_ticket_messages`
+--
+ALTER TABLE `support_ticket_messages`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_ticket_messages_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_messages_sender_id` (`sender_id`);
+
+--
+-- 表的索引 `support_ticket_attachments`
+--
+ALTER TABLE `support_ticket_attachments`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_ticket_attachments_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_attachments_message_id` (`message_id`),
+  ADD KEY `idx_support_ticket_attachments_file_id` (`file_id`);
+
+--
+-- 表的索引 `support_ticket_transfer_requests`
+--
+ALTER TABLE `support_ticket_transfer_requests`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_ticket_transfer_requests_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_transfer_requests_status` (`status`),
+  ADD KEY `idx_support_ticket_transfer_requests_requested_by` (`requested_by`),
+  ADD KEY `idx_support_ticket_transfer_requests_to_assignee` (`to_assignee`);
+
+--
 -- 表的索引 `points_transactions`
 --
 ALTER TABLE `points_transactions`
@@ -1177,6 +1296,7 @@ ALTER TABLE `users`
   ADD KEY `idx_users_deleted_at` (`deleted_at`),
   ADD KEY `idx_users_status` (`status`),
   ADD KEY `idx_users_is_admin` (`is_admin`),
+  ADD KEY `idx_users_role` (`role`),
   ADD KEY `idx_users_created_at` (`created_at`),
   ADD KEY `idx_users_region_code` (`region_code`),
   ADD KEY `fk_users_group` (`group_id`);
@@ -1250,6 +1370,30 @@ ALTER TABLE `messages`
 --
 ALTER TABLE `message_broadcasts`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_tickets`
+--
+ALTER TABLE `support_tickets`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_messages`
+--
+ALTER TABLE `support_ticket_messages`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_attachments`
+--
+ALTER TABLE `support_ticket_attachments`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_transfer_requests`
+--
+ALTER TABLE `support_ticket_transfer_requests`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `user_checkins`

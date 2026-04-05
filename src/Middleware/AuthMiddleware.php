@@ -52,7 +52,7 @@ class AuthMiddleware implements MiddlewareInterface
                 'user_uuid' => $payload['uuid'] ?? null,
                 'action' => 'auth_success',
                 'operation_category' => 'authentication',
-                'actor_type' => ($payload['role'] ?? 'user') === 'admin' ? 'admin' : 'user',
+                'actor_type' => in_array(($payload['role'] ?? 'user'), ['admin', 'support'], true) ? ($payload['role'] ?? 'user') : 'user',
                 'status' => 'success',
                 'ip_address' => $this->getClientIp($request),
                 'user_agent' => $request->getHeaderLine('User-Agent'),
@@ -83,13 +83,15 @@ class AuthMiddleware implements MiddlewareInterface
                     'email' => null,
                     'role' => 'admin',
                     'user' => [
-                        'id' => null,
-                        'uuid' => null,
-                        'is_admin' => true,
-                        'username' => 'test-admin',
-                        'email' => null,
-                    ],
-                ];
+                    'id' => null,
+                    'uuid' => null,
+                    'role' => 'admin',
+                    'is_admin' => true,
+                    'is_support' => true,
+                    'username' => 'test-admin',
+                    'email' => null,
+                ],
+            ];
                 $request = $request
                     ->withAttribute('user_id', $fallback['user_id'])
                     ->withAttribute('user_uuid', $fallback['uuid'])

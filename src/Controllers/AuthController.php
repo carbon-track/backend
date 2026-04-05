@@ -158,7 +158,7 @@ class AuthController
             // 不再接受/存储 real_name 或 class_name，保持向后兼容：如果客户端仍发送则忽略
             $userUuid = Uuid::generateV4();
             $now = date('Y-m-d H:i:s');
-            $stmt = $this->db->prepare('INSERT INTO users (uuid, username, email, password, school_id, region_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+            $stmt = $this->db->prepare('INSERT INTO users (uuid, username, email, password, school_id, region_code, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
             $stmt->execute([
                 $userUuid,
                 $data['username'],
@@ -166,6 +166,7 @@ class AuthController
                 $hashed,
                 $schoolId,
                 $regionCode,
+                'user',
                 $now,
                 $now
             ]);
@@ -199,17 +200,19 @@ class AuthController
                 'success' => true,
                 'message' => 'User registered successfully',
                 'data' => [
-                    'user' => [
-                        'id' => $userId,
-                        'uuid' => $userUuid,
-                        'username' => $data['username'],
-                        'email' => $data['email'],
-                        'points' => 0,
-                        'is_admin' => false,
-                        'email_verified_at' => null,
-                        'region_code' => $regionCode,
-                        'region_label' => $this->regionService->getRegionLabel($regionCode),
-                        'country_code' => $countryCode,
+                        'user' => [
+                            'id' => $userId,
+                            'uuid' => $userUuid,
+                            'username' => $data['username'],
+                            'email' => $data['email'],
+                            'points' => 0,
+                            'role' => 'user',
+                            'is_admin' => false,
+                            'is_support' => false,
+                            'email_verified_at' => null,
+                            'region_code' => $regionCode,
+                            'region_label' => $this->regionService->getRegionLabel($regionCode),
+                            'country_code' => $countryCode,
                         'state_code' => $stateCode,
                     ],
                     'token' => $token,
@@ -1239,7 +1242,9 @@ class AuthController
             'school_id' => $profileFields['school_id'],
             'school_name' => $profileFields['school_name'],
             'points' => (int)($row['points'] ?? 0),
+            'role' => !empty($row['is_admin']) ? 'admin' : (($row['role'] ?? 'user') ?: 'user'),
             'is_admin' => (bool)($row['is_admin'] ?? 0),
+            'is_support' => !empty($row['is_admin']) || (($row['role'] ?? 'user') === 'support'),
             'email_verified_at' => $row['email_verified_at'] ?? null,
             'avatar_id' => $row['avatar_id'] ?? null,
             'avatar_path' => $avatar['avatar_path'],

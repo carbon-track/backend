@@ -103,7 +103,11 @@ class User extends Model
      */
     public function getRole(): string
     {
-        return $this->role ?? ($this->is_admin ? 'admin' : 'user');
+        if ($this->is_admin) {
+            return 'admin';
+        }
+
+        return $this->role ?? 'user';
     }
 
     /**
@@ -140,6 +144,11 @@ class User extends Model
     public function isAdmin(): bool
     {
         return $this->getRole() === 'admin';
+    }
+
+    public function isSupport(): bool
+    {
+        return in_array($this->getRole(), ['support', 'admin'], true);
     }
 
     /**
@@ -213,7 +222,7 @@ class User extends Model
             $errors[] = 'Invalid email format';
         }
 
-        $validRoles = ['user', 'admin', 'moderator'];
+        $validRoles = ['user', 'support', 'admin'];
         if (!in_array($this->getRole(), $validRoles)) {
             $errors[] = 'Invalid role';
         }
@@ -289,6 +298,13 @@ class User extends Model
     public function scopeAdmins($query)
     {
         return $query->where('is_admin', true);
+    }
+
+    public function scopeSupport($query)
+    {
+        return $query->where(function ($builder) {
+            $builder->where('is_admin', true)->orWhere('role', 'support');
+        });
     }
 
     /**
