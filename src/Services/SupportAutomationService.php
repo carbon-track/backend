@@ -796,12 +796,12 @@ class SupportAutomationService
     {
         $stmt = $this->db->query("
             SELECT
-                COALESCE(trigger, 'unknown') AS trigger_bucket,
+                COALESCE(`trigger`, 'unknown') AS trigger_bucket,
                 COUNT(*) AS run_count,
                 SUM(CASE WHEN winner_user_id IS NULL THEN 1 ELSE 0 END) AS no_winner_count,
                 SUM(CASE WHEN used_ai = 1 THEN 1 ELSE 0 END) AS used_ai_count
             FROM support_ticket_routing_runs
-            GROUP BY COALESCE(trigger, 'unknown')
+            GROUP BY COALESCE(`trigger`, 'unknown')
             ORDER BY run_count DESC, trigger_bucket ASC
         ");
 

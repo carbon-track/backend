@@ -436,6 +436,54 @@ class SupportAutomationServiceTest extends TestCase
         $this->assertSame(4, $reports['rule_hits'][0]['trigger_count']);
     }
 
+    public function testReportsAggregateRoutingOutcomesByTrigger(): void
+    {
+        $now = date('Y-m-d H:i:s');
+
+        self::$capsule->table('support_ticket_routing_runs')->insert([
+            [
+                'ticket_id' => 10,
+                'trigger' => 'created',
+                'used_ai' => 1,
+                'winner_user_id' => 2,
+                'winner_score' => 88.5,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'ticket_id' => 11,
+                'trigger' => 'created',
+                'used_ai' => 0,
+                'winner_user_id' => null,
+                'winner_score' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'ticket_id' => 12,
+                'trigger' => 'sla_breach',
+                'used_ai' => 1,
+                'winner_user_id' => 3,
+                'winner_score' => 91.0,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+
+        $reports = $this->makeService()->getReports(['days' => 14]);
+        $byTrigger = [];
+        foreach ($reports['routing_outcomes'] as $row) {
+            $byTrigger[$row['trigger']] = $row;
+        }
+
+        $this->assertSame(2, $byTrigger['created']['count'] ?? null);
+        $this->assertSame(1, $byTrigger['created']['no_winner_count'] ?? null);
+        $this->assertSame(1, $byTrigger['created']['used_ai_count'] ?? null);
+        $this->assertSame(1, $byTrigger['sla_breach']['count'] ?? null);
+        $this->assertSame(0, $byTrigger['sla_breach']['no_winner_count'] ?? null);
+        $this->assertSame(1, $byTrigger['sla_breach']['used_ai_count'] ?? null);
+    }
+
     private function makeService(): SupportAutomationService
     {
         $audit = $this->createMock(AuditLogService::class);
