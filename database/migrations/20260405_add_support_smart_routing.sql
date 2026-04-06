@@ -76,30 +76,9 @@ VALUES (
   1,
   12000,
   30,
-  JSON_OBJECT(
-    'group_weight', 15,
-    'priority_weight', 18,
-    'severity_weight', 24,
-    'escalation_weight', 10,
-    'rule_weight', 20,
-    'skill_weight', 16,
-    'level_weight', 10,
-    'feedback_weight', 8,
-    'overdue_weight', 18,
-    'load_penalty_weight', 22
-  ),
-  JSON_OBJECT(
-    'use_priority_as_severity', true,
-    'default_feedback_rating', 3.5
-  ),
-  JSON_OBJECT(
-    'first_response_minutes', 240,
-    'resolution_minutes', 1440,
-    'routing_weight', 1,
-    'min_agent_level', 1,
-    'overdue_boost', 1,
-    'tier_label', 'standard'
-  )
+  '{"group_weight":15,"priority_weight":18,"severity_weight":24,"escalation_weight":10,"rule_weight":20,"skill_weight":16,"level_weight":10,"feedback_weight":8,"overdue_weight":18,"load_penalty_weight":22}',
+  '{"use_priority_as_severity":true,"default_feedback_rating":3.5}',
+  '{"first_response_minutes":240,"resolution_minutes":1440,"routing_weight":1,"min_agent_level":1,"overdue_boost":1,"tier_label":"standard"}'
 );
 
 INSERT INTO `support_assignee_profiles` (`user_id`, `level`, `skills_json`, `languages_json`, `max_active_tickets`, `is_auto_assignable`, `weight_overrides_json`, `status`)
@@ -111,8 +90,8 @@ SELECT
     WHEN `role` = 'support' THEN 2
     ELSE 1
   END,
-  JSON_ARRAY(),
-  JSON_ARRAY(),
+  '[]',
+  '[]',
   10,
   1,
   NULL,
