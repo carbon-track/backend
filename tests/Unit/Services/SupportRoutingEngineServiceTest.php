@@ -1,0 +1,326 @@
+<?php
+
+declare(strict_types=1);
+
+namespace CarbonTrack\Tests\Unit\Services;
+
+use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\SupportRoutingEngineService;
+use CarbonTrack\Services\SupportRoutingTriageService;
+use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\Schema\Blueprint;
+use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
+
+class SupportRoutingEngineServiceTest extends TestCase
+{
+    private static ?Capsule $capsule = null;
+
+    public static function setUpBeforeClass(): void
+    {
+        self::$capsule = new Capsule();
+        self::$capsule->addConnection([
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+        ]);
+        self::$capsule->setAsGlobal();
+        self::$capsule->bootEloquent();
+
+        self::$capsule->schema()->create('users', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('username')->nullable();
+            $table->string('email')->nullable();
+            $table->string('role')->default('user');
+            $table->boolean('is_admin')->default(false);
+            $table->string('status')->default('active');
+            $table->integer('group_id')->nullable();
+            $table->timestamp('deleted_at')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('user_groups', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('name');
+            $table->string('code');
+            $table->text('config')->nullable();
+            $table->boolean('is_default')->default(false);
+            $table->text('notes')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_tickets', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->string('subject');
+            $table->string('category');
+            $table->string('status');
+            $table->string('priority')->default('normal');
+            $table->integer('assigned_to')->nullable();
+            $table->string('assignment_source')->nullable();
+            $table->integer('assigned_rule_id')->nullable();
+            $table->boolean('assignment_locked')->default(false);
+            $table->timestamp('first_support_response_at')->nullable();
+            $table->timestamp('first_response_due_at')->nullable();
+            $table->timestamp('resolution_due_at')->nullable();
+            $table->string('sla_status')->default('pending');
+            $table->integer('escalation_level')->default(0);
+            $table->integer('last_routing_run_id')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_messages', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('sender_id')->nullable();
+            $table->string('sender_role')->nullable();
+            $table->string('sender_name')->nullable();
+            $table->text('body');
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_feedback', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('user_id');
+            $table->integer('rated_user_id');
+            $table->integer('rating');
+            $table->text('comment')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_tags', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('slug');
+            $table->string('name');
+            $table->string('color')->default('emerald');
+            $table->boolean('is_active')->default(true);
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_tag_assignments', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('tag_id');
+            $table->string('source_type')->default('rule');
+            $table->integer('rule_id')->nullable();
+            $table->timestamp('created_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_automation_rules', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('name');
+            $table->boolean('is_active')->default(true);
+            $table->integer('sort_order')->default(0);
+            $table->string('match_category')->nullable();
+            $table->string('match_priority')->nullable();
+            $table->text('match_weekdays')->nullable();
+            $table->string('match_time_start')->nullable();
+            $table->string('match_time_end')->nullable();
+            $table->string('timezone')->default('Asia/Shanghai');
+            $table->integer('assign_to')->nullable();
+            $table->decimal('score_boost', 10, 2)->default(0);
+            $table->integer('required_agent_level')->nullable();
+            $table->text('skill_hints_json')->nullable();
+            $table->text('add_tag_ids')->nullable();
+            $table->boolean('stop_processing')->default(false);
+            $table->integer('trigger_count')->default(0);
+            $table->timestamp('last_triggered_at')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_assignee_profiles', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->integer('level')->default(1);
+            $table->text('skills_json')->nullable();
+            $table->text('languages_json')->nullable();
+            $table->integer('max_active_tickets')->default(10);
+            $table->boolean('is_auto_assignable')->default(true);
+            $table->text('weight_overrides_json')->nullable();
+            $table->string('status')->default('active');
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_routing_settings', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->boolean('ai_enabled')->default(false);
+            $table->integer('ai_timeout_ms')->default(12000);
+            $table->integer('due_soon_minutes')->default(30);
+            $table->text('weights_json')->nullable();
+            $table->text('fallback_json')->nullable();
+            $table->text('defaults_json')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_routing_runs', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->string('trigger')->default('created');
+            $table->boolean('used_ai')->default(false);
+            $table->string('fallback_reason')->nullable();
+            $table->text('triage_json')->nullable();
+            $table->text('matched_rule_ids_json')->nullable();
+            $table->text('candidate_scores_json')->nullable();
+            $table->integer('winner_user_id')->nullable();
+            $table->decimal('winner_score', 12, 2)->nullable();
+            $table->text('summary_json')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        foreach ([
+            'support_ticket_routing_runs',
+            'support_routing_settings',
+            'support_assignee_profiles',
+            'support_ticket_automation_rules',
+            'support_ticket_tag_assignments',
+            'support_ticket_tags',
+            'support_ticket_feedback',
+            'support_ticket_messages',
+            'support_tickets',
+            'user_groups',
+            'users',
+        ] as $table) {
+            self::$capsule->table($table)->delete();
+        }
+    }
+
+    public function testRouteTicketUsesGroupLevelRequirement(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('user_groups')->insert([
+            'id' => 1,
+            'name' => 'VIP',
+            'code' => 'vip',
+            'config' => json_encode(['support_routing' => ['min_agent_level' => 4, 'routing_weight' => 1.5]]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('users')->insert([
+            ['id' => 1, 'username' => 'requester', 'email' => 'requester@example.com', 'role' => 'user', 'group_id' => 1, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 2, 'username' => 'junior', 'email' => 'junior@example.com', 'role' => 'support', 'group_id' => null, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 3, 'username' => 'senior', 'email' => 'senior@example.com', 'role' => 'support', 'group_id' => null, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_assignee_profiles')->insert([
+            ['user_id' => 2, 'level' => 2, 'skills_json' => json_encode([]), 'languages_json' => json_encode([]), 'max_active_tickets' => 10, 'is_auto_assignable' => 1, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['user_id' => 3, 'level' => 5, 'skills_json' => json_encode([]), 'languages_json' => json_encode([]), 'max_active_tickets' => 10, 'is_auto_assignable' => 1, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'weights_json' => json_encode(['group_weight' => 15]),
+            'fallback_json' => json_encode(['default_feedback_rating' => 3.5]),
+            'defaults_json' => json_encode(['min_agent_level' => 1]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 101,
+            'user_id' => 1,
+            'subject' => 'VIP complaint',
+            'category' => 'business_issue',
+            'status' => 'open',
+            'priority' => 'normal',
+            'sla_status' => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 101,
+            'sender_id' => 1,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Please escalate this',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('logSystemEvent')->willReturn(true);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $result = $engine->routeTicket(101, 'created');
+        $ticket = self::$capsule->table('support_tickets')->where('id', 101)->first();
+
+        $this->assertSame(3, $result['assigned_to']);
+        $this->assertSame('smart', $ticket->assignment_source);
+        $this->assertSame(3, (int) $ticket->assigned_to);
+        $this->assertNotNull($ticket->last_routing_run_id);
+    }
+
+    public function testNotifyAssigneeLogsFailedWhenNoChannelSucceeds(): void
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->exactly(2))->method('warning');
+
+        $loggedPayloads = [];
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->exactly(3))
+            ->method('log')
+            ->willReturnCallback(static function (array $payload) use (&$loggedPayloads): bool {
+                $loggedPayloads[] = $payload;
+                return true;
+            });
+
+        $messageService = $this->createMock(MessageService::class);
+        $messageService->method('sendSystemMessage')->willThrowException(new \RuntimeException('message failed'));
+
+        $emailService = $this->createMock(EmailService::class);
+        $emailService->method('sendMessageNotification')->willThrowException(new \RuntimeException('email failed'));
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class)),
+            $messageService,
+            $emailService
+        );
+
+        $method = new \ReflectionMethod($engine, 'notifyAssignee');
+        $method->setAccessible(true);
+        $method->invoke($engine, ['id' => 99, 'username' => 'supporter', 'email' => 'support@example.com'], 'Subject', 'Body', 123);
+
+        $finalNotificationLog = null;
+        foreach ($loggedPayloads as $payload) {
+            if (($payload['action'] ?? null) === 'support_routing_assignee_notified') {
+                $finalNotificationLog = $payload;
+                break;
+            }
+        }
+
+        $this->assertNotNull($finalNotificationLog);
+        $this->assertSame('failed', $finalNotificationLog['status'] ?? null);
+        $this->assertFalse($finalNotificationLog['data']['message_sent'] ?? true);
+        $this->assertFalse($finalNotificationLog['data']['email_sent'] ?? true);
+    }
+}

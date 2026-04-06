@@ -167,6 +167,13 @@ CREATE TABLE `support_tickets` (
   `assigned_to` int(11) DEFAULT NULL,
   `assignment_source` varchar(32) DEFAULT NULL,
   `assigned_rule_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `assignment_locked` tinyint(1) NOT NULL DEFAULT '0',
+  `first_support_response_at` datetime DEFAULT NULL,
+  `first_response_due_at` datetime DEFAULT NULL,
+  `resolution_due_at` datetime DEFAULT NULL,
+  `sla_status` varchar(32) NOT NULL DEFAULT 'pending',
+  `escalation_level` int(11) NOT NULL DEFAULT '0',
+  `last_routing_run_id` bigint(20) UNSIGNED DEFAULT NULL,
   `last_replied_at` datetime DEFAULT NULL,
   `last_reply_by_role` varchar(32) DEFAULT NULL,
   `resolved_at` datetime DEFAULT NULL,
@@ -245,6 +252,128 @@ CREATE TABLE `support_ticket_feedback` (
   `rated_user_id` int(11) NOT NULL,
   `rating` tinyint(3) UNSIGNED NOT NULL,
   `comment` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_tags`
+--
+
+CREATE TABLE `support_ticket_tags` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `slug` varchar(64) NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `color` varchar(32) NOT NULL DEFAULT 'emerald',
+  `description` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_tag_assignments`
+--
+
+CREATE TABLE `support_ticket_tag_assignments` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `tag_id` bigint(20) UNSIGNED NOT NULL,
+  `source_type` varchar(32) NOT NULL DEFAULT 'rule',
+  `rule_id` bigint(20) UNSIGNED DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_automation_rules`
+--
+
+CREATE TABLE `support_ticket_automation_rules` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `name` varchar(128) NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `sort_order` int(11) NOT NULL DEFAULT '0',
+  `match_category` varchar(64) DEFAULT NULL,
+  `match_priority` varchar(32) DEFAULT NULL,
+  `match_weekdays` text DEFAULT NULL,
+  `match_time_start` char(5) DEFAULT NULL,
+  `match_time_end` char(5) DEFAULT NULL,
+  `timezone` varchar(64) NOT NULL DEFAULT 'Asia/Shanghai',
+  `assign_to` int(11) DEFAULT NULL,
+  `score_boost` decimal(10,2) NOT NULL DEFAULT '0.00',
+  `required_agent_level` tinyint(3) UNSIGNED DEFAULT NULL,
+  `skill_hints_json` text DEFAULT NULL,
+  `add_tag_ids` text DEFAULT NULL,
+  `stop_processing` tinyint(1) NOT NULL DEFAULT '0',
+  `trigger_count` int(11) NOT NULL DEFAULT '0',
+  `last_triggered_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_assignee_profiles`
+--
+
+CREATE TABLE `support_assignee_profiles` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `level` tinyint(3) UNSIGNED NOT NULL DEFAULT '1',
+  `skills_json` text DEFAULT NULL,
+  `languages_json` text DEFAULT NULL,
+  `max_active_tickets` int(11) NOT NULL DEFAULT '10',
+  `is_auto_assignable` tinyint(1) NOT NULL DEFAULT '1',
+  `weight_overrides_json` text DEFAULT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'active',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_routing_settings`
+--
+
+CREATE TABLE `support_routing_settings` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ai_enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `ai_timeout_ms` int(11) NOT NULL DEFAULT '12000',
+  `due_soon_minutes` int(11) NOT NULL DEFAULT '30',
+  `weights_json` longtext DEFAULT NULL,
+  `fallback_json` longtext DEFAULT NULL,
+  `defaults_json` longtext DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `support_ticket_routing_runs`
+--
+
+CREATE TABLE `support_ticket_routing_runs` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ticket_id` bigint(20) UNSIGNED NOT NULL,
+  `trigger` varchar(32) NOT NULL DEFAULT 'created',
+  `used_ai` tinyint(1) NOT NULL DEFAULT '0',
+  `fallback_reason` varchar(255) DEFAULT NULL,
+  `triage_json` longtext DEFAULT NULL,
+  `matched_rule_ids_json` longtext DEFAULT NULL,
+  `candidate_scores_json` longtext DEFAULT NULL,
+  `winner_user_id` int(11) DEFAULT NULL,
+  `winner_score` decimal(12,2) DEFAULT NULL,
+  `summary_json` longtext DEFAULT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -899,8 +1028,8 @@ CREATE TABLE `user_groups` (
 --
 
 INSERT INTO `user_groups` (`id`, `name`, `code`, `config`, `is_default`, `notes`) VALUES
-(1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 2}}', 1, 'Default free tier'),
-(2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 5}}', 0, 'Premium tier');
+(1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 2}, "support_routing": {"first_response_minutes": 240, "resolution_minutes": 1440, "routing_weight": 1, "min_agent_level": 1, "overdue_boost": 1, "tier_label": "standard"}}', 1, 'Default free tier'),
+(2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 5}, "support_routing": {"first_response_minutes": 60, "resolution_minutes": 720, "routing_weight": 1.5, "min_agent_level": 2, "overdue_boost": 1.5, "tier_label": "premium"}}', 0, 'Premium tier');
 
 -- --------------------------------------------------------
 
@@ -1145,7 +1274,11 @@ ALTER TABLE `support_tickets`
   ADD KEY `idx_support_tickets_user_id` (`user_id`),
   ADD KEY `idx_support_tickets_status` (`status`),
   ADD KEY `idx_support_tickets_assigned_to` (`assigned_to`),
-  ADD KEY `idx_support_tickets_last_replied_at` (`last_replied_at`);
+  ADD KEY `idx_support_tickets_last_replied_at` (`last_replied_at`),
+  ADD KEY `idx_support_tickets_sla_status` (`sla_status`),
+  ADD KEY `idx_support_tickets_first_response_due_at` (`first_response_due_at`),
+  ADD KEY `idx_support_tickets_resolution_due_at` (`resolution_due_at`),
+  ADD KEY `idx_support_tickets_last_routing_run_id` (`last_routing_run_id`);
 
 --
 -- 表的索引 `support_ticket_messages`
@@ -1185,6 +1318,56 @@ ALTER TABLE `support_ticket_feedback`
   ADD KEY `idx_support_ticket_feedback_rated_user_id` (`rated_user_id`);
 
 --
+-- 表的索引 `support_ticket_tags`
+--
+ALTER TABLE `support_ticket_tags`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_support_ticket_tags_slug` (`slug`),
+  ADD KEY `idx_support_ticket_tags_active` (`is_active`);
+
+--
+-- 表的索引 `support_ticket_tag_assignments`
+--
+ALTER TABLE `support_ticket_tag_assignments`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_support_ticket_tag_assignments_ticket_tag` (`ticket_id`,`tag_id`),
+  ADD KEY `idx_support_ticket_tag_assignments_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_tag_assignments_tag_id` (`tag_id`),
+  ADD KEY `idx_support_ticket_tag_assignments_rule_id` (`rule_id`);
+
+--
+-- 表的索引 `support_ticket_automation_rules`
+--
+ALTER TABLE `support_ticket_automation_rules`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_ticket_automation_rules_active` (`is_active`),
+  ADD KEY `idx_support_ticket_automation_rules_assign_to` (`assign_to`);
+
+--
+-- 表的索引 `support_assignee_profiles`
+--
+ALTER TABLE `support_assignee_profiles`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_support_assignee_profiles_user_id` (`user_id`),
+  ADD KEY `idx_support_assignee_profiles_status` (`status`),
+  ADD KEY `idx_support_assignee_profiles_level` (`level`);
+
+--
+-- 表的索引 `support_routing_settings`
+--
+ALTER TABLE `support_routing_settings`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- 表的索引 `support_ticket_routing_runs`
+--
+ALTER TABLE `support_ticket_routing_runs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_support_ticket_routing_runs_ticket_id` (`ticket_id`),
+  ADD KEY `idx_support_ticket_routing_runs_trigger` (`trigger`),
+  ADD KEY `idx_support_ticket_routing_runs_winner_user_id` (`winner_user_id`);
+
+-- 
 -- 表的索引 `points_transactions`
 --
 ALTER TABLE `points_transactions`
@@ -1426,6 +1609,42 @@ ALTER TABLE `support_ticket_transfer_requests`
 -- 使用表AUTO_INCREMENT `support_ticket_feedback`
 --
 ALTER TABLE `support_ticket_feedback`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+-- 
+-- 使用表AUTO_INCREMENT `support_ticket_tags`
+--
+ALTER TABLE `support_ticket_tags`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_tag_assignments`
+--
+ALTER TABLE `support_ticket_tag_assignments`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_automation_rules`
+--
+ALTER TABLE `support_ticket_automation_rules`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_assignee_profiles`
+--
+ALTER TABLE `support_assignee_profiles`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_routing_settings`
+--
+ALTER TABLE `support_routing_settings`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `support_ticket_routing_runs`
+--
+ALTER TABLE `support_ticket_routing_runs`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --

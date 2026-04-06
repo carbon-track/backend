@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Models\SupportAssigneeProfile;
+use CarbonTrack\Models\SupportRoutingSetting;
 use CarbonTrack\Models\SupportTicketAutomationRule;
 use CarbonTrack\Models\SupportTicketTag;
 use CarbonTrack\Models\SupportTicketTagAssignment;
@@ -43,6 +45,15 @@ class SupportAutomationService
                 u.lastlgn,
                 u.created_at,
                 u.updated_at,
+                COALESCE(p.level, CASE WHEN u.is_admin = 1 OR u.role = 'admin' THEN 5 WHEN u.role = 'support' THEN 2 ELSE 1 END) AS routing_level,
+                COALESCE(p.skills_json, '[]') AS skills_json,
+                COALESCE(p.languages_json, '[]') AS languages_json,
+                COALESCE(p.max_active_tickets, 10) AS max_active_tickets,
+                COALESCE(p.is_auto_assignable, 1) AS is_auto_assignable,
+                COALESCE(p.weight_overrides_json, '{}') AS weight_overrides_json,
+                COALESCE(p.status, CASE WHEN u.status = 'active' THEN 'active' ELSE 'offline' END) AS routing_status,
+                COALESCE(feedback.avg_rating, 3.5) AS avg_feedback_rating,
+                COALESCE(feedback.rating_count, 0) AS rating_count,
                 SUM(CASE WHEN t.id IS NOT NULL THEN 1 ELSE 0 END) AS assigned_total_count,
                 SUM(CASE WHEN t.status = 'open' THEN 1 ELSE 0 END) AS open_count,
                 SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
@@ -51,7 +62,13 @@ class SupportAutomationService
                 SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) AS closed_count
             FROM users u
             LEFT JOIN schools s ON s.id = u.school_id
+            LEFT JOIN support_assignee_profiles p ON p.user_id = u.id
             LEFT JOIN support_tickets t ON t.assigned_to = u.id
+            LEFT JOIN (
+                SELECT rated_user_id, AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                FROM support_ticket_feedback
+                GROUP BY rated_user_id
+            ) feedback ON feedback.rated_user_id = u.id
             WHERE u.deleted_at IS NULL
               AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
             GROUP BY
@@ -68,7 +85,16 @@ class SupportAutomationService
                 u.group_id,
                 u.lastlgn,
                 u.created_at,
-                u.updated_at
+                u.updated_at,
+                p.level,
+                p.skills_json,
+                p.languages_json,
+                p.max_active_tickets,
+                p.is_auto_assignable,
+                p.weight_overrides_json,
+                p.status,
+                feedback.avg_rating,
+                feedback.rating_count
             ORDER BY u.is_admin DESC, COALESCE(u.username, u.email, '') ASC, u.id ASC
         ");
 
@@ -94,6 +120,15 @@ class SupportAutomationService
                 u.created_at,
                 u.updated_at,
                 u.admin_notes,
+                COALESCE(p.level, CASE WHEN u.is_admin = 1 OR u.role = 'admin' THEN 5 WHEN u.role = 'support' THEN 2 ELSE 1 END) AS routing_level,
+                COALESCE(p.skills_json, '[]') AS skills_json,
+                COALESCE(p.languages_json, '[]') AS languages_json,
+                COALESCE(p.max_active_tickets, 10) AS max_active_tickets,
+                COALESCE(p.is_auto_assignable, 1) AS is_auto_assignable,
+                COALESCE(p.weight_overrides_json, '{}') AS weight_overrides_json,
+                COALESCE(p.status, CASE WHEN u.status = 'active' THEN 'active' ELSE 'offline' END) AS routing_status,
+                COALESCE(feedback.avg_rating, 3.5) AS avg_feedback_rating,
+                COALESCE(feedback.rating_count, 0) AS rating_count,
                 SUM(CASE WHEN t.id IS NOT NULL THEN 1 ELSE 0 END) AS assigned_total_count,
                 SUM(CASE WHEN t.status = 'open' THEN 1 ELSE 0 END) AS open_count,
                 SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
@@ -102,7 +137,13 @@ class SupportAutomationService
                 SUM(CASE WHEN t.status = 'closed' THEN 1 ELSE 0 END) AS closed_count
             FROM users u
             LEFT JOIN schools s ON s.id = u.school_id
+            LEFT JOIN support_assignee_profiles p ON p.user_id = u.id
             LEFT JOIN support_tickets t ON t.assigned_to = u.id
+            LEFT JOIN (
+                SELECT rated_user_id, AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                FROM support_ticket_feedback
+                GROUP BY rated_user_id
+            ) feedback ON feedback.rated_user_id = u.id
             WHERE u.id = :id
               AND u.deleted_at IS NULL
               AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
@@ -121,7 +162,16 @@ class SupportAutomationService
                 u.lastlgn,
                 u.created_at,
                 u.updated_at,
-                u.admin_notes
+                u.admin_notes,
+                p.level,
+                p.skills_json,
+                p.languages_json,
+                p.max_active_tickets,
+                p.is_auto_assignable,
+                p.weight_overrides_json,
+                p.status,
+                feedback.avg_rating,
+                feedback.rating_count
             LIMIT 1
         ");
         $stmt->execute(['id' => $userId]);
@@ -133,8 +183,124 @@ class SupportAutomationService
         $detail = $this->formatAssignableUser($row);
         $detail['admin_notes'] = $row['admin_notes'] ?? null;
         $detail['recent_tickets'] = $this->recentTicketsForAssignee($userId);
+        $detail['routing_profile'] = [
+            'user_id' => $detail['id'],
+            'level' => (int) ($row['routing_level'] ?? 1),
+            'skills' => $this->decodeJsonList($row['skills_json'] ?? null),
+            'languages' => $this->decodeJsonList($row['languages_json'] ?? null),
+            'max_active_tickets' => (int) ($row['max_active_tickets'] ?? 10),
+            'is_auto_assignable' => !empty($row['is_auto_assignable']),
+            'weight_overrides' => $this->decodeJsonObject($row['weight_overrides_json'] ?? null) ?? [],
+            'status' => $row['routing_status'] ?? 'active',
+            'avg_feedback_rating' => round((float) ($row['avg_feedback_rating'] ?? 3.5), 2),
+            'rating_count' => (int) ($row['rating_count'] ?? 0),
+        ];
 
         return $detail;
+    }
+
+    public function getRoutingSettings(): array
+    {
+        $row = $this->findRoutingSettingsRow();
+        return $this->formatRoutingSettings($row ?? []);
+    }
+
+    public function saveRoutingSettings(array $actor, array $payload): array
+    {
+        $existing = $this->findRoutingSettingsRow();
+        $weights = $this->normalizeJsonObject($payload['weights'] ?? ($this->decodeJsonObject($existing['weights_json'] ?? null) ?? []));
+        $fallback = $this->normalizeJsonObject($payload['fallback'] ?? ($this->decodeJsonObject($existing['fallback_json'] ?? null) ?? []));
+        $defaults = $this->normalizeJsonObject($payload['defaults'] ?? ($this->decodeJsonObject($existing['defaults_json'] ?? null) ?? []));
+        $data = [
+            'ai_enabled' => array_key_exists('ai_enabled', $payload) ? (bool) $payload['ai_enabled'] : (bool) ($existing['ai_enabled'] ?? true),
+            'ai_timeout_ms' => max(1000, (int) ($payload['ai_timeout_ms'] ?? ($existing['ai_timeout_ms'] ?? 12000))),
+            'due_soon_minutes' => max(1, (int) ($payload['due_soon_minutes'] ?? ($existing['due_soon_minutes'] ?? 30))),
+            'weights_json' => json_encode($weights, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'fallback_json' => json_encode($fallback, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'defaults_json' => json_encode($defaults, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'updated_at' => $this->now(),
+        ];
+
+        if ($existing !== null) {
+            $settings = SupportRoutingSetting::find((int) $existing['id']);
+            $settings?->fill($data);
+            $settings?->save();
+            $result = $this->findRoutingSettingsRow();
+            $action = 'support_routing_settings_updated';
+        } else {
+            $settings = SupportRoutingSetting::create($data + ['created_at' => $this->now()]);
+            $result = $this->findRoutingSettingsRow((int) ($settings->id ?? 0));
+            $action = 'support_routing_settings_created';
+        }
+
+        $formatted = $this->formatRoutingSettings($result ?? []);
+        $this->auditLogService->log([
+            'user_id' => (int) ($actor['id'] ?? 0),
+            'action' => $action,
+            'operation_category' => 'support',
+            'actor_type' => !empty($actor['is_admin']) ? 'admin' : 'support',
+            'affected_table' => 'support_routing_settings',
+            'affected_id' => (int) ($formatted['id'] ?? 0),
+            'status' => 'success',
+            'new_data' => $formatted,
+        ]);
+
+        return $formatted;
+    }
+
+    public function getAssigneeRoutingProfile(int $userId): ?array
+    {
+        $detail = $this->getAssignableUserDetail($userId);
+        if ($detail === null) {
+            return null;
+        }
+
+        return $detail['routing_profile'] ?? null;
+    }
+
+    public function saveAssigneeRoutingProfile(array $actor, int $userId, array $payload): array
+    {
+        $assignee = $this->getAssignableUserDetail($userId);
+        if ($assignee === null) {
+            throw new \RuntimeException('Support assignee not found');
+        }
+
+        $existing = $this->findAssigneeProfileRow($userId);
+        $data = [
+            'user_id' => $userId,
+            'level' => max(1, min(5, (int) ($payload['level'] ?? ($existing['level'] ?? ($assignee['routing_profile']['level'] ?? 1))))),
+            'skills_json' => json_encode($this->normalizeStringList($payload['skills'] ?? $this->decodeJsonList($existing['skills_json'] ?? null)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'languages_json' => json_encode($this->normalizeStringList($payload['languages'] ?? $this->decodeJsonList($existing['languages_json'] ?? null)), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'max_active_tickets' => max(1, (int) ($payload['max_active_tickets'] ?? ($existing['max_active_tickets'] ?? 10))),
+            'is_auto_assignable' => array_key_exists('is_auto_assignable', $payload) ? (bool) $payload['is_auto_assignable'] : (bool) ($existing['is_auto_assignable'] ?? true),
+            'weight_overrides_json' => json_encode($this->normalizeJsonObject($payload['weight_overrides'] ?? ($this->decodeJsonObject($existing['weight_overrides_json'] ?? null) ?? [])), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'status' => $this->normalizeProfileStatus($payload['status'] ?? ($existing['status'] ?? 'active')),
+            'updated_at' => $this->now(),
+        ];
+
+        if ($existing !== null) {
+            $profile = SupportAssigneeProfile::find((int) $existing['id']);
+            $profile?->fill($data);
+            $profile?->save();
+            $action = 'support_assignee_profile_updated';
+        } else {
+            SupportAssigneeProfile::create($data + ['created_at' => $this->now()]);
+            $action = 'support_assignee_profile_created';
+        }
+
+        $detail = $this->getAssignableUserDetail($userId);
+        $this->auditLogService->log([
+            'user_id' => (int) ($actor['id'] ?? 0),
+            'action' => $action,
+            'operation_category' => 'support',
+            'actor_type' => !empty($actor['is_admin']) ? 'admin' : 'support',
+            'affected_table' => 'support_assignee_profiles',
+            'affected_id' => $userId,
+            'status' => 'success',
+            'new_data' => $detail['routing_profile'] ?? null,
+        ]);
+
+        return $detail ?? [];
     }
 
     public function listTags(): array
@@ -251,8 +417,10 @@ class SupportAutomationService
         $timeEnd = $this->normalizeTime($payload['match_time_end'] ?? ($existing['match_time_end'] ?? null));
         $timezone = $this->normalizeTimezone($payload['timezone'] ?? ($existing['timezone'] ?? 'Asia/Shanghai'));
         $assignTo = $this->normalizeAssignableUser($payload['assign_to'] ?? ($existing['assign_to'] ?? null));
+        $scoreBoost = isset($payload['score_boost']) ? round((float) $payload['score_boost'], 2) : (float) ($existing['score_boost'] ?? ($assignTo ? 20 : 0));
+        $requiredAgentLevel = $this->normalizeRequiredAgentLevel($payload['required_agent_level'] ?? ($existing['required_agent_level'] ?? null));
+        $skillHints = $this->normalizeStringList($payload['skill_hints'] ?? $this->decodeJsonList($existing['skill_hints_json'] ?? null));
         $tagIds = $this->normalizeTagIds($payload['tag_ids'] ?? $this->decodeJsonList($existing['add_tag_ids'] ?? null));
-        $stopProcessing = array_key_exists('stop_processing', $payload) ? (bool) $payload['stop_processing'] : (bool) ($existing['stop_processing'] ?? false);
 
         $now = $this->now();
         $data = [
@@ -267,8 +435,11 @@ class SupportAutomationService
             'match_time_end' => $timeEnd,
             'timezone' => $timezone,
             'assign_to' => $assignTo,
+            'score_boost' => $scoreBoost,
+            'required_agent_level' => $requiredAgentLevel,
+            'skill_hints_json' => $skillHints === [] ? null : json_encode($skillHints, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'add_tag_ids' => $tagIds === [] ? null : json_encode($tagIds),
-            'stop_processing' => $stopProcessing,
+            'stop_processing' => false,
             'updated_at' => $now,
         ];
 
@@ -313,8 +484,10 @@ class SupportAutomationService
             'by_category' => $this->breakdown('category'),
             'by_priority' => $this->breakdown('priority'),
             'by_assignee' => $this->assigneeBreakdown(),
+            'by_agent_level' => $this->agentLevelBreakdown(),
             'by_tag' => $this->tagBreakdown(),
             'rule_hits' => $this->ruleHitBreakdown(),
+            'routing_outcomes' => $this->routingOutcomeBreakdown(),
         ];
     }
 
@@ -338,9 +511,6 @@ class SupportAutomationService
         $rules = $rulesStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
         $ticketTags = $this->getTagsForTicketIds([$ticketId]);
-        $assignedTo = isset($ticketRow['assigned_to']) ? (int) $ticketRow['assigned_to'] : null;
-        $assignmentSource = $ticketRow['assignment_source'] ?? null;
-        $assignedRuleId = isset($ticketRow['assigned_rule_id']) ? (int) $ticketRow['assigned_rule_id'] : null;
         $applied = [];
 
         foreach ($rules as $rule) {
@@ -370,28 +540,14 @@ class SupportAutomationService
                 $appliedTagIds[] = $tagId;
             }
 
-            $appliedAssignment = false;
-            if (!$assignedTo && !empty($rule['assign_to'])) {
-                $assignedTo = (int) $rule['assign_to'];
-                $assignmentSource = 'rule';
-                $assignedRuleId = (int) $rule['id'];
-                $this->db->prepare('UPDATE support_tickets SET assigned_to = :assigned_to, assignment_source = :assignment_source, assigned_rule_id = :assigned_rule_id, updated_at = :updated_at WHERE id = :id')
-                    ->execute([
-                        'assigned_to' => $assignedTo,
-                        'assignment_source' => $assignmentSource,
-                        'assigned_rule_id' => $assignedRuleId,
-                        'updated_at' => $this->now(),
-                        'id' => $ticketId,
-                    ]);
-                $appliedAssignment = true;
-            }
-
-            if ($appliedAssignment || $appliedTagIds !== []) {
+            if ($appliedTagIds !== [] || !empty($rule['assign_to']) || (float) ($rule['score_boost'] ?? 0) !== 0.0) {
                 $this->touchRuleMetrics((int) $rule['id']);
                 $applied[] = [
                     'rule_id' => (int) $rule['id'],
                     'rule_name' => (string) $rule['name'],
-                    'assigned_to' => $appliedAssignment ? $assignedTo : null,
+                    'assigned_to' => !empty($rule['assign_to']) ? (int) $rule['assign_to'] : null,
+                    'score_boost' => round((float) ($rule['score_boost'] ?? 0), 2),
+                    'required_agent_level' => isset($rule['required_agent_level']) ? (int) $rule['required_agent_level'] : null,
                     'tag_ids' => $appliedTagIds,
                 ];
 
@@ -406,21 +562,18 @@ class SupportAutomationService
                     'data' => [
                         'trigger' => $trigger,
                         'rule_id' => (int) $rule['id'],
-                        'assigned_to' => $appliedAssignment ? $assignedTo : null,
+                        'assigned_to' => !empty($rule['assign_to']) ? (int) $rule['assign_to'] : null,
+                        'score_boost' => round((float) ($rule['score_boost'] ?? 0), 2),
                         'tag_ids' => $appliedTagIds,
                     ],
                 ]);
-
-                if (!empty($rule['stop_processing'])) {
-                    break;
-                }
             }
         }
 
         return [
-            'assigned_to' => $assignedTo,
-            'assignment_source' => $assignmentSource,
-            'assigned_rule_id' => $assignedRuleId,
+            'assigned_to' => isset($ticketRow['assigned_to']) ? (int) $ticketRow['assigned_to'] : null,
+            'assignment_source' => $ticketRow['assignment_source'] ?? null,
+            'assigned_rule_id' => isset($ticketRow['assigned_rule_id']) ? (int) $ticketRow['assigned_rule_id'] : null,
             'applied_rules' => $applied,
             'tags' => array_values($ticketTags[$ticketId] ?? []),
         ];
@@ -476,8 +629,9 @@ class SupportAutomationService
                 SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
                 SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) AS closed_count,
                 SUM(CASE WHEN assigned_to IS NULL THEN 1 ELSE 0 END) AS unassigned_count,
-                SUM(CASE WHEN assignment_source = 'rule' THEN 1 ELSE 0 END) AS auto_assigned_count,
-                SUM(CASE WHEN assignment_source = 'manual' THEN 1 ELSE 0 END) AS manual_assigned_count
+                SUM(CASE WHEN assignment_source = 'smart' THEN 1 ELSE 0 END) AS smart_assigned_count,
+                SUM(CASE WHEN assignment_source = 'manual' THEN 1 ELSE 0 END) AS manual_assigned_count,
+                SUM(CASE WHEN sla_status IN ('breached', 'escalated') THEN 1 ELSE 0 END) AS sla_breach_count
             FROM support_tickets
         ");
         $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
@@ -509,8 +663,9 @@ class SupportAutomationService
             'resolved' => (int) ($row['resolved_count'] ?? 0),
             'closed' => (int) ($row['closed_count'] ?? 0),
             'unassigned' => (int) ($row['unassigned_count'] ?? 0),
-            'auto_assigned' => (int) ($row['auto_assigned_count'] ?? 0),
+            'smart_assignment_count' => (int) ($row['smart_assigned_count'] ?? 0),
             'manual_assigned' => (int) ($row['manual_assigned_count'] ?? 0),
+            'sla_breach_count' => (int) ($row['sla_breach_count'] ?? 0),
             'avg_resolution_hours' => $avgResolutionHours,
         ];
     }
@@ -576,6 +731,26 @@ class SupportAutomationService
         ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
     }
 
+    private function agentLevelBreakdown(): array
+    {
+        $stmt = $this->db->query("
+            SELECT
+                COALESCE(p.level, 0) AS level_bucket,
+                COUNT(*) AS assignee_count
+            FROM support_assignee_profiles p
+            INNER JOIN users u ON u.id = p.user_id
+            WHERE u.deleted_at IS NULL
+              AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
+            GROUP BY COALESCE(p.level, 0)
+            ORDER BY level_bucket ASC
+        ");
+
+        return array_map(static fn (array $row): array => [
+            'level' => (int) ($row['level_bucket'] ?? 0),
+            'count' => (int) ($row['assignee_count'] ?? 0),
+        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
     private function tagBreakdown(): array
     {
         $stmt = $this->db->query("
@@ -614,6 +789,27 @@ class SupportAutomationService
             'trigger_count' => (int) ($row['trigger_count'] ?? 0),
             'last_triggered_at' => $row['last_triggered_at'] ?? null,
             'is_active' => !empty($row['is_active']),
+        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
+    private function routingOutcomeBreakdown(): array
+    {
+        $stmt = $this->db->query("
+            SELECT
+                COALESCE(trigger, 'unknown') AS trigger_bucket,
+                COUNT(*) AS run_count,
+                SUM(CASE WHEN winner_user_id IS NULL THEN 1 ELSE 0 END) AS no_winner_count,
+                SUM(CASE WHEN used_ai = 1 THEN 1 ELSE 0 END) AS used_ai_count
+            FROM support_ticket_routing_runs
+            GROUP BY COALESCE(trigger, 'unknown')
+            ORDER BY run_count DESC, trigger_bucket ASC
+        ");
+
+        return array_map(static fn (array $row): array => [
+            'trigger' => (string) ($row['trigger_bucket'] ?? 'unknown'),
+            'count' => (int) ($row['run_count'] ?? 0),
+            'no_winner_count' => (int) ($row['no_winner_count'] ?? 0),
+            'used_ai_count' => (int) ($row['used_ai_count'] ?? 0),
         ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
     }
 
@@ -672,6 +868,29 @@ class SupportAutomationService
             LIMIT 1
         ");
         $stmt->execute(['id' => $ruleId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    private function findRoutingSettingsRow(?int $settingsId = null): ?array
+    {
+        $sql = 'SELECT * FROM support_routing_settings';
+        $params = [];
+        if ($settingsId !== null && $settingsId > 0) {
+            $sql .= ' WHERE id = :id';
+            $params['id'] = $settingsId;
+        }
+        $sql .= ' ORDER BY id ASC LIMIT 1';
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    private function findAssigneeProfileRow(int $userId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM support_assignee_profiles WHERE user_id = :user_id LIMIT 1');
+        $stmt->execute(['user_id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ?: null;
     }
@@ -737,6 +956,8 @@ class SupportAutomationService
     {
         $profileFields = $this->userProfileViewService->buildProfileFields($row);
         $legacyDisplayFields = $this->userProfileViewService->buildLegacyDisplayFields($row, $profileFields);
+        $maxActiveTickets = max(1, (int) ($row['max_active_tickets'] ?? 10));
+        $activeCount = (int) (($row['open_count'] ?? 0) + ($row['in_progress_count'] ?? 0) + ($row['waiting_user_count'] ?? 0));
 
         return [
             'id' => (int) ($row['id'] ?? 0),
@@ -759,6 +980,16 @@ class SupportAutomationService
             'waiting_user_count' => (int) ($row['waiting_user_count'] ?? 0),
             'resolved_count' => (int) ($row['resolved_count'] ?? 0),
             'closed_count' => (int) ($row['closed_count'] ?? 0),
+            'routing_level' => (int) ($row['routing_level'] ?? 1),
+            'skills' => $this->decodeJsonList($row['skills_json'] ?? null),
+            'languages' => $this->decodeJsonList($row['languages_json'] ?? null),
+            'max_active_tickets' => $maxActiveTickets,
+            'is_auto_assignable' => !empty($row['is_auto_assignable']),
+            'routing_status' => $row['routing_status'] ?? 'active',
+            'avg_feedback_rating' => round((float) ($row['avg_feedback_rating'] ?? 3.5), 2),
+            'rating_count' => (int) ($row['rating_count'] ?? 0),
+            'available_capacity' => max(0, $maxActiveTickets - $activeCount),
+            'weight_overrides' => $this->decodeJsonObject($row['weight_overrides_json'] ?? null) ?? [],
         ];
     }
 
@@ -805,9 +1036,11 @@ class SupportAutomationService
                 'username' => $row['assignee_username'] ?? null,
                 'email' => $row['assignee_email'] ?? null,
             ] : null,
+            'score_boost' => round((float) ($row['score_boost'] ?? 0), 2),
+            'required_agent_level' => isset($row['required_agent_level']) && $row['required_agent_level'] !== null ? (int) $row['required_agent_level'] : null,
+            'skill_hints' => $this->decodeJsonList($row['skill_hints_json'] ?? null),
             'tag_ids' => $tagIds,
             'tags' => $tagIds === [] ? [] : $this->loadTagsByIds($tagIds),
-            'stop_processing' => !empty($row['stop_processing']),
             'trigger_count' => (int) ($row['trigger_count'] ?? 0),
             'last_triggered_at' => $row['last_triggered_at'] ?? null,
             'created_at' => $row['created_at'] ?? null,
@@ -896,6 +1129,27 @@ class SupportAutomationService
         return $time;
     }
 
+    private function normalizeRequiredAgentLevel(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $level = (int) $value;
+        if ($level < 1 || $level > 5) {
+            throw new \InvalidArgumentException('required_agent_level must be between 1 and 5');
+        }
+        return $level;
+    }
+
+    private function normalizeProfileStatus(mixed $value): string
+    {
+        $status = strtolower($this->nullableString($value) ?? 'active');
+        if (!in_array($status, ['active', 'backup', 'offline'], true)) {
+            throw new \InvalidArgumentException('Invalid routing profile status');
+        }
+        return $status;
+    }
+
     private function normalizeTimezone(mixed $value): string
     {
         $timezone = $this->nullableString($value) ?? 'Asia/Shanghai';
@@ -927,6 +1181,33 @@ class SupportAutomationService
         return substr($slug, 0, 64);
     }
 
+    private function normalizeStringList(mixed $value): array
+    {
+        $items = [];
+        foreach ($this->decodeList($value) as $item) {
+            $normalized = trim((string) $item);
+            if ($normalized === '') {
+                continue;
+            }
+            $items[] = $normalized;
+        }
+        return array_values(array_unique($items));
+    }
+
+    private function normalizeJsonObject(mixed $value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (is_string($value) && trim($value) !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+        return [];
+    }
+
     private function requireString(mixed $value, string $field): string
     {
         $string = $this->nullableString($value);
@@ -952,6 +1233,55 @@ class SupportAutomationService
         }
         $decoded = json_decode($json, true);
         return is_array($decoded) ? array_values($decoded) : [];
+    }
+
+    private function decodeJsonObject(?string $json): ?array
+    {
+        if (!is_string($json) || trim($json) === '') {
+            return null;
+        }
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function formatRoutingSettings(array $row): array
+    {
+        $defaults = [
+            'first_response_minutes' => 240,
+            'resolution_minutes' => 1440,
+            'routing_weight' => 1.0,
+            'min_agent_level' => 1,
+            'overdue_boost' => 1.0,
+            'tier_label' => 'standard',
+        ];
+        $weights = [
+            'group_weight' => 15,
+            'priority_weight' => 18,
+            'severity_weight' => 24,
+            'escalation_weight' => 10,
+            'rule_weight' => 20,
+            'skill_weight' => 16,
+            'level_weight' => 10,
+            'feedback_weight' => 8,
+            'overdue_weight' => 18,
+            'load_penalty_weight' => 22,
+        ];
+        $fallback = [
+            'use_priority_as_severity' => true,
+            'default_feedback_rating' => 3.5,
+        ];
+
+        return [
+            'id' => isset($row['id']) ? (int) $row['id'] : null,
+            'ai_enabled' => array_key_exists('ai_enabled', $row) ? !empty($row['ai_enabled']) : true,
+            'ai_timeout_ms' => (int) ($row['ai_timeout_ms'] ?? 12000),
+            'due_soon_minutes' => (int) ($row['due_soon_minutes'] ?? 30),
+            'weights' => array_replace($weights, $this->decodeJsonObject($row['weights_json'] ?? null) ?? []),
+            'fallback' => array_replace($fallback, $this->decodeJsonObject($row['fallback_json'] ?? null) ?? []),
+            'defaults' => array_replace($defaults, $this->decodeJsonObject($row['defaults_json'] ?? null) ?? []),
+            'created_at' => $row['created_at'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
+        ];
     }
 
     private function decodeList(mixed $value): array

@@ -59,7 +59,10 @@ class UserGroupService
         $config = $this->quotaConfigService->decodeJsonToArray($data['config'] ?? null);
         $normalized = $config === null ? null : $this->quotaConfigService->normalizeQuotaConfig($config);
         $data['config'] = $normalized;
-        $data['quota_flat'] = $this->quotaConfigService->flattenQuotas($normalized);
+        $quotaConfig = is_array($normalized) ? $normalized : [];
+        unset($quotaConfig['support_routing']);
+        $data['quota_flat'] = $this->quotaConfigService->flattenQuotas($quotaConfig);
+        $data['support_routing'] = $this->normalizeSupportRouting($normalized['support_routing'] ?? null);
         return $data;
     }
 
@@ -67,6 +70,7 @@ class UserGroupService
     {
         $payload = $data;
         unset($payload['quota_flat']);
+        unset($payload['support_routing']);
 
         $config = $this->quotaConfigService->decodeJsonToArray($data['config'] ?? null);
         $current = $this->quotaConfigService->decodeJsonToArray($currentConfig);
@@ -76,10 +80,30 @@ class UserGroupService
             $config = $this->quotaConfigService->unflattenQuotas($data['quota_flat'], $base);
         }
 
+        if (array_key_exists('support_routing', $data)) {
+            $base = $config ?? $current ?? [];
+            $base['support_routing'] = $this->normalizeSupportRouting($data['support_routing']);
+            $config = $base;
+        }
+
         if ($config !== null) {
             $payload['config'] = $this->quotaConfigService->normalizeQuotaConfig($config);
         }
 
         return $payload;
+    }
+
+    private function normalizeSupportRouting(mixed $value): array
+    {
+        $routing = is_array($value) ? $value : [];
+
+        return [
+            'first_response_minutes' => max(1, (int) ($routing['first_response_minutes'] ?? 240)),
+            'resolution_minutes' => max(1, (int) ($routing['resolution_minutes'] ?? 1440)),
+            'routing_weight' => max(0.1, (float) ($routing['routing_weight'] ?? 1)),
+            'min_agent_level' => max(1, min(5, (int) ($routing['min_agent_level'] ?? 1))),
+            'overdue_boost' => max(0.0, (float) ($routing['overdue_boost'] ?? 1)),
+            'tier_label' => trim((string) ($routing['tier_label'] ?? 'standard')) ?: 'standard',
+        ];
     }
 }

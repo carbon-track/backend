@@ -64,6 +64,13 @@ class SupportTicketServiceTest extends TestCase
             $table->integer('assigned_to')->nullable();
             $table->string('assignment_source')->nullable();
             $table->integer('assigned_rule_id')->nullable();
+            $table->boolean('assignment_locked')->default(false);
+            $table->timestamp('first_support_response_at')->nullable();
+            $table->timestamp('first_response_due_at')->nullable();
+            $table->timestamp('resolution_due_at')->nullable();
+            $table->string('sla_status')->default('pending');
+            $table->integer('escalation_level')->default(0);
+            $table->integer('last_routing_run_id')->nullable();
             $table->string('last_reply_by_role')->nullable();
             $table->timestamp('last_replied_at')->nullable();
             $table->timestamp('resolved_at')->nullable();
@@ -422,12 +429,23 @@ class SupportTicketServiceTest extends TestCase
         $fileMetadata = $this->createMock(FileMetadataService::class);
         $audit->method('log')->willReturn(true);
 
+        $messages = $this->createMock(MessageService::class);
+        $email = $this->createMock(EmailService::class);
+        $messages->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with((int) $supportB->id, 'Transfer request for ticket #1', $this->stringContains('A transfer request is waiting for your review.'), 'support_ticket', 'normal', 'support_ticket', 1, false);
+        $email->expects($this->once())
+            ->method('sendMessageNotification')
+            ->with('support-b@example.com', 'support-b', 'Transfer request for ticket #1', $this->stringContains('A transfer request is waiting for your review.'), NotificationPreferenceService::CATEGORY_SUPPORT, 'normal');
+
         $service = new SupportTicketService(
             self::$capsule->getConnection()->getPdo(),
             $logger,
             $audit,
             $errorLog,
-            $fileMetadata
+            $fileMetadata,
+            $email,
+            $messages
         );
 
         $result = $service->createTransferRequest(
@@ -441,7 +459,7 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame(1, self::$capsule->table('support_ticket_transfer_requests')->count());
     }
 
-    public function testReviewTransferRequestApprovesAndReassignsTicket(): void
+    public function testReviewTransferRequestApprovesWhenTargetAcceptsTicket(): void
     {
         $now = date('Y-m-d H:i:s');
         $requester = User::create([
@@ -462,14 +480,6 @@ class SupportTicketServiceTest extends TestCase
             'username' => 'support-b',
             'email' => 'support-b@example.com',
             'role' => 'support',
-            'created_at' => $now,
-            'updated_at' => $now,
-        ]);
-        $admin = User::create([
-            'username' => 'admin-user',
-            'email' => 'admin@example.com',
-            'role' => 'admin',
-            'is_admin' => 1,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -507,9 +517,9 @@ class SupportTicketServiceTest extends TestCase
         );
 
         $result = $service->reviewTransferRequest(
-            ['id' => (int) $admin->id, 'role' => 'admin', 'is_admin' => true, 'username' => 'admin-user'],
+            ['id' => (int) $supportB->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-b'],
             (int) $request['id'],
-            ['status' => 'approved', 'review_note' => 'Switching to the correct lane']
+            ['status' => 'approved', 'review_note' => 'I can take this one']
         );
 
         $ticketRow = self::$capsule->table('support_tickets')->where('id', 1)->first();
@@ -517,6 +527,7 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame('approved', $result['status']);
         $this->assertSame((int) $supportB->id, $ticketRow->assigned_to);
         $this->assertSame('manual', $ticketRow->assignment_source);
+        $this->assertSame(0, (int) $ticketRow->assignment_locked);
     }
 
     public function testSubmitTicketFeedbackCreatesEntryForHandledSupportAgent(): void
@@ -649,4 +660,111 @@ class SupportTicketServiceTest extends TestCase
             ]
         );
     }
+
+    public function testAdminAssignmentLocksTicketAndNotifiesTarget(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'notification_email_mask' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $assignee = User::create([
+            'username' => 'support-b',
+            'email' => 'support-b@example.com',
+            'role' => 'support',
+            'notification_email_mask' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 3,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Escalation needed',
+            'category' => 'business_issue',
+            'status' => 'open',
+            'priority' => 'high',
+            'assigned_to' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $messages = $this->createMock(MessageService::class);
+        $email = $this->createMock(EmailService::class);
+        $audit->method('log')->willReturn(true);
+        $messages->expects($this->exactly(2))
+            ->method('sendSystemMessage')
+            ->withConsecutive(
+                [
+                    (int) $requester->id,
+                    'Support ticket #3 updated',
+                    $this->stringContains('Assigned handler'),
+                    'support_ticket',
+                    'normal',
+                    'support_ticket',
+                    3,
+                    false,
+                ],
+                [
+                    (int) $assignee->id,
+                    'Ticket #3 assigned to you',
+                    $this->stringContains('An administrator assigned ticket #3 to you.'),
+                    'support_ticket',
+                    'normal',
+                    'support_ticket',
+                    3,
+                    false,
+                ]
+            );
+        $email->expects($this->exactly(2))
+            ->method('sendMessageNotification')
+            ->withConsecutive(
+                [
+                    'requester@example.com',
+                    'requester',
+                    'Support ticket #3 updated',
+                    $this->stringContains('Assigned handler'),
+                    NotificationPreferenceService::CATEGORY_SUPPORT,
+                    'normal',
+                ],
+                [
+                    'support-b@example.com',
+                    'support-b',
+                    'Ticket #3 assigned to you',
+                    $this->stringContains('An administrator assigned ticket #3 to you.'),
+                    NotificationPreferenceService::CATEGORY_SUPPORT,
+                    'normal',
+                ]
+            );
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata,
+            $email,
+            $messages
+        );
+
+        $service->updateTicketFromSupport(
+            ['id' => 99, 'role' => 'admin', 'is_admin' => true, 'username' => 'admin-user'],
+            3,
+            ['assigned_to' => (int) $assignee->id]
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 3)->first();
+        $this->assertSame((int) $assignee->id, $ticketRow->assigned_to);
+        $this->assertSame('manual', $ticketRow->assignment_source);
+        $this->assertSame(1, (int) $ticketRow->assignment_locked);
+    }
+
 }

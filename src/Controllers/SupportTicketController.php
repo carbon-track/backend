@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
 use Psr\Http\Message\ResponseInterface as Response;
@@ -19,8 +21,59 @@ class SupportTicketController
         private AuthService $authService,
         private TurnstileService $turnstileService,
         private LoggerInterface $logger,
-        private ErrorLogService $errorLogService
+        private ErrorLogService $errorLogService,
+        private ?SupportRoutingEngineService $supportRoutingEngineService = null,
+        private ?AuditLogService $auditLogService = null
     ) {
+    }
+
+    public function runSlaSweep(Request $request, Response $response): Response
+    {
+        $query = $request->getQueryParams();
+        $providedKey = is_string($query['key'] ?? null)
+            ? trim((string) $query['key'])
+            : trim((string) ($_GET['key'] ?? ''));
+        $configuredKey = trim((string) ($_ENV['SUPPORT_SLA_SWEEP_KEY'] ?? getenv('SUPPORT_SLA_SWEEP_KEY') ?: ''));
+
+        if ($configuredKey === '') {
+            $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_unconfigured', 'support_sla_sweep', [
+                'status' => 'failed',
+                'request_method' => 'GET',
+                'endpoint' => (string) $request->getUri()->getPath(),
+                'request_data' => ['remote_addr' => $this->clientIp($request)],
+            ]);
+
+            return $this->json($response, ['success' => false, 'message' => 'SLA sweep key is not configured', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
+        }
+
+        if ($providedKey === '' || !hash_equals($configuredKey, $providedKey)) {
+            $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_denied', 'support_sla_sweep', [
+                'status' => 'failed',
+                'request_method' => 'GET',
+                'endpoint' => (string) $request->getUri()->getPath(),
+                'request_data' => ['remote_addr' => $this->clientIp($request)],
+            ]);
+
+            return $this->json($response, ['success' => false, 'message' => 'Invalid SLA sweep key', 'code' => 'FORBIDDEN'], 403);
+        }
+
+        if ($this->supportRoutingEngineService === null) {
+            return $this->json($response, ['success' => false, 'message' => 'SLA sweep engine unavailable', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
+        }
+
+        try {
+            $result = $this->supportRoutingEngineService->runSlaSweep();
+            $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_triggered', 'support_sla_sweep', [
+                'status' => 'success',
+                'request_method' => 'GET',
+                'endpoint' => (string) $request->getUri()->getPath(),
+                'request_data' => $result + ['remote_addr' => $this->clientIp($request)],
+            ]);
+
+            return $this->json($response, ['success' => true, 'data' => $result]);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to run SLA sweep');
+        }
     }
 
     public function createTicket(Request $request, Response $response): Response

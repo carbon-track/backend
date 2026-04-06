@@ -78,4 +78,45 @@ class AdminSupportControllerTest extends TestCase
 
         $this->assertSame(404, $response->getStatusCode());
     }
+
+    public function testUpdateRoutingSettingsReturnsPayload(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true, 'role' => 'admin']);
+
+        $service = $this->createMock(SupportAutomationService::class);
+        $service->expects($this->once())
+            ->method('saveRoutingSettings')
+            ->with(['id' => 1, 'is_admin' => true, 'role' => 'admin'], ['ai_enabled' => true])
+            ->willReturn(['id' => 1, 'ai_enabled' => true]);
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->updateRoutingSettings(
+            makeRequest('PUT', '/api/v1/admin/support/routing-settings', ['ai_enabled' => true]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function testUpdateAssigneeRoutingProfileReturnsNotFound(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true, 'role' => 'admin']);
+
+        $service = $this->createMock(SupportAutomationService::class);
+        $service->expects($this->once())
+            ->method('saveAssigneeRoutingProfile')
+            ->willThrowException(new \RuntimeException('Support assignee not found'));
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->updateAssigneeRoutingProfile(
+            makeRequest('PUT', '/api/v1/admin/support/assignees/42/routing-profile', ['level' => 3]),
+            new \Slim\Psr7\Response(),
+            ['id' => '42']
+        );
+
+        $this->assertSame(404, $response->getStatusCode());
+    }
+
 }

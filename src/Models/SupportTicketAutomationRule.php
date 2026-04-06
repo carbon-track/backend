@@ -22,6 +22,9 @@ class SupportTicketAutomationRule extends Model
         'match_time_end',
         'timezone',
         'assign_to',
+        'score_boost',
+        'required_agent_level',
+        'skill_hints_json',
         'add_tag_ids',
         'stop_processing',
         'trigger_count',
@@ -32,6 +35,8 @@ class SupportTicketAutomationRule extends Model
         'is_active' => 'bool',
         'sort_order' => 'int',
         'assign_to' => 'int',
+        'score_boost' => 'float',
+        'required_agent_level' => 'int',
         'stop_processing' => 'bool',
         'trigger_count' => 'int',
     ];

@@ -64,10 +64,28 @@ class SupportAutomationServiceTest extends TestCase
             $table->integer('assigned_to')->nullable();
             $table->string('assignment_source')->nullable();
             $table->integer('assigned_rule_id')->nullable();
+            $table->boolean('assignment_locked')->default(false);
+            $table->timestamp('first_support_response_at')->nullable();
+            $table->timestamp('first_response_due_at')->nullable();
+            $table->timestamp('resolution_due_at')->nullable();
+            $table->string('sla_status')->default('pending');
+            $table->integer('escalation_level')->default(0);
+            $table->integer('last_routing_run_id')->nullable();
             $table->string('last_reply_by_role')->nullable();
             $table->timestamp('last_replied_at')->nullable();
             $table->timestamp('resolved_at')->nullable();
             $table->timestamp('closed_at')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_feedback', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->integer('user_id');
+            $table->integer('rated_user_id');
+            $table->integer('rating');
+            $table->text('comment')->nullable();
             $table->timestamp('created_at')->nullable();
             $table->timestamp('updated_at')->nullable();
         });
@@ -105,10 +123,55 @@ class SupportAutomationServiceTest extends TestCase
             $table->string('match_time_end')->nullable();
             $table->string('timezone')->default('Asia/Shanghai');
             $table->integer('assign_to')->nullable();
+            $table->decimal('score_boost', 10, 2)->default(0);
+            $table->integer('required_agent_level')->nullable();
+            $table->text('skill_hints_json')->nullable();
             $table->text('add_tag_ids')->nullable();
             $table->boolean('stop_processing')->default(false);
             $table->integer('trigger_count')->default(0);
             $table->timestamp('last_triggered_at')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_assignee_profiles', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('user_id');
+            $table->integer('level')->default(1);
+            $table->text('skills_json')->nullable();
+            $table->text('languages_json')->nullable();
+            $table->integer('max_active_tickets')->default(10);
+            $table->boolean('is_auto_assignable')->default(true);
+            $table->text('weight_overrides_json')->nullable();
+            $table->string('status')->default('active');
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_routing_settings', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->boolean('ai_enabled')->default(true);
+            $table->integer('ai_timeout_ms')->default(12000);
+            $table->integer('due_soon_minutes')->default(30);
+            $table->text('weights_json')->nullable();
+            $table->text('fallback_json')->nullable();
+            $table->text('defaults_json')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+        });
+
+        self::$capsule->schema()->create('support_ticket_routing_runs', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->integer('ticket_id');
+            $table->string('trigger')->default('created');
+            $table->boolean('used_ai')->default(false);
+            $table->string('fallback_reason')->nullable();
+            $table->text('triage_json')->nullable();
+            $table->text('matched_rule_ids_json')->nullable();
+            $table->text('candidate_scores_json')->nullable();
+            $table->integer('winner_user_id')->nullable();
+            $table->decimal('winner_score', 12, 2)->nullable();
+            $table->text('summary_json')->nullable();
             $table->timestamp('created_at')->nullable();
             $table->timestamp('updated_at')->nullable();
         });
@@ -119,6 +182,10 @@ class SupportAutomationServiceTest extends TestCase
         parent::setUp();
 
         foreach ([
+            'support_ticket_routing_runs',
+            'support_routing_settings',
+            'support_assignee_profiles',
+            'support_ticket_feedback',
             'support_ticket_tag_assignments',
             'support_ticket_tags',
             'support_ticket_automation_rules',
@@ -221,7 +288,7 @@ class SupportAutomationServiceTest extends TestCase
         $this->assertSame([], $detail['recent_tickets']);
     }
 
-    public function testApplyRulesAssignsTicketAndAddsTags(): void
+    public function testApplyRulesAddsTagsAndPreservesTicketAssignmentForScoring(): void
     {
         $now = date('Y-m-d H:i:s');
         self::$capsule->table('users')->insert([
@@ -264,6 +331,9 @@ class SupportAutomationServiceTest extends TestCase
             'match_time_end' => '23:59',
             'timezone' => 'Asia/Shanghai',
             'assign_to' => 2,
+            'score_boost' => 20,
+            'required_agent_level' => 2,
+            'skill_hints_json' => json_encode(['billing', 'bug']),
             'add_tag_ids' => json_encode([7]),
             'stop_processing' => 1,
             'trigger_count' => 0,
@@ -274,16 +344,20 @@ class SupportAutomationServiceTest extends TestCase
         $service = $this->makeService();
         $result = $service->applyRulesToTicket(10, null, 'created');
 
-        $this->assertSame(2, $result['assigned_to']);
-        $this->assertSame('rule', $result['assignment_source']);
-        $this->assertSame(3, $result['assigned_rule_id']);
+        $this->assertNull($result['assigned_to']);
+        $this->assertNull($result['assignment_source']);
+        $this->assertNull($result['assigned_rule_id']);
+        $this->assertCount(1, $result['applied_rules']);
+        $this->assertSame(2, $result['applied_rules'][0]['assigned_to']);
+        $this->assertSame(20.0, $result['applied_rules'][0]['score_boost']);
+        $this->assertSame(2, $result['applied_rules'][0]['required_agent_level']);
         $this->assertCount(1, $result['tags']);
         $this->assertSame('hotfix', $result['tags'][0]['slug']);
 
         $ticket = self::$capsule->table('support_tickets')->where('id', 10)->first();
-        $this->assertSame(2, (int) $ticket->assigned_to);
-        $this->assertSame('rule', $ticket->assignment_source);
-        $this->assertSame(3, (int) $ticket->assigned_rule_id);
+        $this->assertNull($ticket->assigned_to);
+        $this->assertNull($ticket->assignment_source);
+        $this->assertNull($ticket->assigned_rule_id);
         $this->assertSame(1, self::$capsule->table('support_ticket_tag_assignments')->count());
     }
 
@@ -317,8 +391,9 @@ class SupportAutomationServiceTest extends TestCase
                 'status' => 'open',
                 'priority' => 'urgent',
                 'assigned_to' => 1,
-                'assignment_source' => 'rule',
+                'assignment_source' => 'smart',
                 'assigned_rule_id' => 3,
+                'sla_status' => 'escalated',
                 'created_at' => $now,
                 'updated_at' => $now,
                 'resolved_at' => null,
@@ -333,6 +408,7 @@ class SupportAutomationServiceTest extends TestCase
                 'assigned_to' => null,
                 'assignment_source' => null,
                 'assigned_rule_id' => null,
+                'sla_status' => 'resolved',
                 'created_at' => $yesterday,
                 'updated_at' => $now,
                 'resolved_at' => $now,
@@ -350,7 +426,8 @@ class SupportAutomationServiceTest extends TestCase
         $reports = $service->getReports(['days' => 14]);
 
         $this->assertSame(2, $reports['summary']['total']);
-        $this->assertSame(1, $reports['summary']['auto_assigned']);
+        $this->assertSame(1, $reports['summary']['smart_assignment_count']);
+        $this->assertSame(1, $reports['summary']['sla_breach_count']);
         $this->assertSame(1, $reports['summary']['unassigned']);
         $this->assertNotNull($reports['summary']['avg_resolution_hours']);
         $this->assertNotEmpty($reports['timeline']);

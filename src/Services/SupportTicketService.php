@@ -54,7 +54,8 @@ class SupportTicketService
         private ?EmailService $emailService = null,
         private ?MessageService $messageService = null,
         private ?CloudflareR2Service $r2Service = null,
-        private ?SupportAutomationService $supportAutomationService = null
+        private ?SupportAutomationService $supportAutomationService = null,
+        private ?SupportRoutingEngineService $supportRoutingEngineService = null
     ) {
     }
 
@@ -89,7 +90,6 @@ class SupportTicketService
             ]);
 
             $this->attachFiles((int) $ticket->id, (int) $message->id, $attachments, (int) $actor['id'], false);
-            $this->supportAutomationService?->applyRulesToTicket((int) $ticket->id, null, 'created');
             $this->db->commit();
 
             $this->auditLogService->log([
@@ -102,6 +102,18 @@ class SupportTicketService
                 'status' => 'success',
                 'new_data' => ['category' => $category, 'priority' => $priority, 'attachment_count' => count($attachments)],
             ]);
+
+            if ($this->supportRoutingEngineService !== null) {
+                try {
+                    $this->supportRoutingEngineService->routeTicket((int) $ticket->id, 'created');
+                } catch (\Throwable $routingException) {
+                    $this->logger->warning('Support ticket routing failed after ticket creation', [
+                        'ticket_id' => (int) $ticket->id,
+                        'error' => $routingException->getMessage(),
+                    ]);
+                    $this->recordFailure($routingException, 'support_ticket_routing_failed', $actor, (int) $ticket->id);
+                }
+            }
 
             $detail = $this->getTicketDetailForUser((int) $actor['id'], (int) $ticket->id);
             $this->notifySupportMailbox(
@@ -347,12 +359,19 @@ class SupportTicketService
                 'body' => $body,
             ]);
             $this->attachFiles($ticketId, (int) $message->id, $attachments, (int) $actor['id'], true);
-            $this->updateTicket($ticketId, [
+            $updates = [
                 'status' => self::STATUS_WAITING_USER,
                 'last_replied_at' => $now,
                 'last_reply_by_role' => $senderRole,
                 'updated_at' => $now,
-            ]);
+            ];
+            if (empty($ticket['first_support_response_at'])) {
+                $updates['first_support_response_at'] = $now;
+            }
+            if (($ticket['sla_status'] ?? 'pending') === 'resolved') {
+                $updates['sla_status'] = 'pending';
+            }
+            $this->updateTicket($ticketId, $updates);
             $this->db->commit();
 
             $this->auditLogService->log([
@@ -386,14 +405,20 @@ class SupportTicketService
 
         $updates = [];
         $now = $this->now();
+        $assigneeToNotify = null;
         if (array_key_exists('status', $payload) && $payload['status'] !== null && $payload['status'] !== '') {
             $status = $this->normalizeStatus($payload['status']);
             $updates['status'] = $status;
             if ($status === self::STATUS_RESOLVED) {
                 $updates['resolved_at'] = $now;
+                $updates['sla_status'] = 'resolved';
             }
             if ($status === self::STATUS_CLOSED) {
                 $updates['closed_at'] = $now;
+                $updates['sla_status'] = 'resolved';
+            }
+            if (in_array($status, [self::STATUS_OPEN, self::STATUS_IN_PROGRESS, self::STATUS_WAITING_USER], true) && ($ticket['sla_status'] ?? null) === 'resolved') {
+                $updates['sla_status'] = 'pending';
             }
         }
         if (array_key_exists('priority', $payload) && $payload['priority'] !== null && $payload['priority'] !== '') {
@@ -408,6 +433,7 @@ class SupportTicketService
                 $updates['assigned_to'] = null;
                 $updates['assignment_source'] = null;
                 $updates['assigned_rule_id'] = null;
+                $updates['assignment_locked'] = 0;
             } else {
                 $assignee = $this->findAssignableUser((int) $assigned);
                 if ($assignee === null) {
@@ -416,6 +442,8 @@ class SupportTicketService
                 $updates['assigned_to'] = (int) $assignee['id'];
                 $updates['assignment_source'] = 'manual';
                 $updates['assigned_rule_id'] = null;
+                $updates['assignment_locked'] = 1;
+                $assigneeToNotify = $this->loadUserById((int) $assignee['id']);
             }
         }
         if ($updates === []) {
@@ -435,6 +463,15 @@ class SupportTicketService
             'new_data' => $updates,
         ]);
         $this->notifyUserTicketUpdated($ticket, $updates, $ticketId);
+        if ($assigneeToNotify !== null) {
+            $this->notifyAssignee(
+                $assigneeToNotify,
+                sprintf('Ticket #%d assigned to you', $ticketId),
+                sprintf("An administrator assigned ticket #%d to you.\nSubject: %s", $ticketId, (string) ($ticket['subject'] ?? '')),
+                $ticketId,
+                'support_ticket_manual_assignment_notified'
+            );
+        }
         return $this->getTicketDetailForSupport($actor, $ticketId);
     }
 
@@ -491,15 +528,27 @@ class SupportTicketService
             ],
         ]);
 
+        $targetUser = $this->loadUserById((int) $assignee['id']);
+        if ($targetUser !== null) {
+            $this->notifyAssignee(
+                $targetUser,
+                sprintf('Transfer request for ticket #%d', $ticketId),
+                sprintf(
+                    "A transfer request is waiting for your review.\nTicket #%d\nFrom: %s\nReason: %s",
+                    $ticketId,
+                    $this->actorName($actor),
+                    $reason ?? 'No reason provided'
+                ),
+                $ticketId,
+                'support_ticket_transfer_target_notified'
+            );
+        }
+
         return $formatted ?? [];
     }
 
     public function reviewTransferRequest(array $actor, int $requestId, array $payload): array
     {
-        if (empty($actor['is_admin'])) {
-            throw new \DomainException('Only administrators can review transfer requests');
-        }
-
         $requestRow = $this->findTransferRequest($requestId);
         if ($requestRow === null) {
             throw new \RuntimeException('Transfer request not found');
@@ -511,6 +560,16 @@ class SupportTicketService
         $decision = $this->normalizeTransferStatus($payload['status'] ?? null);
         if (!in_array($decision, [self::TRANSFER_STATUS_APPROVED, self::TRANSFER_STATUS_REJECTED, self::TRANSFER_STATUS_CANCELLED], true)) {
             throw new \InvalidArgumentException('Transfer review must approve, reject, or cancel the request');
+        }
+
+        $actorId = (int) ($actor['id'] ?? 0);
+        $isRequester = $actorId > 0 && $actorId === (int) ($requestRow['requested_by'] ?? 0);
+        $isTarget = $actorId > 0 && $actorId === (int) ($requestRow['to_assignee'] ?? 0);
+        if ($decision === self::TRANSFER_STATUS_CANCELLED && !$isRequester) {
+            throw new \DomainException('Only the transfer requester can cancel this request');
+        }
+        if (in_array($decision, [self::TRANSFER_STATUS_APPROVED, self::TRANSFER_STATUS_REJECTED], true) && !$isTarget) {
+            throw new \DomainException('Only the transfer target can approve or reject this request');
         }
 
         $reviewNote = $this->nullableString($payload['review_note'] ?? null);
@@ -525,6 +584,7 @@ class SupportTicketService
                 'assigned_to' => (int) $requestRow['to_assignee'],
                 'assignment_source' => 'manual',
                 'assigned_rule_id' => null,
+                'assignment_locked' => 0,
                 'updated_at' => $now,
             ]);
         }
@@ -533,7 +593,7 @@ class SupportTicketService
         $transferRequest?->fill([
             'status' => $decision,
             'review_note' => $reviewNote,
-            'reviewed_by' => (int) ($actor['id'] ?? 0),
+            'reviewed_by' => $actorId,
             'reviewed_at' => $now,
         ]);
         $transferRequest?->save();
@@ -585,7 +645,9 @@ class SupportTicketService
         }
         if ($includeRequester && !empty($query['q'])) {
             $where[] = '(t.subject LIKE :search_subject OR requester.username LIKE :search_username OR requester.email LIKE :search_email)';
-            $searchPattern = '%' . trim((string) $query['q']) . '%';
+            $term = trim((string) $query['q']);
+            $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term);
+            $searchPattern = '%' . $escaped . '%';
             $params['search_subject'] = $searchPattern;
             $params['search_username'] = $searchPattern;
             $params['search_email'] = $searchPattern;
@@ -625,6 +687,12 @@ class SupportTicketService
             $tagsByTicket = $this->supportAutomationService->getTagsForTicketIds(array_map(static fn (array $item): int => (int) $item['id'], $items));
             $items = array_map(static function (array $item) use ($tagsByTicket): array {
                 $item['tags'] = array_values($tagsByTicket[(int) $item['id']] ?? []);
+                return $item;
+            }, $items);
+        }
+        if ($includeRequester && $items !== [] && $this->supportRoutingEngineService !== null) {
+            $items = array_map(function (array $item): array {
+                $item['routing_summary'] = $this->supportRoutingEngineService?->getRoutingSummaryForTicket((int) $item['id']);
                 return $item;
             }, $items);
         }
@@ -682,9 +750,16 @@ class SupportTicketService
             'assigned_to' => isset($row['assigned_to']) ? (int) $row['assigned_to'] : null,
             'assignment_source' => $row['assignment_source'] ?? null,
             'assigned_rule_id' => isset($row['assigned_rule_id']) && $row['assigned_rule_id'] !== null ? (int) $row['assigned_rule_id'] : null,
+            'assignment_locked' => !empty($row['assignment_locked']),
             'assigned_user' => $row['assigned_to'] ? ['id' => (int) $row['assigned_to'], 'username' => $row['assigned_username'] ?? null] : null,
             'last_replied_at' => $row['last_replied_at'] ?? null,
             'last_reply_by_role' => $row['last_reply_by_role'] ?? null,
+            'first_support_response_at' => $row['first_support_response_at'] ?? null,
+            'first_response_due_at' => $row['first_response_due_at'] ?? null,
+            'resolution_due_at' => $row['resolution_due_at'] ?? null,
+            'sla_status' => $row['sla_status'] ?? 'pending',
+            'escalation_level' => (int) ($row['escalation_level'] ?? 0),
+            'last_routing_run_id' => isset($row['last_routing_run_id']) && $row['last_routing_run_id'] !== null ? (int) $row['last_routing_run_id'] : null,
             'created_at' => $row['created_at'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
             'resolved_at' => $row['resolved_at'] ?? null,
@@ -714,6 +789,7 @@ class SupportTicketService
         }
         if ($includeRequester) {
             $detail['transfer_requests'] = $this->transferRequests((int) $ticket['id']);
+            $detail['routing_summary'] = $this->supportRoutingEngineService?->getRoutingSummaryForTicket((int) $ticket['id']);
         }
         return $detail;
     }
@@ -1033,6 +1109,88 @@ class SupportTicketService
         return (!empty($row['is_admin']) || in_array($role, ['support', 'admin'], true)) ? $row : null;
     }
 
+    private function loadUserById(int $userId): ?array
+    {
+        $stmt = $this->db->prepare('SELECT id, username, email, role, is_admin FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1');
+        $stmt->execute(['id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
+
+    private function notifyAssignee(array $user, string $subject, string $body, int $ticketId, string $auditAction): void
+    {
+        $userId = (int) ($user['id'] ?? 0);
+        $messageSent = false;
+        $emailSent = false;
+
+        if ($this->messageService !== null && $userId > 0) {
+            try {
+                $this->messageService->sendSystemMessage(
+                    $userId,
+                    $subject,
+                    $body,
+                    'support_ticket',
+                    'normal',
+                    'support_ticket',
+                    $ticketId,
+                    false
+                );
+                $messageSent = true;
+            } catch (\Throwable $exception) {
+                $this->logger->warning('Failed to send support assignee system notification', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'error' => $exception->getMessage(),
+                ]);
+                $this->recordNotificationFailure($exception, 'support_assignee_system_notification_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'subject' => $subject,
+                ]);
+            }
+        }
+
+        if ($this->emailService !== null && !empty($user['email'])) {
+            try {
+                $this->emailService->sendMessageNotification(
+                    (string) $user['email'],
+                    (string) ($user['username'] ?? $user['email']),
+                    $subject,
+                    $body,
+                    NotificationPreferenceService::CATEGORY_SUPPORT,
+                    'normal'
+                );
+                $emailSent = true;
+            } catch (\Throwable $exception) {
+                $this->logger->warning('Failed to send support assignee email notification', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'error' => $exception->getMessage(),
+                ]);
+                $this->recordNotificationFailure($exception, 'support_assignee_email_notification_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                    'subject' => $subject,
+                ]);
+            }
+        }
+
+        $this->auditLogService->log([
+            'user_id' => $userId > 0 ? $userId : null,
+            'action' => $auditAction,
+            'operation_category' => 'support',
+            'actor_type' => 'system',
+            'affected_table' => 'support_tickets',
+            'affected_id' => $ticketId,
+            'status' => ($messageSent || $emailSent) ? 'success' : 'partial',
+            'data' => [
+                'message_sent' => $messageSent,
+                'email_sent' => $emailSent,
+                'subject' => $subject,
+            ],
+        ]);
+    }
+
     private function notifySupportMailbox(string $subject, string $body): void
     {
         if ($this->emailService === null) {
@@ -1311,6 +1469,34 @@ class SupportTicketService
             'status' => 'failed',
             'data' => ['error' => $e->getMessage()],
         ]);
+    }
+
+    private function recordNotificationFailure(\Throwable $exception, string $action, array $context): void
+    {
+        $this->auditLogService->log([
+            'user_id' => isset($context['user_id']) ? (int) $context['user_id'] : null,
+            'action' => $action,
+            'operation_category' => 'support',
+            'actor_type' => 'system',
+            'affected_table' => 'support_tickets',
+            'affected_id' => isset($context['ticket_id']) ? (int) $context['ticket_id'] : null,
+            'status' => 'failed',
+            'data' => $context + ['error' => $exception->getMessage()],
+        ]);
+
+        try {
+            $request = \CarbonTrack\Support\SyntheticRequestFactory::fromContext(
+                '/support/notifications',
+                'SYSTEM',
+                null,
+                [],
+                $context,
+                ['PHP_SAPI' => PHP_SAPI]
+            );
+            $this->errorLogService->logException($exception, $request, $context);
+        } catch (\Throwable) {
+            // ignore secondary logging failure
+        }
     }
 
     private function now(): string

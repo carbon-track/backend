@@ -24,6 +24,8 @@ use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\MultipartUploadService;
 use CarbonTrack\Services\SupportAutomationService;
+use CarbonTrack\Services\SupportRoutingEngineService;
+use CarbonTrack\Services\SupportRoutingTriageService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
@@ -663,6 +665,37 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(SupportRoutingTriageService::class, function (ContainerInterface $c) {
+        /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
+        $llmClient = $c->get('ai.llmClient');
+        $config = [
+            'model' => $_ENV['LLM_API_MODEL'] ?? null,
+            'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
+            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+        ];
+
+        return new SupportRoutingTriageService(
+            $llmClient,
+            $c->get(LoggerInterface::class),
+            $config,
+            $c->get(LlmLogService::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
+        );
+    });
+
+    $container->set(SupportRoutingEngineService::class, function (ContainerInterface $c) {
+        return new SupportRoutingEngineService(
+            $c->get(PDO::class),
+            $c->get(LoggerInterface::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $c->get(SupportRoutingTriageService::class),
+            $c->get(MessageService::class),
+            $c->get(EmailService::class)
+        );
+    });
+
     $container->set(SupportTicketService::class, function (ContainerInterface $c) {
         return new SupportTicketService(
             $c->get(PDO::class),
@@ -673,7 +706,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(EmailService::class),
             $c->get(MessageService::class),
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
-            $c->get(SupportAutomationService::class)
+            $c->get(SupportAutomationService::class),
+            $c->get(SupportRoutingEngineService::class)
         );
     });
 
@@ -969,7 +1003,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuthService::class),
             $c->get(TurnstileService::class),
             $c->get(LoggerInterface::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(SupportRoutingEngineService::class),
+            $c->get(AuditLogService::class)
         );
     });
 

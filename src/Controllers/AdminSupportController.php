@@ -45,6 +45,59 @@ class AdminSupportController
         }
     }
 
+    public function getRoutingSettings(Request $request, Response $response): Response
+    {
+        try {
+            return $this->json($response, ['success' => true, 'data' => $this->supportAutomationService->getRoutingSettings()]);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to load support routing settings');
+        }
+    }
+
+    public function updateRoutingSettings(Request $request, Response $response): Response
+    {
+        try {
+            $actor = $this->currentUser($request);
+            return $this->json($response, ['success' => true, 'data' => $this->supportAutomationService->saveRoutingSettings($actor, $this->body($request))]);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to save support routing settings');
+        }
+    }
+
+    public function getAssigneeRoutingProfile(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $profile = $this->supportAutomationService->getAssigneeRoutingProfile($this->numericId($args, 'id'));
+            if ($profile === null) {
+                return $this->json($response, ['success' => false, 'message' => 'Support assignee not found', 'code' => 'ASSIGNEE_NOT_FOUND'], 404);
+            }
+            return $this->json($response, ['success' => true, 'data' => $profile]);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to load support assignee routing profile');
+        }
+    }
+
+    public function updateAssigneeRoutingProfile(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $actor = $this->currentUser($request);
+            return $this->json($response, [
+                'success' => true,
+                'data' => $this->supportAutomationService->saveAssigneeRoutingProfile($actor, $this->numericId($args, 'id'), $this->body($request)),
+            ]);
+        } catch (\RuntimeException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'ASSIGNEE_NOT_FOUND'], 404);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        } catch (\Throwable $e) {
+            return $this->error($request, $response, $e, 'Failed to save support assignee routing profile');
+        }
+    }
+
     public function listTags(Request $request, Response $response): Response
     {
         try {

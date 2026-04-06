@@ -6,7 +6,9 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\SupportTicketController;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
 use PHPUnit\Framework\TestCase;
@@ -14,17 +16,28 @@ use Psr\Log\LoggerInterface;
 
 class SupportTicketControllerTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        unset($_ENV['SUPPORT_SLA_SWEEP_KEY']);
+        unset($_GET['key']);
+    }
+
     private function makeController(
         ?SupportTicketService $supportTicketService = null,
         ?AuthService $authService = null,
-        ?TurnstileService $turnstileService = null
+        ?TurnstileService $turnstileService = null,
+        ?SupportRoutingEngineService $supportRoutingEngineService = null,
+        ?AuditLogService $auditLogService = null
     ): SupportTicketController {
         return new SupportTicketController(
             $supportTicketService ?? $this->createMock(SupportTicketService::class),
             $authService ?? $this->createMock(AuthService::class),
             $turnstileService ?? $this->createMock(TurnstileService::class),
             $this->createMock(LoggerInterface::class),
-            $this->createMock(ErrorLogService::class)
+            $this->createMock(ErrorLogService::class),
+            $supportRoutingEngineService,
+            $auditLogService
         );
     }
 
@@ -198,5 +211,52 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $this->assertSame(422, $response->getStatusCode());
+    }
+
+    public function testRunSlaSweepReturnsForbiddenForInvalidKey(): void
+    {
+        $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logSystemEvent');
+
+        $controller = $this->makeController(
+            supportRoutingEngineService: $this->createMock(SupportRoutingEngineService::class),
+            auditLogService: $audit
+        );
+
+        $response = $controller->runSlaSweep(
+            makeRequest('GET', '/api/v1/support/sla-sweep?key=bad'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(403, $response->getStatusCode());
+    }
+
+    public function testRunSlaSweepReturnsSummaryForValidKey(): void
+    {
+        $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
+        $_GET['key'] = 'expected-secret';
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logSystemEvent');
+
+        $engine = $this->createMock(SupportRoutingEngineService::class);
+        $engine->expects($this->once())
+            ->method('runSlaSweep')
+            ->willReturn(['processed' => 4, 'breached' => 2, 'rerouted' => 1]);
+
+        $controller = $this->makeController(
+            supportRoutingEngineService: $engine,
+            auditLogService: $audit
+        );
+
+        $response = $controller->runSlaSweep(
+            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        unset($_GET['key']);
     }
 }
