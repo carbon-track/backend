@@ -774,7 +774,11 @@ $__deps_initializer = function (Container $container) {
     // Models
     $container->set(Avatar::class, function (ContainerInterface $c) {
         $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
-        return new Avatar($db);
+        return new Avatar(
+            $db,
+            $c->get(LoggerInterface::class),
+            $c->get(ErrorLogService::class)
+        );
     });
 
     // Controllers

@@ -6,17 +6,21 @@ namespace CarbonTrack\Models;
 
 use PDO;
 use CarbonTrack\Services\ErrorLogService;
+use Psr\Log\LoggerInterface;
 use Slim\Psr7\Factory\ServerRequestFactory;
 
 class Avatar
 {
     private PDO $db;
 
+    private LoggerInterface $logger;
+
     private ?ErrorLogService $errorLogService;
 
-    public function __construct(PDO $db, ?ErrorLogService $errorLogService = null)
+    public function __construct(PDO $db, LoggerInterface $logger, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
+        $this->logger = $logger;
         $this->errorLogService = $errorLogService;
     }
 
@@ -361,10 +365,19 @@ class Avatar
                 $this->errorLogService->logException($exception, $request, ['context_message' => $contextMessage]);
                 return;
             } catch (\Throwable $loggingError) {
-                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+                $this->logger->error('ErrorLogService logging failed for avatar model', [
+                    'message' => $loggingError->getMessage(),
+                    'context_message' => $contextMessage,
+                    'exception_type' => get_class($loggingError),
+                ]);
             }
         }
-        error_log($contextMessage . ' ' . $exception->getMessage());
+
+        $this->logger->error(trim($contextMessage . ' ' . $exception->getMessage()), [
+            'exception_type' => get_class($exception),
+            'exception_file' => $exception->getFile(),
+            'exception_line' => $exception->getLine(),
+        ]);
     }
 
 }
