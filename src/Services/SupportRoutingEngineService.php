@@ -271,6 +271,80 @@ class SupportRoutingEngineService
         return $summary;
     }
 
+    public function buildSlaSummaryForTicket(array $ticket, ?array $routingSettings = null): array
+    {
+        $settings = $routingSettings ?? $this->loadRoutingSettings();
+        $dueSoonMinutes = max(1, (int) ($settings['due_soon_minutes'] ?? 30));
+
+        $firstResponse = $this->buildMilestoneSummary(
+            $ticket['first_response_due_at'] ?? null,
+            $ticket['first_support_response_at'] ?? null,
+            (string) ($ticket['sla_status'] ?? 'pending'),
+            $dueSoonMinutes
+        );
+
+        $resolvedAt = $ticket['resolved_at'] ?? $ticket['closed_at'] ?? null;
+        $resolution = $this->buildMilestoneSummary(
+            $ticket['resolution_due_at'] ?? null,
+            $resolvedAt,
+            (string) ($ticket['sla_status'] ?? 'pending'),
+            $dueSoonMinutes
+        );
+
+        $activeTarget = empty($ticket['first_support_response_at']) ? 'first_response' : 'resolution';
+        $activeSummary = $activeTarget === 'first_response' ? $firstResponse : $resolution;
+        $displayState = $this->resolveDisplayState($ticket, $activeSummary['state'] ?? 'pending');
+
+        return [
+            'due_soon_minutes' => $dueSoonMinutes,
+            'display_state' => $displayState,
+            'active_target' => $activeTarget,
+            'active_due_at' => $activeSummary['due_at'] ?? null,
+            'active_minutes_delta' => $activeSummary['minutes_delta'] ?? null,
+            'first_response' => $firstResponse,
+            'resolution' => $resolution,
+        ];
+    }
+
+    public function getSlaSettingsSnapshot(): array
+    {
+        return $this->loadRoutingSettings();
+    }
+
+    public function getRoutingRunsForTicket(int $ticketId, int $limit = 10): array
+    {
+        $stmt = $this->db->prepare('
+            SELECT *
+            FROM support_ticket_routing_runs
+            WHERE ticket_id = :ticket_id
+            ORDER BY id DESC
+            LIMIT :limit
+        ');
+        $stmt->bindValue(':ticket_id', $ticketId, PDO::PARAM_INT);
+        $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(function (array $row): array {
+            $candidateScores = json_decode((string) ($row['candidate_scores_json'] ?? '[]'), true);
+
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'ticket_id' => (int) ($row['ticket_id'] ?? 0),
+                'trigger' => (string) ($row['trigger'] ?? 'unknown'),
+                'used_ai' => !empty($row['used_ai']),
+                'fallback_reason' => $row['fallback_reason'] ?? null,
+                'triage' => $this->decodeJsonObject($row['triage_json'] ?? null) ?? [],
+                'matched_rule_ids' => array_map('intval', $this->decodeJsonList($row['matched_rule_ids_json'] ?? null)),
+                'candidate_scores' => is_array($candidateScores) ? $candidateScores : [],
+                'winner_user_id' => isset($row['winner_user_id']) ? (int) $row['winner_user_id'] : null,
+                'winner_score' => isset($row['winner_score']) ? (float) $row['winner_score'] : null,
+                'summary' => $this->decodeJsonObject($row['summary_json'] ?? null) ?? [],
+                'created_at' => $row['created_at'] ?? null,
+                'updated_at' => $row['updated_at'] ?? null,
+            ];
+        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
     private function buildLockedResult(array $ticket, string $trigger): array
     {
         return [
@@ -300,6 +374,7 @@ class SupportRoutingEngineService
                 requester.username AS requester_username,
                 requester.email AS requester_email,
                 requester.group_id AS requester_group_id,
+                requester.quota_override AS requester_quota_override,
                 requester.role AS requester_role
             FROM support_tickets t
             INNER JOIN users requester ON requester.id = t.user_id
@@ -380,16 +455,73 @@ class SupportRoutingEngineService
     private function resolveGroupRouting(array $ticket, array $defaults): array
     {
         $groupId = isset($ticket['requester_group_id']) ? (int) $ticket['requester_group_id'] : 0;
-        if ($groupId <= 0) {
-            return $defaults;
+        $groupRouting = $defaults;
+
+        if ($groupId > 0) {
+            $stmt = $this->db->prepare('SELECT config FROM user_groups WHERE id = :id LIMIT 1');
+            $stmt->execute(['id' => $groupId]);
+            $config = $this->decodeJsonObject($stmt->fetchColumn() ?: null) ?? [];
+            $supportRouting = is_array($config['support_routing'] ?? null) ? $config['support_routing'] : [];
+            $groupRouting = array_replace($groupRouting, $supportRouting);
         }
 
-        $stmt = $this->db->prepare('SELECT config FROM user_groups WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => $groupId]);
-        $config = $this->decodeJsonObject($stmt->fetchColumn() ?: null) ?? [];
-        $supportRouting = is_array($config['support_routing'] ?? null) ? $config['support_routing'] : [];
+        $requesterOverride = $this->decodeJsonObject($ticket['requester_quota_override'] ?? null) ?? [];
+        $supportRoutingOverride = is_array($requesterOverride['support_routing'] ?? null) ? $requesterOverride['support_routing'] : [];
 
-        return array_replace($defaults, $supportRouting);
+        return array_replace($groupRouting, $supportRoutingOverride);
+    }
+
+    private function buildMilestoneSummary(?string $dueAt, ?string $completedAt, string $slaStatus, int $dueSoonMinutes): array
+    {
+        if (!$dueAt) {
+            return [
+                'due_at' => null,
+                'completed_at' => $completedAt,
+                'minutes_delta' => null,
+                'state' => 'not_configured',
+            ];
+        }
+
+        $now = new DateTimeImmutable($this->now(), new DateTimeZone('Asia/Shanghai'));
+        $due = new DateTimeImmutable($dueAt, new DateTimeZone('Asia/Shanghai'));
+        $minutesDelta = (int) floor(($due->getTimestamp() - $now->getTimestamp()) / 60);
+
+        if ($completedAt) {
+            return [
+                'due_at' => $dueAt,
+                'completed_at' => $completedAt,
+                'minutes_delta' => $minutesDelta,
+                'state' => 'met',
+            ];
+        }
+
+        $state = 'pending';
+        if ($minutesDelta < 0) {
+            $state = $slaStatus === 'escalated' ? 'escalated' : 'breached';
+        } elseif ($minutesDelta <= $dueSoonMinutes) {
+            $state = 'due_soon';
+        }
+
+        return [
+            'due_at' => $dueAt,
+            'completed_at' => null,
+            'minutes_delta' => $minutesDelta,
+            'state' => $state,
+        ];
+    }
+
+    private function resolveDisplayState(array $ticket, string $activeState): string
+    {
+        if (in_array((string) ($ticket['status'] ?? ''), ['resolved', 'closed'], true) || (string) ($ticket['sla_status'] ?? '') === 'resolved') {
+            return 'resolved';
+        }
+
+        return match ($activeState) {
+            'escalated' => 'escalated',
+            'breached' => 'breached',
+            'due_soon' => 'due_soon',
+            default => 'pending',
+        };
     }
 
     private function ensureDeadlineFields(array $ticket, array $groupRouting): void

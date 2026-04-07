@@ -265,6 +265,8 @@ return function (App $app) {
             $admin->get('/support/rules', [AdminSupportController::class, 'listRules']);
             $admin->post('/support/rules', [AdminSupportController::class, 'createRule']);
             $admin->put('/support/rules/{id:[0-9]+}', [AdminSupportController::class, 'updateRule']);
+            $admin->get('/support/tickets', [AdminSupportController::class, 'listTickets']);
+            $admin->get('/support/tickets/{id:[0-9]+}', [AdminSupportController::class, 'getTicketDetail']);
             $admin->get('/support/reports', [AdminSupportController::class, 'reports']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);

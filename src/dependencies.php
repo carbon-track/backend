@@ -1016,7 +1016,10 @@ $__deps_initializer = function (Container $container) {
     $container->set(AdminSupportController::class, function (ContainerInterface $c) {
         return new AdminSupportController(
             $c->get(SupportAutomationService::class),
+            $c->get(SupportTicketService::class),
+            $c->get(SupportRoutingEngineService::class),
             $c->get(AuthService::class),
+            $c->get(AuditLogService::class),
             $c->get(LoggerInterface::class),
             $c->get(ErrorLogService::class)
         );

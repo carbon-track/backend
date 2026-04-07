@@ -38,6 +38,7 @@ class SupportRoutingEngineServiceTest extends TestCase
             $table->boolean('is_admin')->default(false);
             $table->string('status')->default('active');
             $table->integer('group_id')->nullable();
+            $table->text('quota_override')->nullable();
             $table->timestamp('deleted_at')->nullable();
             $table->timestamp('created_at')->nullable();
             $table->timestamp('updated_at')->nullable();
@@ -322,5 +323,39 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('failed', $finalNotificationLog['status'] ?? null);
         $this->assertFalse($finalNotificationLog['data']['message_sent'] ?? true);
         $this->assertFalse($finalNotificationLog['data']['email_sent'] ?? true);
+    }
+
+    public function testBuildSlaSummaryMarksTicketAsDueSoon(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $tz = new \DateTimeZone('Asia/Shanghai');
+        $base = new \DateTimeImmutable('now', $tz);
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'due_soon_minutes' => 30,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $summary = $engine->buildSlaSummaryForTicket([
+            'status' => 'open',
+            'sla_status' => 'pending',
+            'first_support_response_at' => null,
+            'first_response_due_at' => $base->modify('+20 minutes')->format('Y-m-d H:i:s'),
+            'resolution_due_at' => $base->modify('+3 hours')->format('Y-m-d H:i:s'),
+        ]);
+
+        $this->assertSame('due_soon', $summary['display_state']);
+        $this->assertSame('first_response', $summary['active_target']);
+        $this->assertSame('due_soon', $summary['first_response']['state']);
     }
 }

@@ -31,5 +31,5 @@ ADD CONSTRAINT `fk_users_group` FOREIGN KEY (`group_id`) REFERENCES `user_groups
 
 -- Create default groups
 INSERT INTO `user_groups` (`name`, `code`, `config`, `is_default`, `notes`) VALUES
-('Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}}', 1, 'Default free tier'),
-('Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}}', 0, 'Premium tier');
+('Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}, "support_routing": {"first_response_minutes": 240, "resolution_minutes": 1440, "routing_weight": 1, "min_agent_level": 1, "overdue_boost": 1, "tier_label": "standard"}}', 1, 'Default free tier'),
+('Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}, "support_routing": {"first_response_minutes": 60, "resolution_minutes": 720, "routing_weight": 1.5, "min_agent_level": 2, "overdue_boost": 1.5, "tier_label": "premium"}}', 0, 'Premium tier');

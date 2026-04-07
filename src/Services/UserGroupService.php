@@ -8,6 +8,56 @@ use CarbonTrack\Models\UserGroup;
 
 class UserGroupService
 {
+    private const SUPPORT_ROUTING_FIELDS = [
+        [
+            'key' => 'first_response_minutes',
+            'type' => 'number',
+            'min' => 1,
+            'step' => 1,
+            'default' => 240,
+            'label_key' => 'admin.groups.supportFirstResponseMinutes',
+        ],
+        [
+            'key' => 'resolution_minutes',
+            'type' => 'number',
+            'min' => 1,
+            'step' => 1,
+            'default' => 1440,
+            'label_key' => 'admin.groups.supportResolutionMinutes',
+        ],
+        [
+            'key' => 'routing_weight',
+            'type' => 'number',
+            'min' => 0.1,
+            'step' => 0.1,
+            'default' => 1,
+            'label_key' => 'admin.groups.supportRoutingWeight',
+        ],
+        [
+            'key' => 'min_agent_level',
+            'type' => 'number',
+            'min' => 1,
+            'max' => 5,
+            'step' => 1,
+            'default' => 1,
+            'label_key' => 'admin.groups.supportMinAgentLevel',
+        ],
+        [
+            'key' => 'overdue_boost',
+            'type' => 'number',
+            'min' => 0,
+            'step' => 0.1,
+            'default' => 1,
+            'label_key' => 'admin.groups.supportOverdueBoost',
+        ],
+        [
+            'key' => 'tier_label',
+            'type' => 'text',
+            'default' => 'standard',
+            'label_key' => 'admin.groups.supportTierLabel',
+        ],
+    ];
+
     public function __construct(
         private QuotaConfigService $quotaConfigService
     ) {}
@@ -51,6 +101,20 @@ class UserGroupService
     public function getQuotaDefinitions(): array
     {
         return $this->quotaConfigService->getQuotaDefinitions();
+    }
+
+    public function getSupportRoutingFieldDefinitions(): array
+    {
+        return self::SUPPORT_ROUTING_FIELDS;
+    }
+
+    public function getSupportRoutingDefaults(): array
+    {
+        $defaults = [];
+        foreach (self::SUPPORT_ROUTING_FIELDS as $field) {
+            $defaults[$field['key']] = $field['default'] ?? null;
+        }
+        return $defaults;
     }
 
     private function formatGroup(UserGroup $group): array

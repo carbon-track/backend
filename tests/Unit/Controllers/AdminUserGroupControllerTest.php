@@ -20,6 +20,12 @@ class AdminUserGroupControllerTest extends TestCase
         $errorLogService = $this->createMock(ErrorLogService::class);
 
         $service->method('getQuotaDefinitions')->willReturn(['llm.daily_limit', 'llm.rate_limit']);
+        $service->method('getSupportRoutingFieldDefinitions')->willReturn([
+            ['key' => 'first_response_minutes', 'type' => 'number'],
+        ]);
+        $service->method('getSupportRoutingDefaults')->willReturn([
+            'first_response_minutes' => 240,
+        ]);
         $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
 
         $controller = new AdminUserGroupController($service, $auditLogService, $errorLogService);
@@ -32,5 +38,7 @@ class AdminUserGroupControllerTest extends TestCase
         $payload = json_decode((string) $result->getBody(), true);
         $this->assertTrue($payload['success']);
         $this->assertSame(['llm.daily_limit', 'llm.rate_limit'], $payload['data']['quota_definitions']);
+        $this->assertSame('first_response_minutes', $payload['data']['support_routing_fields'][0]['key']);
+        $this->assertSame(240, $payload['data']['support_routing_defaults']['first_response_minutes']);
     }
 }

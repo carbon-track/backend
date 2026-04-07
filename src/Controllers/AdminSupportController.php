@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\SupportAutomationService;
+use CarbonTrack\Services\SupportRoutingEngineService;
+use CarbonTrack\Services\SupportTicketService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -15,7 +18,10 @@ class AdminSupportController
 {
     public function __construct(
         private SupportAutomationService $supportAutomationService,
+        private SupportTicketService $supportTicketService,
+        private SupportRoutingEngineService $supportRoutingEngineService,
         private AuthService $authService,
+        private AuditLogService $auditLogService,
         private LoggerInterface $logger,
         private ErrorLogService $errorLogService
     ) {
@@ -147,6 +153,81 @@ class AdminSupportController
         }
     }
 
+    public function listTickets(Request $request, Response $response): Response
+    {
+        try {
+            $actor = $this->currentUser($request);
+            $query = $request->getQueryParams();
+            $result = $this->supportTicketService->listSupportTickets($actor, $query);
+            $this->auditLogService->logAdminOperation('admin_support_tickets_listed', $this->actorId($actor), 'admin_support', [
+                'table' => 'support_tickets',
+                'request_data' => $query,
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'success',
+                'new_data' => ['count' => count($result['items'] ?? [])],
+            ]);
+            return $this->json($response, [
+                'success' => true,
+                'data' => $result,
+            ]);
+        } catch (\Throwable $e) {
+            $this->auditLogService->logAdminOperation('admin_support_tickets_list_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
+                'table' => 'support_tickets',
+                'request_data' => $request->getQueryParams(),
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'failed',
+                'data' => ['error' => $e->getMessage()],
+            ]);
+            return $this->error($request, $response, $e, 'Failed to load support tickets');
+        }
+    }
+
+    public function getTicketDetail(Request $request, Response $response, array $args): Response
+    {
+        try {
+            $ticketId = $this->numericId($args, 'id');
+            $actor = $this->currentUser($request);
+            $detail = $this->supportTicketService->getTicketDetailForSupport($actor, $ticketId);
+            $limit = (int) ($_ENV['SUPPORT_ROUTING_AUDIT_LIMIT'] ?? 10);
+            $detail['routing_runs'] = $this->supportRoutingEngineService->getRoutingRunsForTicket($ticketId, max(1, $limit));
+            $this->auditLogService->logAdminOperation('admin_support_ticket_detail_viewed', $this->actorId($actor), 'admin_support', [
+                'table' => 'support_tickets',
+                'record_id' => $ticketId,
+                'request_data' => ['routing_audit_limit' => max(1, $limit)],
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'success',
+            ]);
+            return $this->json($response, ['success' => true, 'data' => $detail]);
+        } catch (\RuntimeException $e) {
+            $this->auditLogService->logAdminOperation('admin_support_ticket_detail_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
+                'table' => 'support_tickets',
+                'record_id' => isset($args['id']) && is_numeric($args['id']) ? (int) $args['id'] : null,
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'failed',
+                'data' => ['error' => $e->getMessage()],
+            ]);
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'TICKET_NOT_FOUND'], 404);
+        } catch (\InvalidArgumentException $e) {
+            $this->auditLogService->logAdminOperation('admin_support_ticket_detail_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
+                'table' => 'support_tickets',
+                'record_id' => isset($args['id']) && is_numeric($args['id']) ? (int) $args['id'] : null,
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'failed',
+                'data' => ['error' => $e->getMessage()],
+            ]);
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        } catch (\Throwable $e) {
+            $this->auditLogService->logAdminOperation('admin_support_ticket_detail_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
+                'table' => 'support_tickets',
+                'record_id' => isset($args['id']) && is_numeric($args['id']) ? (int) $args['id'] : null,
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'failed',
+                'data' => ['error' => $e->getMessage()],
+            ]);
+            return $this->error($request, $response, $e, 'Failed to load support ticket detail');
+        }
+    }
+
     private function saveTag(Request $request, Response $response, ?int $tagId, int $status): Response
     {
         try {
@@ -205,6 +286,11 @@ class AdminSupportController
             $this->logger->error('Admin support logging failed', ['error' => $loggingError->getMessage()]);
         }
         return $this->json($response, ['success' => false, 'message' => $message, 'code' => 'INTERNAL_ERROR'], 500);
+    }
+
+    private function actorId(array $actor): ?int
+    {
+        return isset($actor['id']) && is_numeric($actor['id']) ? (int) $actor['id'] : null;
     }
 
     private function json(Response $response, array $payload, int $status = 200): Response

@@ -250,7 +250,10 @@ $sql = "
                 $row['active_badges'] = (int) ($row['active_badges'] ?? 0);
                 $override = $this->quotaConfigService->decodeJsonToArray($row['quota_override'] ?? null);
                 $row['quota_override'] = $override === null ? null : $this->quotaConfigService->normalizeQuotaConfig($override);
-                $row['quota_flat'] = $this->quotaConfigService->flattenQuotas($row['quota_override']);
+                $quotaOverrideConfig = is_array($row['quota_override']) ? $row['quota_override'] : [];
+                $row['support_routing_override'] = $this->extractSupportRoutingOverride($quotaOverrideConfig);
+                unset($quotaOverrideConfig['support_routing']);
+                $row['quota_flat'] = $this->quotaConfigService->flattenQuotas($quotaOverrideConfig);
                 $row['days_since_registration'] = 0;
                 if (!empty($row['created_at'])) {
                     try {
@@ -676,6 +679,30 @@ $sql = "
                 
                 // If quota_override was already in sets, update it; otherwise add it
                 $jsonStr = json_encode($newJson);
+                if (in_array('quota_override = :quota_override', $sets)) {
+                    $params['quota_override'] = $jsonStr;
+                } else {
+                    $sets[] = 'quota_override = :quota_override';
+                    $params['quota_override'] = $jsonStr;
+                }
+            }
+            if (array_key_exists('support_routing', $payload) && is_array($payload['support_routing'])) {
+                if (!array_key_exists('quota_override', $params)) {
+                    $currStmt = $this->db->prepare("SELECT quota_override FROM users WHERE id = :id");
+                    $currStmt->execute(['id' => $userId]);
+                    $currentJson = $this->quotaConfigService->decodeJsonToArray($currStmt->fetchColumn()) ?? [];
+                } else {
+                    $currentJson = $this->quotaConfigService->decodeJsonToArray($params['quota_override']) ?? [];
+                }
+
+                $supportRoutingOverride = $this->sanitizeSupportRoutingOverride($payload['support_routing']);
+                if ($supportRoutingOverride === []) {
+                    unset($currentJson['support_routing']);
+                } else {
+                    $currentJson['support_routing'] = $supportRoutingOverride;
+                }
+
+                $jsonStr = $currentJson === [] ? null : json_encode($currentJson);
                 if (in_array('quota_override = :quota_override', $sets)) {
                     $params['quota_override'] = $jsonStr;
                 } else {
@@ -1330,6 +1357,56 @@ $sql = "
         }
 
         return false;
+    }
+
+    private function extractSupportRoutingOverride(array $quotaOverride): array
+    {
+        $supportRouting = $quotaOverride['support_routing'] ?? null;
+        return is_array($supportRouting) ? $this->sanitizeSupportRoutingOverride($supportRouting) : [];
+    }
+
+    private function sanitizeSupportRoutingOverride(array $supportRouting): array
+    {
+        $normalized = [];
+
+        foreach ([
+            'first_response_minutes' => ['type' => 'int', 'min' => 1],
+            'resolution_minutes' => ['type' => 'int', 'min' => 1],
+            'routing_weight' => ['type' => 'float', 'min' => 0.1],
+            'min_agent_level' => ['type' => 'int', 'min' => 1, 'max' => 5],
+            'overdue_boost' => ['type' => 'float', 'min' => 0.0],
+            'tier_label' => ['type' => 'string'],
+        ] as $key => $rule) {
+            if (!array_key_exists($key, $supportRouting)) {
+                continue;
+            }
+
+            $value = $supportRouting[$key];
+            if ($value === '' || $value === null) {
+                continue;
+            }
+
+            if ($rule['type'] === 'string') {
+                $text = trim((string) $value);
+                if ($text !== '') {
+                    $normalized[$key] = $text;
+                }
+                continue;
+            }
+
+            if (!is_numeric($value)) {
+                continue;
+            }
+
+            $number = $rule['type'] === 'int' ? (int) $value : (float) $value;
+            $number = max($rule['min'], $number);
+            if (isset($rule['max'])) {
+                $number = min($rule['max'], $number);
+            }
+            $normalized[$key] = $number;
+        }
+
+        return $normalized;
     }
 
 

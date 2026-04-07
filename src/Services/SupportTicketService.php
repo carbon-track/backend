@@ -679,8 +679,9 @@ class SupportTicketService
         ";
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
+        $slaSettings = $this->supportRoutingEngineService?->getSlaSettingsSnapshot();
         $items = array_map(
-            fn (array $row): array => $this->formatTicketSummary($row, $includeRequester),
+            fn (array $row): array => $this->formatTicketSummary($row, $includeRequester, $slaSettings),
             $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []
         );
         if ($includeRequester && $items !== [] && $this->supportAutomationService !== null) {
@@ -739,7 +740,7 @@ class SupportTicketService
         return $row ?: null;
     }
 
-    private function formatTicketSummary(array $row, bool $includeRequester): array
+    private function formatTicketSummary(array $row, bool $includeRequester, ?array $slaSettings = null): array
     {
         $summary = [
             'id' => (int) $row['id'],
@@ -767,6 +768,9 @@ class SupportTicketService
             'message_count' => (int) ($row['message_count'] ?? 0),
             'latest_message_preview' => $row['latest_message_preview'] ?? null,
         ];
+        if ($this->supportRoutingEngineService !== null) {
+            $summary['sla_summary'] = $this->supportRoutingEngineService->buildSlaSummaryForTicket($row, $slaSettings);
+        }
         if ($includeRequester) {
             $summary['requester'] = [
                 'id' => (int) ($row['user_id'] ?? 0),
@@ -780,7 +784,11 @@ class SupportTicketService
 
     private function formatTicketDetail(array $ticket, bool $includeRequester): array
     {
-        $detail = $this->formatTicketSummary($ticket, $includeRequester);
+        $detail = $this->formatTicketSummary(
+            $ticket,
+            $includeRequester,
+            $this->supportRoutingEngineService?->getSlaSettingsSnapshot()
+        );
         $detail['messages'] = $this->messages((int) $ticket['id']);
         $detail['feedback_candidates'] = $this->feedbackCandidates((int) $ticket['id']);
         $detail['feedback'] = $this->feedback((int) $ticket['id']);

@@ -107,6 +107,8 @@ class AdminUserGroupController
                 'success' => true,
                 'data' => [
                     'quota_definitions' => $definitions,
+                    'support_routing_fields' => $this->groupService->getSupportRoutingFieldDefinitions(),
+                    'support_routing_defaults' => $this->groupService->getSupportRoutingDefaults(),
                 ],
             ]);
         } catch (\Throwable $e) {
