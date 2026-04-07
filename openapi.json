@@ -27850,10 +27850,20 @@
             ]
           },
           "top_factors": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            }
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
           }
         }
       },

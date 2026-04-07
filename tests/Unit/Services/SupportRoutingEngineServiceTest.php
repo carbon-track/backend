@@ -359,7 +359,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('due_soon', $summary['first_response']['state']);
     }
 
-    public function testGetRoutingSummaryNormalizesTopFactors(): void
+    public function testRoutingSummaryKeepsTopFactorsMachineReadable(): void
     {
         $now = date('Y-m-d H:i:s');
         self::$capsule->table('support_ticket_routing_runs')->insert([
@@ -385,8 +385,37 @@ class SupportRoutingEngineServiceTest extends TestCase
         );
 
         $summary = $engine->getRoutingSummaryForTicket(101);
+        $runs = $engine->getRoutingRunsForTicket(101);
 
         $this->assertIsArray($summary['top_factors']);
-        $this->assertSame('severity 12.50', $summary['top_factors'][0]);
+        $this->assertSame(['severity' => 12.5, 'priority' => 9.0], $summary['top_factors']);
+        $this->assertSame(['severity' => 12.5, 'priority' => 9.0], $runs[0]['summary']['top_factors']);
+    }
+
+    public function testRoutingSummaryTrimsWhitespaceOnlyTopFactorsListEntries(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('support_ticket_routing_runs')->insert([
+            'ticket_id' => 102,
+            'trigger' => 'created',
+            'used_ai' => 1,
+            'summary_json' => json_encode([
+                'top_factors' => ['  severity  ', '   ', null, 0, 'priority'],
+            ]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $summary = $engine->getRoutingSummaryForTicket(102);
+
+        $this->assertSame(['severity', '0', 'priority'], $summary['top_factors']);
     }
 }

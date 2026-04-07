@@ -4,6 +4,11 @@
             "name": "aws/aws-crt-php",
             "version": "v1.2.7",
             "version_normalized": "1.2.7.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/awslabs/aws-crt-php.git",
+                "reference": "d71d9906c7bb63a28295447ba12e74723bd3730e"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/aws/aws-crt-php/v1.2.7/aws-aws-crt-php-v1.2.7.zip",
@@ -55,6 +60,11 @@
             "name": "aws/aws-sdk-php",
             "version": "3.373.6",
             "version_normalized": "3.373.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/aws/aws-sdk-php.git",
+                "reference": "adad2a5f7785e71928b4a9eb1eaadf5d0ede5edc"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/aws/aws-sdk-php/3.373.6/aws-aws-sdk-php-3.373.6.zip",
@@ -314,6 +324,11 @@
             "name": "doctrine/instantiator",
             "version": "2.0.0",
             "version_normalized": "2.0.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/doctrine/instantiator.git",
+                "reference": "c6222283fa3f4ac679f8b9ced9a4e23f163e80d0"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/doctrine/instantiator/2.0.0/doctrine-instantiator-2.0.0.zip",
@@ -426,6 +441,11 @@
             "name": "firebase/php-jwt",
             "version": "v7.0.3",
             "version_normalized": "7.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/firebase/php-jwt.git",
+                "reference": "28aa0694bcfdfa5e2959c394d5a1ee7a5083629e"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/firebase/php-jwt/v7.0.3/firebase-php-jwt-v7.0.3.zip",
@@ -551,6 +571,11 @@
             "name": "guzzlehttp/guzzle",
             "version": "7.10.0",
             "version_normalized": "7.10.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/guzzle/guzzle.git",
+                "reference": "b51ac707cfa420b7bfd4e4d5e510ba8008e822b4"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/guzzlehttp/guzzle/7.10.0/guzzlehttp-guzzle-7.10.0.zip",
@@ -660,6 +685,11 @@
             "name": "guzzlehttp/promises",
             "version": "2.3.0",
             "version_normalized": "2.3.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/guzzle/promises.git",
+                "reference": "481557b130ef3790cf82b713667b43030dc9c957"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/guzzlehttp/promises/2.3.0/guzzlehttp-promises-2.3.0.zip",
@@ -726,6 +756,11 @@
             "name": "guzzlehttp/psr7",
             "version": "2.8.0",
             "version_normalized": "2.8.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/guzzle/psr7.git",
+                "reference": "21dc724a0583619cd1652f673303492272778051"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/guzzlehttp/psr7/2.8.0/guzzlehttp-psr7-2.8.0.zip",
@@ -1573,6 +1608,11 @@
             "name": "mtdowling/jmespath.php",
             "version": "2.8.0",
             "version_normalized": "2.8.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/jmespath/jmespath.php.git",
+                "reference": "a2a865e05d5f420b50cc2f85bb78d565db12a6bc"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/mtdowling/jmespath.php/2.8.0/mtdowling-jmespath.php-2.8.0.zip",
@@ -1636,6 +1676,11 @@
             "name": "myclabs/deep-copy",
             "version": "1.13.4",
             "version_normalized": "1.13.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/myclabs/DeepCopy.git",
+                "reference": "07d290f0c47959fd5eed98c95ee5602db07e0b6a"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/myclabs/deep-copy/1.13.4/myclabs-deep-copy-1.13.4.zip",
@@ -1914,6 +1959,11 @@
             "name": "nikic/php-parser",
             "version": "v5.7.0",
             "version_normalized": "5.7.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/nikic/PHP-Parser.git",
+                "reference": "dca41cd15c2ac9d055ad70dbfd011130757d1f82"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/nikic/php-parser/v5.7.0/nikic-php-parser-v5.7.0.zip",
@@ -2064,6 +2114,11 @@
             "name": "phar-io/manifest",
             "version": "2.0.4",
             "version_normalized": "2.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/phar-io/manifest.git",
+                "reference": "54750ef60c58e43759730615a392c31c80e23176"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phar-io/manifest/2.0.4/phar-io-manifest-2.0.4.zip",
@@ -2122,6 +2177,11 @@
             "name": "phar-io/version",
             "version": "3.2.1",
             "version_normalized": "3.2.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/phar-io/version.git",
+                "reference": "4f7fd7836c6f332bb2933569e566a0d6c4cbed74"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phar-io/version/3.2.1/phar-io-version-3.2.1.zip",
@@ -2655,6 +2715,11 @@
             "name": "phpunit/php-code-coverage",
             "version": "9.2.32",
             "version_normalized": "9.2.32.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/php-code-coverage.git",
+                "reference": "85402a822d1ecf1db1096959413d35e1c37cf1a5"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/php-code-coverage/9.2.32/phpunit-php-code-coverage-9.2.32.zip",
@@ -2724,6 +2789,11 @@
             "name": "phpunit/php-file-iterator",
             "version": "3.0.6",
             "version_normalized": "3.0.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/php-file-iterator.git",
+                "reference": "cf1c2e7c203ac650e352f4cc675a7021e7d1b3cf"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/php-file-iterator/3.0.6/phpunit-php-file-iterator-3.0.6.zip",
@@ -2775,6 +2845,11 @@
             "name": "phpunit/php-invoker",
             "version": "3.1.1",
             "version_normalized": "3.1.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/php-invoker.git",
+                "reference": "5a10147d0aaf65b58940a0b72f71c9ac0423cc67"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/php-invoker/3.1.1/phpunit-php-invoker-3.1.1.zip",
@@ -2829,6 +2904,11 @@
             "name": "phpunit/php-text-template",
             "version": "2.0.4",
             "version_normalized": "2.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/php-text-template.git",
+                "reference": "5da5f67fc95621df9ff4c4e5a84d6a8a2acf7c28"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/php-text-template/2.0.4/phpunit-php-text-template-2.0.4.zip",
@@ -2879,6 +2959,11 @@
             "name": "phpunit/php-timer",
             "version": "5.0.3",
             "version_normalized": "5.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/php-timer.git",
+                "reference": "5a63ce20ed1b5bf577850e2c4e87f4aa902afbd2"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/php-timer/5.0.3/phpunit-php-timer-5.0.3.zip",
@@ -2929,6 +3014,11 @@
             "name": "phpunit/phpunit",
             "version": "9.6.34",
             "version_normalized": "9.6.34.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/phpunit.git",
+                "reference": "b36f02317466907a230d3aa1d34467041271ef4a"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/phpunit/phpunit/9.6.34/phpunit-phpunit-9.6.34.zip",
@@ -3117,6 +3207,11 @@
             "name": "psr/http-client",
             "version": "1.0.3",
             "version_normalized": "1.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/php-fig/http-client.git",
+                "reference": "bb5906edc1c324c9a05aa0873d40117941e5fa90"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/psr/http-client/1.0.3/psr-http-client-1.0.3.zip",
@@ -3166,6 +3261,11 @@
             "name": "psr/http-factory",
             "version": "1.1.0",
             "version_normalized": "1.1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/php-fig/http-factory.git",
+                "reference": "2b4765fddfe3b508ac62f829e852b1501d3f6e8a"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/psr/http-factory/1.1.0/psr-http-factory-1.1.0.zip",
@@ -3218,6 +3318,11 @@
             "name": "psr/http-message",
             "version": "1.1",
             "version_normalized": "1.1.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/php-fig/http-message.git",
+                "reference": "cb6ce4845ce34a8ad9e68117c10ee90a29919eba"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/psr/http-message/1.1/psr-http-message-1.1.zip",
@@ -3494,6 +3599,11 @@
             "name": "ralouphie/getallheaders",
             "version": "3.0.3",
             "version_normalized": "3.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/ralouphie/getallheaders.git",
+                "reference": "120b605dfeb996808c31b6477290a714d356e822"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/ralouphie/getallheaders/3.0.3/ralouphie-getallheaders-3.0.3.zip",
@@ -3663,6 +3773,11 @@
             "name": "sebastian/cli-parser",
             "version": "1.0.2",
             "version_normalized": "1.0.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/cli-parser.git",
+                "reference": "2b56bea83a09de3ac06bb18b92f068e60cc6f50b"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/cli-parser/1.0.2/sebastian-cli-parser-1.0.2.zip",
@@ -3710,6 +3825,11 @@
             "name": "sebastian/code-unit",
             "version": "1.0.8",
             "version_normalized": "1.0.8.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/code-unit.git",
+                "reference": "1fc9f64c0927627ef78ba436c9b17d967e68e120"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/code-unit/1.0.8/sebastian-code-unit-1.0.8.zip",
@@ -3757,6 +3877,11 @@
             "name": "sebastian/code-unit-reverse-lookup",
             "version": "2.0.3",
             "version_normalized": "2.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/code-unit-reverse-lookup.git",
+                "reference": "ac91f01ccec49fb77bdc6fd1e548bc70f7faa3e5"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/code-unit-reverse-lookup/2.0.3/sebastian-code-unit-reverse-lookup-2.0.3.zip",
@@ -3803,6 +3928,11 @@
             "name": "sebastian/comparator",
             "version": "4.0.10",
             "version_normalized": "4.0.10.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/comparator.git",
+                "reference": "e4df00b9b3571187db2831ae9aada2c6efbd715d"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/comparator/4.0.10/sebastian-comparator-4.0.10.zip",
@@ -3868,6 +3998,11 @@
             "name": "sebastian/complexity",
             "version": "2.0.3",
             "version_normalized": "2.0.3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/complexity.git",
+                "reference": "25f207c40d62b8b7aa32f5ab026c53561964053a"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/complexity/2.0.3/sebastian-complexity-2.0.3.zip",
@@ -3916,6 +4051,11 @@
             "name": "sebastian/diff",
             "version": "4.0.6",
             "version_normalized": "4.0.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/diff.git",
+                "reference": "ba01945089c3a293b01ba9badc29ad55b106b0bc"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/diff/4.0.6/sebastian-diff-4.0.6.zip",
@@ -3973,6 +4113,11 @@
             "name": "sebastian/environment",
             "version": "5.1.5",
             "version_normalized": "5.1.5.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/environment.git",
+                "reference": "830c43a844f1f8d5b7a1f6d6076b784454d8b7ed"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/environment/5.1.5/sebastian-environment-5.1.5.zip",
@@ -4027,6 +4172,11 @@
             "name": "sebastian/exporter",
             "version": "4.0.8",
             "version_normalized": "4.0.8.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/exporter.git",
+                "reference": "14c6ba52f95a36c3d27c835d65efc7123c446e8c"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/exporter/4.0.8/sebastian-exporter-4.0.8.zip",
@@ -4095,6 +4245,11 @@
             "name": "sebastian/global-state",
             "version": "5.0.8",
             "version_normalized": "5.0.8.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/global-state.git",
+                "reference": "b6781316bdcd28260904e7cc18ec983d0d2ef4f6"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/global-state/5.0.8/sebastian-global-state-5.0.8.zip",
@@ -4150,6 +4305,11 @@
             "name": "sebastian/lines-of-code",
             "version": "1.0.4",
             "version_normalized": "1.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/lines-of-code.git",
+                "reference": "e1e4a170560925c26d424b6a03aed157e7dcc5c5"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/lines-of-code/1.0.4/sebastian-lines-of-code-1.0.4.zip",
@@ -4198,6 +4358,11 @@
             "name": "sebastian/object-enumerator",
             "version": "4.0.4",
             "version_normalized": "4.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/object-enumerator.git",
+                "reference": "5c9eeac41b290a3712d88851518825ad78f45c71"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/object-enumerator/4.0.4/sebastian-object-enumerator-4.0.4.zip",
@@ -4246,6 +4411,11 @@
             "name": "sebastian/object-reflector",
             "version": "2.0.4",
             "version_normalized": "2.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/object-reflector.git",
+                "reference": "b4f479ebdbf63ac605d183ece17d8d7fe49c15c7"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/object-reflector/2.0.4/sebastian-object-reflector-2.0.4.zip",
@@ -4292,6 +4462,11 @@
             "name": "sebastian/recursion-context",
             "version": "4.0.6",
             "version_normalized": "4.0.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/recursion-context.git",
+                "reference": "539c6691e0623af6dc6f9c20384c120f963465a0"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/recursion-context/4.0.6/sebastian-recursion-context-4.0.6.zip",
@@ -4346,6 +4521,11 @@
             "name": "sebastian/resource-operations",
             "version": "3.0.4",
             "version_normalized": "3.0.4.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/resource-operations.git",
+                "reference": "05d5692a7993ecccd56a03e40cd7e5b09b1d404e"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/resource-operations/3.0.4/sebastian-resource-operations-3.0.4.zip",
@@ -4391,6 +4571,11 @@
             "name": "sebastian/type",
             "version": "3.2.1",
             "version_normalized": "3.2.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/type.git",
+                "reference": "75e2c2a32f5e0b3aef905b9ed0b179b953b3d7c7"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/type/3.2.1/sebastian-type-3.2.1.zip",
@@ -4438,6 +4623,11 @@
             "name": "sebastian/version",
             "version": "3.0.2",
             "version_normalized": "3.0.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/sebastianbergmann/version.git",
+                "reference": "c6c1022351a901512170118436c764e473f6de8c"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/sebastian/version/3.0.2/sebastian-version-3.0.2.zip",
@@ -4927,6 +5117,11 @@
             "name": "symfony/deprecation-contracts",
             "version": "v3.6.0",
             "version_normalized": "3.6.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/deprecation-contracts.git",
+                "reference": "63afe740e99a13ba87ec199bb07bbdee937a5b62"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/symfony/deprecation-contracts/v3.6.0/symfony-deprecation-contracts-v3.6.0.zip",
@@ -4977,6 +5172,11 @@
             "name": "symfony/filesystem",
             "version": "v7.4.6",
             "version_normalized": "7.4.6.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/filesystem.git",
+                "reference": "3ebc794fa5315e59fd122561623c2e2e4280538e"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/symfony/filesystem/v7.4.6/symfony-filesystem-v7.4.6.zip",
@@ -5026,6 +5226,11 @@
             "name": "symfony/polyfill-ctype",
             "version": "v1.33.0",
             "version_normalized": "1.33.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/polyfill-ctype.git",
+                "reference": "a3cc8b044a6ea513310cbd48ef7333b384945638"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/symfony/polyfill-ctype/v1.33.0/symfony-polyfill-ctype-v1.33.0.zip",
@@ -5261,6 +5466,11 @@
             "name": "symfony/polyfill-mbstring",
             "version": "v1.33.0",
             "version_normalized": "1.33.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/polyfill-mbstring.git",
+                "reference": "6d857f4d76bd4b343eac26d6b539585d2bc56493"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/symfony/polyfill-mbstring/v1.33.0/symfony-polyfill-mbstring-v1.33.0.zip",
@@ -5408,6 +5618,11 @@
             "name": "symfony/polyfill-php80",
             "version": "v1.33.0",
             "version_normalized": "1.33.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/polyfill-php80.git",
+                "reference": "0cc9dd0f17f61d8131e7df6b84bd344899fe2608"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/symfony/polyfill-php80/v1.33.0/symfony-polyfill-php80-v1.33.0.zip",
@@ -5833,6 +6048,11 @@
             "name": "theseer/tokenizer",
             "version": "1.3.1",
             "version_normalized": "1.3.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/theseer/tokenizer.git",
+                "reference": "b7489ce515e168639d17feec34b8847c326b0b3c"
+            },
             "dist": {
                 "type": "zip",
                 "url": "https://mirrors.tencent.com/repository/composer/theseer/tokenizer/1.3.1/theseer-tokenizer-1.3.1.zip",

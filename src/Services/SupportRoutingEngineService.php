@@ -328,6 +328,8 @@ class SupportRoutingEngineService
 
         return array_map(function (array $row): array {
             $candidateScores = json_decode((string) ($row['candidate_scores_json'] ?? '[]'), true);
+            $summary = $this->decodeJsonObject($row['summary_json'] ?? null) ?? [];
+            $summary['top_factors'] = $this->normalizeTopFactors($summary['top_factors'] ?? []);
 
             return [
                 'id' => (int) ($row['id'] ?? 0),
@@ -340,14 +342,7 @@ class SupportRoutingEngineService
                 'candidate_scores' => is_array($candidateScores) ? $candidateScores : [],
                 'winner_user_id' => isset($row['winner_user_id']) ? (int) $row['winner_user_id'] : null,
                 'winner_score' => isset($row['winner_score']) ? (float) $row['winner_score'] : null,
-                'summary' => array_merge(
-                    $this->decodeJsonObject($row['summary_json'] ?? null) ?? [],
-                    [
-                        'top_factors' => $this->normalizeTopFactors(
-                            ($this->decodeJsonObject($row['summary_json'] ?? null) ?? [])['top_factors'] ?? []
-                        ),
-                    ]
-                ),
+                'summary' => $summary,
                 'created_at' => $row['created_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
             ];
@@ -538,7 +533,13 @@ class SupportRoutingEngineService
         if (is_array($value)) {
             $isList = array_keys($value) === range(0, count($value) - 1);
             if ($isList) {
-                return array_values(array_map(static fn ($item): string => trim((string) $item), array_filter($value, static fn ($item): bool => $item !== null && $item !== '')));
+                return array_values(array_map(
+                    static fn ($item): string => trim((string) $item),
+                    array_filter(
+                        $value,
+                        static fn ($item): bool => is_scalar($item) && trim((string) $item) !== ''
+                    )
+                ));
             }
 
             $pairs = [];
@@ -546,18 +547,12 @@ class SupportRoutingEngineService
                 if (!is_numeric($score)) {
                     continue;
                 }
-                $pairs[] = [
-                    'label' => (string) $key,
-                    'value' => (float) $score,
-                ];
+                $pairs[(string) $key] = (float) $score;
             }
 
-            usort($pairs, static fn (array $left, array $right): int => abs($right['value']) <=> abs($left['value']));
+            uasort($pairs, static fn (float $left, float $right): int => abs($right) <=> abs($left));
 
-            return array_map(
-                static fn (array $pair): string => sprintf('%s %.2f', $pair['label'], $pair['value']),
-                array_slice($pairs, 0, 4)
-            );
+            return array_slice($pairs, 0, 4, true);
         }
 
         if (is_string($value) && trim($value) !== '') {
