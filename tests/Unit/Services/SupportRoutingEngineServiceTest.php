@@ -358,4 +358,35 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('first_response', $summary['active_target']);
         $this->assertSame('due_soon', $summary['first_response']['state']);
     }
+
+    public function testGetRoutingSummaryNormalizesTopFactors(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('support_ticket_routing_runs')->insert([
+            'ticket_id' => 101,
+            'trigger' => 'created',
+            'used_ai' => 1,
+            'summary_json' => json_encode([
+                'top_factors' => [
+                    'severity' => 12.5,
+                    'priority' => 9.0,
+                ],
+            ]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $summary = $engine->getRoutingSummaryForTicket(101);
+
+        $this->assertIsArray($summary['top_factors']);
+        $this->assertSame('severity 12.50', $summary['top_factors'][0]);
+    }
 }

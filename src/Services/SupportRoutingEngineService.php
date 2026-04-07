@@ -99,6 +99,7 @@ class SupportRoutingEngineService
         $winner = $scoredCandidates[0] ?? null;
         $winnerId = $winner['candidate']['id'] ?? null;
         $winnerScore = $winner['total_score'] ?? null;
+        $topFactors = $this->normalizeTopFactors($winner['breakdown'] ?? []);
         $summary = [
             'locked' => false,
             'used_ai' => (bool) $triageResult['used_ai'],
@@ -107,7 +108,7 @@ class SupportRoutingEngineService
             'required_agent_level' => $requiredLevel,
             'suggested_skills' => $skillHints,
             'winner_score' => $winnerScore,
-            'top_factors' => $winner['breakdown'] ?? [],
+            'top_factors' => $topFactors,
         ];
 
         try {
@@ -267,6 +268,7 @@ class SupportRoutingEngineService
         }
 
         $summary = $this->decodeJsonObject($row['summary_json'] ?? null) ?? [];
+        $summary['top_factors'] = $this->normalizeTopFactors($summary['top_factors'] ?? []);
         $summary['last_run_id'] = (int) ($row['id'] ?? 0);
         return $summary;
     }
@@ -338,7 +340,14 @@ class SupportRoutingEngineService
                 'candidate_scores' => is_array($candidateScores) ? $candidateScores : [],
                 'winner_user_id' => isset($row['winner_user_id']) ? (int) $row['winner_user_id'] : null,
                 'winner_score' => isset($row['winner_score']) ? (float) $row['winner_score'] : null,
-                'summary' => $this->decodeJsonObject($row['summary_json'] ?? null) ?? [],
+                'summary' => array_merge(
+                    $this->decodeJsonObject($row['summary_json'] ?? null) ?? [],
+                    [
+                        'top_factors' => $this->normalizeTopFactors(
+                            ($this->decodeJsonObject($row['summary_json'] ?? null) ?? [])['top_factors'] ?? []
+                        ),
+                    ]
+                ),
                 'created_at' => $row['created_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
             ];
@@ -522,6 +531,40 @@ class SupportRoutingEngineService
             'due_soon' => 'due_soon',
             default => 'pending',
         };
+    }
+
+    private function normalizeTopFactors(mixed $value): array
+    {
+        if (is_array($value)) {
+            $isList = array_keys($value) === range(0, count($value) - 1);
+            if ($isList) {
+                return array_values(array_map(static fn ($item): string => trim((string) $item), array_filter($value, static fn ($item): bool => $item !== null && $item !== '')));
+            }
+
+            $pairs = [];
+            foreach ($value as $key => $score) {
+                if (!is_numeric($score)) {
+                    continue;
+                }
+                $pairs[] = [
+                    'label' => (string) $key,
+                    'value' => (float) $score,
+                ];
+            }
+
+            usort($pairs, static fn (array $left, array $right): int => abs($right['value']) <=> abs($left['value']));
+
+            return array_map(
+                static fn (array $pair): string => sprintf('%s %.2f', $pair['label'], $pair['value']),
+                array_slice($pairs, 0, 4)
+            );
+        }
+
+        if (is_string($value) && trim($value) !== '') {
+            return [trim($value)];
+        }
+
+        return [];
     }
 
     private function ensureDeadlineFields(array $ticket, array $groupRouting): void
