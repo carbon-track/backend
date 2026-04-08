@@ -15996,7 +15996,7 @@
           "Support"
         ],
         "summary": "获取客服工单队列",
-        "description": "客服与管理员可查看支持队列并按状态、分类、分配人或关键字过滤。",
+        "description": "客服默认仅查看分配给自己的工单；传 pending_transfer_target=1 时可查看待自己审批的转单工单。管理员可查看全部队列并按状态、分类、分配人或关键字过滤。",
         "operationId": "supportQueueList",
         "security": [
           {
@@ -16063,7 +16063,19 @@
               "type": "integer",
               "minimum": 0
             },
-            "description": "客服或管理员用户 ID；传 0 表示仅筛选未分配工单。"
+            "description": "管理员可按客服或管理员用户 ID 过滤；传 0 表示仅筛选未分配工单。"
+          },
+          {
+            "name": "pending_transfer_target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            },
+            "description": "当前登录客服或管理员传 1 时，仅返回待自己审批的转单工单。"
           },
           {
             "name": "q",
@@ -26956,6 +26968,16 @@
               }
             ]
           },
+          "pending_transfer_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTransferRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sla_summary": {
             "type": "object",
             "properties": {
@@ -27846,6 +27868,12 @@
           "winner_score": {
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "winner_label": {
+            "type": [
+              "string",
               "null"
             ]
           },

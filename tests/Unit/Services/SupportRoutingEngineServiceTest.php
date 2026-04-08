@@ -418,4 +418,37 @@ class SupportRoutingEngineServiceTest extends TestCase
 
         $this->assertSame(['severity', '0', 'priority'], $summary['top_factors']);
     }
+
+    public function testRoutingRunsPreserveStoredCandidateNames(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('support_ticket_routing_runs')->insert([
+            'ticket_id' => 103,
+            'trigger' => 'created',
+            'used_ai' => 1,
+            'winner_user_id' => 12,
+            'winner_score' => 66.5,
+            'candidate_scores_json' => json_encode([
+                ['candidate' => ['id' => 11, 'username' => 'alpha'], 'candidate_id' => 11, 'total_score' => 61.2],
+                ['candidate' => ['id' => 12, 'username' => 'beta'], 'candidate_id' => 12, 'total_score' => 66.5],
+            ]),
+            'summary_json' => json_encode(['winner_label' => 'beta']),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $runs = $engine->getRoutingRunsForTicket(103);
+
+        $this->assertSame('alpha', $runs[0]['candidate_scores'][0]['candidate']['username']);
+        $this->assertSame('beta', $runs[0]['candidate_scores'][1]['candidate']['username']);
+        $this->assertSame('beta', $runs[0]['summary']['winner_label']);
+    }
 }

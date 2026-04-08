@@ -108,6 +108,7 @@ class SupportRoutingEngineService
             'required_agent_level' => $requiredLevel,
             'suggested_skills' => $skillHints,
             'winner_score' => $winnerScore,
+            'winner_label' => $winner !== null ? ($winner['candidate']['username'] ?? $winner['candidate']['email'] ?? ('User #' . (int) ($winner['candidate']['id'] ?? 0))) : null,
             'top_factors' => $topFactors,
         ];
 
@@ -126,6 +127,7 @@ class SupportRoutingEngineService
                 'triage_json' => $this->encodeJson($triageResult['triage']),
                 'matched_rule_ids_json' => $this->encodeJson($matchedRuleIds),
                 'candidate_scores_json' => $this->encodeJson(array_map(fn (array $candidate): array => [
+                    'candidate' => $candidate['candidate'],
                     'candidate_id' => (int) ($candidate['candidate']['id'] ?? 0),
                     'total_score' => round((float) ($candidate['total_score'] ?? 0), 2),
                     'breakdown' => $candidate['breakdown'],
@@ -325,11 +327,11 @@ class SupportRoutingEngineService
         $stmt->bindValue(':ticket_id', $ticketId, PDO::PARAM_INT);
         $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
         $stmt->execute();
-
         return array_map(function (array $row): array {
             $candidateScores = json_decode((string) ($row['candidate_scores_json'] ?? '[]'), true);
             $summary = $this->decodeJsonObject($row['summary_json'] ?? null) ?? [];
             $summary['top_factors'] = $this->normalizeTopFactors($summary['top_factors'] ?? []);
+            $winnerUserId = isset($row['winner_user_id']) ? (int) $row['winner_user_id'] : null;
 
             return [
                 'id' => (int) ($row['id'] ?? 0),
@@ -340,7 +342,7 @@ class SupportRoutingEngineService
                 'triage' => $this->decodeJsonObject($row['triage_json'] ?? null) ?? [],
                 'matched_rule_ids' => array_map('intval', $this->decodeJsonList($row['matched_rule_ids_json'] ?? null)),
                 'candidate_scores' => is_array($candidateScores) ? $candidateScores : [],
-                'winner_user_id' => isset($row['winner_user_id']) ? (int) $row['winner_user_id'] : null,
+                'winner_user_id' => $winnerUserId,
                 'winner_score' => isset($row['winner_score']) ? (float) $row['winner_score'] : null,
                 'summary' => $summary,
                 'created_at' => $row['created_at'] ?? null,
@@ -742,6 +744,7 @@ class SupportRoutingEngineService
             'candidate' => [
                 'id' => (int) ($candidate['id'] ?? 0),
                 'username' => $candidate['username'] ?? null,
+                'email' => $candidate['email'] ?? null,
             ],
             'total_score' => round($total, 2),
             'breakdown' => [
