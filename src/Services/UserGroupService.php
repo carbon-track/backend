@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Models\UserGroup;
+use CarbonTrack\Support\InputValueNormalizer;
 
 class UserGroupService
 {
@@ -136,6 +137,10 @@ class UserGroupService
         unset($payload['quota_flat']);
         unset($payload['support_routing']);
 
+        if (array_key_exists('is_default', $payload)) {
+            $payload['is_default'] = $this->normalizeBooleanValue($payload['is_default']);
+        }
+
         $config = $this->quotaConfigService->decodeJsonToArray($data['config'] ?? null);
         $current = $this->quotaConfigService->decodeJsonToArray($currentConfig);
 
@@ -155,6 +160,18 @@ class UserGroupService
         }
 
         return $payload;
+    }
+
+    private function normalizeBooleanValue(mixed $value, bool $default = false): bool
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '' || strtolower($trimmed) === 'indeterminate') {
+                return $default;
+            }
+        }
+
+        return InputValueNormalizer::boolean($value, 'is_default', $default);
     }
 
     private function normalizeSupportRouting(mixed $value): array

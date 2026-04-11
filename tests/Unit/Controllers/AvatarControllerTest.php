@@ -125,6 +125,96 @@ class AvatarControllerTest extends TestCase
         $resp = $controller->getAvatar($request, $response, ['id'=>1]);
         $this->assertEquals(403, $resp->getStatusCode());
     }
+
+    public function testUpdateAvatarNormalizesEmptyStringDefaultFlag(): void
+    {
+        $avatarModel = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1]);
+        $audit->method('log')->willReturn(true);
+
+        $existingAvatar = [
+            'id' => 5,
+            'name' => 'Original Avatar',
+            'file_path' => '/avatars/original.png',
+            'is_default' => 1,
+        ];
+        $updatedAvatar = [
+            'id' => 5,
+            'name' => 'Original Avatar',
+            'file_path' => '/avatars/original.png',
+            'is_default' => 0,
+        ];
+
+        $avatarModel->expects($this->exactly(2))
+            ->method('getAvatarById')
+            ->with(5)
+            ->willReturnOnConsecutiveCalls($existingAvatar, $updatedAvatar);
+        $avatarModel->expects($this->never())->method('setDefaultAvatar');
+        $avatarModel->expects($this->once())
+            ->method('updateAvatar')
+            ->with(5, $this->callback(function (array $data): bool {
+                $this->assertArrayHasKey('is_default', $data);
+                $this->assertFalse($data['is_default']);
+                return true;
+            }))
+            ->willReturn(true);
+
+        /** @var \CarbonTrack\Models\Avatar $avatarModel */
+        /** @var \CarbonTrack\Services\AuthService $auth */
+        /** @var \CarbonTrack\Services\AuditLogService $audit */
+        /** @var \CarbonTrack\Services\CloudflareR2Service $r2 */
+        /** @var \Monolog\Logger $logger */
+        /** @var \CarbonTrack\Services\ErrorLogService $errorLog */
+        $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger, $errorLog);
+
+        $request = makeRequest('PUT', '/admin/avatars/5', [
+            'is_default' => '',
+        ]);
+        $response = $controller->updateAvatar($request, new \Slim\Psr7\Response(), ['id' => 5]);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame(0, $payload['data']['is_default']);
+    }
+
+    public function testUpdateAvatarRejectsInvalidSortOrderString(): void
+    {
+        $avatarModel = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1]);
+        $avatarModel->expects($this->never())->method('updateAvatar');
+
+        /** @var \CarbonTrack\Models\Avatar $avatarModel */
+        /** @var \CarbonTrack\Services\AuthService $auth */
+        /** @var \CarbonTrack\Services\AuditLogService $audit */
+        /** @var \CarbonTrack\Services\CloudflareR2Service $r2 */
+        /** @var \Monolog\Logger $logger */
+        /** @var \CarbonTrack\Services\ErrorLogService $errorLog */
+        $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger, $errorLog);
+
+        $response = $controller->updateAvatar(
+            makeRequest('PUT', '/admin/avatars/5', ['sort_order' => 'abc']),
+            new \Slim\Psr7\Response(),
+            ['id' => 5]
+        );
+
+        $this->assertSame(400, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
+    }
 }
 
 

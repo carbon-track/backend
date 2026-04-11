@@ -7,6 +7,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\InputValueNormalizer;
 use PDO;
 use Illuminate\Database\QueryException;
 
@@ -108,11 +109,30 @@ class SchoolController extends BaseController
     // Admin: Create a new school
     public function store(Request $request, Response $response, array $args)
     {
-        $data = $request->getParsedBody();
+        $payload = $request->getParsedBody();
+        if (!is_array($payload)) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'Request body must be a JSON object',
+                'code' => 'INVALID_REQUEST_BODY',
+            ], 400);
+        }
+
+        try {
+            $data = $this->sanitizeSchoolPayload($payload);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'code' => 'VALIDATION_ERROR',
+            ], 400);
+        }
+
         $this->validate($data, [
             "name" => "required|string|max:255",
             "location" => "required|string|max:255",
-            "is_active" => "boolean"
+            "is_active" => "boolean",
+            "sort_order" => "integer"
         ]);
 
         $school = School::create($data);
@@ -229,11 +249,30 @@ class SchoolController extends BaseController
             ], 404);
         }
 
-        $data = $request->getParsedBody();
+        $payload = $request->getParsedBody();
+        if (!is_array($payload)) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => 'Request body must be a JSON object',
+                'code' => 'INVALID_REQUEST_BODY',
+            ], 400);
+        }
+
+        try {
+            $data = $this->sanitizeSchoolPayload($payload);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->response($response, [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'code' => 'VALIDATION_ERROR',
+            ], 400);
+        }
+
         $this->validate($data, [
             "name" => "string|max:255",
             "location" => "string|max:255",
-            "is_active" => "boolean"
+            "is_active" => "boolean",
+            "sort_order" => "integer"
         ]);
 
         $oldData = $school->toArray();
@@ -498,6 +537,27 @@ class SchoolController extends BaseController
         } else {
             error_log($exception->getMessage());
         }
+    }
+
+    /**
+     * @param mixed $payload
+     * @return array<string,mixed>
+     */
+    private function sanitizeSchoolPayload(mixed $payload): array
+    {
+        if (!is_array($payload)) {
+            throw new \InvalidArgumentException('Request body must be a JSON object');
+        }
+
+        if (array_key_exists('is_active', $payload)) {
+            $payload['is_active'] = InputValueNormalizer::boolean($payload['is_active'], 'is_active');
+        }
+
+        if (array_key_exists('sort_order', $payload)) {
+            $payload['sort_order'] = InputValueNormalizer::integer($payload['sort_order'], 'sort_order');
+        }
+
+        return $payload;
     }
 
 }

@@ -71,6 +71,77 @@ class AvatarTest extends TestCase
             'Avatar query failed: db down',
         ], $loggedMessages);
     }
+
+    public function testCreateAvatarNormalizesEmptyStringNumericFields(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->once())
+            ->method('execute')
+            ->with($this->callback(function (array $params): bool {
+                $this->assertCount(9, $params);
+                $this->assertIsString($params[0]);
+                $this->assertSame('Demo Avatar', $params[1]);
+                $this->assertSame('/avatars/demo.png', $params[3]);
+                $this->assertSame(0, $params[6]);
+                $this->assertSame(0, $params[7]);
+                $this->assertSame(0, $params[8]);
+                return true;
+            }))
+            ->willReturn(true);
+        $pdo->method('prepare')->willReturn($stmt);
+        $pdo->method('lastInsertId')->willReturn('12');
+        $logger = $this->createMock(LoggerInterface::class);
+
+        $model = new Avatar($pdo, $logger);
+        $avatarId = $model->createAvatar([
+            'name' => 'Demo Avatar',
+            'file_path' => '/avatars/demo.png',
+            'sort_order' => '',
+            'is_active' => '',
+            'is_default' => '',
+        ]);
+
+        $this->assertSame(12, $avatarId);
+    }
+
+    public function testUpdateAvatarNormalizesEmptyStringNumericFields(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->once())
+            ->method('execute')
+            ->with([0, 0, 0, 7])
+            ->willReturn(true);
+        $pdo->method('prepare')->willReturn($stmt);
+        $logger = $this->createMock(LoggerInterface::class);
+
+        $model = new Avatar($pdo, $logger);
+        $result = $model->updateAvatar(7, [
+            'sort_order' => '',
+            'is_active' => '',
+            'is_default' => '',
+        ]);
+
+        $this->assertTrue($result);
+    }
+
+    public function testCreateAvatarRejectsInvalidNonEmptyNumericStrings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $logger = $this->createMock(LoggerInterface::class);
+
+        $model = new Avatar($pdo, $logger);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('sort_order must be an integer');
+
+        $model->createAvatar([
+            'name' => 'Demo Avatar',
+            'file_path' => '/avatars/demo.png',
+            'sort_order' => 'abc',
+        ]);
+    }
 }
 
 

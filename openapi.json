@@ -6894,6 +6894,16 @@
           "201": {
             "description": "创建成功"
           },
+          "400": {
+            "description": "请求体不是 JSON 对象，或字段值格式不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
             "content": {
@@ -6954,6 +6964,16 @@
         "responses": {
           "200": {
             "description": "更新成功"
+          },
+          "400": {
+            "description": "请求体不是 JSON 对象，或字段值格式不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
