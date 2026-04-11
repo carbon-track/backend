@@ -7,6 +7,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 use CarbonTrack\Controllers\SupportTicketController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
@@ -28,7 +29,8 @@ class SupportTicketControllerTest extends TestCase
         ?AuthService $authService = null,
         ?TurnstileService $turnstileService = null,
         ?SupportRoutingEngineService $supportRoutingEngineService = null,
-        ?AuditLogService $auditLogService = null
+        ?AuditLogService $auditLogService = null,
+        ?CronSchedulerService $cronSchedulerService = null
     ): SupportTicketController {
         return new SupportTicketController(
             $supportTicketService ?? $this->createMock(SupportTicketService::class),
@@ -37,7 +39,8 @@ class SupportTicketControllerTest extends TestCase
             $this->createMock(LoggerInterface::class),
             $this->createMock(ErrorLogService::class),
             $supportRoutingEngineService,
-            $auditLogService
+            $auditLogService,
+            $cronSchedulerService
         );
     }
 
@@ -239,7 +242,15 @@ class SupportTicketControllerTest extends TestCase
         $_GET['key'] = 'expected-secret';
 
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent');
+        $audit->expects($this->once())
+            ->method('logSystemEvent')
+            ->with(
+                'support_sla_sweep_endpoint_triggered',
+                'support_sla_sweep',
+                $this->callback(static function (array $context): bool {
+                    return ($context['request_id'] ?? null) === null || is_string($context['request_id'] ?? null);
+                })
+            );
 
         $engine = $this->createMock(SupportRoutingEngineService::class);
         $engine->expects($this->once())
@@ -257,6 +268,80 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->getStatusCode());
+        unset($_GET['key']);
+    }
+
+    public function testRunSlaSweepUsesSchedulerWhenAvailable(): void
+    {
+        $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
+        $_GET['key'] = 'expected-secret';
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logSystemEvent');
+
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->once())
+            ->method('runTaskNow')
+            ->with(CronSchedulerService::TASK_SUPPORT_SLA_SWEEP, 'legacy_endpoint', $this->arrayHasKey('request_id'))
+            ->willReturn(['task_key' => CronSchedulerService::TASK_SUPPORT_SLA_SWEEP, 'status' => 'success', 'result' => ['processed' => 3]]);
+
+        $controller = $this->makeController(
+            supportRoutingEngineService: $this->createMock(SupportRoutingEngineService::class),
+            auditLogService: $audit,
+            cronSchedulerService: $scheduler
+        );
+
+        $response = $controller->runSlaSweep(
+            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertSame(3, $payload['data']['processed']);
+        unset($_GET['key']);
+    }
+
+    public function testRunSlaSweepReturnsFailureWhenSchedulerRunFails(): void
+    {
+        $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
+        $_GET['key'] = 'expected-secret';
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logSystemEvent')
+            ->with(
+                'support_sla_sweep_endpoint_triggered',
+                'support_sla_sweep',
+                $this->callback(static function (array $context): bool {
+                    return ($context['request_id'] ?? null) === null || is_string($context['request_id'] ?? null);
+                })
+            );
+
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->once())
+            ->method('runTaskNow')
+            ->willReturn([
+                'task_key' => CronSchedulerService::TASK_SUPPORT_SLA_SWEEP,
+                'status' => 'failed',
+                'error_message' => 'task_failed',
+                'result' => [],
+            ]);
+
+        $controller = $this->makeController(
+            supportRoutingEngineService: $this->createMock(SupportRoutingEngineService::class),
+            auditLogService: $audit,
+            cronSchedulerService: $scheduler
+        );
+
+        $response = $controller->runSlaSweep(
+            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(503, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
         unset($_GET['key']);
     }
 }

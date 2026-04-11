@@ -10,7 +10,8 @@ class AdminAiReadModelService
 {
     public function __construct(
         private PDO $db,
-        private ?StatisticsService $statisticsService = null
+        private ?StatisticsService $statisticsService = null,
+        private ?CronSchedulerService $cronSchedulerService = null
     ) {
     }
 
@@ -36,6 +37,8 @@ class AdminAiReadModelService
             'get_product_catalog' => $this->queryProductCatalog($payload),
             'get_passkey_admin_stats' => $this->queryPasskeyAdminStats(),
             'get_passkey_admin_list' => $this->queryPasskeyAdminList($payload),
+            'get_cron_tasks' => $this->queryCronTasks(),
+            'get_cron_runs' => $this->queryCronRuns($payload),
             'search_system_logs' => $this->querySystemLogs($payload),
             'get_broadcast_history' => $this->queryBroadcastHistory($payload),
             'search_broadcast_recipients' => $this->queryBroadcastRecipients($payload),
@@ -721,6 +724,163 @@ class AdminAiReadModelService
     }
 
     /**
+     * @return array<string,mixed>
+     */
+    private function queryCronTasks(): array
+    {
+        if ($this->cronSchedulerService !== null) {
+            $items = $this->cronSchedulerService->listTasks();
+            return [
+                'scope' => 'cron_tasks',
+                'total' => count($items),
+                'items' => $items,
+            ];
+        }
+
+        $stmt = $this->db->query("SELECT
+                task_key,
+                task_name,
+                description,
+                interval_minutes,
+                enabled,
+                next_run_at,
+                last_started_at,
+                last_finished_at,
+                last_status,
+                last_error,
+                last_duration_ms,
+                consecutive_failures,
+                lock_token,
+                locked_at,
+                settings_json
+            FROM cron_tasks
+            ORDER BY task_key ASC");
+
+        $items = [];
+        foreach (($stmt?->fetchAll(PDO::FETCH_ASSOC)) ?: [] as $row) {
+            $settings = $this->decodeJson($row['settings_json'] ?? null);
+            $items[] = [
+                'task_key' => $row['task_key'] ?? null,
+                'task_name' => $row['task_name'] ?? null,
+                'description' => $row['description'] ?? null,
+                'interval_minutes' => isset($row['interval_minutes']) ? (int) $row['interval_minutes'] : 0,
+                'enabled' => !empty($row['enabled']),
+                'next_run_at' => $row['next_run_at'] ?? null,
+                'last_started_at' => $row['last_started_at'] ?? null,
+                'last_finished_at' => $row['last_finished_at'] ?? null,
+                'last_status' => $row['last_status'] ?? null,
+                'last_error' => $row['last_error'] ?? null,
+                'last_duration_ms' => isset($row['last_duration_ms']) ? (int) $row['last_duration_ms'] : null,
+                'consecutive_failures' => isset($row['consecutive_failures']) ? (int) $row['consecutive_failures'] : 0,
+                'locked_at' => $row['locked_at'] ?? null,
+                'settings' => $settings,
+                'is_due' => !empty($row['enabled']) && !empty($row['next_run_at']) && ($row['next_run_at'] <= $this->currentCronNow()),
+                'is_locked' => !empty($row['lock_token']) && !empty($row['locked_at']),
+            ];
+        }
+
+        return [
+            'scope' => 'cron_tasks',
+            'total' => count($items),
+            'items' => $items,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function queryCronRuns(array $payload): array
+    {
+        if ($this->cronSchedulerService !== null) {
+            $result = $this->cronSchedulerService->listRuns($payload);
+            return [
+                'scope' => 'cron_runs',
+                'total' => (int) (($result['pagination']['total'] ?? 0)),
+                'items' => $result['items'] ?? [],
+                'pagination' => $result['pagination'] ?? null,
+            ];
+        }
+
+        $page = max(1, (int) ($payload['page'] ?? 1));
+        $limit = max(1, min(100, (int) ($payload['limit'] ?? 20)));
+        $status = strtolower(trim((string) ($payload['status'] ?? '')));
+        $taskKey = trim((string) ($payload['task_key'] ?? ''));
+        $triggerSource = strtolower(trim((string) ($payload['trigger_source'] ?? '')));
+        $validStatuses = ['success', 'failed', 'skipped'];
+        $validSources = ['cron_endpoint', 'legacy_endpoint', 'admin_manual'];
+
+        $where = ['1 = 1'];
+        $params = [];
+        if ($taskKey !== '') {
+            $where[] = 'task_key = :task_key';
+            $params[':task_key'] = $taskKey;
+        }
+        if ($status !== '') {
+            if (!in_array($status, $validStatuses, true)) {
+                throw new \InvalidArgumentException('Invalid cron run status');
+            }
+            $where[] = 'status = :status';
+            $params[':status'] = $status;
+        }
+        if ($triggerSource !== '') {
+            if (!in_array($triggerSource, $validSources, true)) {
+                throw new \InvalidArgumentException('Invalid cron trigger source');
+            }
+            $where[] = 'trigger_source = :trigger_source';
+            $params[':trigger_source'] = $triggerSource;
+        }
+
+        $countStmt = $this->db->prepare('SELECT COUNT(*) FROM cron_runs WHERE ' . implode(' AND ', $where));
+        foreach ($params as $key => $value) {
+            $countStmt->bindValue($key, $value);
+        }
+        $countStmt->execute();
+        $total = (int) $countStmt->fetchColumn();
+
+        $sql = 'SELECT id, task_key, trigger_source, request_id, status, started_at, finished_at, duration_ms, result_json, error_message, created_at
+            FROM cron_runs
+            WHERE ' . implode(' AND ', $where) . '
+            ORDER BY id DESC
+            LIMIT :limit OFFSET :offset';
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':offset', ($page - 1) * $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $items = [];
+        foreach (($stmt->fetchAll(PDO::FETCH_ASSOC)) ?: [] as $row) {
+            $items[] = [
+                'id' => isset($row['id']) ? (int) $row['id'] : null,
+                'task_key' => $row['task_key'] ?? null,
+                'trigger_source' => $row['trigger_source'] ?? null,
+                'request_id' => $row['request_id'] ?? null,
+                'status' => $row['status'] ?? null,
+                'started_at' => $row['started_at'] ?? null,
+                'finished_at' => $row['finished_at'] ?? null,
+                'duration_ms' => isset($row['duration_ms']) ? (int) $row['duration_ms'] : null,
+                'result' => $this->decodeJson($row['result_json'] ?? null),
+                'error_message' => $row['error_message'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }
+
+        return [
+            'scope' => 'cron_runs',
+            'total' => $total,
+            'items' => $items,
+            'pagination' => [
+                'page' => $page,
+                'limit' => $limit,
+                'total' => $total,
+            ],
+        ];
+    }
+
+    /**
      * @param array<string,mixed> $payload
      * @return array<string,mixed>
      */
@@ -1058,6 +1218,11 @@ class AdminAiReadModelService
         }
 
         return preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $normalized) === 1 ? $normalized : null;
+    }
+
+    private function currentCronNow(): string
+    {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
     }
 
     /**

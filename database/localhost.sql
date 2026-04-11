@@ -381,6 +381,53 @@ CREATE TABLE `support_ticket_routing_runs` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `cron_tasks`
+--
+
+CREATE TABLE `cron_tasks` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `task_key` varchar(64) NOT NULL,
+  `task_name` varchar(128) NOT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `interval_minutes` int(11) NOT NULL DEFAULT '5',
+  `enabled` tinyint(1) NOT NULL DEFAULT '1',
+  `next_run_at` datetime DEFAULT NULL,
+  `last_started_at` datetime DEFAULT NULL,
+  `last_finished_at` datetime DEFAULT NULL,
+  `last_status` varchar(32) NOT NULL DEFAULT 'idle',
+  `last_error` text DEFAULT NULL,
+  `last_duration_ms` int(11) DEFAULT NULL,
+  `consecutive_failures` int(11) NOT NULL DEFAULT '0',
+  `lock_token` varchar(64) DEFAULT NULL,
+  `locked_at` datetime DEFAULT NULL,
+  `settings_json` longtext DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `cron_runs`
+--
+
+CREATE TABLE `cron_runs` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `task_key` varchar(64) NOT NULL,
+  `trigger_source` varchar(32) NOT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
+  `status` varchar(32) NOT NULL,
+  `started_at` datetime NOT NULL,
+  `finished_at` datetime DEFAULT NULL,
+  `duration_ms` int(11) DEFAULT NULL,
+  `result_json` longtext DEFAULT NULL,
+  `error_message` text DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `avatars`
 --
 
@@ -1031,6 +1078,16 @@ INSERT INTO `user_groups` (`id`, `name`, `code`, `config`, `is_default`, `notes`
 (1, 'Free', 'free', '{"llm": {"daily_limit": 10, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 2}, "support_routing": {"first_response_minutes": 240, "resolution_minutes": 1440, "routing_weight": 1, "min_agent_level": 1, "overdue_boost": 1, "tier_label": "standard"}}', 1, 'Default free tier'),
 (2, 'Premium', 'premium', '{"llm": {"daily_limit": 100, "rate_limit": 60}, "checkin_makeup": {"monthly_limit": 5}, "support_routing": {"first_response_minutes": 60, "resolution_minutes": 720, "routing_weight": 1.5, "min_agent_level": 2, "overdue_boost": 1.5, "tier_label": "premium"}}', 0, 'Premium tier');
 
+--
+-- 转存表中的数据 `cron_tasks`
+--
+
+INSERT INTO `cron_tasks` (`id`, `task_key`, `task_name`, `description`, `interval_minutes`, `enabled`, `next_run_at`, `last_status`, `consecutive_failures`, `settings_json`) VALUES
+(1, 'support_sla_sweep', 'Support SLA Sweep', 'Inspect unresolved support tickets, update SLA status, and reroute escalated tickets.', 1, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
+(2, 'badge_auto_award', 'Badge Auto Award', 'Evaluate active users against badge auto-grant rules and award newly qualified badges.', 5, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
+(3, 'leaderboard_refresh', 'Leaderboard Refresh', 'Refresh the main points leaderboard cache for global, regional, and school rankings.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
+(4, 'streak_leaderboard_refresh', 'Streak Leaderboard Refresh', 'Refresh the streak leaderboard cache for current and longest check-in streak rankings.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}');
+
 -- --------------------------------------------------------
 
 --
@@ -1367,6 +1424,26 @@ ALTER TABLE `support_ticket_routing_runs`
   ADD KEY `idx_support_ticket_routing_runs_trigger` (`trigger`),
   ADD KEY `idx_support_ticket_routing_runs_winner_user_id` (`winner_user_id`);
 
+--
+-- 表的索引 `cron_tasks`
+--
+ALTER TABLE `cron_tasks`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_cron_tasks_task_key` (`task_key`),
+  ADD KEY `idx_cron_tasks_enabled_next_run` (`enabled`,`next_run_at`),
+  ADD KEY `idx_cron_tasks_last_status` (`last_status`),
+  ADD KEY `idx_cron_tasks_locked_at` (`locked_at`);
+
+--
+-- 表的索引 `cron_runs`
+--
+ALTER TABLE `cron_runs`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_cron_runs_task_key_created_at` (`task_key`,`created_at`),
+  ADD KEY `idx_cron_runs_status` (`status`),
+  ADD KEY `idx_cron_runs_trigger_source` (`trigger_source`),
+  ADD KEY `idx_cron_runs_request_id` (`request_id`);
+
 -- 
 -- 表的索引 `points_transactions`
 --
@@ -1645,6 +1722,18 @@ ALTER TABLE `support_routing_settings`
 -- 使用表AUTO_INCREMENT `support_ticket_routing_runs`
 --
 ALTER TABLE `support_ticket_routing_runs`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `cron_tasks`
+--
+ALTER TABLE `cron_tasks`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `cron_runs`
+--
+ALTER TABLE `cron_runs`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\LeaderboardService;
 use Monolog\Logger;
@@ -17,7 +18,8 @@ class LeaderboardController
         private LeaderboardService $leaderboardService,
         private Logger $logger,
         private AuditLogService $auditLogService,
-        private ErrorLogService $errorLogService
+        private ErrorLogService $errorLogService,
+        private ?CronSchedulerService $cronSchedulerService = null
     ) {}
 
     public function triggerRefresh(Request $request, Response $response): Response
@@ -49,14 +51,34 @@ class LeaderboardController
                 ], 403);
             }
 
-            $snapshot = $this->leaderboardService->rebuildCache('manual-trigger');
-            $meta = [
-                'generated_at' => $snapshot['generated_at'] ?? null,
-                'expires_at' => $snapshot['expires_at'] ?? null,
-                'global_count' => isset($snapshot['global']) ? count($snapshot['global']) : 0,
-                'regions_count' => isset($snapshot['regions']) ? count($snapshot['regions']) : 0,
-                'schools_count' => isset($snapshot['schools']) ? count($snapshot['schools']) : 0,
-            ];
+            if ($this->cronSchedulerService !== null) {
+                $taskRun = $this->cronSchedulerService->runTaskNow(CronSchedulerService::TASK_LEADERBOARD_REFRESH, 'legacy_endpoint', [
+                    'request_id' => $request->getAttribute('request_id'),
+                ]);
+                if (($taskRun['status'] ?? null) !== 'success') {
+                    $status = ($taskRun['status'] ?? null) === 'skipped' ? 409 : 503;
+                    $message = $taskRun['error_message'] ?? 'Leaderboard refresh did not complete successfully';
+                    $this->logSystemAudit('leaderboard_refresh_failed', $request, [
+                        'data' => $taskRun,
+                    ], 'failed');
+
+                    return $this->json($response, [
+                        'success' => false,
+                        'message' => $message,
+                        'data' => $taskRun,
+                    ], $status);
+                }
+                $meta = $taskRun['result'] ?? [];
+            } else {
+                $snapshot = $this->leaderboardService->rebuildCache('manual-trigger');
+                $meta = [
+                    'generated_at' => $snapshot['generated_at'] ?? null,
+                    'expires_at' => $snapshot['expires_at'] ?? null,
+                    'global_count' => isset($snapshot['global']) ? count($snapshot['global']) : 0,
+                    'regions_count' => isset($snapshot['regions']) ? count($snapshot['regions']) : 0,
+                    'schools_count' => isset($snapshot['schools']) ? count($snapshot['schools']) : 0,
+                ];
+            }
 
             $this->logger->info('Leaderboard cache refreshed via trigger', $meta);
             $this->logSystemAudit('leaderboard_cache_refreshed', $request, [

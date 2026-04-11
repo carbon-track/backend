@@ -12651,7 +12651,7 @@
           "Leaderboard"
         ],
         "summary": "Trigger leaderboard cache refresh",
-        "description": "Rebuilds the cached leaderboard snapshot using a trigger key.",
+        "description": "兼容入口。推荐改用 /api/v1/cron/run?key=... 的统一 cron 调度。",
         "parameters": [
           {
             "name": "key",
@@ -12720,6 +12720,16 @@
           },
           "403": {
             "description": "Invalid trigger key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "榜单刷新任务当前被锁定或跳过。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15942,7 +15952,7 @@
           "Support"
         ],
         "summary": "触发 SLA 巡检",
-        "description": "通过查询参数 key 提供预共享秘钥，触发工单 SLA 巡检与逾期重派。该端点不要求 JWT。",
+        "description": "兼容入口。推荐改用 /api/v1/cron/run?key=... 的统一 cron 调度。",
         "operationId": "supportRunSlaSweep",
         "security": [],
         "parameters": [
@@ -15969,6 +15979,16 @@
           },
           "403": {
             "description": "秘钥无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SLA 巡检任务当前被锁定或跳过。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17188,6 +17208,380 @@
           }
         }
       }
+    },
+    "/api/v1/cron/run": {
+      "get": {
+        "tags": [
+          "Cron"
+        ],
+        "summary": "运行到点的系统定时任务",
+        "description": "供外部 cron 每分钟调用。服务端会自行判断哪些已启用任务到点执行。",
+        "operationId": "cronRunDueTasks",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "统一 cron 调度密钥。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "本轮 cron 执行摘要。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronBatchRunResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "密钥错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "当前至少一个到点任务被跳过或锁定，即使其他任务已执行成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Cron 密钥未配置，或当前到点任务存在执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks": {
+      "get": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "获取 cron 任务配置",
+        "operationId": "adminCronListTasks",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cron 任务列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks/{taskKey}": {
+      "put": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "更新 cron 任务配置",
+        "operationId": "adminCronUpdateTask",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "taskKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCronTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的任务配置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/runs": {
+      "get": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "获取 cron 运行历史",
+        "operationId": "adminCronListRuns",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "task_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failed",
+                "skipped"
+              ]
+            }
+          },
+          {
+            "name": "trigger_source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cron_endpoint",
+                "legacy_endpoint",
+                "admin_manual"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cron 运行历史。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "筛选参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks/{taskKey}/run": {
+      "post": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "手动执行单个 cron 任务",
+        "operationId": "adminCronRunTask",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "taskKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务执行结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "任务当前被锁定或被跳过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "任务执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -18318,6 +18712,14 @@
           "error": {
             "type": "string",
             "description": "旧接口错误字段（部分控制器仍返回）"
+          },
+          "data": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "可选的结构化错误上下文，例如 cron 跳过或失败时的执行详情。"
           }
         },
         "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。生产环境仅返回 code；开发/测试环境会附带 message。"
@@ -27950,6 +28352,335 @@
           },
           "data": {
             "$ref": "#/components/schemas/SupportRoutingSettings"
+          }
+        }
+      },
+      "CronTask": {
+        "type": "object",
+        "properties": {
+          "task_key": {
+            "type": "string"
+          },
+          "task_name": {
+            "type": "string"
+          },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_registered": {
+          "type": "boolean",
+          "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
+        },
+        "interval_minutes": {
+          "type": "integer"
+        },
+          "enabled": {
+            "type": "boolean"
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "success",
+              "failed"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "locked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "is_due": {
+            "type": "boolean"
+          },
+          "is_locked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CronTaskExecutionResult": {
+        "type": "object",
+        "properties": {
+          "task_key": {
+            "type": "string"
+          },
+          "task_name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "skipped"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CronRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "task_key": {
+            "type": "string"
+          },
+          "trigger_source": {
+            "type": "string",
+            "enum": [
+              "cron_endpoint",
+              "legacy_endpoint",
+              "admin_manual"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "skipped"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CronRunListData": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronRun"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/SupportTicketPagination"
+          }
+        }
+      },
+      "CronTaskListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronTask"
+            }
+          }
+        }
+      },
+      "CronTaskResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronTask"
+          }
+        }
+      },
+      "CronRunListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronRunListData"
+          }
+        }
+      },
+      "CronTaskRunResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronTaskExecutionResult"
+          }
+        }
+      },
+      "CronBatchRunResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "triggered_at": {
+                "type": "string"
+              },
+              "due": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "executed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              },
+              "failed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              },
+              "skipped": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              }
+            }
+          }
+        }
+      },
+      "UpdateCronTaskRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       }

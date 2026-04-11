@@ -164,6 +164,21 @@
       ]
     },
     {
+      "id": "cron",
+      "label": "Cron Scheduler",
+      "route": "/admin/cron",
+      "description": "Inspect scheduled cron tasks, execution history, and manual task runs.",
+      "keywords": [
+        "cron",
+        "scheduler",
+        "scheduled task",
+        "定时任务",
+        "调度",
+        "cron调度",
+        "任务执行"
+      ]
+    },
+    {
       "id": "supportPortal",
       "label": "Support Desk",
       "route": "/support/",
@@ -405,6 +420,24 @@
         "接口诊断",
         "接口健康",
         "spec review"
+      ]
+    },
+    {
+      "id": "review-cron-tasks",
+      "label": "Review cron tasks",
+      "description": "Open the cron scheduler console to inspect task cadence and last run status.",
+      "routeId": "cron",
+      "route": "/admin/cron",
+      "mode": "shortcut",
+      "query": {
+        "focus": "tasks"
+      },
+      "keywords": [
+        "cron tasks",
+        "scheduler",
+        "定时任务",
+        "调度台",
+        "cron控制台"
       ]
     }
   ],
@@ -1132,6 +1165,99 @@
         "recipient search",
         "广播接收人",
         "目标用户"
+      ]
+    },
+    {
+      "name": "get_cron_tasks",
+      "label": "Get cron tasks",
+      "description": "Read the cron task registry and current scheduling state.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/cron/tasks",
+        "payloadTemplate": {}
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "cron tasks",
+        "scheduler state",
+        "定时任务",
+        "调度状态"
+      ]
+    },
+    {
+      "name": "get_cron_runs",
+      "label": "Get cron runs",
+      "description": "Read recent cron task execution history with filters.",
+      "api": {
+        "method": "GET",
+        "path": "/api/v1/admin/cron/runs",
+        "payloadTemplate": {
+          "task_key": null,
+          "status": null,
+          "limit": 20
+        }
+      },
+      "requires": [],
+      "contextHints": [],
+      "risk_level": "read",
+      "requires_confirmation": false,
+      "keywords": [
+        "cron runs",
+        "scheduler history",
+        "任务运行记录",
+        "调度历史"
+      ]
+    },
+    {
+      "name": "update_cron_task",
+      "label": "Update cron task",
+      "description": "Enable, disable, or change the interval for a cron task.",
+      "api": {
+        "method": "PUT",
+        "path": "/api/v1/admin/cron/tasks/{taskKey}",
+        "payloadTemplate": {
+          "task_key": null
+        }
+      },
+      "requires": [
+        "task_key"
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "update cron",
+        "disable cron",
+        "enable cron",
+        "修改定时任务",
+        "启停cron"
+      ]
+    },
+    {
+      "name": "run_cron_task",
+      "label": "Run cron task now",
+      "description": "Manually execute a single cron task immediately.",
+      "api": {
+        "method": "POST",
+        "path": "/api/v1/admin/cron/tasks/{taskKey}/run",
+        "payloadTemplate": {
+          "task_key": null
+        }
+      },
+      "requires": [
+        "task_key"
+      ],
+      "contextHints": [],
+      "risk_level": "write",
+      "requires_confirmation": true,
+      "keywords": [
+        "run cron",
+        "trigger cron",
+        "执行定时任务",
+        "手动跑任务"
       ]
     }
   ]

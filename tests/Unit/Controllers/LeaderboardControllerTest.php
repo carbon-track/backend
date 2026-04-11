@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Controllers\LeaderboardController;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\LeaderboardService;
 use Monolog\Handler\NullHandler;
@@ -52,5 +53,85 @@ class LeaderboardControllerTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertTrue($payload['success']);
         $this->assertSame(2, $payload['data']['global_count']);
+    }
+
+    public function testTriggerRefreshUsesSchedulerWhenAvailable(): void
+    {
+        $_ENV['LEADERBOARD_TRIGGER_KEY'] = 'secret-key';
+
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->once())
+            ->method('runTaskNow')
+            ->with(CronSchedulerService::TASK_LEADERBOARD_REFRESH, 'legacy_endpoint', $this->arrayHasKey('request_id'))
+            ->willReturn([
+                'task_key' => CronSchedulerService::TASK_LEADERBOARD_REFRESH,
+                'status' => 'success',
+                'result' => [
+                    'generated_at' => '2026-03-07T00:00:00Z',
+                    'expires_at' => '2026-03-07T01:00:00Z',
+                    'global_count' => 4,
+                    'regions_count' => 2,
+                    'schools_count' => 3,
+                ],
+            ]);
+
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logSystemEvent')->willReturn(true);
+
+        $logger = new Logger('test');
+        $logger->pushHandler(new NullHandler());
+
+        $controller = new LeaderboardController(
+            $this->createMock(LeaderboardService::class),
+            $logger,
+            $auditLogService,
+            $this->createMock(ErrorLogService::class),
+            $scheduler
+        );
+
+        $request = makeRequest('GET', '/leaderboard/trigger', null, ['key' => 'secret-key'])
+            ->withAttribute('request_id', 'req-2');
+        $response = $controller->triggerRefresh($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertSame(4, $payload['data']['global_count']);
+    }
+
+    public function testTriggerRefreshReturnsFailureWhenSchedulerRunFails(): void
+    {
+        $_ENV['LEADERBOARD_TRIGGER_KEY'] = 'secret-key';
+
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->once())
+            ->method('runTaskNow')
+            ->willReturn([
+                'task_key' => CronSchedulerService::TASK_LEADERBOARD_REFRESH,
+                'status' => 'failed',
+                'error_message' => 'refresh_failed',
+                'result' => [],
+            ]);
+
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logSystemEvent')->willReturn(true);
+
+        $logger = new Logger('test');
+        $logger->pushHandler(new NullHandler());
+
+        $controller = new LeaderboardController(
+            $this->createMock(LeaderboardService::class),
+            $logger,
+            $auditLogService,
+            $this->createMock(ErrorLogService::class),
+            $scheduler
+        );
+
+        $request = makeRequest('GET', '/leaderboard/trigger', null, ['key' => 'secret-key'])
+            ->withAttribute('request_id', 'req-3');
+        $response = $controller->triggerRefresh($request, new Response());
+
+        $this->assertSame(503, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
     }
 }

@@ -6,6 +6,7 @@ namespace CarbonTrack\Controllers;
 
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
@@ -23,7 +24,8 @@ class SupportTicketController
         private LoggerInterface $logger,
         private ErrorLogService $errorLogService,
         private ?SupportRoutingEngineService $supportRoutingEngineService = null,
-        private ?AuditLogService $auditLogService = null
+        private ?AuditLogService $auditLogService = null,
+        private ?CronSchedulerService $cronSchedulerService = null
     ) {
     }
 
@@ -40,6 +42,7 @@ class SupportTicketController
                 'status' => 'failed',
                 'request_method' => 'GET',
                 'endpoint' => (string) $request->getUri()->getPath(),
+                'request_id' => $request->getAttribute('request_id'),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
             ]);
 
@@ -51,22 +54,51 @@ class SupportTicketController
                 'status' => 'failed',
                 'request_method' => 'GET',
                 'endpoint' => (string) $request->getUri()->getPath(),
+                'request_id' => $request->getAttribute('request_id'),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
             ]);
 
             return $this->json($response, ['success' => false, 'message' => 'Invalid SLA sweep key', 'code' => 'FORBIDDEN'], 403);
         }
 
-        if ($this->supportRoutingEngineService === null) {
+        if ($this->cronSchedulerService === null && $this->supportRoutingEngineService === null) {
             return $this->json($response, ['success' => false, 'message' => 'SLA sweep engine unavailable', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
         }
 
         try {
-            $result = $this->supportRoutingEngineService->runSlaSweep();
+            if ($this->cronSchedulerService !== null) {
+                $taskRun = $this->cronSchedulerService->runTaskNow(CronSchedulerService::TASK_SUPPORT_SLA_SWEEP, 'legacy_endpoint', [
+                    'request_id' => $request->getAttribute('request_id'),
+                    'remote_addr' => $this->clientIp($request),
+                ]);
+                if (($taskRun['status'] ?? null) !== 'success') {
+                    $status = ($taskRun['status'] ?? null) === 'skipped' ? 409 : 503;
+                    $message = $taskRun['error_message'] ?? 'SLA sweep did not complete successfully';
+                    $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_triggered', 'support_sla_sweep', [
+                        'status' => 'failed',
+                        'request_method' => 'GET',
+                        'endpoint' => (string) $request->getUri()->getPath(),
+                        'request_id' => $request->getAttribute('request_id'),
+                        'request_data' => ['remote_addr' => $this->clientIp($request)],
+                        'new_data' => $taskRun,
+                    ]);
+
+                    return $this->json($response, [
+                        'success' => false,
+                        'message' => $message,
+                        'code' => 'SLA_SWEEP_FAILED',
+                        'data' => $taskRun,
+                    ], $status);
+                }
+                $result = $taskRun['result'] ?? [];
+            } else {
+                $result = $this->supportRoutingEngineService->runSlaSweep();
+            }
             $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_triggered', 'support_sla_sweep', [
                 'status' => 'success',
                 'request_method' => 'GET',
                 'endpoint' => (string) $request->getUri()->getPath(),
+                'request_id' => $request->getAttribute('request_id'),
                 'request_data' => $result + ['remote_addr' => $this->clientIp($request)],
             ]);
 

@@ -27,6 +27,8 @@ use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Controllers\PasskeyController;
 use CarbonTrack\Controllers\AdminSupportController;
+use CarbonTrack\Controllers\AdminCronController;
+use CarbonTrack\Controllers\CronController;
 use CarbonTrack\Controllers\SupportTicketController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
@@ -85,6 +87,7 @@ return function (App $app) {
                     'messages' => API_V1_PREFIX . '/messages',
                     'tickets' => API_V1_PREFIX . '/tickets',
                     'support' => API_V1_PREFIX . '/support',
+                    'cron' => API_V1_PREFIX . '/cron/run',
                     'avatars' => API_V1_PREFIX . PATH_AVATARS,
                     'schools' => API_V1_PREFIX . PATH_SCHOOLS,
                     'files' => API_V1_PREFIX . '/files',
@@ -268,6 +271,10 @@ return function (App $app) {
             $admin->get('/support/tickets', [AdminSupportController::class, 'listTickets']);
             $admin->get('/support/tickets/{id:[0-9]+}', [AdminSupportController::class, 'getTicketDetail']);
             $admin->get('/support/reports', [AdminSupportController::class, 'reports']);
+            $admin->get('/cron/tasks', [AdminCronController::class, 'listTasks']);
+            $admin->put('/cron/tasks/{taskKey:[^/]+}', [AdminCronController::class, 'updateTask']);
+            $admin->get('/cron/runs', [AdminCronController::class, 'listRuns']);
+            $admin->post('/cron/tasks/{taskKey:[^/]+}/run', [AdminCronController::class, 'runTask']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
             $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);
@@ -332,6 +339,7 @@ return function (App $app) {
 
     $registerSupportRoutes = function (RouteCollectorProxy $group) {
         $group->get('/support/sla-sweep', [SupportTicketController::class, 'runSlaSweep']);
+        $group->get('/cron/run', [CronController::class, 'run']);
         $group->group('/support', function (RouteCollectorProxy $support) {
             $support->get('/assignees', [SupportTicketController::class, 'listSupportAssignees']);
             $support->get('/tickets', [SupportTicketController::class, 'listSupportTickets']);
