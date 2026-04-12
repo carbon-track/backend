@@ -713,6 +713,44 @@ class CronSchedulerServiceTest extends TestCase
         $this->assertCount(1, $result['executed']);
     }
 
+    public function testStaleCompletionIsRecordedAsFailureInsteadOfSuccess(): void
+    {
+        $this->seedTask(CronSchedulerService::TASK_SUPPORT_SLA_SWEEP, 'Support SLA Sweep', 1, true, $this->now());
+
+        $support = $this->createMock(SupportRoutingEngineService::class);
+        $support->expects($this->once())->method('runSlaSweep')->willReturnCallback(function (): array {
+            CronTask::query()
+                ->where('task_key', CronSchedulerService::TASK_SUPPORT_SLA_SWEEP)
+                ->update([
+                    'lock_token' => 'stolen-lock',
+                    'locked_at' => $this->now(),
+                    'updated_at' => $this->now(),
+                ]);
+
+            return ['processed' => 1, 'breached' => 0, 'rerouted' => 0];
+        });
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('warning');
+
+        $service = new CronSchedulerService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $support,
+            $this->createMock(BadgeService::class),
+            $this->createMock(LeaderboardService::class),
+            $this->createMock(StreakLeaderboardService::class)
+        );
+
+        $result = $service->runTaskNow(CronSchedulerService::TASK_SUPPORT_SLA_SWEEP, 'admin_manual', ['request_id' => 'req-stale-1']);
+
+        $this->assertSame('failed', $result['status']);
+        $this->assertSame('task_lock_lost', $result['error_message']);
+        $this->assertSame('failed', CronRun::query()->where('task_key', CronSchedulerService::TASK_SUPPORT_SLA_SWEEP)->value('status'));
+    }
+
     private function seedTask(string $taskKey, string $taskName, int $intervalMinutes, bool $enabled, ?string $nextRunAt, array $overrides = []): void
     {
         CronTask::query()->create(array_merge([

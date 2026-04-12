@@ -135,7 +135,7 @@ class SchoolController extends BaseController
             "sort_order" => "integer"
         ]);
 
-        $school = School::create($data);
+        $school = $this->createSchoolWithCompatibility($data);
 
         $this->auditLogService->log(
             $request->getAttribute("user_id"),
@@ -276,7 +276,7 @@ class SchoolController extends BaseController
         ]);
 
         $oldData = $school->toArray();
-        $school->update($data);
+        $this->updateSchoolWithCompatibility($school, $data);
 
         $this->auditLogService->log(
             $request->getAttribute("user_id"),
@@ -558,6 +558,79 @@ class SchoolController extends BaseController
         }
 
         return $payload;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private function createSchoolWithCompatibility(array $data): School
+    {
+        try {
+            return School::create($data);
+        } catch (QueryException $exception) {
+            if (!$this->shouldRetryWithoutSortOrder($data, $exception)) {
+                throw $exception;
+            }
+
+            return School::create($this->withoutSortOrder($data));
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private function updateSchoolWithCompatibility(School $school, array $data): void
+    {
+        if ($data === []) {
+            return;
+        }
+
+        try {
+            $school->update($data);
+        } catch (QueryException $exception) {
+            if (!$this->shouldRetryWithoutSortOrder($data, $exception)) {
+                throw $exception;
+            }
+
+            $retryData = $this->withoutSortOrder($data);
+            if ($retryData !== []) {
+                $school->update($retryData);
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private function shouldRetryWithoutSortOrder(array $data, QueryException $exception): bool
+    {
+        if (!array_key_exists('sort_order', $data)) {
+            return false;
+        }
+
+        $message = strtolower($exception->getMessage());
+        if (!str_contains($message, 'sort_order')) {
+            return false;
+        }
+
+        foreach (['unknown column', 'no such column', 'has no column named', 'undefined column'] as $needle) {
+            if (str_contains($message, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private function withoutSortOrder(array $data): array
+    {
+        unset($data['sort_order']);
+
+        return $data;
     }
 
 }

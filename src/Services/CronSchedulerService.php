@@ -28,6 +28,7 @@ class CronSchedulerService
     private const TASK_STATUS_SUCCESS = 'success';
     private const TASK_STATUS_FAILED = 'failed';
     private const VALID_TRIGGER_SOURCES = ['cron_endpoint', 'legacy_endpoint', 'admin_manual'];
+    private const STALE_COMPLETION_ERROR = 'task_lock_lost';
     private const VALID_TASK_STATUSES = [
         self::TASK_STATUS_IDLE,
         self::TASK_STATUS_RUNNING,
@@ -259,7 +260,7 @@ class CronSchedulerService
             $result = $this->normalizeTaskResult($taskKey, $rawResult);
             $finishedAt = $this->now();
             $durationMs = $this->diffMilliseconds($startedAtMicro, microtime(true));
-            $this->completeTaskRun($taskKey, $lockToken, [
+            if (!$this->completeTaskRun($taskKey, $lockToken, [
                 'last_finished_at' => $finishedAt,
                 'last_status' => self::TASK_STATUS_SUCCESS,
                 'last_error' => null,
@@ -268,7 +269,9 @@ class CronSchedulerService
                 'lock_token' => null,
                 'locked_at' => null,
                 'updated_at' => $finishedAt,
-            ]);
+            ])) {
+                return $this->recordStaleCompletion($task, $triggerSource, $context, $startedAt, $finishedAt, $durationMs, $result);
+            }
 
             $freshTask = $this->findTask($taskKey);
             $nextRunAt = null;
@@ -347,7 +350,7 @@ class CronSchedulerService
             $durationMs = $this->diffMilliseconds($startedAtMicro, microtime(true));
             $errorMessage = trim($exception->getMessage()) !== '' ? $exception->getMessage() : 'Unknown cron task error';
 
-            $this->completeTaskRun($taskKey, $lockToken, [
+            if (!$this->completeTaskRun($taskKey, $lockToken, [
                 'last_finished_at' => $finishedAt,
                 'last_status' => self::TASK_STATUS_FAILED,
                 'last_error' => $errorMessage,
@@ -356,7 +359,18 @@ class CronSchedulerService
                 'lock_token' => null,
                 'locked_at' => null,
                 'updated_at' => $finishedAt,
-            ]);
+            ])) {
+                return $this->recordStaleCompletion(
+                    $task,
+                    $triggerSource,
+                    $context,
+                    $startedAt,
+                    $finishedAt,
+                    $durationMs,
+                    ['reason' => self::STALE_COMPLETION_ERROR, 'original_error' => $errorMessage],
+                    $exception
+                );
+            }
 
             $freshTask = $this->findTask($taskKey);
             $nextRunAt = null;
@@ -556,7 +570,7 @@ class CronSchedulerService
         return $stmt->rowCount() > 0;
     }
 
-    private function completeTaskRun(string $taskKey, string $lockToken, array $fields): void
+    private function completeTaskRun(string $taskKey, string $lockToken, array $fields): bool
     {
         $set = [];
         $params = [
@@ -572,6 +586,8 @@ class CronSchedulerService
         $sql = 'UPDATE cron_tasks SET ' . implode(', ', $set) . ' WHERE task_key = :task_key AND lock_token = :lock_token_match';
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
+
+        return $stmt->rowCount() > 0;
     }
 
     private function updateNextRunAtIfUnlocked(string $taskKey, string $nextRunAt, string $updatedAt): void
@@ -920,6 +936,101 @@ class CronSchedulerService
             ]);
         } catch (\Throwable) {
         }
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     */
+    private function recordStaleCompletion(
+        CronTask $task,
+        string $triggerSource,
+        array $context,
+        string $startedAt,
+        string $finishedAt,
+        int $durationMs,
+        array $result = [],
+        ?\Throwable $exception = null
+    ): array {
+        $taskKey = (string) $task->task_key;
+        $errorMessage = self::STALE_COMPLETION_ERROR;
+
+        $this->logger->warning('Cron task completion aborted because lock ownership was lost', [
+            'task_key' => $taskKey,
+            'trigger_source' => $triggerSource,
+            'request_id' => $context['request_id'] ?? null,
+            'original_error' => $exception?->getMessage(),
+        ]);
+
+        if ($exception !== null) {
+            $this->logTaskException($taskKey, $triggerSource, $context, $exception);
+        }
+
+        $runPayload = $result !== [] ? $result : ['reason' => $errorMessage];
+        $runId = null;
+        try {
+            $run = CronRun::create([
+                'task_key' => $taskKey,
+                'trigger_source' => $triggerSource,
+                'request_id' => $context['request_id'] ?? null,
+                'status' => self::RUN_STATUS_FAILED,
+                'started_at' => $startedAt,
+                'finished_at' => $finishedAt,
+                'duration_ms' => $durationMs,
+                'result_json' => $this->encodeJson($runPayload),
+                'error_message' => $errorMessage,
+            ]);
+            $runId = (int) $run->id;
+        } catch (\Throwable $persistenceException) {
+            $this->logNonCriticalPostRunFailure(
+                'Cron task stale-run persistence failed',
+                $taskKey,
+                $triggerSource,
+                $context,
+                $persistenceException
+            );
+        }
+
+        try {
+            $this->auditLogService->logSystemEvent('cron_task_run_failed', 'cron_scheduler', [
+                'status' => 'failed',
+                'request_method' => 'SYSTEM',
+                'endpoint' => '/internal/cron/' . $taskKey,
+                'request_id' => $context['request_id'] ?? null,
+                'request_data' => [
+                    'task_key' => $taskKey,
+                    'trigger_source' => $triggerSource,
+                    'duration_ms' => $durationMs,
+                    'reason' => $errorMessage,
+                ],
+                'data' => [
+                    'error' => $errorMessage,
+                    'result' => $runPayload,
+                ],
+            ]);
+        } catch (\Throwable $loggingException) {
+            $this->logNonCriticalPostRunFailure(
+                'Cron task stale-completion audit logging failed',
+                $taskKey,
+                $triggerSource,
+                $context,
+                $loggingException
+            );
+        }
+
+        $freshTask = $this->findTask($taskKey);
+
+        return [
+            'task_key' => $taskKey,
+            'task_name' => $task->task_name,
+            'status' => self::RUN_STATUS_FAILED,
+            'run_id' => $runId,
+            'started_at' => $startedAt,
+            'finished_at' => $finishedAt,
+            'duration_ms' => $durationMs,
+            'result' => $runPayload,
+            'error_message' => $errorMessage,
+            'next_run_at' => $freshTask?->next_run_at,
+        ];
     }
 
     private function now(): string

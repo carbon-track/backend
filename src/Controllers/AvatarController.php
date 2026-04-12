@@ -16,6 +16,8 @@ use Monolog\Logger;
 
 class AvatarController
 {
+    private const ERR_INVALID_REQUEST_BODY = 'Request body must be a JSON object';
+
     private Avatar $avatarModel;
     private AuthService $authService;
     private ?AuditLogService $auditLogService;
@@ -263,7 +265,7 @@ class AvatarController
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => $e->getMessage(),
-                'code' => 'VALIDATION_ERROR',
+                'code' => $this->avatarValidationErrorCode($e),
             ], 400);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
@@ -389,7 +391,7 @@ class AvatarController
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => $e->getMessage(),
-                'code' => 'VALIDATION_ERROR',
+                'code' => $this->avatarValidationErrorCode($e),
             ], 400);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
@@ -910,7 +912,7 @@ class AvatarController
     private function normalizeAvatarPayload(mixed $payload): array
     {
         if (!is_array($payload)) {
-            return [];
+            throw new \InvalidArgumentException(self::ERR_INVALID_REQUEST_BODY);
         }
 
         foreach (['is_active', 'is_default'] as $field) {
@@ -924,6 +926,15 @@ class AvatarController
         }
 
         return $payload;
+    }
+
+    private function avatarValidationErrorCode(\InvalidArgumentException $exception): string
+    {
+        if ($exception->getMessage() === self::ERR_INVALID_REQUEST_BODY) {
+            return 'INVALID_REQUEST_BODY';
+        }
+
+        return 'VALIDATION_ERROR';
     }
 }
 

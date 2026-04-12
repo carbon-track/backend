@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use Illuminate\Database\QueryException;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\SchoolController;
 
@@ -101,6 +102,50 @@ class SchoolControllerTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
         $this->assertSame('INVALID_REQUEST_BODY', $payload['code']);
+    }
+
+    public function testShouldRetryWithoutSortOrderForLegacySchemaError(): void
+    {
+        $controller = new SchoolController(
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(\PDO::class)
+        );
+
+        $method = new \ReflectionMethod($controller, 'shouldRetryWithoutSortOrder');
+        $method->setAccessible(true);
+
+        $exception = new QueryException(
+            'insert into schools',
+            [],
+            new \PDOException("SQLSTATE[42S22]: Column not found: 1054 Unknown column 'sort_order' in 'field list'")
+        );
+
+        $shouldRetry = $method->invoke($controller, ['sort_order' => 0], $exception);
+
+        $this->assertTrue($shouldRetry);
+    }
+
+    public function testShouldNotRetryWithoutSortOrderForUnrelatedQueryError(): void
+    {
+        $controller = new SchoolController(
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(\PDO::class)
+        );
+
+        $method = new \ReflectionMethod($controller, 'shouldRetryWithoutSortOrder');
+        $method->setAccessible(true);
+
+        $exception = new QueryException(
+            'insert into schools',
+            [],
+            new \PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062 Duplicate entry')
+        );
+
+        $shouldRetry = $method->invoke($controller, ['sort_order' => 0], $exception);
+
+        $this->assertFalse($shouldRetry);
     }
 }
 
