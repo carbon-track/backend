@@ -247,6 +247,8 @@ class SupportTicketController
 
         try {
             return $this->json($response, ['success' => true, 'data' => $this->supportTicketService->getTicketDetailForSupport($actor, $this->ticketId($args))]);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
         } catch (\RuntimeException $e) {
             return $this->json($response, ['success' => false, 'message' => 'Ticket not found', 'code' => 'TICKET_NOT_FOUND'], 404);
         } catch (\Throwable $e) {

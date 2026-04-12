@@ -16245,6 +16245,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "ticketId 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -16772,6 +16782,16 @@
         "responses": {
           "200": {
             "description": "标签已更新。"
+          },
+          "422": {
+            "description": "标签 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -16838,6 +16858,16 @@
         "responses": {
           "200": {
             "description": "评分规则已更新。"
+          },
+          "422": {
+            "description": "规则 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

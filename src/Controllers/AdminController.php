@@ -15,6 +15,7 @@ use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Support\InputValueNormalizer;
 use CarbonTrack\Support\Uuid;
 use PDO;
 use DateTimeImmutable;
@@ -1398,7 +1399,15 @@ $sql = "
                 continue;
             }
 
-            $number = $rule['type'] === 'int' ? (int) $value : (float) $value;
+            if ($rule['type'] === 'int') {
+                try {
+                    $number = InputValueNormalizer::integer($value, $key);
+                } catch (\InvalidArgumentException) {
+                    continue;
+                }
+            } else {
+                $number = (float) $value;
+            }
             $number = max($rule['min'], $number);
             if (isset($rule['max'])) {
                 $number = min($rule['max'], $number);

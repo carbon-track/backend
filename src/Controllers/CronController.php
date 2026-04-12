@@ -26,7 +26,7 @@ class CronController
         $query = $request->getQueryParams();
         $providedKey = is_string($query['key'] ?? null)
             ? trim((string) $query['key'])
-            : trim((string) ($_GET['key'] ?? ''));
+            : '';
         $configuredKey = trim((string) ($_ENV['CRON_RUN_KEY'] ?? getenv('CRON_RUN_KEY') ?: ''));
 
         if ($configuredKey === '') {

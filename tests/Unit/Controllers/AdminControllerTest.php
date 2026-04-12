@@ -191,6 +191,31 @@ class AdminControllerTest extends TestCase
         $this->assertSame(7, $row['school_id']);
     }
 
+    public function testSanitizeSupportRoutingOverrideRejectsFractionalIntegerFields(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $badgeService = $this->createMock(BadgeService::class);
+        $statsService = $this->createMock(StatisticsService::class);
+        $checkinService = $this->createMock(CheckinService::class);
+        $quotaConfigService = new QuotaConfigService();
+
+        $controller = $this->makeController($pdo, $auth, $audit, $badgeService, $statsService, $checkinService, $quotaConfigService);
+        $method = new \ReflectionMethod($controller, 'sanitizeSupportRoutingOverride');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($controller, [
+            'min_agent_level' => '2.5',
+            'resolution_minutes' => '90',
+            'routing_weight' => '2.5',
+        ]);
+
+        $this->assertArrayNotHasKey('min_agent_level', $result);
+        $this->assertSame(90, $result['resolution_minutes']);
+        $this->assertSame(2.5, $result['routing_weight']);
+    }
+
     public function testGetUserOverviewIncludesPasskeySummaryAndRecentSecurityActivity(): void
     {
         $pdo = new \PDO('sqlite::memory:');

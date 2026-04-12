@@ -120,7 +120,11 @@ class AdminSupportController
 
     public function updateTag(Request $request, Response $response, array $args): Response
     {
-        return $this->saveTag($request, $response, $this->numericId($args, 'id'), 200);
+        try {
+            return $this->saveTag($request, $response, $this->numericId($args, 'id'), 200);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        }
     }
 
     public function listRules(Request $request, Response $response): Response
@@ -139,7 +143,11 @@ class AdminSupportController
 
     public function updateRule(Request $request, Response $response, array $args): Response
     {
-        return $this->saveRule($request, $response, $this->numericId($args, 'id'), 200);
+        try {
+            return $this->saveRule($request, $response, $this->numericId($args, 'id'), 200);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
+        }
     }
 
     public function reports(Request $request, Response $response): Response

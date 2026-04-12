@@ -1030,6 +1030,71 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame(1, self::$capsule->table('support_ticket_transfer_requests')->count());
     }
 
+    public function testCreateTransferRequestRejectsDuplicatePendingRequest(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportA = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportB = User::create([
+            'username' => 'support-b',
+            'email' => 'support-b@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 11,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Billing mismatch',
+            'category' => 'business_issue',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportA->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_transfer_requests')->insert([
+            'ticket_id' => 11,
+            'requested_by' => (int) $supportA->id,
+            'from_assignee' => (int) $supportA->id,
+            'to_assignee' => (int) $supportB->id,
+            'reason' => 'Existing request',
+            'status' => SupportTicketService::TRANSFER_STATUS_PENDING,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('A pending transfer request already exists for this ticket');
+
+        $service->createTransferRequest(
+            ['id' => (int) $supportA->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            11,
+            ['to_assignee' => (int) $supportB->id, 'reason' => 'Need a different owner']
+        );
+    }
+
     public function testReviewTransferRequestApprovesWhenTargetAcceptsTicket(): void
     {
         $now = date('Y-m-d H:i:s');

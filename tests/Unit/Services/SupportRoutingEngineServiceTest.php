@@ -277,6 +277,64 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertNotNull($ticket->last_routing_run_id);
     }
 
+    public function testRouteTicketCanUseSupportUserWithoutProfileRow(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            ['id' => 21, 'username' => 'requester', 'email' => 'requester@example.com', 'role' => 'user', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 22, 'username' => 'support-no-profile', 'email' => 'support@example.com', 'role' => 'support', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'weights_json' => json_encode(['group_weight' => 15]),
+            'fallback_json' => json_encode(['default_feedback_rating' => 3.5]),
+            'defaults_json' => json_encode(['min_agent_level' => 1]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 202,
+            'user_id' => 21,
+            'subject' => 'Profileless support candidate',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'low',
+            'sla_status' => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 202,
+            'sender_id' => 21,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Please help',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('logSystemEvent')->willReturn(true);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $result = $engine->routeTicket(202, 'created');
+        $ticket = self::$capsule->table('support_tickets')->where('id', 202)->first();
+
+        $this->assertSame(22, $result['assigned_to']);
+        $this->assertSame(22, (int) $ticket->assigned_to);
+        $this->assertSame('smart', $ticket->assignment_source);
+    }
+
     public function testNotifyAssigneeLogsFailedWhenNoChannelSucceeds(): void
     {
         $logger = $this->createMock(LoggerInterface::class);

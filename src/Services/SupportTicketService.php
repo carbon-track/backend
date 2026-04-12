@@ -8,7 +8,6 @@ use CarbonTrack\Models\SupportTicket;
 use CarbonTrack\Models\SupportTicketAttachment;
 use CarbonTrack\Models\SupportTicketFeedback;
 use CarbonTrack\Models\SupportTicketMessage;
-use CarbonTrack\Models\SupportTicketTransferRequest;
 use PDO;
 use Psr\Log\LoggerInterface;
 
@@ -494,19 +493,9 @@ class SupportTicketService
             throw new \DomainException('Administrators can manually transfer tickets without creating a request');
         }
 
-        $ticket = $this->findTicketForSupport($actor, $ticketId);
-        if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
-        }
-
         $actorId = (int) ($actor['id'] ?? 0);
-        if ($actorId <= 0 || (int) ($ticket['assigned_to'] ?? 0) !== $actorId) {
+        if ($actorId <= 0) {
             throw new \DomainException('Only the current assignee can request a transfer');
-        }
-
-        $existingPending = $this->findPendingTransferRequestForTicket($ticketId);
-        if ($existingPending !== null) {
-            throw new \InvalidArgumentException('A pending transfer request already exists for this ticket');
         }
 
         $targetId = (int) ($payload['to_assignee'] ?? 0);
@@ -516,23 +505,59 @@ class SupportTicketService
         }
 
         $reason = $this->nullableString($payload['reason'] ?? null);
-        $request = SupportTicketTransferRequest::create([
-            'ticket_id' => $ticketId,
-            'requested_by' => $actorId,
-            'from_assignee' => $actorId,
-            'to_assignee' => (int) $assignee['id'],
-            'reason' => $reason,
-            'status' => self::TRANSFER_STATUS_PENDING,
-        ]);
+        $now = $this->now();
+        $requestId = null;
 
-        $formatted = $this->findTransferRequest((int) $request->id);
+        try {
+            $this->db->beginTransaction();
+
+            $ticket = $this->findTicket($ticketId, '', [], true);
+            if ($ticket === null) {
+                throw new \RuntimeException('Ticket not found');
+            }
+            if ((int) ($ticket['assigned_to'] ?? 0) !== $actorId) {
+                throw new \DomainException('Only the current assignee can request a transfer');
+            }
+
+            $existingPending = $this->findPendingTransferRequestForTicket($ticketId);
+            if ($existingPending !== null) {
+                throw new \InvalidArgumentException('A pending transfer request already exists for this ticket');
+            }
+
+            $stmt = $this->db->prepare("
+                INSERT INTO support_ticket_transfer_requests (
+                    ticket_id, requested_by, from_assignee, to_assignee, reason, status, created_at, updated_at
+                ) VALUES (
+                    :ticket_id, :requested_by, :from_assignee, :to_assignee, :reason, :status, :created_at, :updated_at
+                )
+            ");
+            $stmt->execute([
+                'ticket_id' => $ticketId,
+                'requested_by' => $actorId,
+                'from_assignee' => $actorId,
+                'to_assignee' => (int) $assignee['id'],
+                'reason' => $reason,
+                'status' => self::TRANSFER_STATUS_PENDING,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $requestId = (int) $this->db->lastInsertId();
+            $this->db->commit();
+        } catch (\Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
+        }
+
+        $formatted = $requestId > 0 ? $this->findTransferRequest($requestId) : null;
         $this->auditLogService->log([
             'user_id' => $actorId,
             'action' => 'support_ticket_transfer_requested',
             'operation_category' => 'support',
             'actor_type' => $this->actorType($actor),
             'affected_table' => 'support_ticket_transfer_requests',
-            'affected_id' => (int) $request->id,
+            'affected_id' => $requestId,
             'status' => 'success',
             'data' => [
                 'ticket_id' => $ticketId,
@@ -562,61 +587,91 @@ class SupportTicketService
 
     public function reviewTransferRequest(array $actor, int $requestId, array $payload): array
     {
-        $requestRow = $this->findTransferRequest($requestId);
-        if ($requestRow === null) {
-            throw new \RuntimeException('Transfer request not found');
-        }
-        if (($requestRow['status'] ?? '') !== self::TRANSFER_STATUS_PENDING) {
-            throw new \InvalidArgumentException('Transfer request is no longer pending');
-        }
-
         $decision = $this->normalizeTransferStatus($payload['status'] ?? null);
         if (!in_array($decision, [self::TRANSFER_STATUS_APPROVED, self::TRANSFER_STATUS_REJECTED, self::TRANSFER_STATUS_CANCELLED], true)) {
             throw new \InvalidArgumentException('Transfer review must approve, reject, or cancel the request');
         }
 
         $actorId = (int) ($actor['id'] ?? 0);
-        $isRequester = $actorId > 0 && $actorId === (int) ($requestRow['requested_by'] ?? 0);
-        $isTarget = $actorId > 0 && $actorId === (int) ($requestRow['to_assignee'] ?? 0);
-        if ($decision === self::TRANSFER_STATUS_CANCELLED && !$isRequester) {
-            throw new \DomainException('Only the transfer requester can cancel this request');
-        }
-        if (in_array($decision, [self::TRANSFER_STATUS_APPROVED, self::TRANSFER_STATUS_REJECTED], true) && !$isTarget) {
-            throw new \DomainException('Only the transfer target can approve or reject this request');
-        }
-
         $reviewNote = $this->nullableString($payload['review_note'] ?? null);
         $now = $this->now();
+        $requestRow = null;
+        $updatedRequest = null;
 
-        if ($decision === self::TRANSFER_STATUS_APPROVED) {
-            $ticket = $this->findTicket((int) $requestRow['ticket_id']);
-            if ($ticket === null) {
-                throw new \RuntimeException('Ticket not found');
+        try {
+            $this->db->beginTransaction();
+
+            $requestRow = $this->findTransferRequest($requestId, true);
+            if ($requestRow === null) {
+                throw new \RuntimeException('Transfer request not found');
             }
-            $currentAssigneeId = isset($ticket['assigned_to']) ? (int) $ticket['assigned_to'] : 0;
-            $expectedAssigneeId = isset($requestRow['from_assignee']) ? (int) $requestRow['from_assignee'] : 0;
-            if ($currentAssigneeId !== $expectedAssigneeId) {
-                throw new \InvalidArgumentException('Transfer request is stale because the ticket assignee has changed');
+            if (($requestRow['status'] ?? '') !== self::TRANSFER_STATUS_PENDING) {
+                throw new \InvalidArgumentException('Transfer request is no longer pending');
             }
-            $this->updateTicket((int) $requestRow['ticket_id'], [
-                'assigned_to' => (int) $requestRow['to_assignee'],
-                'assignment_source' => 'manual',
-                'assigned_rule_id' => null,
-                'assignment_locked' => 0,
+
+            $isRequester = $actorId > 0 && $actorId === (int) ($requestRow['requested_by'] ?? 0);
+            $isTarget = $actorId > 0 && $actorId === (int) ($requestRow['to_assignee'] ?? 0);
+            if ($decision === self::TRANSFER_STATUS_CANCELLED && !$isRequester) {
+                throw new \DomainException('Only the transfer requester can cancel this request');
+            }
+            if (in_array($decision, [self::TRANSFER_STATUS_APPROVED, self::TRANSFER_STATUS_REJECTED], true) && !$isTarget) {
+                throw new \DomainException('Only the transfer target can approve or reject this request');
+            }
+
+            if ($decision === self::TRANSFER_STATUS_APPROVED) {
+                $ticket = $this->findTicket((int) $requestRow['ticket_id'], '', [], true);
+                if ($ticket === null) {
+                    throw new \RuntimeException('Ticket not found');
+                }
+                $currentAssigneeId = isset($ticket['assigned_to']) ? (int) $ticket['assigned_to'] : 0;
+                $expectedAssigneeId = isset($requestRow['from_assignee']) ? (int) $requestRow['from_assignee'] : 0;
+                if ($currentAssigneeId !== $expectedAssigneeId) {
+                    throw new \InvalidArgumentException('Transfer request is stale because the ticket assignee has changed');
+                }
+            }
+
+            $updateStmt = $this->db->prepare("
+                UPDATE support_ticket_transfer_requests
+                SET status = :status,
+                    review_note = :review_note,
+                    reviewed_by = :reviewed_by,
+                    reviewed_at = :reviewed_at,
+                    updated_at = :updated_at
+                WHERE id = :id
+                  AND status = :expected_status
+            ");
+            $updateStmt->execute([
+                'status' => $decision,
+                'review_note' => $reviewNote,
+                'reviewed_by' => $actorId,
+                'reviewed_at' => $now,
                 'updated_at' => $now,
+                'id' => $requestId,
+                'expected_status' => self::TRANSFER_STATUS_PENDING,
             ]);
+            if ($updateStmt->rowCount() !== 1) {
+                throw new \InvalidArgumentException('Transfer request is no longer pending');
+            }
+
+            if ($decision === self::TRANSFER_STATUS_APPROVED) {
+                $this->updateTicket((int) $requestRow['ticket_id'], [
+                    'assigned_to' => (int) $requestRow['to_assignee'],
+                    'assignment_source' => 'manual',
+                    'assigned_rule_id' => null,
+                    'assignment_locked' => 0,
+                    'updated_at' => $now,
+                ]);
+            }
+
+            $this->db->commit();
+            $updatedRequest = $this->findTransferRequest($requestId);
+        } catch (\Throwable $exception) {
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $exception;
         }
 
-        $transferRequest = SupportTicketTransferRequest::find($requestId);
-        $transferRequest?->fill([
-            'status' => $decision,
-            'review_note' => $reviewNote,
-            'reviewed_by' => $actorId,
-            'reviewed_at' => $now,
-        ]);
-        $transferRequest?->save();
-
-        $updatedRequest = $this->findTransferRequest($requestId);
         $this->auditLogService->log([
             'user_id' => (int) ($actor['id'] ?? 0),
             'action' => 'support_ticket_transfer_reviewed',
@@ -785,7 +840,7 @@ class SupportTicketService
         );
     }
 
-    private function findTicket(int $ticketId, string $extraWhere = '', array $params = []): ?array
+    private function findTicket(int $ticketId, string $extraWhere = '', array $params = [], bool $forUpdate = false): ?array
     {
         $stmt = $this->db->prepare("
             SELECT
@@ -799,6 +854,7 @@ class SupportTicketService
             LEFT JOIN users assignee ON assignee.id = t.assigned_to
             WHERE t.id = :ticket_id {$extraWhere}
             LIMIT 1
+            {$this->selectForUpdateClause($forUpdate)}
         ");
         $stmt->execute(['ticket_id' => $ticketId] + $params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1111,7 +1167,7 @@ class SupportTicketService
         $stmt->execute($params);
     }
 
-    private function findTransferRequest(int $requestId): ?array
+    private function findTransferRequest(int $requestId, bool $forUpdate = false): ?array
     {
         $stmt = $this->db->prepare("
             SELECT
@@ -1131,11 +1187,27 @@ class SupportTicketService
             LEFT JOIN users reviewer ON reviewer.id = tr.reviewed_by
             WHERE tr.id = :id
             LIMIT 1
+            {$this->selectForUpdateClause($forUpdate)}
         ");
         $stmt->execute(['id' => $requestId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row ? $this->formatTransferRequest($row) : null;
+    }
+
+    private function selectForUpdateClause(bool $forUpdate): string
+    {
+        if (!$forUpdate) {
+            return '';
+        }
+
+        try {
+            $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+        } catch (\Throwable) {
+            return '';
+        }
+
+        return in_array($driver, ['mysql', 'pgsql', 'sqlsrv'], true) ? ' FOR UPDATE' : '';
     }
 
     private function findPendingTransferRequestForTicket(int $ticketId): ?array

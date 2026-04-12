@@ -124,10 +124,11 @@ class UserGroupService
         $config = $this->quotaConfigService->decodeJsonToArray($data['config'] ?? null);
         $normalized = $config === null ? null : $this->quotaConfigService->normalizeQuotaConfig($config);
         $data['config'] = $normalized;
-        $quotaConfig = is_array($normalized) ? $normalized : [];
+        $fullConfig = is_array($normalized) ? $normalized : [];
+        $quotaConfig = $fullConfig;
         unset($quotaConfig['support_routing']);
         $data['quota_flat'] = $this->quotaConfigService->flattenQuotas($quotaConfig);
-        $data['support_routing'] = $this->normalizeSupportRouting($normalized['support_routing'] ?? null);
+        $data['support_routing'] = $this->normalizeSupportRouting($fullConfig['support_routing'] ?? null);
         return $data;
     }
 

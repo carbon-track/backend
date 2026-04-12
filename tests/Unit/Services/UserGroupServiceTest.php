@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Models\UserGroup;
 use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserGroupService;
 use PHPUnit\Framework\TestCase;
@@ -113,5 +114,32 @@ class UserGroupServiceTest extends TestCase
             'overdue_boost' => 1.0,
             'tier_label' => 'standard',
         ], $payload['config']['support_routing']);
+    }
+
+    public function testFormatGroupHandlesMissingConfigWithoutNullOffset(): void
+    {
+        $service = new UserGroupService(new QuotaConfigService());
+        $method = new \ReflectionMethod($service, 'formatGroup');
+        $method->setAccessible(true);
+
+        $group = new UserGroup([
+            'id' => 1,
+            'name' => 'Default',
+            'code' => 'default',
+            'config' => null,
+        ]);
+
+        $formatted = $method->invoke($service, $group);
+
+        $this->assertNull($formatted['config']);
+        $this->assertIsArray($formatted['quota_flat']);
+        $this->assertSame([
+            'first_response_minutes' => 240,
+            'resolution_minutes' => 1440,
+            'routing_weight' => 1.0,
+            'min_agent_level' => 1,
+            'overdue_boost' => 1.0,
+            'tier_label' => 'standard',
+        ], $formatted['support_routing']);
     }
 }

@@ -13,6 +13,35 @@ use Psr\Log\LoggerInterface;
 
 class CronControllerTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        unset($_ENV['CRON_RUN_KEY']);
+    }
+
+    public function testRunReturnsServiceUnavailableWhenCronKeyIsMissing(): void
+    {
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+
+        $controller = new CronController(
+            $this->createMock(CronSchedulerService::class),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(ErrorLogService::class),
+            $audit
+        );
+
+        $response = $controller->run(
+            makeRequest('GET', '/api/v1/cron/run'),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(503, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertSame('CRON_UNAVAILABLE', $payload['code']);
+        $this->assertArrayHasKey('request_id', $payload);
+    }
+
     public function testRunReturnsForbiddenForInvalidKey(): void
     {
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
@@ -28,7 +57,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=bad'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'bad']),
             new \Slim\Psr7\Response()
         );
 
@@ -57,7 +86,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=bad'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'bad']),
             new \Slim\Psr7\Response()
         );
 
@@ -67,7 +96,6 @@ class CronControllerTest extends TestCase
     public function testRunReturnsSchedulerSummaryForValidKey(): void
     {
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
@@ -92,18 +120,16 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=expected-secret'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(200, $response->getStatusCode());
-        unset($_GET['key']);
     }
 
     public function testRunReturnsFailureWhenDueTaskFails(): void
     {
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
@@ -127,20 +153,18 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=expected-secret'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(503, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
-        unset($_GET['key']);
     }
 
     public function testRunReturnsConflictWhenAllDueTasksAreSkipped(): void
     {
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
@@ -164,20 +188,18 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=expected-secret'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(409, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
-        unset($_GET['key']);
     }
 
     public function testRunReturnsConflictWhenBatchIsPartiallySkipped(): void
     {
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
@@ -210,13 +232,12 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run?key=expected-secret'),
+            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(409, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
-        unset($_GET['key']);
     }
 }

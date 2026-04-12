@@ -610,18 +610,18 @@ class SupportRoutingEngineService
                 u.role,
                 u.is_admin,
                 u.status AS user_status,
-                p.level,
-                p.skills_json,
-                p.languages_json,
-                p.max_active_tickets,
-                p.is_auto_assignable,
+                COALESCE(p.level, 1) AS level,
+                COALESCE(p.skills_json, '[]') AS skills_json,
+                COALESCE(p.languages_json, '[]') AS languages_json,
+                COALESCE(p.max_active_tickets, 10) AS max_active_tickets,
+                COALESCE(p.is_auto_assignable, 1) AS is_auto_assignable,
                 p.weight_overrides_json,
-                p.status,
+                COALESCE(p.status, 'active') AS profile_status,
                 COALESCE(active.active_count, 0) AS active_count,
                 COALESCE(feedback.avg_rating, 3.5) AS avg_feedback_rating,
                 COALESCE(feedback.rating_count, 0) AS rating_count
             FROM users u
-            INNER JOIN support_assignee_profiles p ON p.user_id = u.id
+            LEFT JOIN support_assignee_profiles p ON p.user_id = u.id
             LEFT JOIN (
                 SELECT assigned_to, COUNT(*) AS active_count
                 FROM support_tickets
@@ -661,7 +661,7 @@ class SupportRoutingEngineService
         array $skillHints
     ): ?array {
         $userStatus = strtolower((string) ($candidate['user_status'] ?? ''));
-        $profileStatus = strtolower((string) ($candidate['status'] ?? ''));
+        $profileStatus = strtolower((string) ($candidate['profile_status'] ?? ''));
         if ($userStatus !== 'active' || $profileStatus !== 'active' || empty($candidate['is_auto_assignable'])) {
             return null;
         }

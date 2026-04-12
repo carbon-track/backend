@@ -54,6 +54,20 @@ class AdminSupportControllerTest extends TestCase
         $this->assertSame(201, $response->getStatusCode());
     }
 
+    public function testUpdateTagReturnsValidationErrorForInvalidId(): void
+    {
+        $controller = $this->makeController();
+        $response = $controller->updateTag(
+            makeRequest('PUT', '/api/v1/admin/support/tags/0', ['name' => 'Urgent']),
+            new \Slim\Psr7\Response(),
+            ['id' => '0']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
+    }
+
     public function testReportsReturnsValidationError(): void
     {
         $service = $this->createMock(SupportAutomationService::class);
@@ -126,6 +140,20 @@ class AdminSupportControllerTest extends TestCase
         );
 
         $this->assertSame(404, $response->getStatusCode());
+    }
+
+    public function testUpdateRuleReturnsValidationErrorForInvalidId(): void
+    {
+        $controller = $this->makeController();
+        $response = $controller->updateRule(
+            makeRequest('PUT', '/api/v1/admin/support/rules/0', ['name' => 'Rule']),
+            new \Slim\Psr7\Response(),
+            ['id' => '0']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
     }
 
     public function testListTicketsReturnsQueuePayload(): void
