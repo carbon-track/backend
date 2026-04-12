@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Models\File;
 use CarbonTrack\Models\User;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
@@ -215,6 +216,172 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame('%billing%', $listExecuteParams['search_username'] ?? null);
         $this->assertSame('%billing%', $listExecuteParams['search_email'] ?? null);
         $this->assertSame('%billing%', $countExecuteParams['search_subject'] ?? null);
+    }
+
+    public function testSupportReplyRejectsAttachmentOutsideTicketScope(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 50,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Cross-ticket leak check',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $audit->method('log')->willReturn(true);
+
+        $foreignFile = new File([
+            'id' => 501,
+            'file_path' => 'support-tickets/2026/04/foreign-evidence.png',
+            'original_name' => 'foreign-evidence.png',
+            'mime_type' => 'image/png',
+            'size' => 1234,
+            'user_id' => (int) $requester->id,
+        ]);
+        $fileMetadata->expects($this->once())
+            ->method('findByFilePath')
+            ->with('support-tickets/2026/04/foreign-evidence.png')
+            ->willReturn($foreignFile);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Attachment is not authorized for this ticket');
+
+        $service->addSupportMessage(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            50,
+            [
+                'content' => 'Attaching foreign file should fail',
+                'attachments' => ['support-tickets/2026/04/foreign-evidence.png'],
+            ]
+        );
+    }
+
+    public function testSupportReplyCanReuseAttachmentAlreadyScopedToTicket(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 51,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Scoped attachment reuse',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'id' => 5101,
+            'ticket_id' => 51,
+            'sender_id' => (int) $requester->id,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Original attachment',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_attachments')->insert([
+            'ticket_id' => 51,
+            'message_id' => 5101,
+            'file_id' => 601,
+            'file_path' => 'support-tickets/2026/04/reused-proof.png',
+            'original_name' => 'reused-proof.png',
+            'mime_type' => 'image/png',
+            'size' => 2048,
+            'entity_type' => 'support_ticket_message',
+            'created_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $audit->method('log')->willReturn(true);
+
+        $reusedFile = new File([
+            'id' => 601,
+            'file_path' => 'support-tickets/2026/04/reused-proof.png',
+            'original_name' => 'reused-proof.png',
+            'mime_type' => 'image/png',
+            'size' => 2048,
+            'user_id' => (int) $requester->id,
+        ]);
+        $fileMetadata->expects($this->once())
+            ->method('findByFilePath')
+            ->with('support-tickets/2026/04/reused-proof.png')
+            ->willReturn($reusedFile);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata
+        );
+
+        $result = $service->addSupportMessage(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            51,
+            [
+                'content' => 'Reusing already-scoped attachment',
+                'attachments' => ['support-tickets/2026/04/reused-proof.png'],
+            ]
+        );
+
+        $attachments = self::$capsule->table('support_ticket_attachments')
+            ->where('ticket_id', 51)
+            ->where('file_path', 'support-tickets/2026/04/reused-proof.png')
+            ->get();
+
+        $this->assertSame(2, $attachments->count());
+        $this->assertSame(51, $result['id']);
     }
 
     public function testUpdateTicketFromSupportSendsUserSupportNotification(): void

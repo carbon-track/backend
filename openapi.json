@@ -15796,6 +15796,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "ticketId 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

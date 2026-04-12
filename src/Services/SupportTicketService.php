@@ -1056,6 +1056,9 @@ class SupportTicketService
             if (!$supportActor && (int) ($file->user_id ?? 0) !== $actorUserId) {
                 throw new \InvalidArgumentException('Attachment ownership mismatch: ' . $path);
             }
+            if ($supportActor && !$this->canSupportActorAttachFile($ticketId, $path, (int) ($file->user_id ?? 0), $actorUserId)) {
+                throw new \InvalidArgumentException('Attachment is not authorized for this ticket: ' . $path);
+            }
             SupportTicketAttachment::create([
                 'ticket_id' => $ticketId,
                 'message_id' => $messageId,
@@ -1068,6 +1071,27 @@ class SupportTicketService
                 'created_at' => $this->now(),
             ]);
         }
+    }
+
+    private function canSupportActorAttachFile(int $ticketId, string $path, int $fileOwnerUserId, int $actorUserId): bool
+    {
+        if ($fileOwnerUserId > 0 && $fileOwnerUserId === $actorUserId) {
+            return true;
+        }
+
+        $stmt = $this->db->prepare('
+            SELECT 1
+            FROM support_ticket_attachments
+            WHERE ticket_id = :ticket_id
+              AND file_path = :file_path
+            LIMIT 1
+        ');
+        $stmt->execute([
+            'ticket_id' => $ticketId,
+            'file_path' => $path,
+        ]);
+
+        return $stmt->fetchColumn() !== false;
     }
 
     private function updateTicket(int $ticketId, array $fields): void

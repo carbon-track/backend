@@ -83,6 +83,27 @@ class SupportTicketControllerTest extends TestCase
         $this->assertSame(403, $response->getStatusCode());
     }
 
+    public function testGetMyTicketReturnsValidationErrorForInvalidTicketId(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'role' => 'user']);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->never())->method('getTicketDetailForUser');
+
+        $controller = $this->makeController($service, $auth);
+        $response = $controller->getMyTicket(
+            makeRequest('GET', '/api/v1/tickets/0'),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '0']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
+        $this->assertSame('Invalid ticket id', $payload['message']);
+    }
+
     public function testListSupportTicketsRequiresAuthentication(): void
     {
         $auth = $this->createMock(AuthService::class);
