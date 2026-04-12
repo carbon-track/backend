@@ -16934,6 +16934,16 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "筛选条件不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

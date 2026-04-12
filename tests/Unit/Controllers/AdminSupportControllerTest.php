@@ -147,6 +147,29 @@ class AdminSupportControllerTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
     }
 
+    public function testListTicketsReturnsValidationErrorForInvalidFilters(): void
+    {
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logAdminOperation');
+
+        $ticketService = $this->createMock(SupportTicketService::class);
+        $ticketService->expects($this->once())
+            ->method('listSupportTickets')
+            ->with([], ['status' => 'bad'])
+            ->willThrowException(new \InvalidArgumentException('Invalid status'));
+
+        $controller = $this->makeController(ticketService: $ticketService, auditLogService: $audit);
+        $response = $controller->listTickets(
+            makeRequest('GET', '/api/v1/admin/support/tickets?status=bad', [], ['status' => 'bad']),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
+        $this->assertSame('Invalid status', $payload['message']);
+    }
+
     public function testGetTicketDetailIncludesRoutingRuns(): void
     {
         $_ENV['SUPPORT_ROUTING_AUDIT_LIMIT'] = '4';

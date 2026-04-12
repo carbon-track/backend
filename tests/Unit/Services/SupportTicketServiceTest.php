@@ -1101,6 +1101,87 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame(0, (int) $ticketRow->assignment_locked);
     }
 
+    public function testReviewTransferRequestRejectsApprovalWhenTicketAssignmentChanged(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportA = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportB = User::create([
+            'username' => 'support-b',
+            'email' => 'support-b@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $admin = User::create([
+            'username' => 'admin-user',
+            'email' => 'admin@example.com',
+            'role' => 'admin',
+            'is_admin' => 1,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 2,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Billing mismatch',
+            'category' => 'business_issue',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportA->id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $audit = $this->createMock(AuditLogService::class);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $fileMetadata = $this->createMock(FileMetadataService::class);
+        $audit->method('log')->willReturn(true);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $logger,
+            $audit,
+            $errorLog,
+            $fileMetadata
+        );
+
+        $request = $service->createTransferRequest(
+            ['id' => (int) $supportA->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            2,
+            ['to_assignee' => (int) $supportB->id, 'reason' => 'Need a different owner']
+        );
+
+        self::$capsule->table('support_tickets')->where('id', 2)->update([
+            'assigned_to' => (int) $admin->id,
+            'assignment_source' => 'manual',
+            'updated_at' => $now,
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Transfer request is stale because the ticket assignee has changed');
+
+        $service->reviewTransferRequest(
+            ['id' => (int) $supportB->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-b'],
+            (int) $request['id'],
+            ['status' => 'approved', 'review_note' => 'I can take this one']
+        );
+    }
+
     public function testSubmitTicketFeedbackCreatesEntryForHandledSupportAgent(): void
     {
         $now = date('Y-m-d H:i:s');

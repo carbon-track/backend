@@ -170,6 +170,15 @@ class AdminSupportController
                 'success' => true,
                 'data' => $result,
             ]);
+        } catch (\InvalidArgumentException $e) {
+            $this->auditLogService->logAdminOperation('admin_support_tickets_list_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
+                'table' => 'support_tickets',
+                'request_data' => $request->getQueryParams(),
+                'request_id' => $request->getAttribute('request_id'),
+                'status' => 'failed',
+                'data' => ['error' => $e->getMessage()],
+            ]);
+            return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
         } catch (\Throwable $e) {
             $this->auditLogService->logAdminOperation('admin_support_tickets_list_failed', $this->actorId($this->currentUser($request)), 'admin_support', [
                 'table' => 'support_tickets',

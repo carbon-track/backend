@@ -593,6 +593,11 @@ class SupportTicketService
             if ($ticket === null) {
                 throw new \RuntimeException('Ticket not found');
             }
+            $currentAssigneeId = isset($ticket['assigned_to']) ? (int) $ticket['assigned_to'] : 0;
+            $expectedAssigneeId = isset($requestRow['from_assignee']) ? (int) $requestRow['from_assignee'] : 0;
+            if ($currentAssigneeId !== $expectedAssigneeId) {
+                throw new \InvalidArgumentException('Transfer request is stale because the ticket assignee has changed');
+            }
             $this->updateTicket((int) $requestRow['ticket_id'], [
                 'assigned_to' => (int) $requestRow['to_assignee'],
                 'assignment_source' => 'manual',
