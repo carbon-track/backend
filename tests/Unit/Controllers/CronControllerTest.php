@@ -32,7 +32,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run'),
+            makeRequest('POST', '/api/v1/cron/run'),
             new \Slim\Psr7\Response()
         );
 
@@ -40,6 +40,7 @@ class CronControllerTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertSame('CRON_UNAVAILABLE', $payload['code']);
         $this->assertArrayHasKey('request_id', $payload);
+        $this->assertSame('no-store, no-cache, max-age=0, must-revalidate', $response->getHeaderLine('Cache-Control'));
     }
 
     public function testRunReturnsForbiddenForInvalidKey(): void
@@ -57,7 +58,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'bad']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'bad']),
             new \Slim\Psr7\Response()
         );
 
@@ -86,7 +87,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'bad']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'bad']),
             new \Slim\Psr7\Response()
         );
 
@@ -120,7 +121,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
@@ -153,7 +154,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
@@ -188,7 +189,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
@@ -232,7 +233,7 @@ class CronControllerTest extends TestCase
         );
 
         $response = $controller->run(
-            makeRequest('GET', '/api/v1/cron/run', null, ['key' => 'expected-secret']),
+            makeRequest('POST', '/api/v1/cron/run', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 

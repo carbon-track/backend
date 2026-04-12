@@ -161,4 +161,31 @@ class AdminAiCronActionsTest extends TestCase
             'conversation_id' => 'conv-4',
         ]);
     }
+
+    public function testWriteModelRejectsMissingCronTaskKeyForUpdateAndRun(): void
+    {
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->never())->method('updateTask');
+        $scheduler->expects($this->never())->method('runTaskNow');
+
+        $service = new AdminAiWriteActionService(
+            new \PDO('sqlite::memory:'),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(MessageService::class),
+            $this->createMock(BadgeService::class),
+            $scheduler
+        );
+
+        try {
+            $service->execute('update_cron_task', [], []);
+            $this->fail('Expected InvalidArgumentException for missing task_key on update.');
+        } catch (\InvalidArgumentException $exception) {
+            $this->assertSame('task_key is required.', $exception->getMessage());
+        }
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('task_key is required.');
+
+        $service->execute('run_cron_task', [], []);
+    }
 }

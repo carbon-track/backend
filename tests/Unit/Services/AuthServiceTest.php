@@ -109,6 +109,18 @@ class AuthServiceTest extends TestCase
         $this->assertFalse($payload['user']['is_admin']);
     }
 
+    public function testNormalizeUserRoleViewNormalizesFlagsConsistently(): void
+    {
+        $normalized = $this->authService->normalizeUserRoleView([
+            'role' => 'support',
+            'is_admin' => 0,
+        ]);
+
+        $this->assertSame('support', $normalized['role']);
+        $this->assertFalse($normalized['is_admin']);
+        $this->assertTrue($normalized['is_support']);
+    }
+
     public function testGenerateJwtTokenUsesUuidAsSubjectWhenAvailable(): void
     {
         $user = [

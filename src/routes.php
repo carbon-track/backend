@@ -338,8 +338,8 @@ return function (App $app) {
     };
 
     $registerSupportRoutes = function (RouteCollectorProxy $group) {
-        $group->get('/support/sla-sweep', [SupportTicketController::class, 'runSlaSweep']);
-        $group->get('/cron/run', [CronController::class, 'run']);
+        $group->post('/support/sla-sweep', [SupportTicketController::class, 'runSlaSweep']);
+        $group->post('/cron/run', [CronController::class, 'run']);
         $group->group('/support', function (RouteCollectorProxy $support) {
             $support->get('/assignees', [SupportTicketController::class, 'listSupportAssignees']);
             $support->get('/tickets', [SupportTicketController::class, 'listSupportTickets']);

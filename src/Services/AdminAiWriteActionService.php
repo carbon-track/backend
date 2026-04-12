@@ -55,7 +55,7 @@ class AdminAiWriteActionService
 
         $taskKey = trim((string) ($payload['task_key'] ?? ''));
         if ($taskKey === '') {
-            throw new \RuntimeException('task_key is required.');
+            throw new \InvalidArgumentException('task_key is required.');
         }
 
         $updatePayload = $this->normalizeCronTaskUpdatePayload($payload);
@@ -142,7 +142,7 @@ class AdminAiWriteActionService
 
         $taskKey = trim((string) ($payload['task_key'] ?? ''));
         if ($taskKey === '') {
-            throw new \RuntimeException('task_key is required.');
+            throw new \InvalidArgumentException('task_key is required.');
         }
 
         $adminId = isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null;

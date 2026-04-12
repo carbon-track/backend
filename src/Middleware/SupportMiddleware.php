@@ -30,29 +30,53 @@ class SupportMiddleware implements MiddlewareInterface
             }
 
             if (!$user) {
-                return $this->jsonError(401, 'Authentication required', 'AUTH_REQUIRED');
+                return $this->jsonError($request, 401, 'Authentication required', 'AUTH_REQUIRED');
             }
 
             if (!$this->authService->isSupportUser($user)) {
-                return $this->jsonError(403, 'Support access required', 'SUPPORT_REQUIRED');
+                return $this->jsonError($request, 403, 'Support access required', 'SUPPORT_REQUIRED');
             }
 
             return $handler->handle($request->withAttribute('user', $user));
         } catch (\Throwable $e) {
             $this->logExceptionWithFallback($e, $request, 'SupportMiddleware error: ' . $e->getMessage());
-            return $this->jsonError(500, 'Internal server error', 'INTERNAL_ERROR');
+            return $this->jsonError($request, 500, 'Internal server error', 'INTERNAL_ERROR');
         }
     }
 
-    private function jsonError(int $status, string $message, string $code): Response
+    private function jsonError(Request $request, int $status, string $message, string $code): Response
     {
         $response = new \Slim\Psr7\Response();
-        $response->getBody()->write(json_encode([
+        $payload = [
             'success' => false,
             'message' => $message,
             'error' => $message,
             'code' => $code,
-        ]));
+        ];
+
+        $requestId = $this->resolveRequestId($request);
+        if (is_string($requestId) && $requestId !== '') {
+            $payload['request_id'] = $requestId;
+        }
+
+        $json = json_encode($payload);
+        if ($json === false) {
+            $fallbackPayload = [
+                'success' => false,
+                'message' => 'Internal server error',
+                'error' => 'Internal server error',
+                'code' => 'JSON_ENCODE_ERROR',
+            ];
+            if (isset($payload['request_id'])) {
+                $fallbackPayload['request_id'] = $payload['request_id'];
+            }
+            $json = json_encode($fallbackPayload);
+            if ($json === false) {
+                $json = '{"success":false,"message":"Internal server error","error":"Internal server error","code":"JSON_ENCODE_ERROR"}';
+            }
+        }
+
+        $response->getBody()->write($json);
 
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }

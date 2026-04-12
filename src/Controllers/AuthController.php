@@ -1234,6 +1234,7 @@ class AuthController
     {
         $avatar = $this->resolveAvatar($row['avatar_path'] ?? $row['avatar_url'] ?? null);
         $profileFields = $this->userProfileViewService->buildProfileFields($row);
+        $roleView = $this->authService->normalizeUserRoleView($row);
         return [
             'id' => (int)($row['id'] ?? 0),
             'uuid' => $row['uuid'] ?? null,
@@ -1242,9 +1243,9 @@ class AuthController
             'school_id' => $profileFields['school_id'],
             'school_name' => $profileFields['school_name'],
             'points' => (int)($row['points'] ?? 0),
-            'role' => !empty($row['is_admin']) ? 'admin' : (($row['role'] ?? 'user') ?: 'user'),
-            'is_admin' => (bool)($row['is_admin'] ?? 0),
-            'is_support' => !empty($row['is_admin']) || (($row['role'] ?? 'user') === 'support'),
+            'role' => $roleView['role'] ?? 'user',
+            'is_admin' => (bool)($roleView['is_admin'] ?? false),
+            'is_support' => (bool)($roleView['is_support'] ?? false),
             'email_verified_at' => $row['email_verified_at'] ?? null,
             'avatar_id' => $row['avatar_id'] ?? null,
             'avatar_path' => $avatar['avatar_path'],

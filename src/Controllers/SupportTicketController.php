@@ -31,38 +31,35 @@ class SupportTicketController
 
     public function runSlaSweep(Request $request, Response $response): Response
     {
-        $query = $request->getQueryParams();
-        $providedKey = is_string($query['key'] ?? null)
-            ? trim((string) $query['key'])
-            : trim((string) ($_GET['key'] ?? ''));
+        $providedKey = $this->resolveInvocationKey($request, 'X-SLA-Sweep-Key');
         $configuredKey = trim((string) ($_ENV['SUPPORT_SLA_SWEEP_KEY'] ?? getenv('SUPPORT_SLA_SWEEP_KEY') ?: ''));
 
         if ($configuredKey === '') {
             $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_unconfigured', 'support_sla_sweep', [
                 'status' => 'failed',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_id' => $request->getAttribute('request_id'),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
             ]);
 
-            return $this->json($response, ['success' => false, 'message' => 'SLA sweep key is not configured', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
+            return $this->scheduledJson($response, ['success' => false, 'message' => 'SLA sweep key is not configured', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
         }
 
         if ($providedKey === '' || !hash_equals($configuredKey, $providedKey)) {
             $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_denied', 'support_sla_sweep', [
                 'status' => 'failed',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_id' => $request->getAttribute('request_id'),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
             ]);
 
-            return $this->json($response, ['success' => false, 'message' => 'Invalid SLA sweep key', 'code' => 'FORBIDDEN'], 403);
+            return $this->scheduledJson($response, ['success' => false, 'message' => 'Invalid SLA sweep key', 'code' => 'FORBIDDEN'], 403);
         }
 
         if ($this->cronSchedulerService === null && $this->supportRoutingEngineService === null) {
-            return $this->json($response, ['success' => false, 'message' => 'SLA sweep engine unavailable', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
+            return $this->scheduledJson($response, ['success' => false, 'message' => 'SLA sweep engine unavailable', 'code' => 'SLA_SWEEP_UNAVAILABLE'], 503);
         }
 
         try {
@@ -76,14 +73,14 @@ class SupportTicketController
                     $message = $taskRun['error_message'] ?? 'SLA sweep did not complete successfully';
                     $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_triggered', 'support_sla_sweep', [
                         'status' => 'failed',
-                        'request_method' => 'GET',
+                        'request_method' => 'POST',
                         'endpoint' => (string) $request->getUri()->getPath(),
                         'request_id' => $request->getAttribute('request_id'),
                         'request_data' => ['remote_addr' => $this->clientIp($request)],
                         'new_data' => $taskRun,
                     ]);
 
-                    return $this->json($response, [
+                    return $this->scheduledJson($response, [
                         'success' => false,
                         'message' => $message,
                         'code' => 'SLA_SWEEP_FAILED',
@@ -96,16 +93,39 @@ class SupportTicketController
             }
             $this->auditLogService?->logSystemEvent('support_sla_sweep_endpoint_triggered', 'support_sla_sweep', [
                 'status' => 'success',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_id' => $request->getAttribute('request_id'),
                 'request_data' => $result + ['remote_addr' => $this->clientIp($request)],
             ]);
 
-            return $this->json($response, ['success' => true, 'data' => $result]);
+            return $this->scheduledJson($response, ['success' => true, 'data' => $result]);
         } catch (\Throwable $e) {
             return $this->error($request, $response, $e, 'Failed to run SLA sweep');
         }
+    }
+
+    private function resolveInvocationKey(Request $request, string $headerName): string
+    {
+        $headerValue = trim($request->getHeaderLine($headerName));
+        if ($headerValue !== '') {
+            return $headerValue;
+        }
+
+        $body = $request->getParsedBody();
+        if (is_array($body) && is_string($body['key'] ?? null)) {
+            return trim((string) $body['key']);
+        }
+
+        return '';
+    }
+
+    private function scheduledJson(Response $response, array $payload, int $status = 200): Response
+    {
+        return $this->json($response, $payload, $status)
+            ->withHeader('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate')
+            ->withHeader('Pragma', 'no-cache')
+            ->withHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 
     public function createTicket(Request $request, Response $response): Response

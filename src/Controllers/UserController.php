@@ -491,6 +491,7 @@ class UserController
 
             $avatar = $this->resolveAvatar($row['avatar_path'] ?? null);
             $profileFields = $this->userProfileViewService->buildProfileFields($row);
+            $roleView = $this->authService->normalizeUserRoleView($row);
 
                 $userInfo = [
                     'id' => $row['id'],
@@ -500,9 +501,9 @@ class UserController
                 'school_id' => $profileFields['school_id'],
                 'school_name' => $profileFields['school_name'],
                 'points' => (int)$row['points'],
-                    'role' => !empty($row['is_admin']) ? 'admin' : (($row['role'] ?? 'user') ?: 'user'),
-                    'is_admin' => (bool)$row['is_admin'],
-                    'is_support' => !empty($row['is_admin']) || (($row['role'] ?? 'user') === 'support'),
+                    'role' => $roleView['role'] ?? 'user',
+                    'is_admin' => (bool) ($roleView['is_admin'] ?? false),
+                    'is_support' => (bool) ($roleView['is_support'] ?? false),
                     'email_verified_at' => $row['email_verified_at'] ?? null,
                 'avatar_id' => $row['avatar_id'],
                 'avatar_path' => $avatar['avatar_path'],
@@ -882,6 +883,7 @@ class UserController
             $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
             $updatedAvatar = $this->resolveAvatar($updatedUser['avatar_path'] ?? null);
             $profileFields = $this->userProfileViewService->buildProfileFields($updatedUser);
+            $roleView = $this->authService->normalizeUserRoleView($updatedUser);
 
             // 准备返回的用户信息
                 $userInfo = [
@@ -892,9 +894,9 @@ class UserController
                 'school_id' => $profileFields['school_id'],
                 'school_name' => $profileFields['school_name'],
                 'points' => $updatedUser['points'],
-                    'role' => !empty($updatedUser['is_admin']) ? 'admin' : (($updatedUser['role'] ?? 'user') ?: 'user'),
-                    'is_admin' => (bool)$updatedUser['is_admin'],
-                    'is_support' => !empty($updatedUser['is_admin']) || (($updatedUser['role'] ?? 'user') === 'support'),
+                    'role' => $roleView['role'] ?? 'user',
+                    'is_admin' => (bool) ($roleView['is_admin'] ?? false),
+                    'is_support' => (bool) ($roleView['is_support'] ?? false),
                     'avatar_id' => $updatedUser['avatar_id'],
                 'avatar_path' => $updatedAvatar['avatar_path'],
                 'avatar_url' => $updatedAvatar['avatar_url'],

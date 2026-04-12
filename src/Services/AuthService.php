@@ -594,6 +594,15 @@ class AuthService
     }
 
     /**
+     * @param array<string,mixed> $user
+     * @return array<string,mixed>
+     */
+    public function normalizeUserRoleView(array $user): array
+    {
+        return $this->normalizeRoleFlags($user);
+    }
+
+    /**
      * Normalize a token/user payload into a local authenticated user context.
      *
      * UUID is treated as the stable cross-site subject. The local numeric user ID

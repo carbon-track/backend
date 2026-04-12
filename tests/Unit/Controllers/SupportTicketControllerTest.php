@@ -21,7 +21,6 @@ class SupportTicketControllerTest extends TestCase
     {
         parent::setUp();
         unset($_ENV['SUPPORT_SLA_SWEEP_KEY']);
-        unset($_GET['key']);
     }
 
     private function makeController(
@@ -271,17 +270,17 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $response = $controller->runSlaSweep(
-            makeRequest('GET', '/api/v1/support/sla-sweep?key=bad'),
+            makeRequest('POST', '/api/v1/support/sla-sweep', ['key' => 'bad']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(403, $response->getStatusCode());
+        $this->assertSame('no-store, no-cache, max-age=0, must-revalidate', $response->getHeaderLine('Cache-Control'));
     }
 
     public function testRunSlaSweepReturnsSummaryForValidKey(): void
     {
         $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $audit = $this->createMock(AuditLogService::class);
         $audit->expects($this->once())
@@ -305,18 +304,16 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $response = $controller->runSlaSweep(
-            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            makeRequest('POST', '/api/v1/support/sla-sweep', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(200, $response->getStatusCode());
-        unset($_GET['key']);
     }
 
     public function testRunSlaSweepUsesSchedulerWhenAvailable(): void
     {
         $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $audit = $this->createMock(AuditLogService::class);
         $audit->expects($this->once())->method('logSystemEvent');
@@ -334,20 +331,18 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $response = $controller->runSlaSweep(
-            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            makeRequest('POST', '/api/v1/support/sla-sweep', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(200, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertSame(3, $payload['data']['processed']);
-        unset($_GET['key']);
     }
 
     public function testRunSlaSweepReturnsFailureWhenSchedulerRunFails(): void
     {
         $_ENV['SUPPORT_SLA_SWEEP_KEY'] = 'expected-secret';
-        $_GET['key'] = 'expected-secret';
 
         $audit = $this->createMock(AuditLogService::class);
         $audit->expects($this->once())
@@ -377,13 +372,12 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $response = $controller->runSlaSweep(
-            makeRequest('GET', '/api/v1/support/sla-sweep?key=expected-secret'),
+            makeRequest('POST', '/api/v1/support/sla-sweep', ['key' => 'expected-secret']),
             new \Slim\Psr7\Response()
         );
 
         $this->assertSame(503, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
-        unset($_GET['key']);
     }
 }

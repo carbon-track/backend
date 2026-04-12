@@ -15977,18 +15977,18 @@
       }
     },
     "/api/v1/support/sla-sweep": {
-      "get": {
+      "post": {
         "tags": [
           "Support"
         ],
         "summary": "触发 SLA 巡检",
-        "description": "兼容入口。推荐改用 /api/v1/cron/run?key=... 的统一 cron 调度。",
+        "description": "兼容入口。使用 POST 触发一次 SLA 巡检，建议通过请求头传入秘钥。",
         "operationId": "supportRunSlaSweep",
         "security": [],
         "parameters": [
           {
-            "name": "key",
-            "in": "query",
+            "name": "X-SLA-Sweep-Key",
+            "in": "header",
             "required": true,
             "schema": {
               "type": "string"
@@ -17280,17 +17280,17 @@
       }
     },
     "/api/v1/cron/run": {
-      "get": {
+      "post": {
         "tags": [
           "Cron"
         ],
         "summary": "运行到点的系统定时任务",
-        "description": "供外部 cron 每分钟调用。服务端会自行判断哪些已启用任务到点执行。",
+        "description": "供外部 cron 每分钟以 POST 方式调用。服务端会自行判断哪些已启用任务到点执行。",
         "operationId": "cronRunDueTasks",
         "parameters": [
           {
-            "name": "key",
-            "in": "query",
+            "name": "X-Cron-Key",
+            "in": "header",
             "required": true,
             "schema": {
               "type": "string"

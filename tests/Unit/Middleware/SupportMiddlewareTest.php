@@ -19,7 +19,7 @@ class SupportMiddlewareTest extends TestCase
 
         $middleware = new SupportMiddleware($auth, $this->createMock(LoggerInterface::class));
         $response = $middleware->process(
-            makeRequest('GET', '/api/v1/support/tickets'),
+            makeRequest('GET', '/api/v1/support/tickets')->withAttribute('request_id', 'req-support-auth'),
             $this->createMock(\Psr\Http\Server\RequestHandlerInterface::class)
         );
 
@@ -28,6 +28,7 @@ class SupportMiddlewareTest extends TestCase
         $this->assertSame('Authentication required', $payload['message']);
         $this->assertSame('Authentication required', $payload['error']);
         $this->assertSame('AUTH_REQUIRED', $payload['code']);
+        $this->assertSame('req-support-auth', $payload['request_id']);
     }
 
     public function testRejectsRegularUsers(): void

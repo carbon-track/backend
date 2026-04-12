@@ -23,16 +23,13 @@ class CronController
 
     public function run(Request $request, Response $response): Response
     {
-        $query = $request->getQueryParams();
-        $providedKey = is_string($query['key'] ?? null)
-            ? trim((string) $query['key'])
-            : '';
+        $providedKey = $this->resolveInvocationKey($request, 'X-Cron-Key');
         $configuredKey = trim((string) ($_ENV['CRON_RUN_KEY'] ?? getenv('CRON_RUN_KEY') ?: ''));
 
         if ($configuredKey === '') {
             $this->auditSafely('cron_run_endpoint_unconfigured', [
                 'status' => 'failed',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
                 'request_id' => $request->getAttribute('request_id'),
@@ -48,7 +45,7 @@ class CronController
         if ($providedKey === '' || !hash_equals($configuredKey, $providedKey)) {
             $this->auditSafely('cron_run_endpoint_denied', [
                 'status' => 'failed',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_data' => ['remote_addr' => $this->clientIp($request)],
                 'request_id' => $request->getAttribute('request_id'),
@@ -69,7 +66,7 @@ class CronController
 
             $this->auditSafely('cron_run_endpoint_triggered', [
                 'status' => !empty($result['failed']) || !empty($result['skipped']) ? 'failed' : 'success',
-                'request_method' => 'GET',
+                'request_method' => 'POST',
                 'endpoint' => (string) $request->getUri()->getPath(),
                 'request_id' => $request->getAttribute('request_id'),
                 'request_data' => [
@@ -125,6 +122,21 @@ class CronController
         return null;
     }
 
+    private function resolveInvocationKey(Request $request, string $headerName): string
+    {
+        $headerValue = trim($request->getHeaderLine($headerName));
+        if ($headerValue !== '') {
+            return $headerValue;
+        }
+
+        $body = $request->getParsedBody();
+        if (is_array($body) && is_string($body['key'] ?? null)) {
+            return trim((string) $body['key']);
+        }
+
+        return '';
+    }
+
     private function auditSafely(string $action, array $payload, Request $request): void
     {
         try {
@@ -160,6 +172,11 @@ class CronController
             $payload['request_id'] = $request->getAttribute('request_id');
         }
         $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
+        return $response
+            ->withStatus($status)
+            ->withHeader('Content-Type', 'application/json')
+            ->withHeader('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate')
+            ->withHeader('Pragma', 'no-cache')
+            ->withHeader('X-Robots-Tag', 'noindex, nofollow');
     }
 }
