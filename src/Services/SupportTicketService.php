@@ -1373,7 +1373,9 @@ class SupportTicketService
             'actor_type' => 'system',
             'affected_table' => 'support_tickets',
             'affected_id' => $ticketId,
-            'status' => ($messageSent || $emailSent) ? 'success' : 'partial',
+            'status' => $messageSent && $emailSent
+                ? 'success'
+                : (($messageSent || $emailSent) ? 'partial' : 'failed'),
             'data' => [
                 'message_sent' => $messageSent,
                 'email_sent' => $emailSent,

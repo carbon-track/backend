@@ -1644,4 +1644,56 @@ class SupportTicketServiceTest extends TestCase
         $this->assertNull($ticketRow->closed_at);
     }
 
+    public function testNotifyAssigneeMarksAuditAsFailedWhenAllChannelsFail(): void
+    {
+        $loggedPayloads = [];
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->exactly(3))
+            ->method('log')
+            ->willReturnCallback(static function (array $payload) use (&$loggedPayloads): bool {
+                $loggedPayloads[] = $payload;
+                return true;
+            });
+
+        $messageService = $this->createMock(MessageService::class);
+        $messageService->method('sendSystemMessage')->willThrowException(new \RuntimeException('message failed'));
+
+        $emailService = $this->createMock(EmailService::class);
+        $emailService->method('sendMessageNotification')->willThrowException(new \RuntimeException('email failed'));
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class),
+            $emailService,
+            $messageService
+        );
+
+        $method = new \ReflectionMethod($service, 'notifyAssignee');
+        $method->setAccessible(true);
+        $method->invoke(
+            $service,
+            ['id' => 99, 'username' => 'supporter', 'email' => 'support@example.com'],
+            'Subject',
+            'Body',
+            123,
+            'support_ticket_manual_assignment_notified'
+        );
+
+        $finalNotificationLog = null;
+        foreach ($loggedPayloads as $payload) {
+            if (($payload['action'] ?? null) === 'support_ticket_manual_assignment_notified') {
+                $finalNotificationLog = $payload;
+                break;
+            }
+        }
+
+        $this->assertNotNull($finalNotificationLog);
+        $this->assertSame('failed', $finalNotificationLog['status'] ?? null);
+        $this->assertFalse($finalNotificationLog['data']['message_sent'] ?? true);
+        $this->assertFalse($finalNotificationLog['data']['email_sent'] ?? true);
+    }
+
 }

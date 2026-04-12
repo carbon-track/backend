@@ -233,12 +233,14 @@ class SupportRoutingEngineService
                 }
                 $this->updateTicket($ticketId, $updates);
                 try {
-                    $this->routeTicket($ticketId, 'sla_breach', ['force' => true]);
-                    $this->updateTicket($ticketId, [
-                        'sla_status' => 'escalated',
-                        'updated_at' => $this->now(),
-                    ]);
-                    $rerouted++;
+                    $routeResult = $this->routeTicket($ticketId, 'sla_breach', ['force' => true]);
+                    if (($routeResult['assigned_to'] ?? null) !== null) {
+                        $this->updateTicket($ticketId, [
+                            'sla_status' => 'escalated',
+                            'updated_at' => $this->now(),
+                        ]);
+                        $rerouted++;
+                    }
                 } catch (\Throwable $exception) {
                     $this->logger->warning('Support SLA reroute failed', [
                         'ticket_id' => $ticketId,
