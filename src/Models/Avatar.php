@@ -6,17 +6,22 @@ namespace CarbonTrack\Models;
 
 use PDO;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\InputValueNormalizer;
+use Psr\Log\LoggerInterface;
 use Slim\Psr7\Factory\ServerRequestFactory;
 
 class Avatar
 {
     private PDO $db;
 
+    private LoggerInterface $logger;
+
     private ?ErrorLogService $errorLogService;
 
-    public function __construct(PDO $db, ?ErrorLogService $errorLogService = null)
+    public function __construct(PDO $db, LoggerInterface $logger, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
+        $this->logger = $logger;
         $this->errorLogService = $errorLogService;
     }
 
@@ -144,6 +149,7 @@ class Avatar
     public function createAvatar(array $data): int
     {
         $uuid = $this->generateUUID();
+        $data = $this->normalizePersistenceData($data);
         
         $stmt = $this->db->prepare("
             INSERT INTO avatars (
@@ -173,6 +179,7 @@ class Avatar
      */
     public function updateAvatar(int $avatarId, array $data): bool
     {
+        $data = $this->normalizePersistenceData($data);
         $fields = [];
         $params = [];
         
@@ -199,6 +206,29 @@ class Avatar
         $stmt = $this->db->prepare($sql);
         
         return $stmt->execute($params);
+    }
+
+    /**
+     * Normalize controller/input payload before persisting to integer-backed columns.
+     *
+     * @param array<string,mixed> $data
+     * @return array<string,mixed>
+     */
+    private function normalizePersistenceData(array $data): array
+    {
+        if (array_key_exists('sort_order', $data)) {
+            $data['sort_order'] = InputValueNormalizer::integer($data['sort_order'], 'sort_order');
+        }
+
+        foreach (['is_active', 'is_default'] as $field) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+
+            $data[$field] = InputValueNormalizer::booleanFlagInteger($data[$field], $field);
+        }
+
+        return $data;
     }
 
     /**
@@ -361,10 +391,19 @@ class Avatar
                 $this->errorLogService->logException($exception, $request, ['context_message' => $contextMessage]);
                 return;
             } catch (\Throwable $loggingError) {
-                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+                $this->logger->error('ErrorLogService logging failed for avatar model', [
+                    'message' => $loggingError->getMessage(),
+                    'context_message' => $contextMessage,
+                    'exception_type' => get_class($loggingError),
+                ]);
             }
         }
-        error_log($contextMessage . ' ' . $exception->getMessage());
+
+        $this->logger->error(trim($contextMessage . ' ' . $exception->getMessage()), [
+            'exception_type' => get_class($exception),
+            'exception_file' => $exception->getFile(),
+            'exception_line' => $exception->getLine(),
+        ]);
     }
 
 }

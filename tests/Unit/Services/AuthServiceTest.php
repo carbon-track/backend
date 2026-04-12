@@ -90,6 +90,37 @@ class AuthServiceTest extends TestCase
         $this->assertSame($user['uuid'], $payload['user']['uuid']);
     }
 
+    public function testGenerateTokenMarksSupportUsers(): void
+    {
+        $user = [
+            'id' => 7,
+            'uuid' => '550e8400-e29b-41d4-a716-446655440007',
+            'username' => 'support-user',
+            'email' => 'support@example.com',
+            'role' => 'support',
+            'is_admin' => false,
+        ];
+
+        $token = $this->authService->generateToken($user);
+        $payload = $this->authService->validateToken($token);
+
+        $this->assertSame('support', $payload['role']);
+        $this->assertTrue($payload['user']['is_support']);
+        $this->assertFalse($payload['user']['is_admin']);
+    }
+
+    public function testNormalizeUserRoleViewNormalizesFlagsConsistently(): void
+    {
+        $normalized = $this->authService->normalizeUserRoleView([
+            'role' => 'support',
+            'is_admin' => 0,
+        ]);
+
+        $this->assertSame('support', $normalized['role']);
+        $this->assertFalse($normalized['is_admin']);
+        $this->assertTrue($normalized['is_support']);
+    }
+
     public function testGenerateJwtTokenUsesUuidAsSubjectWhenAvailable(): void
     {
         $user = [
@@ -168,6 +199,34 @@ class AuthServiceTest extends TestCase
         $this->assertSame('new-sso-user', $pdo->query('SELECT username FROM users LIMIT 1')->fetchColumn());
     }
 
+    public function testValidateTokenProvisionLocalUserNormalizesUnknownRole(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        $token = JWT::encode([
+            'iss' => 'carbontrack',
+            'aud' => 'carbontrack-users',
+            'iat' => time(),
+            'exp' => time() + 3600,
+            'sub' => '550e8400-e29b-41d4-a716-4466554400ac',
+            'user' => [
+                'uuid' => '550e8400-e29b-41d4-a716-4466554400ac',
+                'username' => 'unknown-role-user',
+                'email' => 'unknown-role-user@example.com',
+                'role' => 'moderator',
+                'is_admin' => false,
+            ],
+        ], $this->jwtSecret, 'HS256');
+
+        $payload = $service->validateToken($token);
+
+        $this->assertSame('user', $payload['role']);
+        $this->assertSame('user', $pdo->query('SELECT role FROM users LIMIT 1')->fetchColumn());
+        $this->assertSame(0, (int) $pdo->query('SELECT is_admin FROM users LIMIT 1')->fetchColumn());
+    }
+
     public function testValidateJwtTokenWithInvalidToken(): void
     {
         $result = $this->authService->validateJwtToken('invalid.token.here');
@@ -242,6 +301,17 @@ class AuthServiceTest extends TestCase
         $this->assertFalse($this->authService->isAdminUser($regularUser));
     }
 
+    public function testIsSupportUserAcceptsSupportAndAdmin(): void
+    {
+        $supportUser = ['id' => 2, 'username' => 'support', 'role' => 'support', 'is_admin' => false];
+        $adminUser = ['id' => 1, 'username' => 'admin', 'role' => 'admin', 'is_admin' => true];
+        $regularUser = ['id' => 3, 'username' => 'user', 'role' => 'user', 'is_admin' => false];
+
+        $this->assertTrue($this->authService->isSupportUser($supportUser));
+        $this->assertTrue($this->authService->isSupportUser($adminUser));
+        $this->assertFalse($this->authService->isSupportUser($regularUser));
+    }
+
     public function testGenerateSecureToken(): void
     {
         $token1 = $this->authService->generateSecureToken();
@@ -290,6 +360,7 @@ class AuthServiceTest extends TestCase
                 username TEXT UNIQUE,
                 email TEXT UNIQUE,
                 password TEXT,
+                role TEXT DEFAULT \'user\',
                 status TEXT,
                 points INTEGER DEFAULT 0,
                 is_admin INTEGER DEFAULT 0,

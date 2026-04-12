@@ -81,6 +81,7 @@ class NotificationPreferenceServiceTest extends TestCase
         $this->assertTrue($byCategory[NotificationPreferenceService::CATEGORY_TRANSACTION]['email_enabled']);
         $this->assertTrue($byCategory[NotificationPreferenceService::CATEGORY_ACTIVITY]['email_enabled']);
         $this->assertTrue($byCategory[NotificationPreferenceService::CATEGORY_ANNOUNCEMENT]['email_enabled']);
+        $this->assertTrue($byCategory[NotificationPreferenceService::CATEGORY_SUPPORT]['email_enabled']);
         $this->assertTrue($byCategory[NotificationPreferenceService::CATEGORY_VERIFICATION]['email_enabled'], 'Locked categories must remain enabled.');
     }
 
@@ -104,12 +105,17 @@ class NotificationPreferenceServiceTest extends TestCase
                 'category' => NotificationPreferenceService::CATEGORY_ANNOUNCEMENT,
                 'email_enabled' => false,
             ],
+            [
+                'category' => NotificationPreferenceService::CATEGORY_SUPPORT,
+                'email_enabled' => false,
+            ],
         ]);
 
         $user->refresh();
-        $this->assertSame(9, $user->notification_email_mask, 'System (bit0) and announcement (bit3) should be disabled.');
+        $this->assertSame(25, $user->notification_email_mask, 'System (bit0), announcement (bit3), and support (bit4) should be disabled.');
         $this->assertFalse($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_SYSTEM));
         $this->assertFalse($service->shouldSendEmailByEmail($user->email, NotificationPreferenceService::CATEGORY_ANNOUNCEMENT));
+        $this->assertFalse($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_SUPPORT));
         $this->assertTrue($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_TRANSACTION));
         $this->assertTrue($service->shouldSendEmailByEmail($user->email, NotificationPreferenceService::CATEGORY_VERIFICATION), 'Locked verification category should ignore mask.');
 
@@ -121,8 +127,9 @@ class NotificationPreferenceServiceTest extends TestCase
         ]);
 
         $user->refresh();
-        $this->assertSame(8, $user->notification_email_mask, 'Only announcement (bit3) should remain disabled.');
+        $this->assertSame(24, $user->notification_email_mask, 'Announcement (bit3) and support (bit4) should remain disabled.');
         $this->assertTrue($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_SYSTEM));
         $this->assertFalse($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_ANNOUNCEMENT));
+        $this->assertFalse($service->shouldSendEmail((int) $user->id, NotificationPreferenceService::CATEGORY_SUPPORT));
     }
 }

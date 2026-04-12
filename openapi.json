@@ -41,7 +41,17 @@
         "/auth/login",
         "/auth/forgot-password",
         "/auth/send-verification-code",
-        "/auth/verify-email"
+        "/auth/verify-email",
+        "/tickets",
+        "/tickets/{ticketId}/messages"
+      ]
+    },
+    "support": {
+      "description": "客服权限中间件，允许 support 与 admin 角色访问独立客服门户和支持端 API。",
+      "error_codes": [
+        "AUTH_REQUIRED",
+        "SUPPORT_REQUIRED",
+        "ACCESS_DENIED"
       ]
     }
   },
@@ -6884,6 +6894,16 @@
           "201": {
             "description": "创建成功"
           },
+          "400": {
+            "description": "请求体不是 JSON 对象，或字段值格式不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
             "content": {
@@ -6944,6 +6964,16 @@
         "responses": {
           "200": {
             "description": "更新成功"
+          },
+          "400": {
+            "description": "请求体不是 JSON 对象，或字段值格式不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
@@ -7948,11 +7978,12 @@
           {
             "name": "role",
             "in": "query",
-            "description": "按角色别名筛选；admin 对应管理员，user 对应普通用户。",
+            "description": "按角色筛选；支持 admin、support、user。",
             "schema": {
               "type": "string",
               "enum": [
                 "admin",
+                "support",
                 "user"
               ]
             }
@@ -8099,7 +8130,50 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "support",
+                      "admin"
+                    ],
+                    "description": "显式设置用户角色，并同步更新 is_admin。"
+                  },
+                  "is_admin": {
+                    "type": "boolean",
+                    "description": "兼容旧调用；true 会提升为 admin，false 会恢复为非管理员角色。"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "inactive"
+                    ]
+                  },
+                  "group_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "quota_override": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "quota_flat": {
+                    "type": "object"
+                  },
+                  "admin_notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -8487,7 +8561,50 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "support",
+                      "admin"
+                    ],
+                    "description": "显式设置用户角色，并同步更新 is_admin。"
+                  },
+                  "is_admin": {
+                    "type": "boolean",
+                    "description": "兼容旧调用；true 会提升为 admin，false 会恢复为非管理员角色。"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "inactive"
+                    ]
+                  },
+                  "group_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "quota_override": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "quota_flat": {
+                    "type": "object"
+                  },
+                  "admin_notes": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -9128,6 +9245,46 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "support_routing_fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "label_key": {
+                                "type": "string"
+                              },
+                              "default": {},
+                              "min": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "max": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "step": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "support_routing_defaults": {
+                          "type": "object",
+                          "additionalProperties": true
                         }
                       }
                     }
@@ -12514,7 +12671,7 @@
           "Leaderboard"
         ],
         "summary": "Trigger leaderboard cache refresh",
-        "description": "Rebuilds the cached leaderboard snapshot using a trigger key.",
+        "description": "兼容入口。推荐改用 /api/v1/cron/run?key=... 的统一 cron 调度。",
         "parameters": [
           {
             "name": "key",
@@ -12583,6 +12740,16 @@
           },
           "403": {
             "description": "Invalid trigger key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "榜单刷新任务当前被锁定或跳过。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15399,6 +15566,2472 @@
         },
         "operationId": "adminAiWorkspace"
       }
+    },
+    "/api/v1/tickets": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取当前用户工单列表",
+        "description": "返回当前登录用户自己的工单摘要列表。",
+        "operationId": "supportListMyTickets",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "in_progress",
+                "waiting_user",
+                "resolved",
+                "closed"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "website_bug",
+                "business_issue",
+                "feature_request",
+                "account",
+                "other"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "当前用户工单列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "筛选参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "创建用户工单",
+        "description": "创建新工单，首条消息作为工单线程的起始内容，并要求登录及 Turnstile 验证。",
+        "operationId": "supportCreateTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "工单创建成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Turnstile 验证失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "创建工单失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tickets/{ticketId}": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取当前用户工单详情",
+        "description": "返回当前登录用户自己的一条工单及其完整消息线程。",
+        "operationId": "supportGetMyTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在或不属于当前用户。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "ticketId 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tickets/{ticketId}/messages": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "当前用户追加工单回复",
+        "description": "向当前用户自己的工单线程追加消息，并要求 Turnstile 验证。",
+        "operationId": "supportReplyMyTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTicketMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "回复成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Turnstile 验证失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "工单状态或请求参数不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tickets/{ticketId}/feedback": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "提交工单服务评价",
+        "description": "当前登录用户可在工单进入 resolved 或 closed 后，为参与处理的客服分别提交评分与评论。",
+        "operationId": "supportSubmitMyTicketFeedback",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTicketFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "评价提交成功，返回最新工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在或不属于当前用户。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "工单尚未结束、评分非法，或目标客服不属于当前工单。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/sla-sweep": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "触发 SLA 巡检",
+        "description": "兼容入口。使用 POST 触发一次 SLA 巡检，建议通过请求头传入秘钥。",
+        "operationId": "supportRunSlaSweep",
+        "security": [],
+        "parameters": [
+          {
+            "name": "X-SLA-Sweep-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "SLA 巡检预共享秘钥，对应 SUPPORT_SLA_SWEEP_KEY。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SLA 巡检执行结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportSlaSweepResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "秘钥无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SLA 巡检任务当前被锁定或跳过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务未配置或暂不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/tickets": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服工单队列",
+        "description": "客服默认仅查看分配给自己的工单；传 pending_transfer_target=1 时可查看待自己审批的转单工单。管理员可查看全部队列并按状态、分类、分配人或关键字过滤。",
+        "operationId": "supportQueueList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "in_progress",
+                "waiting_user",
+                "resolved",
+                "closed"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "website_bug",
+                "business_issue",
+                "feature_request",
+                "account",
+                "other"
+              ]
+            }
+          },
+          {
+            "name": "assigned_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "管理员可按客服或管理员用户 ID 过滤；传 0 表示仅筛选未分配工单。"
+          },
+          {
+            "name": "pending_transfer_target",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                1
+              ]
+            },
+            "description": "当前登录客服或管理员传 1 时，仅返回待自己审批的转单工单。"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "匹配主题、用户名或邮箱。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服工单队列。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少客服权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "筛选参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/tickets/{ticketId}": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服端工单详情",
+        "description": "客服与管理员查看任意工单的完整线程、请求人信息与附件。",
+        "operationId": "supportQueueGetTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少客服权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "ticketId 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "更新客服工单状态",
+        "description": "客服与管理员可修改状态、优先级；管理员可直接派单并向目标发送通知。",
+        "operationId": "supportQueueUpdateTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSupportTicketRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "工单更新后的详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少客服权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "状态、优先级或分配人非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/tickets/{ticketId}/messages": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "客服端追加工单回复",
+        "description": "客服与管理员向工单线程追加回复，不需要 Turnstile。",
+        "operationId": "supportQueueReplyTicket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTicketMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "回复后的工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少客服权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "工单状态或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/assignees": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取支持派单候选客服",
+        "description": "管理员查看客服与管理员账号的持单负载统计。",
+        "operationId": "adminSupportAssigneeList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服与管理员负载列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportAssigneeListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/assignees/{id}": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服详细资料",
+        "description": "管理员查看单个客服的详细资料、负载汇总和最近处理工单。",
+        "operationId": "adminSupportAssigneeDetail",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportAssigneeDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客服不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/assignees/{id}/routing-profile": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服路由档案",
+        "description": "管理员查看客服等级、技能、容量和加权覆盖。",
+        "operationId": "adminSupportAssigneeRoutingProfileGet",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服路由档案。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/SupportRoutingProfile"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客服不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "更新客服路由档案",
+        "description": "管理员更新客服等级、技能、容量、状态与加权覆盖。",
+        "operationId": "adminSupportAssigneeRoutingProfileUpdate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupportRoutingProfile"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的客服详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportAssigneeDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "客服不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/tags": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服标签列表",
+        "operationId": "adminSupportTagsList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服标签列表。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "加载客服标签失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "创建客服标签",
+        "operationId": "adminSupportTagCreate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "标签已创建。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "标签参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "创建客服标签失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/tags/{id}": {
+      "put": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "更新客服标签",
+        "operationId": "adminSupportTagUpdate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "标签已更新。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "标签不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "标签 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/rules": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服评分规则列表",
+        "operationId": "adminSupportRulesList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "评分规则列表。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "加载客服评分规则失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "创建客服评分规则",
+        "operationId": "adminSupportRuleCreate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "评分规则已创建。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "评分规则参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "创建评分规则失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/rules/{id}": {
+      "put": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "更新客服评分规则",
+        "operationId": "adminSupportRuleUpdate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "评分规则已更新。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "评分规则不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "规则 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/tickets": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取支持工单审计队列",
+        "description": "管理员查看支持工单列表，用于运营追踪与审计。",
+        "operationId": "adminSupportTicketsList",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "in_progress",
+                "waiting_user",
+                "resolved",
+                "closed"
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "website_bug",
+                "business_issue",
+                "feature_request",
+                "account",
+                "other"
+              ]
+            }
+          },
+          {
+            "name": "assigned_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "支持工单列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "筛选条件不合法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/tickets/{id}": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取支持工单审计详情",
+        "description": "管理员查看单个工单详情、消息、SLA 与智能分单记录。",
+        "operationId": "adminSupportTicketDetail",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "支持工单详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTicketDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "工单 id 非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "加载支持工单详情失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/reports": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服运营报表",
+        "operationId": "adminSupportReports",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服运营报表。"
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "报表筛选参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "加载客服运营报表失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/support/routing-settings": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取智能分单设置",
+        "description": "管理员查看统一评分引擎、AI 分诊与默认 SLA 配置。",
+        "operationId": "adminSupportRoutingSettingsGet",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "智能分单设置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportRoutingSettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "更新智能分单设置",
+        "description": "管理员更新 AI 开关、评分权重、fallback 与默认 SLA。",
+        "operationId": "adminSupportRoutingSettingsUpdate",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupportRoutingSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的智能分单设置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportRoutingSettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/assignees": {
+      "get": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "获取客服候选处理人列表",
+        "operationId": "supportListAssignees",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "客服候选处理人列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportAssigneeListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/tickets/{ticketId}/transfer-requests": {
+      "post": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "创建转单申请",
+        "description": "当前持单客服发起转单申请，目标受让人后续自行批准或拒绝。",
+        "operationId": "supportCreateTransferRequest",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ticketId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSupportTransferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "转单申请已创建。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTransferRequestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/support/transfer-requests/{requestId}": {
+      "patch": {
+        "tags": [
+          "Support"
+        ],
+        "summary": "处理转单申请",
+        "description": "目标受让人可批准或拒绝转单申请；原发起人可取消申请。",
+        "operationId": "supportReviewTransferRequest",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewSupportTransferRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "转单申请处理结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportTransferRequestResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cron/run": {
+      "post": {
+        "tags": [
+          "Cron"
+        ],
+        "summary": "运行到点的系统定时任务",
+        "description": "供外部 cron 每分钟以 POST 方式调用。服务端会自行判断哪些已启用任务到点执行。",
+        "operationId": "cronRunDueTasks",
+        "parameters": [
+          {
+            "name": "X-Cron-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "统一 cron 调度密钥。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "本轮 cron 执行摘要。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronBatchRunResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "密钥错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "当前至少一个到点任务被跳过或锁定，即使其他任务已执行成功。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Cron 密钥未配置，或当前到点任务存在执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks": {
+      "get": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "获取 cron 任务配置",
+        "operationId": "adminCronListTasks",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cron 任务列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks/{taskKey}": {
+      "put": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "更新 cron 任务配置",
+        "operationId": "adminCronUpdateTask",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "taskKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCronTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新后的任务配置。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/runs": {
+      "get": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "获取 cron 运行历史",
+        "operationId": "adminCronListRuns",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "task_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failed",
+                "skipped"
+              ]
+            }
+          },
+          {
+            "name": "trigger_source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cron_endpoint",
+                "legacy_endpoint",
+                "admin_manual"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cron 运行历史。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRunListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "筛选参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/cron/tasks/{taskKey}/run": {
+      "post": {
+        "tags": [
+          "Admin Cron"
+        ],
+        "summary": "手动执行单个 cron 任务",
+        "operationId": "adminCronRunTask",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "taskKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务执行结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronTaskRunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "缺少管理员权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "任务当前被锁定或被跳过。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "任务执行失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -16529,6 +19162,14 @@
           "error": {
             "type": "string",
             "description": "旧接口错误字段（部分控制器仍返回）"
+          },
+          "data": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "可选的结构化错误上下文，例如 cron 跳过或失败时的执行详情。"
           }
         },
         "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。生产环境仅返回 code；开发/测试环境会附带 message。"
@@ -17143,6 +19784,19 @@
             ],
             "format": "date-time",
             "description": "最近一次使用 Passkey 的时间"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "support",
+              "admin"
+            ],
+            "description": "显式角色字段；admin 保持对原 is_admin 兼容。"
+          },
+          "is_support": {
+            "type": "boolean",
+            "description": "是否拥有客服门户访问权限（support 或 admin）。"
           }
         }
       },
@@ -17178,6 +19832,25 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quota_flat": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            }
+          },
+          "support_routing": {
+            "$ref": "#/components/schemas/SupportGroupRouting"
           }
         }
       },
@@ -17204,6 +19877,25 @@
               "object",
               "null"
             ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quota_flat": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            }
+          },
+          "support_routing": {
+            "$ref": "#/components/schemas/SupportGroupRouting"
           }
         }
       },
@@ -17227,6 +19919,25 @@
               "object",
               "null"
             ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quota_flat": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "string",
+                "null"
+              ]
+            }
+          },
+          "support_routing": {
+            "$ref": "#/components/schemas/SupportGroupRouting"
           }
         }
       },
@@ -24686,6 +27397,1754 @@
             "$ref": "#/components/schemas/AdminAiWorkspaceData"
           }
         }
+      },
+      "SupportTicketRequester": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "SupportTicketAssignee": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SupportTicketParticipant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "support",
+              "admin"
+            ]
+          }
+        }
+      },
+      "SupportTicketFeedback": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ticket_id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "rated_user_id": {
+            "type": "integer"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/SupportTicketRequester"
+          },
+          "rated_user": {
+            "$ref": "#/components/schemas/SupportTicketParticipant"
+          }
+        }
+      },
+      "SupportTicketAttachment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ticket_id": {
+            "type": "integer"
+          },
+          "message_id": {
+            "type": "integer"
+          },
+          "file_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file_path": {
+            "type": "string"
+          },
+          "original_name": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": "integer"
+          },
+          "entity_type": {
+            "type": "string",
+            "enum": [
+              "support_ticket_message"
+            ]
+          },
+          "download_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SupportTicketMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ticket_id": {
+            "type": "integer"
+          },
+          "sender_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sender_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user",
+              "support",
+              "admin",
+              null
+            ]
+          },
+          "sender_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportTicketAttachment"
+            }
+          }
+        }
+      },
+      "SupportTicketSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "website_bug",
+              "business_issue",
+              "feature_request",
+              "account",
+              "other"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_user",
+              "resolved",
+              "closed"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "assigned_to": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "assigned_user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTicketAssignee"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_replied_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_reply_by_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "user",
+              "support",
+              "admin",
+              null
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "message_count": {
+            "type": "integer"
+          },
+          "latest_message_preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportTicketTag"
+            }
+          },
+          "assignment_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "smart",
+              "manual",
+              "rule",
+              "transfer",
+              null
+            ]
+          },
+          "assigned_rule_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "assignment_locked": {
+            "type": "boolean"
+          },
+          "first_support_response_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "first_response_due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolution_due_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "sla_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "pending",
+              "breached",
+              "escalated",
+              "resolved",
+              null
+            ]
+          },
+          "escalation_level": {
+            "type": "integer"
+          },
+          "last_routing_run_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "routing_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportRoutingSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_transfer_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTransferRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sla_summary": {
+            "type": "object",
+            "properties": {
+              "due_soon_minutes": {
+                "type": "integer"
+              },
+              "display_state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "due_soon",
+                  "breached",
+                  "escalated",
+                  "resolved"
+                ]
+              },
+              "active_target": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "first_response",
+                  "resolution",
+                  null
+                ]
+              },
+              "active_due_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "active_minutes_delta": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "first_response": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "resolution": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      },
+      "SupportTicketDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SupportTicketSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "requester": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SupportTicketRequester"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketMessage"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketTag"
+                }
+              },
+              "transfer_requests": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTransferRequest"
+                }
+              },
+              "feedback_candidates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketParticipant"
+                }
+              },
+              "feedback": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportTicketFeedback"
+                }
+              },
+              "routing_runs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SupportTicketPagination": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "SupportTicketListData": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportTicketSummary"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/SupportTicketPagination"
+          }
+        }
+      },
+      "SupportTicketListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SupportTicketListData"
+          }
+        }
+      },
+      "SupportTicketDetailResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SupportTicketDetail"
+          }
+        }
+      },
+      "CreateSupportTicketRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "category",
+          "content",
+          "cf_turnstile_response"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "website_bug",
+              "business_issue",
+              "feature_request",
+              "account",
+              "other"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ],
+            "default": "normal"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "已上传附件的 file_path 列表。"
+          },
+          "cf_turnstile_response": {
+            "type": "string",
+            "description": "Cloudflare Turnstile 验证令牌。"
+          }
+        }
+      },
+      "CreateSupportTicketMessageRequest": {
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "已上传附件的 file_path 列表。"
+          },
+          "cf_turnstile_response": {
+            "type": "string",
+            "description": "用户回复时必填；客服端回复不需要提供。"
+          }
+        }
+      },
+      "CreateSupportTicketFeedbackRequest": {
+        "type": "object",
+        "required": [
+          "rated_user_id",
+          "rating"
+        ],
+        "properties": {
+          "rated_user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "需要评价的客服或管理员用户 ID，必须参与过当前工单。"
+          },
+          "rating": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      },
+      "UpdateSupportTicketRequest": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_user",
+              "resolved",
+              "closed"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "assigned_to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "客服或管理员用户 ID；传 null 清除分配。管理员直接派单立即生效并锁定当前归属，无需目标同意。"
+          }
+        }
+      },
+      "SupportTicketTag": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "slate",
+              "emerald",
+              "sky",
+              "amber",
+              "rose",
+              "violet"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "source_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "标签来源，例如 rule、manual 或 system。"
+          },
+          "rule_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "若标签由规则命中产生，则为对应规则 ID。"
+          }
+        }
+      },
+      "SupportAssigneeSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "uuid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "support",
+              "admin"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "school_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "school": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_login_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "assigned_total_count": {
+            "type": "integer"
+          },
+          "open_count": {
+            "type": "integer"
+          },
+          "in_progress_count": {
+            "type": "integer"
+          },
+          "waiting_user_count": {
+            "type": "integer"
+          },
+          "resolved_count": {
+            "type": "integer"
+          },
+          "closed_count": {
+            "type": "integer"
+          },
+          "routing_level": {
+            "type": "integer"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_active_tickets": {
+            "type": "integer"
+          },
+          "is_auto_assignable": {
+            "type": "boolean"
+          },
+          "routing_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "backup",
+              "offline"
+            ]
+          },
+          "avg_feedback_rating": {
+            "type": "number"
+          },
+          "rating_count": {
+            "type": "integer"
+          },
+          "available_capacity": {
+            "type": "integer"
+          },
+          "weight_overrides": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "SupportAssigneeRecentTicket": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_user",
+              "resolved",
+              "closed"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "last_replied_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SupportAssigneeDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SupportAssigneeSummary"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "admin_notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recent_tickets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SupportAssigneeRecentTicket"
+                }
+              },
+              "routing_profile": {
+                "$ref": "#/components/schemas/SupportRoutingProfile"
+              }
+            }
+          }
+        ]
+      },
+      "SupportAssigneeListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportAssigneeSummary"
+            }
+          }
+        }
+      },
+      "SupportAssigneeDetailResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SupportAssigneeDetail"
+          }
+        }
+      },
+      "CreateSupportTransferRequest": {
+        "type": "object",
+        "required": [
+          "to_assignee"
+        ],
+        "properties": {
+          "to_assignee": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "目标客服或管理员用户 ID。"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "转单原因。"
+          }
+        }
+      },
+      "ReviewSupportTransferRequest": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected",
+              "cancelled"
+            ]
+          },
+          "review_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SupportTransferRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "ticket_id": {
+            "type": "integer"
+          },
+          "requested_by": {
+            "type": "integer"
+          },
+          "from_assignee": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "to_assignee": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "cancelled"
+            ]
+          },
+          "review_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "requester": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTicketRequester"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTicketRequester"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTicketRequester"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SupportTicketRequester"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SupportTransferRequestResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SupportTransferRequest"
+          }
+        }
+      },
+      "SupportSlaSweepResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "processed": {
+                "type": "integer"
+              },
+              "breached": {
+                "type": "integer"
+              },
+              "rerouted": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "SupportGroupRouting": {
+        "type": "object",
+        "properties": {
+          "first_response_minutes": {
+            "type": "integer"
+          },
+          "resolution_minutes": {
+            "type": "integer"
+          },
+          "routing_weight": {
+            "type": "number"
+          },
+          "min_agent_level": {
+            "type": "integer"
+          },
+          "overdue_boost": {
+            "type": "number"
+          },
+          "tier_label": {
+            "type": "string"
+          }
+        }
+      },
+      "SupportRoutingProfile": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "integer"
+          },
+          "level": {
+            "type": "integer"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_active_tickets": {
+            "type": "integer"
+          },
+          "is_auto_assignable": {
+            "type": "boolean"
+          },
+          "weight_overrides": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "backup",
+              "offline"
+            ]
+          },
+          "avg_feedback_rating": {
+            "type": "number"
+          },
+          "rating_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "SupportRoutingSummary": {
+        "type": "object",
+        "properties": {
+          "locked": {
+            "type": "boolean"
+          },
+          "last_run_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "used_ai": {
+            "type": "boolean"
+          },
+          "fallback_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matched_rule_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "required_agent_level": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "suggested_skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "winner_score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "winner_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "top_factors": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "SupportRoutingSettings": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ai_enabled": {
+            "type": "boolean"
+          },
+          "ai_timeout_ms": {
+            "type": "integer"
+          },
+          "due_soon_minutes": {
+            "type": "integer"
+          },
+          "weights": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "fallback": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/SupportGroupRouting"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SupportRoutingSettingsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SupportRoutingSettings"
+          }
+        }
+      },
+      "CronTask": {
+        "type": "object",
+        "properties": {
+          "task_key": {
+            "type": "string"
+          },
+          "task_name": {
+            "type": "string"
+          },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_registered": {
+          "type": "boolean",
+          "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
+        },
+        "interval_minutes": {
+          "type": "integer"
+        },
+          "enabled": {
+            "type": "boolean"
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "success",
+              "failed"
+            ]
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer"
+          },
+          "locked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "is_due": {
+            "type": "boolean"
+          },
+          "is_locked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CronTaskExecutionResult": {
+        "type": "object",
+        "properties": {
+          "task_key": {
+            "type": "string"
+          },
+          "task_name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "skipped"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CronRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "task_key": {
+            "type": "string"
+          },
+          "trigger_source": {
+            "type": "string",
+            "enum": [
+              "cron_endpoint",
+              "legacy_endpoint",
+              "admin_manual"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "skipped"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CronRunListData": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronRun"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/SupportTicketPagination"
+          }
+        }
+      },
+      "CronTaskListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CronTask"
+            }
+          }
+        }
+      },
+      "CronTaskResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronTask"
+          }
+        }
+      },
+      "CronRunListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronRunListData"
+          }
+        }
+      },
+      "CronTaskRunResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CronTaskExecutionResult"
+          }
+        }
+      },
+      "CronBatchRunResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "triggered_at": {
+                "type": "string"
+              },
+              "due": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "executed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              },
+              "failed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              },
+              "skipped": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CronTaskExecutionResult"
+                }
+              }
+            }
+          }
+        }
+      },
+      "UpdateCronTaskRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1440
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -24767,6 +29226,10 @@
     {
       "name": "Statistics",
       "description": "Public summary statistics endpoints."
+    },
+    {
+      "name": "Support",
+      "description": "公开联系中心、用户工单线程与独立客服门户接口。"
     },
     {
       "name": "System Logs",

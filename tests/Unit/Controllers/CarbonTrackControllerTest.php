@@ -651,6 +651,64 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['pagination']['total']);
     }
+
+    public function testGetPendingRecordsUsesDistinctSearchBindings(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+        $countBound = [];
+        $listBound = [];
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->expects($this->exactly(4))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$countBound) {
+                $countBound[$key] = [$value, $type];
+                return true;
+            });
+        $countStmt->expects($this->once())->method('execute')->willReturn(true);
+        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->expects($this->exactly(6))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+                $listBound[$key] = [$value, $type];
+                return true;
+            });
+        $listStmt->expects($this->once())->method('execute')->willReturn(true);
+        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use ($countStmt, $listStmt) {
+                static $prepareCalls = 0;
+                $prepareCalls++;
+                $this->assertStringContainsString('u.username LIKE :search_username', $sql);
+                $this->assertStringContainsString('u.email LIKE :search_email', $sql);
+                $this->assertStringContainsString('a.name_zh LIKE :search_name_zh', $sql);
+                $this->assertStringContainsString('a.name_en LIKE :search_name_en', $sql);
+                return $prepareCalls === 1 ? $countStmt : $listStmt;
+            });
+
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $request = makeRequest('GET', '/admin/activities', null, ['search' => 'green']);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->getPendingRecords($request, $response);
+        $this->assertSame(200, $resp->getStatusCode());
+        $this->assertSame('%green%', $countBound['search_username'][0] ?? null);
+        $this->assertSame('%green%', $countBound['search_email'][0] ?? null);
+        $this->assertSame('%green%', $countBound['search_name_zh'][0] ?? null);
+        $this->assertSame('%green%', $countBound['search_name_en'][0] ?? null);
+        $this->assertSame(20, $listBound['limit'][0] ?? null);
+        $this->assertSame(0, $listBound['offset'][0] ?? null);
+    }
 }
 
 

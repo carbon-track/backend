@@ -311,6 +311,42 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
     }
 
+    public function testPresignAllowsSupportTicketsDirectory(): void
+    {
+        $c = $this->controller(['id' => 24], function($r2) {
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getMaxFileSize')->willReturn(5 * 1024 * 1024);
+            $r2->expects($this->once())
+                ->method('generateDirectUploadKey')
+                ->with('ticket.jpg', 'support-tickets')
+                ->willReturn([
+                    'file_name' => 'uuid.jpg',
+                    'file_path' => 'support-tickets/2026/04/uuid.jpg',
+                    'public_url' => 'https://cdn/uuid.jpg'
+                ]);
+            $r2->expects($this->once())
+                ->method('generateUploadPresignedUrl')
+                ->willReturn([
+                    'url' => 'https://r2/presigned',
+                    'method' => 'PUT',
+                    'headers' => ['Content-Type' => self::MIME_JPEG],
+                    'expires_in' => 600,
+                    'expires_at' => '2026-04-06 00:00:00'
+                ]);
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST', self::ROUTE_PRESIGN, [
+            'original_name' => 'ticket.jpg',
+            'mime_type' => self::MIME_JPEG,
+            'file_size' => 26570,
+            'directory' => 'support-tickets',
+            'entity_type' => 'support_ticket_message'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
     public function testPresignUnicodeFileNameDoesNotLeakIntoSignedHeaders(): void
     {
         $c = $this->controller(['id' => 23], function($r2) {

@@ -42,8 +42,10 @@ class AdminLlmUsageController
             $where = ['u.deleted_at IS NULL'];
             $params = [];
             if ($search !== '') {
-                $where[] = '(u.username LIKE :search OR u.email LIKE :search)';
-                $params['search'] = '%' . $search . '%';
+                $where[] = '(u.username LIKE :search_username OR u.email LIKE :search_email)';
+                $searchPattern = '%' . $search . '%';
+                $params['search_username'] = $searchPattern;
+                $params['search_email'] = $searchPattern;
             }
             $whereClause = implode(' AND ', $where);
 

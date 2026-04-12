@@ -612,13 +612,16 @@ class LogSearchController
         $stmt = $this->db->prepare("
             SELECT DISTINCT request_id
             FROM (
-                SELECT request_id FROM audit_logs WHERE conversation_id = :conversation_id
+                SELECT request_id FROM audit_logs WHERE conversation_id = :conversation_id_audit
                 UNION
-                SELECT request_id FROM llm_logs WHERE conversation_id = :conversation_id
+                SELECT request_id FROM llm_logs WHERE conversation_id = :conversation_id_llm
             ) requests
             WHERE request_id IS NOT NULL AND request_id <> ''
         ");
-        $stmt->execute([':conversation_id' => $conversationId]);
+        $stmt->execute([
+            ':conversation_id_audit' => $conversationId,
+            ':conversation_id_llm' => $conversationId,
+        ]);
         return array_values(array_filter(array_map(
             static fn ($value): ?string => is_string($value) && trim($value) !== '' ? trim($value) : null,
             $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []

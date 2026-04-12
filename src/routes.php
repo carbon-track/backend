@@ -26,8 +26,13 @@ use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Controllers\PasskeyController;
+use CarbonTrack\Controllers\AdminSupportController;
+use CarbonTrack\Controllers\AdminCronController;
+use CarbonTrack\Controllers\CronController;
+use CarbonTrack\Controllers\SupportTicketController;
 use CarbonTrack\Middleware\AuthMiddleware;
 use CarbonTrack\Middleware\AdminMiddleware;
+use CarbonTrack\Middleware\SupportMiddleware;
 use CarbonTrack\Middleware\RequestLoggingMiddleware;
 
 // Constants to avoid duplicated literals
@@ -80,6 +85,9 @@ return function (App $app) {
                     'products' => API_V1_PREFIX . PATH_PRODUCTS,
                     'exchange' => API_V1_PREFIX . '/exchange',
                     'messages' => API_V1_PREFIX . '/messages',
+                    'tickets' => API_V1_PREFIX . '/tickets',
+                    'support' => API_V1_PREFIX . '/support',
+                    'cron' => API_V1_PREFIX . '/cron/run',
                     'avatars' => API_V1_PREFIX . PATH_AVATARS,
                     'schools' => API_V1_PREFIX . PATH_SCHOOLS,
                     'files' => API_V1_PREFIX . '/files',
@@ -197,6 +205,16 @@ return function (App $app) {
         })->add(AuthMiddleware::class);
     };
 
+    $registerTicketRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/tickets', function (RouteCollectorProxy $tickets) {
+            $tickets->post('', [SupportTicketController::class, 'createTicket']);
+            $tickets->get('', [SupportTicketController::class, 'listMyTickets']);
+            $tickets->get('/{ticketId:[0-9]+}', [SupportTicketController::class, 'getMyTicket']);
+            $tickets->post('/{ticketId:[0-9]+}/messages', [SupportTicketController::class, 'addMyTicketMessage']);
+            $tickets->post('/{ticketId:[0-9]+}/feedback', [SupportTicketController::class, 'submitMyTicketFeedback']);
+        })->add(AuthMiddleware::class);
+    };
+
     $registerSchoolRoutes = function (RouteCollectorProxy $group) {
         $group->get(PATH_SCHOOLS, [SchoolController::class, 'index']);
         $group->post(PATH_SCHOOLS, [SchoolController::class, 'createOrFetch'])->add(AuthMiddleware::class);
@@ -238,6 +256,25 @@ return function (App $app) {
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
             $admin->post('/ai/announcement-drafts', [AdminAiController::class, 'generateAnnouncementDraft']);
             $admin->get('/ai/diagnostics', [AdminAiController::class, 'diagnostics']);
+            $admin->get('/support/assignees', [AdminSupportController::class, 'listAssignees']);
+            $admin->get('/support/assignees/{id:[0-9]+}', [AdminSupportController::class, 'getAssigneeDetail']);
+            $admin->get('/support/assignees/{id:[0-9]+}/routing-profile', [AdminSupportController::class, 'getAssigneeRoutingProfile']);
+            $admin->put('/support/assignees/{id:[0-9]+}/routing-profile', [AdminSupportController::class, 'updateAssigneeRoutingProfile']);
+            $admin->get('/support/routing-settings', [AdminSupportController::class, 'getRoutingSettings']);
+            $admin->put('/support/routing-settings', [AdminSupportController::class, 'updateRoutingSettings']);
+            $admin->get('/support/tags', [AdminSupportController::class, 'listTags']);
+            $admin->post('/support/tags', [AdminSupportController::class, 'createTag']);
+            $admin->put('/support/tags/{id:[0-9]+}', [AdminSupportController::class, 'updateTag']);
+            $admin->get('/support/rules', [AdminSupportController::class, 'listRules']);
+            $admin->post('/support/rules', [AdminSupportController::class, 'createRule']);
+            $admin->put('/support/rules/{id:[0-9]+}', [AdminSupportController::class, 'updateRule']);
+            $admin->get('/support/tickets', [AdminSupportController::class, 'listTickets']);
+            $admin->get('/support/tickets/{id:[0-9]+}', [AdminSupportController::class, 'getTicketDetail']);
+            $admin->get('/support/reports', [AdminSupportController::class, 'reports']);
+            $admin->get('/cron/tasks', [AdminCronController::class, 'listTasks']);
+            $admin->put('/cron/tasks/{taskKey:[^/]+}', [AdminCronController::class, 'updateTask']);
+            $admin->get('/cron/runs', [AdminCronController::class, 'listRuns']);
+            $admin->post('/cron/tasks/{taskKey:[^/]+}/run', [AdminCronController::class, 'runTask']);
             $admin->post(PATH_SCHOOLS, [SchoolController::class, 'store']);
             $admin->put(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'update']);
             $admin->delete(PATH_SCHOOLS . PATTERN_ID_NUMERIC, [SchoolController::class, 'delete']);
@@ -300,6 +337,20 @@ return function (App $app) {
         })->add(AuthMiddleware::class)->add(AdminMiddleware::class);
     };
 
+    $registerSupportRoutes = function (RouteCollectorProxy $group) {
+        $group->post('/support/sla-sweep', [SupportTicketController::class, 'runSlaSweep']);
+        $group->post('/cron/run', [CronController::class, 'run']);
+        $group->group('/support', function (RouteCollectorProxy $support) {
+            $support->get('/assignees', [SupportTicketController::class, 'listSupportAssignees']);
+            $support->get('/tickets', [SupportTicketController::class, 'listSupportTickets']);
+            $support->get('/tickets/{ticketId:[0-9]+}', [SupportTicketController::class, 'getSupportTicket']);
+            $support->post('/tickets/{ticketId:[0-9]+}/messages', [SupportTicketController::class, 'addSupportTicketMessage']);
+            $support->patch('/tickets/{ticketId:[0-9]+}', [SupportTicketController::class, 'updateSupportTicket']);
+            $support->post('/tickets/{ticketId:[0-9]+}/transfer-requests', [SupportTicketController::class, 'createTransferRequest']);
+            $support->patch('/transfer-requests/{requestId:[0-9]+}', [SupportTicketController::class, 'reviewTransferRequest']);
+        })->add(AuthMiddleware::class)->add(SupportMiddleware::class);
+    };
+
     $registerFileRoutes = function (RouteCollectorProxy $group) {
         $group->group('/files', function (RouteCollectorProxy $files) {
             // 前端直传：获取预签名、确认
@@ -338,8 +389,10 @@ return function (App $app) {
         $registerProductRoutes,
         $registerExchangeRoutes,
         $registerMessageRoutes,
+        $registerTicketRoutes,
         $registerSchoolRoutes,
         $registerAdminRoutes,
+        $registerSupportRoutes,
         $registerFileRoutes,
         $registerLeaderboardRoutes
     ) {
@@ -353,8 +406,10 @@ return function (App $app) {
         $registerProductRoutes($group);
         $registerExchangeRoutes($group);
         $registerMessageRoutes($group);
+        $registerTicketRoutes($group);
         $registerSchoolRoutes($group);
         $registerAdminRoutes($group);
+        $registerSupportRoutes($group);
         $registerFileRoutes($group);
         $registerLeaderboardRoutes($group);
 

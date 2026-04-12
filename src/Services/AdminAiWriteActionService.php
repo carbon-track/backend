@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\InputValueNormalizer;
 use PDO;
 
 class AdminAiWriteActionService
@@ -12,7 +13,8 @@ class AdminAiWriteActionService
         private PDO $db,
         private ?AuditLogService $auditLogService = null,
         private ?MessageService $messageService = null,
-        private ?BadgeService $badgeService = null
+        private ?BadgeService $badgeService = null,
+        private ?CronSchedulerService $cronSchedulerService = null
     ) {
     }
 
@@ -34,8 +36,141 @@ class AdminAiWriteActionService
             'update_exchange_status' => $this->updateExchangeStatus($payload, $logContext),
             'update_product_status' => $this->updateProductStatus($payload, $logContext),
             'adjust_product_inventory' => $this->adjustProductInventory($payload, $logContext),
+            'update_cron_task' => $this->updateCronTask($payload, $logContext),
+            'run_cron_task' => $this->runCronTask($payload, $logContext),
             default => throw new \RuntimeException('Unsupported write action: ' . $actionName),
         };
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param array<string,mixed> $logContext
+     * @return array<string,mixed>
+     */
+    private function updateCronTask(array $payload, array $logContext): array
+    {
+        if ($this->cronSchedulerService === null) {
+            throw new \RuntimeException('Cron scheduler unavailable.');
+        }
+
+        $taskKey = trim((string) ($payload['task_key'] ?? ''));
+        if ($taskKey === '') {
+            throw new \InvalidArgumentException('task_key is required.');
+        }
+
+        $updatePayload = $this->normalizeCronTaskUpdatePayload($payload);
+        if ($updatePayload === []) {
+            throw new \InvalidArgumentException('No cron task fields provided.');
+        }
+
+        $result = $this->cronSchedulerService->updateTask($taskKey, $updatePayload);
+        $adminId = isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null;
+        $this->auditLogService?->logAdminOperation('admin_ai_cron_task_updated', $adminId, 'admin_ai', [
+            'table' => 'cron_tasks',
+            'request_id' => $logContext['request_id'] ?? null,
+            'endpoint' => $logContext['source'] ?? '/admin/ai/chat',
+            'request_method' => 'POST',
+            'conversation_id' => $logContext['conversation_id'] ?? null,
+            'request_data' => ['task_key' => $taskKey] + $updatePayload,
+            'new_data' => $result,
+            'status' => 'success',
+        ]);
+
+        return [
+            'action' => 'update_cron_task',
+            'task' => $result,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function normalizeCronTaskUpdatePayload(array $payload): array
+    {
+        $updatePayload = [];
+
+        if (array_key_exists('enabled', $payload)) {
+            $updatePayload['enabled'] = InputValueNormalizer::boolean($payload['enabled'], 'enabled');
+        }
+
+        if (array_key_exists('interval_minutes', $payload)) {
+            $intervalMinutes = InputValueNormalizer::integer($payload['interval_minutes'], 'interval_minutes');
+            if ($intervalMinutes < 1 || $intervalMinutes > 1440) {
+                throw new \InvalidArgumentException('interval_minutes must be between 1 and 1440.');
+            }
+            $updatePayload['interval_minutes'] = $intervalMinutes;
+        }
+
+        if (array_key_exists('settings', $payload)) {
+            $updatePayload['settings'] = $this->normalizeCronTaskSettings($payload['settings']);
+        }
+
+        return $updatePayload;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function normalizeCronTaskSettings(mixed $settings): array
+    {
+        if (is_object($settings)) {
+            try {
+                $settings = json_decode(json_encode($settings, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                throw new \InvalidArgumentException('settings must be an object or array.');
+            }
+        }
+
+        if (!is_array($settings)) {
+            throw new \InvalidArgumentException('settings must be an object or array.');
+        }
+
+        return $settings;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param array<string,mixed> $logContext
+     * @return array<string,mixed>
+     */
+    private function runCronTask(array $payload, array $logContext): array
+    {
+        if ($this->cronSchedulerService === null) {
+            throw new \RuntimeException('Cron scheduler unavailable.');
+        }
+
+        $taskKey = trim((string) ($payload['task_key'] ?? ''));
+        if ($taskKey === '') {
+            throw new \InvalidArgumentException('task_key is required.');
+        }
+
+        $adminId = isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null;
+        $result = $this->cronSchedulerService->runTaskNow($taskKey, 'admin_manual', [
+            'request_id' => $logContext['request_id'] ?? null,
+            'admin_id' => $adminId,
+            'conversation_id' => $logContext['conversation_id'] ?? null,
+        ]);
+
+        $this->auditLogService?->logAdminOperation('admin_ai_cron_task_triggered', $adminId, 'admin_ai', [
+            'table' => 'cron_tasks',
+            'request_id' => $logContext['request_id'] ?? null,
+            'endpoint' => $logContext['source'] ?? '/admin/ai/chat',
+            'request_method' => 'POST',
+            'conversation_id' => $logContext['conversation_id'] ?? null,
+            'request_data' => ['task_key' => $taskKey],
+            'new_data' => $result,
+            'status' => ($result['status'] ?? null) === 'success' ? 'success' : 'failed',
+        ]);
+
+        if (($result['status'] ?? null) !== 'success') {
+            throw new \RuntimeException($result['error_message'] ?? 'Cron task did not complete successfully.');
+        }
+
+        return [
+            'action' => 'run_cron_task',
+            'task_run' => $result,
+        ];
     }
 
     /**

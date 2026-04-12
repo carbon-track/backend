@@ -67,7 +67,9 @@ class AuthService
                 'username' => $normalizedUser['username'] ?? null,
                 'email' => $normalizedUser['email'] ?? null,
                 'points' => (int)($normalizedUser['points'] ?? 0),
-                'is_admin' => (bool)($normalizedUser['is_admin'] ?? 0)
+                'role' => $normalizedUser['role'] ?? 'user',
+                'is_admin' => (bool)($normalizedUser['is_admin'] ?? 0),
+                'is_support' => (bool)($normalizedUser['is_support'] ?? false),
             ]
         ];
 
@@ -126,7 +128,7 @@ class AuthService
             'user_id' => $normalizedUser['id'] ?? null,
             'uuid' => $normalizedUser['uuid'] ?? null,
             'email' => $normalizedUser['email'] ?? null,
-            'role' => ($normalizedUser['is_admin'] ?? false) ? 'admin' : 'user',
+            'role' => $normalizedUser['role'] ?? 'user',
             'user' => $normalizedUser,
         ];
     }
@@ -573,6 +575,33 @@ class AuthService
         return false;
     }
 
+    public function isSupportUser($user): bool
+    {
+        if (is_array($user)) {
+            if (!empty($user['is_admin']) || !empty($user['is_support'])) {
+                return true;
+            }
+
+            return in_array((string) ($user['role'] ?? 'user'), ['support', 'admin'], true);
+        }
+
+        if ($user instanceof Request) {
+            $current = $this->getCurrentUser($user);
+            return is_array($current) ? $this->isSupportUser($current) : false;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $user
+     * @return array<string,mixed>
+     */
+    public function normalizeUserRoleView(array $user): array
+    {
+        return $this->normalizeRoleFlags($user);
+    }
+
     /**
      * Normalize a token/user payload into a local authenticated user context.
      *
@@ -625,9 +654,27 @@ class AuthService
         if (array_key_exists('points', $user)) {
             $user['points'] = (int) ($user['points'] ?? 0);
         }
-        if (array_key_exists('is_admin', $user)) {
-            $user['is_admin'] = (bool) ($user['is_admin'] ?? false);
+
+        return $this->normalizeRoleFlags($user);
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     * @return array<string, mixed>
+     */
+    private function normalizeRoleFlags(array $user): array
+    {
+        $explicitRole = is_string($user['role'] ?? null) ? strtolower(trim((string) $user['role'])) : '';
+        if (!in_array($explicitRole, ['user', 'support', 'admin'], true)) {
+            $explicitRole = '';
         }
+
+        $isAdmin = !empty($user['is_admin']) || $explicitRole === 'admin';
+        $role = $isAdmin ? 'admin' : ($explicitRole !== '' ? $explicitRole : 'user');
+
+        $user['is_admin'] = $isAdmin;
+        $user['role'] = $role;
+        $user['is_support'] = $isAdmin || $role === 'support';
 
         return $user;
     }
@@ -738,22 +785,24 @@ class AuthService
         $password = $this->hashPassword(bin2hex(random_bytes(16)));
 
         $stmt = $this->db->prepare(
-            'INSERT INTO users (uuid, username, email, password, status, points, is_admin, created_at, updated_at)
-             VALUES (:uuid, :username, :email, :password, :status, :points, :is_admin, :created_at, :updated_at)'
+            'INSERT INTO users (uuid, username, email, password, role, status, points, is_admin, created_at, updated_at)
+             VALUES (:uuid, :username, :email, :password, :role, :status, :points, :is_admin, :created_at, :updated_at)'
         );
         if (!$stmt) {
             return null;
         }
+        $normalizedIdentity = $this->normalizeRoleFlags($identity);
         $stmt->execute([
             'uuid' => $userUuid,
             'username' => $username,
             'email' => $email,
             'password' => $password,
+            'role' => $normalizedIdentity['role'],
             'status' => isset($identity['status']) && is_string($identity['status']) && trim($identity['status']) !== ''
                 ? trim((string) $identity['status'])
                 : 'active',
             'points' => 0,
-            'is_admin' => !empty($identity['is_admin']) ? 1 : 0,
+            'is_admin' => !empty($normalizedIdentity['is_admin']) ? 1 : 0,
             'created_at' => $now,
             'updated_at' => $now,
         ]);

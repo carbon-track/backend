@@ -78,4 +78,92 @@ class AdminAiReadModelServiceTest extends TestCase
         $this->assertSame(1, $report['pending']['total']);
         $this->assertSame('rec-report-1', $report['pending']['items'][0]['id']);
     }
+
+    public function testExecuteSearchUsersUsesDistinctBindings(): void
+    {
+        $pdo = $this->createMock(PDO::class);
+        $listBound = [];
+        $countBound = [];
+
+        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt->expects($this->exactly(4))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+                $listBound[$key] = [$value, $type];
+                return true;
+            });
+        $listStmt->expects($this->once())->method('execute')->willReturn(true);
+        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt->expects($this->exactly(3))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$countBound) {
+                $countBound[$key] = [$value, $type];
+                return true;
+            });
+        $countStmt->expects($this->once())->method('execute')->willReturn(true);
+        $countStmt->expects($this->once())->method('fetchColumn')->willReturn(0);
+
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use ($listStmt, $countStmt) {
+                static $prepareCalls = 0;
+                $prepareCalls++;
+                $this->assertStringContainsString('u.username LIKE :user_search_0', $sql);
+                $this->assertStringContainsString('u.email LIKE :user_search_1', $sql);
+                $this->assertStringContainsString('u.uuid LIKE :user_search_2', $sql);
+                return $prepareCalls === 1 ? $listStmt : $countStmt;
+            });
+
+        $service = new AdminAiReadModelService($pdo);
+        $result = $service->execute('search_users', [
+            'search' => 'admin',
+            'limit' => 10,
+        ]);
+
+        $this->assertSame('users', $result['scope']);
+        $this->assertSame('%admin%', $listBound[':user_search_0'][0] ?? null);
+        $this->assertSame('%admin%', $listBound[':user_search_1'][0] ?? null);
+        $this->assertSame('%admin%', $listBound[':user_search_2'][0] ?? null);
+        $this->assertSame(10, $listBound[':limit'][0] ?? null);
+        $this->assertSame('%admin%', $countBound[':user_search_0'][0] ?? null);
+    }
+
+    public function testExecuteSearchSystemLogsUsesDistinctBindings(): void
+    {
+        $pdo = $this->createMock(PDO::class);
+        $bound = [];
+
+        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt->expects($this->exactly(3))
+            ->method('bindValue')
+            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+                $bound[$key] = [$value, $type];
+                return true;
+            });
+        $stmt->expects($this->once())->method('execute')->willReturn(true);
+        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+
+        $pdo->expects($this->once())
+            ->method('prepare')
+            ->with($this->callback(static function (string $sql): bool {
+                return str_contains($sql, 'LOWER(action) LIKE :audit_search_0')
+                    && str_contains($sql, 'LOWER(COALESCE(data, \'\')) LIKE :audit_search_1')
+                    && !str_contains($sql, 'LIKE :search');
+            }))
+            ->willReturn($stmt);
+
+        $service = new AdminAiReadModelService($pdo);
+        $result = $service->execute('search_system_logs', [
+            'types' => ['audit'],
+            'search' => 'trace',
+            'limit' => 5,
+        ]);
+
+        $this->assertSame('system_logs', $result['scope']);
+        $this->assertSame('%trace%', $bound[':audit_search_0'][0] ?? null);
+        $this->assertSame('%trace%', $bound[':audit_search_1'][0] ?? null);
+        $this->assertSame(5, $bound[':limit'][0] ?? null);
+    }
 }

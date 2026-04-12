@@ -25,7 +25,7 @@ class TestSchemaBuilder
 
         $tables = [
             // Users
-"CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                group_id INTEGER,\n                region_code TEXT,\n                quota_override TEXT,\n                admin_notes TEXT,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                avatar_id INTEGER,\n                image_path TEXT,\n                lastlgn TEXT,\n                reset_token TEXT,\n                reset_token_expires_at TEXT,\n                email_verified_at TEXT,\n                verification_code TEXT,\n                verification_token TEXT,\n                verification_code_expires_at TEXT,\n                verification_attempts INTEGER DEFAULT 0,\n                verification_send_count INTEGER DEFAULT 0,\n                verification_last_sent_at TEXT,\n                notification_email_mask INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+"CREATE TABLE IF NOT EXISTS users (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                username TEXT UNIQUE,\n                email TEXT UNIQUE,\n                password TEXT,\n                uuid TEXT,\n                school_id INTEGER,\n                group_id INTEGER,\n                region_code TEXT,\n                quota_override TEXT,\n                admin_notes TEXT,\n                status TEXT,\n                points INTEGER DEFAULT 0,\n                is_admin INTEGER DEFAULT 0,\n                role TEXT DEFAULT 'user',\n                avatar_id INTEGER,\n                image_path TEXT,\n                lastlgn TEXT,\n                reset_token TEXT,\n                reset_token_expires_at TEXT,\n                email_verified_at TEXT,\n                verification_code TEXT,\n                verification_token TEXT,\n                verification_code_expires_at TEXT,\n                verification_attempts INTEGER DEFAULT 0,\n                verification_send_count INTEGER DEFAULT 0,\n                verification_last_sent_at TEXT,\n                notification_email_mask INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             "CREATE TABLE IF NOT EXISTS user_groups (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                code TEXT UNIQUE,\n                config TEXT,\n                is_default INTEGER DEFAULT 0,\n                notes TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Products
             "CREATE TABLE IF NOT EXISTS products (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                name TEXT,\n                description TEXT,\n                category TEXT,\n                category_slug TEXT,\n                images TEXT,\n                image_path TEXT,\n                stock INTEGER DEFAULT 0,\n                points_required INTEGER DEFAULT 0,\n                status TEXT DEFAULT 'active',\n                sort_order INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
@@ -78,6 +78,10 @@ class TestSchemaBuilder
             "CREATE TABLE IF NOT EXISTS points_transactions (\n                id TEXT PRIMARY KEY,\n                uid INTEGER,\n                user_id INTEGER,\n                username TEXT,\n                email TEXT,\n                points REAL,\n                raw REAL,\n                act TEXT,\n                type TEXT,\n                description TEXT,\n                status TEXT,\n                img TEXT,\n                notes TEXT,\n                activity_id TEXT,\n                activity_date TEXT,\n                auth TEXT,\n                approved_by INTEGER,\n                approved_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT,\n                deleted_at TEXT,\n                related_table TEXT,\n                related_id TEXT\n            )",
             // Messages (minimal columns used in service)
             "CREATE TABLE IF NOT EXISTS messages (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                sender_id INTEGER,\n                receiver_id INTEGER,\n                title TEXT,\n                content TEXT,\n                priority TEXT DEFAULT 'normal',\n                is_read INTEGER DEFAULT 0,\n                deleted_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS support_tickets (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                user_id INTEGER NOT NULL,\n                subject TEXT NOT NULL,\n                category TEXT NOT NULL,\n                status TEXT NOT NULL DEFAULT 'open',\n                priority TEXT NOT NULL DEFAULT 'normal',\n                assigned_to INTEGER,\n                last_replied_at TEXT,\n                last_reply_by_role TEXT,\n                resolved_at TEXT,\n                closed_at TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS support_ticket_messages (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                sender_id INTEGER,\n                sender_role TEXT NOT NULL,\n                sender_name TEXT,\n                body TEXT NOT NULL,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS support_ticket_attachments (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                message_id INTEGER NOT NULL,\n                file_id INTEGER,\n                file_path TEXT NOT NULL,\n                original_name TEXT,\n                mime_type TEXT,\n                size INTEGER DEFAULT 0,\n                entity_type TEXT DEFAULT 'support_ticket_message',\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
+            "CREATE TABLE IF NOT EXISTS support_ticket_feedback (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                ticket_id INTEGER NOT NULL,\n                user_id INTEGER NOT NULL,\n                rated_user_id INTEGER NOT NULL,\n                rating INTEGER NOT NULL,\n                comment TEXT,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                UNIQUE(ticket_id, user_id, rated_user_id)\n            )",
             "CREATE TABLE IF NOT EXISTS message_broadcasts (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                request_id TEXT,\n                audit_log_id INTEGER,\n                system_log_id INTEGER,\n                error_log_ids TEXT,\n                title TEXT NOT NULL,\n                content TEXT NOT NULL,\n                priority TEXT DEFAULT 'normal',\n                scope TEXT DEFAULT 'all',\n                target_count INTEGER DEFAULT 0,\n                sent_count INTEGER DEFAULT 0,\n                invalid_user_ids TEXT,\n                failed_user_ids TEXT,\n                message_ids_snapshot TEXT,\n                message_map_snapshot TEXT,\n                message_id_count INTEGER,\n                content_hash TEXT,\n                email_delivery_snapshot TEXT,\n                filters_snapshot TEXT,\n                meta TEXT,\n                created_by INTEGER,\n                created_at TEXT DEFAULT CURRENT_TIMESTAMP,\n                updated_at TEXT DEFAULT CURRENT_TIMESTAMP\n            )",
             // Audit logs (expanded to satisfy AuditLogService::logAudit expected columns)
             // Only a subset of data is critical for tests; optional columns kept nullable.
@@ -119,6 +123,7 @@ class TestSchemaBuilder
             'region_code TEXT',
             'quota_override TEXT',
             'admin_notes TEXT',
+            "role TEXT DEFAULT 'user'",
             'reset_token TEXT',
             'reset_token_expires_at TEXT',
             'email_verified_at TEXT',
@@ -150,6 +155,40 @@ class TestSchemaBuilder
             'uid INTEGER', 'raw REAL', 'act TEXT', 'description TEXT', 'status TEXT', 'img TEXT', 'notes TEXT', 'activity_id TEXT',
             'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',
             'auth TEXT'
+        ]);
+        self::ensureColumns($pdo, 'support_tickets', [
+            'assigned_to INTEGER',
+            'last_replied_at TEXT',
+            'last_reply_by_role TEXT',
+            'resolved_at TEXT',
+            'closed_at TEXT',
+            'created_at TEXT',
+            'updated_at TEXT'
+        ]);
+        self::ensureColumns($pdo, 'support_ticket_messages', [
+            'sender_id INTEGER',
+            'sender_role TEXT',
+            'sender_name TEXT',
+            'body TEXT',
+            'created_at TEXT',
+            'updated_at TEXT'
+        ]);
+        self::ensureColumns($pdo, 'support_ticket_attachments', [
+            'file_id INTEGER',
+            'original_name TEXT',
+            'mime_type TEXT',
+            'size INTEGER DEFAULT 0',
+            "entity_type TEXT DEFAULT 'support_ticket_message'",
+            'created_at TEXT'
+        ]);
+        self::ensureColumns($pdo, 'support_ticket_feedback', [
+            'ticket_id INTEGER',
+            'user_id INTEGER',
+            'rated_user_id INTEGER',
+            'rating INTEGER',
+            'comment TEXT',
+            'created_at TEXT',
+            'updated_at TEXT'
         ]);
 
         try {
@@ -189,6 +228,17 @@ class TestSchemaBuilder
                     SELECT uuid FROM users WHERE users.id = system_logs.user_id
                 ))
                 WHERE (user_uuid IS NULL OR TRIM(user_uuid) = '')
+            ");
+        } catch (\Throwable $e) { /* ignore */ }
+
+        try {
+            $pdo->exec("
+                UPDATE users
+                SET role = CASE
+                    WHEN is_admin = 1 THEN 'admin'
+                    WHEN role IS NULL OR TRIM(role) = '' THEN 'user'
+                    ELSE role
+                END
             ");
         } catch (\Throwable $e) { /* ignore */ }
 
@@ -247,7 +297,7 @@ class TestSchemaBuilder
         $uc = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
         if ($uc === 0) {
             $password = password_hash('password123', PASSWORD_BCRYPT);
-            $pdo->exec("INSERT INTO users (username,email,password,school_id,status,points,is_admin,uuid) VALUES \n                ('admin_user','admin@testdomain.com','{$password}',1,'active',1000,1,'550e8400-e29b-41d4-a716-4466554400aa')");
+            $pdo->exec("INSERT INTO users (username,email,password,school_id,status,points,is_admin,role,uuid) VALUES \n                ('admin_user','admin@testdomain.com','{$password}',1,'active',1000,1,'admin','550e8400-e29b-41d4-a716-4466554400aa')");
         }
     }
 }

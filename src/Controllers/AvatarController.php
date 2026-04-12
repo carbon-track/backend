@@ -11,10 +11,13 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\InputValueNormalizer;
 use Monolog\Logger;
 
 class AvatarController
 {
+    private const ERR_INVALID_REQUEST_BODY = 'Request body must be a JSON object';
+
     private Avatar $avatarModel;
     private AuthService $authService;
     private ?AuditLogService $auditLogService;
@@ -191,7 +194,7 @@ class AvatarController
                 ], 403);
             }
 
-            $data = $request->getParsedBody();
+            $data = $this->normalizeAvatarPayload($request->getParsedBody());
 
             // 验证必需字段
             $requiredFields = ['name', 'file_path'];
@@ -258,6 +261,12 @@ class AvatarController
                 'data' => $createdAvatar
             ], 201);
 
+        } catch (\InvalidArgumentException $e) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code' => $this->avatarValidationErrorCode($e),
+            ], 400);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Create avatar failed', [
@@ -289,7 +298,7 @@ class AvatarController
             }
 
             $avatarId = (int)$args['id'];
-            $data = $request->getParsedBody();
+            $data = $this->normalizeAvatarPayload($request->getParsedBody());
 
             // 检查头像是否存在
             $existingAvatar = $this->avatarModel->getAvatarById($avatarId);
@@ -378,6 +387,12 @@ class AvatarController
                 'data' => $updatedAvatar
             ]);
 
+        } catch (\InvalidArgumentException $e) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code' => $this->avatarValidationErrorCode($e),
+            ], 400);
         } catch (\Exception $e) {
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
             $this->logger->error('Update avatar failed', [
@@ -888,6 +903,38 @@ class AvatarController
         return $response
             ->withHeader('Content-Type', 'application/json')
             ->withStatus($status);
+    }
+
+    /**
+     * @param mixed $payload
+     * @return array<string,mixed>
+     */
+    private function normalizeAvatarPayload(mixed $payload): array
+    {
+        if (!is_array($payload)) {
+            throw new \InvalidArgumentException(self::ERR_INVALID_REQUEST_BODY);
+        }
+
+        foreach (['is_active', 'is_default'] as $field) {
+            if (array_key_exists($field, $payload)) {
+                $payload[$field] = InputValueNormalizer::boolean($payload[$field], $field);
+            }
+        }
+
+        if (array_key_exists('sort_order', $payload)) {
+            $payload['sort_order'] = InputValueNormalizer::integer($payload['sort_order'], 'sort_order');
+        }
+
+        return $payload;
+    }
+
+    private function avatarValidationErrorCode(\InvalidArgumentException $exception): string
+    {
+        if ($exception->getMessage() === self::ERR_INVALID_REQUEST_BODY) {
+            return 'INVALID_REQUEST_BODY';
+        }
+
+        return 'VALIDATION_ERROR';
     }
 }
 

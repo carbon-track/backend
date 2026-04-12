@@ -42,7 +42,7 @@ class UserProfileViewServiceTest extends TestCase
     public function testBuildProfileFieldsFallsBackToLegacySchoolWhenJoinedNameMissing(): void
     {
         $regionService = $this->createMock(RegionService::class);
-        $regionService->expects($this->exactly(2))
+        $regionService->expects($this->once())
             ->method('getRegionContext')
             ->with('US-UM-81')
             ->willReturn([
@@ -56,19 +56,15 @@ class UserProfileViewServiceTest extends TestCase
 
         $service = new UserProfileViewService($regionService);
 
-        $fields = $service->buildProfileFields([
+        $row = [
             'school_id' => 7,
             'school_name' => null,
             'school' => 'Legacy Academy',
             'region_code' => 'US-UM-81',
-        ]);
+        ];
+        $fields = $service->buildProfileFields($row);
 
-        $legacy = $service->buildLegacyDisplayFields([
-            'school_id' => 7,
-            'school_name' => null,
-            'school' => 'Legacy Academy',
-            'region_code' => 'US-UM-81',
-        ]);
+        $legacy = $service->buildLegacyDisplayFields($row, $fields);
 
         $this->assertSame(7, $fields['school_id']);
         $this->assertSame('Legacy Academy', $fields['school_name']);
@@ -79,7 +75,7 @@ class UserProfileViewServiceTest extends TestCase
     public function testCanonicalFieldsTakePriorityOverLegacyValues(): void
     {
         $regionService = $this->createMock(RegionService::class);
-        $regionService->expects($this->exactly(2))
+        $regionService->expects($this->once())
             ->method('getRegionContext')
             ->with('US-UM-81')
             ->willReturn([
@@ -102,7 +98,7 @@ class UserProfileViewServiceTest extends TestCase
         ];
 
         $fields = $service->buildProfileFields($row);
-        $legacy = $service->buildLegacyDisplayFields($row);
+        $legacy = $service->buildLegacyDisplayFields($row, $fields);
 
         $this->assertSame(7, $fields['school_id']);
         $this->assertSame('Canonical Academy', $fields['school_name']);

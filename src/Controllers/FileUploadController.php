@@ -961,6 +961,7 @@ class FileUploadController
             'activities',
             'products',
             'badges',
+            'support-tickets',
             'temp',
             'documents'
         ];

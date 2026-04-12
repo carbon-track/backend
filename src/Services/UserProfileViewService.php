@@ -24,11 +24,12 @@ class UserProfileViewService
 
     /**
      * @param array<string, mixed> $row
+     * @param array<string, mixed>|null $profileFields
      * @return array<string, mixed>
      */
-    public function buildLegacyDisplayFields(array $row): array
+    public function buildLegacyDisplayFields(array $row, ?array $profileFields = null): array
     {
-        $profileFields = $this->buildProfileFields($row);
+        $profileFields ??= $this->buildProfileFields($row);
         $legacySchool = $this->normalizeText($row['school'] ?? null);
         $legacyLocation = $this->normalizeText($row['location'] ?? null);
 

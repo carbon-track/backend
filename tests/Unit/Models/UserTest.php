@@ -77,11 +77,11 @@ class UserTest extends TestCase
     {
         $adminUser = new User(['role' => 'admin']);
         $regularUser = new User(['role' => 'user']);
-        $moderatorUser = new User(['role' => 'moderator']);
+        $supportUser = new User(['role' => 'support']);
 
         $this->assertTrue($adminUser->isAdmin());
         $this->assertFalse($regularUser->isAdmin());
-        $this->assertFalse($moderatorUser->isAdmin());
+        $this->assertFalse($supportUser->isAdmin());
     }
 
     public function testUserModelIsActive(): void

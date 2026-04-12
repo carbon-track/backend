@@ -92,6 +92,45 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame(1, $llmCount);
     }
 
+    public function testApplyPayloadTemplateDoesNotInjectCronWriteDefaults(): void
+    {
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'managementActions' => [
+                    [
+                        'name' => 'update_cron_task',
+                        'label' => 'Update cron task',
+                        'description' => 'Update cron task.',
+                        'api' => ['payloadTemplate' => ['task_key' => null]],
+                        'requires' => ['task_key'],
+                        'contextHints' => [],
+                        'risk_level' => 'write',
+                        'requires_confirmation' => true,
+                    ],
+                ],
+            ]
+        );
+
+        $method = new \ReflectionMethod($service, 'applyPayloadTemplate');
+        $method->setAccessible(true);
+
+        $payload = $method->invoke($service, [
+            'api' => ['payloadTemplate' => ['task_key' => null]],
+            'contextHints' => [],
+        ], [
+            'task_key' => 'legacy_removed_task',
+            'enabled' => false,
+        ], []);
+
+        $this->assertSame('legacy_removed_task', $payload['task_key']);
+        $this->assertFalse($payload['enabled']);
+        $this->assertArrayNotHasKey('interval_minutes', $payload);
+    }
+
     public function testChatRestoresConversationFromLlmLogsWhenAuditWritesFail(): void
     {
         $pdo = $this->makePdo();
