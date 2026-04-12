@@ -686,7 +686,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(SupportRoutingTriageService::class, function (ContainerInterface $c) {
         /** @var \CarbonTrack\Services\Ai\LlmClientInterface|null $llmClient */
-        $llmClient = $c->get('ai.llmClient');
+        $llmClient = $c->has('ai.llmClient') ? $c->get('ai.llmClient') : null;
         $config = [
             'model' => $_ENV['LLM_API_MODEL'] ?? null,
             'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,

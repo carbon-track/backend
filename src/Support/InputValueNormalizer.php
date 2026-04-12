@@ -17,15 +17,19 @@ final class InputValueNormalizer
         }
 
         if (is_int($value)) {
-            return $value !== 0;
+            if ($value === 0 || $value === 1) {
+                return $value === 1;
+            }
+
+            throw new \InvalidArgumentException($field . ' must be a boolean');
         }
 
         if (is_float($value)) {
-            if (floor($value) !== $value) {
+            if (floor($value) !== $value || !in_array((int) $value, [0, 1], true)) {
                 throw new \InvalidArgumentException($field . ' must be a boolean');
             }
 
-            return ((int) $value) !== 0;
+            return ((int) $value) === 1;
         }
 
         if (is_string($value)) {
@@ -34,14 +38,11 @@ final class InputValueNormalizer
                 return $default;
             }
 
-            $booleanValue = filter_var($trimmed, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-            if ($booleanValue !== null) {
-                return $booleanValue;
-            }
-
-            if (preg_match('/^-?\d+$/', $trimmed) === 1) {
-                return ((int) $trimmed) !== 0;
-            }
+            return match (strtolower($trimmed)) {
+                '1', 'true', 'yes', 'on' => true,
+                '0', 'false', 'no', 'off' => false,
+                default => throw new \InvalidArgumentException($field . ' must be a boolean'),
+            };
         }
 
         throw new \InvalidArgumentException($field . ' must be a boolean');

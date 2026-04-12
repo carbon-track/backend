@@ -189,4 +189,35 @@ class AdminCronControllerTest extends TestCase
 
         $this->assertSame(500, $response->getStatusCode());
     }
+
+    public function testJsonFallsBackWhenPayloadCannotBeEncoded(): void
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->atLeastOnce())->method('error');
+
+        $errorLogService = $this->createMock(ErrorLogService::class);
+        $errorLogService->expects($this->once())->method('logException');
+
+        $controller = new AdminCronController(
+            $this->createMock(CronSchedulerService::class),
+            $this->createMock(AuthService::class),
+            $this->createMock(AuditLogService::class),
+            $logger,
+            $errorLogService
+        );
+
+        $method = new \ReflectionMethod($controller, 'json');
+        $method->setAccessible(true);
+
+        $request = makeRequest('GET', '/api/v1/admin/cron/tasks')->withAttribute('request_id', 'req-admin-cron-json');
+        $response = new \Slim\Psr7\Response();
+        $invalidPayload = ['message' => "\xB1\x31"];
+
+        $result = $method->invoke($controller, $request, $response, $invalidPayload, 500);
+        $payload = json_decode((string) $result->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertFalse($payload['success']);
+        $this->assertSame('JSON_ENCODE_ERROR', $payload['code']);
+        $this->assertSame('req-admin-cron-json', $payload['request_id']);
+    }
 }

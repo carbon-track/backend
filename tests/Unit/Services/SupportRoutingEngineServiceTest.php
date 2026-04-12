@@ -417,6 +417,56 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('due_soon', $summary['first_response']['state']);
     }
 
+    public function testBuildSlaSummaryHonorsConfiguredAppTimezone(): void
+    {
+        $previousEnv = $_ENV['APP_TIMEZONE'] ?? null;
+        $previousGetenv = getenv('APP_TIMEZONE');
+        $_ENV['APP_TIMEZONE'] = 'UTC';
+        putenv('APP_TIMEZONE=UTC');
+
+        try {
+            $now = date('Y-m-d H:i:s');
+            $base = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            self::$capsule->table('support_routing_settings')->insert([
+                'id' => 1,
+                'ai_enabled' => 0,
+                'due_soon_minutes' => 30,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $engine = new SupportRoutingEngineService(
+                self::$capsule->getConnection()->getPdo(),
+                $this->createMock(LoggerInterface::class),
+                $this->createMock(AuditLogService::class),
+                $this->createMock(ErrorLogService::class),
+                new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+            );
+
+            $summary = $engine->buildSlaSummaryForTicket([
+                'status' => 'open',
+                'sla_status' => 'pending',
+                'first_support_response_at' => null,
+                'first_response_due_at' => $base->modify('+20 minutes')->format('Y-m-d H:i:s'),
+                'resolution_due_at' => $base->modify('+3 hours')->format('Y-m-d H:i:s'),
+            ]);
+
+            $this->assertSame('due_soon', $summary['display_state']);
+            $this->assertSame('due_soon', $summary['first_response']['state']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_TIMEZONE']);
+            } else {
+                $_ENV['APP_TIMEZONE'] = $previousEnv;
+            }
+            if ($previousGetenv === false) {
+                putenv('APP_TIMEZONE');
+            } else {
+                putenv('APP_TIMEZONE=' . $previousGetenv);
+            }
+        }
+    }
+
     public function testRunSlaSweepDoesNotReEscalateAlreadyEscalatedTicket(): void
     {
         $now = date('Y-m-d H:i:s');

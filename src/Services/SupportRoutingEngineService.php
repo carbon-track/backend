@@ -14,6 +14,8 @@ use Psr\Log\LoggerInterface;
 
 class SupportRoutingEngineService
 {
+    private ?DateTimeZone $appTimeZone = null;
+
     public function __construct(
         private PDO $db,
         private LoggerInterface $logger,
@@ -500,8 +502,9 @@ class SupportRoutingEngineService
             ];
         }
 
-        $now = new DateTimeImmutable($this->now(), new DateTimeZone('Asia/Shanghai'));
-        $due = new DateTimeImmutable($dueAt, new DateTimeZone('Asia/Shanghai'));
+        $timezone = $this->appTimeZone();
+        $now = new DateTimeImmutable($this->now(), $timezone);
+        $due = new DateTimeImmutable($dueAt, $timezone);
         $minutesDelta = (int) floor(($due->getTimestamp() - $now->getTimestamp()) / 60);
 
         if ($completedAt) {
@@ -583,7 +586,7 @@ class SupportRoutingEngineService
         }
 
         $createdAt = $ticket['created_at'] ?? $this->now();
-        $base = new DateTimeImmutable((string) $createdAt, new DateTimeZone('Asia/Shanghai'));
+        $base = new DateTimeImmutable((string) $createdAt, $this->appTimeZone());
         $firstResponseDueAt = $base->modify('+' . max(1, (int) ($groupRouting['first_response_minutes'] ?? 240)) . ' minutes');
         $resolutionDueAt = $base->modify('+' . max(1, (int) ($groupRouting['resolution_minutes'] ?? 1440)) . ' minutes');
 
@@ -847,11 +850,11 @@ class SupportRoutingEngineService
             return false;
         }
 
-        $timezone = (string) ($rule['timezone'] ?? 'Asia/Shanghai');
+        $timezone = (string) ($rule['timezone'] ?? $this->appTimeZoneName());
         try {
             $now = new DateTimeImmutable('now', new DateTimeZone($timezone));
         } catch (\Throwable) {
-            $now = new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai'));
+            $now = new DateTimeImmutable('now', $this->appTimeZone());
         }
 
         $weekdays = $this->decodeJsonList($rule['match_weekdays'] ?? null);
@@ -1060,7 +1063,28 @@ class SupportRoutingEngineService
 
     private function now(): string
     {
-        return (new DateTimeImmutable('now', new DateTimeZone('Asia/Shanghai')))->format('Y-m-d H:i:s');
+        return (new DateTimeImmutable('now', $this->appTimeZone()))->format('Y-m-d H:i:s');
+    }
+
+    private function appTimeZoneName(): string
+    {
+        $configured = trim((string) ($_ENV['APP_TIMEZONE'] ?? getenv('APP_TIMEZONE') ?: ''));
+        return $configured !== '' ? $configured : 'Asia/Shanghai';
+    }
+
+    private function appTimeZone(): DateTimeZone
+    {
+        if ($this->appTimeZone !== null) {
+            return $this->appTimeZone;
+        }
+
+        try {
+            $this->appTimeZone = new DateTimeZone($this->appTimeZoneName());
+        } catch (\Throwable) {
+            $this->appTimeZone = new DateTimeZone('Asia/Shanghai');
+        }
+
+        return $this->appTimeZone;
     }
 
     private function logError(\Throwable $exception, array $context = []): void

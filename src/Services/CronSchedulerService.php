@@ -260,38 +260,27 @@ class CronSchedulerService
             $result = $this->normalizeTaskResult($taskKey, $rawResult);
             $finishedAt = $this->now();
             $durationMs = $this->diffMilliseconds($startedAtMicro, microtime(true));
-            if (!$this->completeTaskRun($taskKey, $lockToken, [
+            $freshTask = $this->findTask($taskKey);
+            $nextRunAt = null;
+            if ($freshTask?->enabled) {
+                $nextRunAt = $freshTask->next_run_at;
+                $nextRunAt = $this->addMinutes($finishedAt, (int) $freshTask->interval_minutes);
+            }
+
+            if (!$this->finalizeTaskRun($taskKey, $lockToken, [
                 'last_finished_at' => $finishedAt,
                 'last_status' => self::TASK_STATUS_SUCCESS,
                 'last_error' => null,
                 'last_duration_ms' => $durationMs,
                 'consecutive_failures' => 0,
-                'lock_token' => null,
-                'locked_at' => null,
+                'next_run_at' => $freshTask?->enabled ? $nextRunAt : null,
                 'updated_at' => $finishedAt,
-            ])) {
+            ], $triggerSource, $context)) {
                 return $this->recordStaleCompletion($task, $triggerSource, $context, $startedAt, $finishedAt, $durationMs, $result);
             }
 
             $freshTask = $this->findTask($taskKey);
-            $nextRunAt = null;
-            if ($freshTask?->enabled) {
-                $nextRunAt = $freshTask->next_run_at;
-                try {
-                    $nextRunAt = $this->addMinutes($finishedAt, (int) $freshTask->interval_minutes);
-                    $this->updateNextRunAtIfUnlocked($taskKey, $nextRunAt, $finishedAt);
-                    $freshTask = $this->findTask($taskKey);
-                    $nextRunAt = $freshTask?->next_run_at;
-                } catch (\Throwable $nextRunException) {
-                    $this->logNonCriticalPostRunFailure(
-                        'Cron task next-run update failed',
-                        $taskKey,
-                        $triggerSource,
-                        $context,
-                        $nextRunException
-                    );
-                }
-            }
+            $nextRunAt = $freshTask?->next_run_at;
 
             $runId = null;
             try {
@@ -349,17 +338,22 @@ class CronSchedulerService
             $finishedAt = $this->now();
             $durationMs = $this->diffMilliseconds($startedAtMicro, microtime(true));
             $errorMessage = trim($exception->getMessage()) !== '' ? $exception->getMessage() : 'Unknown cron task error';
+            $freshTask = $this->findTask($taskKey);
+            $nextRunAt = null;
+            if ($freshTask?->enabled) {
+                $nextRunAt = $freshTask->next_run_at;
+                $nextRunAt = $this->addMinutes($finishedAt, (int) $freshTask->interval_minutes);
+            }
 
-            if (!$this->completeTaskRun($taskKey, $lockToken, [
+            if (!$this->finalizeTaskRun($taskKey, $lockToken, [
                 'last_finished_at' => $finishedAt,
                 'last_status' => self::TASK_STATUS_FAILED,
                 'last_error' => $errorMessage,
                 'last_duration_ms' => $durationMs,
                 'consecutive_failures' => (int) ($task->consecutive_failures ?? 0) + 1,
-                'lock_token' => null,
-                'locked_at' => null,
+                'next_run_at' => $freshTask?->enabled ? $nextRunAt : null,
                 'updated_at' => $finishedAt,
-            ])) {
+            ], $triggerSource, $context)) {
                 return $this->recordStaleCompletion(
                     $task,
                     $triggerSource,
@@ -373,24 +367,7 @@ class CronSchedulerService
             }
 
             $freshTask = $this->findTask($taskKey);
-            $nextRunAt = null;
-            if ($freshTask?->enabled) {
-                $nextRunAt = $freshTask->next_run_at;
-                try {
-                    $nextRunAt = $this->addMinutes($finishedAt, (int) $freshTask->interval_minutes);
-                    $this->updateNextRunAtIfUnlocked($taskKey, $nextRunAt, $finishedAt);
-                    $freshTask = $this->findTask($taskKey);
-                    $nextRunAt = $freshTask?->next_run_at;
-                } catch (\Throwable $nextRunException) {
-                    $this->logNonCriticalPostRunFailure(
-                        'Cron task next-run update failed',
-                        $taskKey,
-                        $triggerSource,
-                        $context,
-                        $nextRunException
-                    );
-                }
-            }
+            $nextRunAt = $freshTask?->next_run_at;
 
             $runId = null;
             try {
@@ -590,20 +567,33 @@ class CronSchedulerService
         return $stmt->rowCount() > 0;
     }
 
-    private function updateNextRunAtIfUnlocked(string $taskKey, string $nextRunAt, string $updatedAt): void
+    private function finalizeTaskRun(
+        string $taskKey,
+        string $lockToken,
+        array $fields,
+        string $triggerSource = 'internal',
+        array $context = []
+    ): bool
     {
-        $stmt = $this->db->prepare('
-            UPDATE cron_tasks
-            SET next_run_at = :next_run_at, updated_at = :updated_at
-            WHERE task_key = :task_key
-              AND lock_token IS NULL
-              AND locked_at IS NULL
-        ');
-        $stmt->execute([
-            'next_run_at' => $nextRunAt,
-            'updated_at' => $updatedAt,
-            'task_key' => $taskKey,
-        ]);
+        try {
+            return $this->completeTaskRun($taskKey, $lockToken, $fields + [
+                'lock_token' => null,
+                'locked_at' => null,
+            ]);
+        } catch (\Throwable $releaseException) {
+            $this->logNonCriticalPostRunFailure(
+                'Cron task release failed after completion',
+                $taskKey,
+                $triggerSource,
+                $context,
+                $releaseException
+            );
+
+            $fallbackFields = $fields;
+            unset($fallbackFields['next_run_at']);
+
+            return $this->completeTaskRun($taskKey, $lockToken, $fallbackFields);
+        }
     }
 
     private function executeTaskHandler(string $taskKey, string $triggerSource): array

@@ -182,7 +182,50 @@ class AdminCronController
         if ($status >= 400 && !array_key_exists('request_id', $payload)) {
             $payload['request_id'] = $request->getAttribute('request_id');
         }
-        $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        try {
+            $json = json_encode(
+                $payload,
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            );
+        } catch (\JsonException $exception) {
+            $this->logger->error('Failed to encode admin cron JSON response', [
+                'error' => $exception->getMessage(),
+                'status' => $status,
+            ]);
+
+            try {
+                $this->errorLogService->logException($exception, $request, [
+                    'context_message' => 'Failed to encode admin cron JSON response',
+                    'status' => $status,
+                ]);
+            } catch (\Throwable $loggingError) {
+                $this->logger->error('Admin cron JSON encoding error logging failed', [
+                    'error' => $loggingError->getMessage(),
+                ]);
+            }
+
+            $fallbackPayload = [
+                'success' => false,
+                'message' => 'Failed to encode JSON response',
+                'code' => 'JSON_ENCODE_ERROR',
+            ];
+
+            if ($status >= 400) {
+                $requestId = $request->getAttribute('request_id');
+                $fallbackPayload['request_id'] = is_scalar($requestId) || $requestId === null ? $requestId : null;
+            }
+
+            try {
+                $json = json_encode(
+                    $fallbackPayload,
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+                );
+            } catch (\JsonException) {
+                $json = '{"success":false,"message":"Failed to encode JSON response","code":"JSON_ENCODE_ERROR"}';
+            }
+        }
+
+        $response->getBody()->write($json);
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
     }
 }

@@ -178,14 +178,15 @@ class UserGroupService
     private function normalizeSupportRouting(mixed $value): array
     {
         $routing = is_array($value) ? $value : [];
+        $defaults = $this->getSupportRoutingDefaults();
 
         return [
-            'first_response_minutes' => $this->normalizeSupportRoutingInteger($routing, 'first_response_minutes', 240, 1),
-            'resolution_minutes' => $this->normalizeSupportRoutingInteger($routing, 'resolution_minutes', 1440, 1),
-            'routing_weight' => $this->normalizeSupportRoutingFloat($routing, 'routing_weight', 1.0, 0.1),
-            'min_agent_level' => $this->normalizeSupportRoutingInteger($routing, 'min_agent_level', 1, 1, 5),
-            'overdue_boost' => $this->normalizeSupportRoutingFloat($routing, 'overdue_boost', 1.0, 0.0),
-            'tier_label' => $this->normalizeSupportRoutingLabel($routing['tier_label'] ?? 'standard'),
+            'first_response_minutes' => $this->normalizeSupportRoutingInteger($routing, 'first_response_minutes', (int) ($defaults['first_response_minutes'] ?? 240), 1),
+            'resolution_minutes' => $this->normalizeSupportRoutingInteger($routing, 'resolution_minutes', (int) ($defaults['resolution_minutes'] ?? 1440), 1),
+            'routing_weight' => $this->normalizeSupportRoutingFloat($routing, 'routing_weight', (float) ($defaults['routing_weight'] ?? 1.0), 0.1),
+            'min_agent_level' => $this->normalizeSupportRoutingInteger($routing, 'min_agent_level', (int) ($defaults['min_agent_level'] ?? 1), 1, 5),
+            'overdue_boost' => $this->normalizeSupportRoutingFloat($routing, 'overdue_boost', (float) ($defaults['overdue_boost'] ?? 1.0), 0.0),
+            'tier_label' => $this->normalizeSupportRoutingLabel($routing['tier_label'] ?? ($defaults['tier_label'] ?? 'standard')),
         ];
     }
 

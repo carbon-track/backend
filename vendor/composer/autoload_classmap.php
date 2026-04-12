@@ -1450,6 +1450,7 @@ return array(
     'CarbonTrack\\Tests\\Unit\\Services\\UserProfileViewServiceTest' => $baseDir . '/tests/Unit/Services/UserProfileViewServiceTest.php',
     'CarbonTrack\\Tests\\Unit\\Services\\Webauthn\\CborDecoderTest' => $baseDir . '/tests/Unit/Services/Webauthn/CborDecoderTest.php',
     'CarbonTrack\\Tests\\Unit\\Support\\ErrorResponseBuilderTest' => $baseDir . '/tests/Unit/Support/ErrorResponseBuilderTest.php',
+    'CarbonTrack\\Tests\\Unit\\Support\\InputValueNormalizerTest' => $baseDir . '/tests/Unit/Support/InputValueNormalizerTest.php',
     'CarbonTrack\\Tests\\Unit\\Support\\RequestIdNormalizerTest' => $baseDir . '/tests/Unit/Support/RequestIdNormalizerTest.php',
     'Carbon\\AbstractTranslator' => $vendorDir . '/nesbot/carbon/src/Carbon/AbstractTranslator.php',
     'Carbon\\Carbon' => $vendorDir . '/nesbot/carbon/src/Carbon/Carbon.php',
