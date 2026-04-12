@@ -171,7 +171,22 @@ class CronController
         if ($status >= 400 && !array_key_exists('request_id', $payload)) {
             $payload['request_id'] = $request->getAttribute('request_id');
         }
-        $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        try {
+            $json = json_encode(
+                $payload,
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            );
+        } catch (\JsonException $exception) {
+            $this->logger->error('Cron endpoint JSON encoding failed', [
+                'status' => $status,
+                'path' => (string) $request->getUri()->getPath(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            $json = '{"success":false,"message":"Failed to encode response payload","code":"INTERNAL_ERROR"}';
+        }
+
+        $response->getBody()->write($json);
         return $response
             ->withStatus($status)
             ->withHeader('Content-Type', 'application/json')

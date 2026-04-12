@@ -360,7 +360,7 @@ class AuthServiceTest extends TestCase
                 username TEXT UNIQUE,
                 email TEXT UNIQUE,
                 password TEXT,
-                role TEXT DEFAULT "user",
+                role TEXT DEFAULT \'user\',
                 status TEXT,
                 points INTEGER DEFAULT 0,
                 is_admin INTEGER DEFAULT 0,

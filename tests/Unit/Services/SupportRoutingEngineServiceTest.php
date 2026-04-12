@@ -479,6 +479,78 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame(0, (int) self::$capsule->table('support_ticket_routing_runs')->count());
     }
 
+    public function testRunSlaSweepRetriesPreviouslyBreachedTicketWithoutIncrementingEscalationAgain(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            ['id' => 41, 'username' => 'requester', 'email' => 'requester@example.com', 'role' => 'user', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 42, 'username' => 'supporter', 'email' => 'support@example.com', 'role' => 'support', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+        self::$capsule->table('support_assignee_profiles')->insert([
+            'user_id' => 42,
+            'level' => 4,
+            'skills_json' => json_encode([]),
+            'languages_json' => json_encode([]),
+            'max_active_tickets' => 10,
+            'is_auto_assignable' => 1,
+            'status' => 'active',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 404,
+            'user_id' => 41,
+            'subject' => 'Retry breached reroute',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'low',
+            'assigned_to' => 42,
+            'assignment_source' => 'smart',
+            'assignment_locked' => 0,
+            'first_response_due_at' => date('Y-m-d H:i:s', strtotime('-2 hours')),
+            'resolution_due_at' => date('Y-m-d H:i:s', strtotime('-1 hour')),
+            'sla_status' => 'breached',
+            'escalation_level' => 2,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 404,
+            'sender_id' => 41,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Please retry',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('logSystemEvent')->willReturn(true);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $result = $engine->runSlaSweep();
+        $ticket = self::$capsule->table('support_tickets')->where('id', 404)->first();
+
+        $this->assertSame(1, $result['processed']);
+        $this->assertSame(1, $result['breached']);
+        $this->assertSame(1, $result['rerouted']);
+        $this->assertSame(2, (int) $ticket->escalation_level);
+        $this->assertSame('escalated', $ticket->sla_status);
+    }
+
     public function testRoutingSummaryKeepsTopFactorsMachineReadable(): void
     {
         $now = date('Y-m-d H:i:s');

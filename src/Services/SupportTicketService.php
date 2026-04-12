@@ -389,10 +389,18 @@ class SupportTicketService
                 'last_reply_by_role' => $senderRole,
                 'updated_at' => $now,
             ];
+            $reopenedTicket = in_array((string) ($ticket['status'] ?? ''), [self::STATUS_RESOLVED, self::STATUS_CLOSED], true)
+                || (string) ($ticket['sla_status'] ?? 'pending') === 'resolved'
+                || !empty($ticket['resolved_at'])
+                || !empty($ticket['closed_at']);
+            if ($reopenedTicket) {
+                $updates['resolved_at'] = null;
+                $updates['closed_at'] = null;
+            }
             if (empty($ticket['first_support_response_at'])) {
                 $updates['first_support_response_at'] = $now;
             }
-            if (($ticket['sla_status'] ?? 'pending') === 'resolved') {
+            if ($reopenedTicket) {
                 $updates['sla_status'] = 'pending';
             }
             $this->updateTicket($ticketId, $updates);
@@ -443,6 +451,8 @@ class SupportTicketService
             }
             if (in_array($status, [self::STATUS_OPEN, self::STATUS_IN_PROGRESS, self::STATUS_WAITING_USER], true) && ($ticket['sla_status'] ?? null) === 'resolved') {
                 $updates['sla_status'] = 'pending';
+                $updates['resolved_at'] = null;
+                $updates['closed_at'] = null;
             }
         }
         if (array_key_exists('priority', $payload) && $payload['priority'] !== null && $payload['priority'] !== '') {

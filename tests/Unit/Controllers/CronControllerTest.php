@@ -241,4 +241,30 @@ class CronControllerTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertFalse($payload['success']);
     }
+
+    public function testJsonFallsBackWhenPayloadCannotBeEncoded(): void
+    {
+        $logger = $this->createMock(LoggerInterface::class);
+        $logger->expects($this->once())->method('error');
+
+        $controller = new CronController(
+            $this->createMock(CronSchedulerService::class),
+            $logger,
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(AuditLogService::class)
+        );
+
+        $method = new \ReflectionMethod($controller, 'json');
+        $method->setAccessible(true);
+
+        $request = makeRequest('POST', '/api/v1/cron/run');
+        $response = new \Slim\Psr7\Response();
+        $invalidPayload = ['message' => "\xB1\x31"];
+
+        $result = $method->invoke($controller, $request, $response, $invalidPayload, 500);
+        $payload = json_decode((string) $result->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertFalse($payload['success']);
+        $this->assertSame('INTERNAL_ERROR', $payload['code']);
+    }
 }

@@ -220,7 +220,7 @@ class SupportRoutingEngineService
             }
 
             $currentSlaStatus = strtolower((string) ($ticket['sla_status'] ?? 'pending'));
-            if (in_array($currentSlaStatus, ['breached', 'escalated'], true)) {
+            if ($currentSlaStatus === 'escalated') {
                 continue;
             }
 
@@ -228,11 +228,16 @@ class SupportRoutingEngineService
             $breached++;
             $updates = ['sla_status' => 'breached', 'updated_at' => $now];
             if (empty($ticket['assignment_locked'])) {
-                $updates['sla_status'] = 'escalated';
-                $updates['escalation_level'] = (int) ($ticket['escalation_level'] ?? 0) + 1;
+                if ($currentSlaStatus !== 'breached') {
+                    $updates['escalation_level'] = (int) ($ticket['escalation_level'] ?? 0) + 1;
+                }
                 $this->updateTicket($ticketId, $updates);
                 try {
                     $this->routeTicket($ticketId, 'sla_breach', ['force' => true]);
+                    $this->updateTicket($ticketId, [
+                        'sla_status' => 'escalated',
+                        'updated_at' => $this->now(),
+                    ]);
                     $rerouted++;
                 } catch (\Throwable $exception) {
                     $this->logger->warning('Support SLA reroute failed', [

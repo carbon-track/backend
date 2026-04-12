@@ -384,6 +384,62 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame(51, $result['id']);
     }
 
+    public function testSupportReplyClearsResolvedMarkersWhenTicketReopens(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 52,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Reopen from support reply',
+            'category' => 'account',
+            'status' => 'resolved',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'resolved',
+            'resolved_at' => $now,
+            'closed_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $result = $service->addSupportMessage(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            52,
+            ['content' => 'Need more info from user']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 52)->first();
+
+        $this->assertSame('waiting_user', $result['status']);
+        $this->assertSame('waiting_user', $ticketRow->status);
+        $this->assertSame('pending', $ticketRow->sla_status);
+        $this->assertNull($ticketRow->resolved_at);
+        $this->assertNull($ticketRow->closed_at);
+    }
+
     public function testUpdateTicketFromSupportSendsUserSupportNotification(): void
     {
         $now = date('Y-m-d H:i:s');
@@ -1530,6 +1586,62 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame((int) $assignee->id, $ticketRow->assigned_to);
         $this->assertSame('manual', $ticketRow->assignment_source);
         $this->assertSame(1, (int) $ticketRow->assignment_locked);
+    }
+
+    public function testUpdateTicketFromSupportClearsResolvedMarkersWhenReopened(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 70,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Reopened by support',
+            'category' => 'account',
+            'status' => 'resolved',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'resolved',
+            'resolved_at' => $now,
+            'closed_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $result = $service->updateTicketFromSupport(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            70,
+            ['status' => 'in_progress']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 70)->first();
+
+        $this->assertSame('in_progress', $result['status']);
+        $this->assertSame('in_progress', $ticketRow->status);
+        $this->assertSame('pending', $ticketRow->sla_status);
+        $this->assertNull($ticketRow->resolved_at);
+        $this->assertNull($ticketRow->closed_at);
     }
 
 }
