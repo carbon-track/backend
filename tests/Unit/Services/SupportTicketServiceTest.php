@@ -7,6 +7,7 @@ namespace CarbonTrack\Tests\Unit\Services;
 use CarbonTrack\Models\File;
 use CarbonTrack\Models\User;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\FileMetadataService;
@@ -41,6 +42,7 @@ class SupportTicketServiceTest extends TestCase
             $table->string('email')->nullable();
             $table->string('role')->default('user');
             $table->boolean('is_admin')->default(false);
+            $table->integer('avatar_id')->nullable();
             $table->string('status')->nullable();
             $table->integer('school_id')->nullable();
             $table->string('school')->nullable();
@@ -116,6 +118,15 @@ class SupportTicketServiceTest extends TestCase
             $table->unique(['ticket_id', 'user_id', 'rated_user_id'], 'uniq_ticket_user_rated');
         });
 
+        self::$capsule->schema()->create('avatars', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->string('name')->nullable();
+            $table->string('file_path')->nullable();
+            $table->timestamp('created_at')->nullable();
+            $table->timestamp('updated_at')->nullable();
+            $table->timestamp('deleted_at')->nullable();
+        });
+
         self::$capsule->schema()->create('support_ticket_tags', function (Blueprint $table): void {
             $table->increments('id');
             $table->string('slug');
@@ -160,6 +171,7 @@ class SupportTicketServiceTest extends TestCase
             self::$capsule->table('support_ticket_transfer_requests')->delete();
             self::$capsule->table('support_ticket_tag_assignments')->delete();
             self::$capsule->table('support_ticket_tags')->delete();
+            self::$capsule->table('avatars')->delete();
             self::$capsule->table('support_ticket_feedback')->delete();
             self::$capsule->table('support_ticket_attachments')->delete();
             self::$capsule->table('support_ticket_messages')->delete();
@@ -826,6 +838,72 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame(20, $detail['id']);
         $this->assertCount(1, $detail['transfer_requests']);
         $this->assertSame((int) $supportB->id, $detail['transfer_requests'][0]['to_assignee']);
+    }
+
+    public function testTicketDetailIncludesMessageAvatarMetadata(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $avatarId = self::$capsule->table('avatars')->insertGetId([
+            'name' => 'Requester Avatar',
+            'file_path' => 'avatars/default/requester.png',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'avatar_id' => $avatarId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 21,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Avatar metadata check',
+            'category' => 'account',
+            'status' => 'open',
+            'priority' => 'normal',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 21,
+            'sender_id' => (int) $requester->id,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Need help',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $r2Service = $this->getMockBuilder(CloudflareR2Service::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['getPublicUrl'])
+            ->getMock();
+        $r2Service->expects($this->once())
+            ->method('getPublicUrl')
+            ->with('avatars/default/requester.png')
+            ->willReturn('https://cdn.example.com/avatars/default/requester.png');
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class),
+            null,
+            null,
+            $r2Service
+        );
+
+        $detail = $service->getTicketDetailForUser((int) $requester->id, 21);
+
+        $this->assertSame('avatars/default/requester.png', $detail['messages'][0]['avatar_path']);
+        $this->assertSame('https://cdn.example.com/avatars/default/requester.png', $detail['messages'][0]['avatar_url']);
     }
 
     public function testTransferTargetCanListPendingTransferTicketsSeparately(): void

@@ -27604,6 +27604,18 @@
               "null"
             ]
           },
+          "avatar_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "avatar_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "body": {
             "type": "string"
           },

@@ -947,18 +947,30 @@ class SupportTicketService
 
     private function messages(int $ticketId): array
     {
-        $stmt = $this->db->prepare('SELECT * FROM support_ticket_messages WHERE ticket_id = :ticket_id ORDER BY id ASC');
+        $stmt = $this->db->prepare("
+            SELECT
+                stm.*,
+                avatar.file_path AS sender_avatar_path
+            FROM support_ticket_messages stm
+            LEFT JOIN users sender ON sender.id = stm.sender_id
+            LEFT JOIN avatars avatar ON avatar.id = sender.avatar_id
+            WHERE stm.ticket_id = :ticket_id
+            ORDER BY stm.id ASC
+        ");
         $stmt->execute(['ticket_id' => $ticketId]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
         $attachments = $this->attachments(array_map(static fn (array $row): int => (int) $row['id'], $rows));
-        return array_map(static function (array $row) use ($attachments): array {
+        return array_map(function (array $row) use ($attachments): array {
             $messageId = (int) $row['id'];
+            $avatar = $this->resolveAvatar($row['sender_avatar_path'] ?? null);
             return [
                 'id' => $messageId,
                 'ticket_id' => (int) $row['ticket_id'],
                 'sender_id' => isset($row['sender_id']) ? (int) $row['sender_id'] : null,
                 'sender_role' => $row['sender_role'] ?? null,
                 'sender_name' => $row['sender_name'] ?? null,
+                'avatar_path' => $avatar['avatar_path'],
+                'avatar_url' => $avatar['avatar_url'],
                 'body' => $row['body'] ?? '',
                 'created_at' => $row['created_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
@@ -1306,6 +1318,25 @@ class SupportTicketService
         $stmt->execute(['id' => $userId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         return $row ?: null;
+    }
+
+    /**
+     * @return array{avatar_path:?string,avatar_url:?string}
+     */
+    private function resolveAvatar(?string $filePath): array
+    {
+        $originalPath = $filePath !== null ? trim($filePath) : null;
+        if ($originalPath === '') {
+            $originalPath = null;
+        }
+
+        $normalized = $originalPath ? ltrim($originalPath, '/') : null;
+        $url = ($normalized && $this->r2Service !== null) ? $this->r2Service->getPublicUrl($normalized) : null;
+
+        return [
+            'avatar_path' => $originalPath,
+            'avatar_url' => $url,
+        ];
     }
 
     private function notifyAssignee(array $user, string $subject, string $body, int $ticketId, string $auditAction): void
