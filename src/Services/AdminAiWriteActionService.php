@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\InputValueNormalizer;
 use PDO;
 
 class AdminAiWriteActionService
@@ -57,18 +58,9 @@ class AdminAiWriteActionService
             throw new \RuntimeException('task_key is required.');
         }
 
-        $updatePayload = [];
-        if (array_key_exists('enabled', $payload)) {
-            $updatePayload['enabled'] = $payload['enabled'];
-        }
-        if (array_key_exists('interval_minutes', $payload)) {
-            $updatePayload['interval_minutes'] = $payload['interval_minutes'];
-        }
-        if (array_key_exists('settings', $payload)) {
-            $updatePayload['settings'] = $payload['settings'];
-        }
+        $updatePayload = $this->normalizeCronTaskUpdatePayload($payload);
         if ($updatePayload === []) {
-            throw new \RuntimeException('No cron task fields provided.');
+            throw new \InvalidArgumentException('No cron task fields provided.');
         }
 
         $result = $this->cronSchedulerService->updateTask($taskKey, $updatePayload);
@@ -88,6 +80,53 @@ class AdminAiWriteActionService
             'action' => 'update_cron_task',
             'task' => $result,
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private function normalizeCronTaskUpdatePayload(array $payload): array
+    {
+        $updatePayload = [];
+
+        if (array_key_exists('enabled', $payload)) {
+            $updatePayload['enabled'] = InputValueNormalizer::boolean($payload['enabled'], 'enabled');
+        }
+
+        if (array_key_exists('interval_minutes', $payload)) {
+            $intervalMinutes = InputValueNormalizer::integer($payload['interval_minutes'], 'interval_minutes');
+            if ($intervalMinutes < 1 || $intervalMinutes > 1440) {
+                throw new \InvalidArgumentException('interval_minutes must be between 1 and 1440.');
+            }
+            $updatePayload['interval_minutes'] = $intervalMinutes;
+        }
+
+        if (array_key_exists('settings', $payload)) {
+            $updatePayload['settings'] = $this->normalizeCronTaskSettings($payload['settings']);
+        }
+
+        return $updatePayload;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function normalizeCronTaskSettings(mixed $settings): array
+    {
+        if (is_object($settings)) {
+            try {
+                $settings = json_decode(json_encode($settings, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                throw new \InvalidArgumentException('settings must be an object or array.');
+            }
+        }
+
+        if (!is_array($settings)) {
+            throw new \InvalidArgumentException('settings must be an object or array.');
+        }
+
+        return $settings;
     }
 
     /**

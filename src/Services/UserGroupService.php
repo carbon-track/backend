@@ -179,12 +179,87 @@ class UserGroupService
         $routing = is_array($value) ? $value : [];
 
         return [
-            'first_response_minutes' => max(1, (int) ($routing['first_response_minutes'] ?? 240)),
-            'resolution_minutes' => max(1, (int) ($routing['resolution_minutes'] ?? 1440)),
-            'routing_weight' => max(0.1, (float) ($routing['routing_weight'] ?? 1)),
-            'min_agent_level' => max(1, min(5, (int) ($routing['min_agent_level'] ?? 1))),
-            'overdue_boost' => max(0.0, (float) ($routing['overdue_boost'] ?? 1)),
-            'tier_label' => trim((string) ($routing['tier_label'] ?? 'standard')) ?: 'standard',
+            'first_response_minutes' => $this->normalizeSupportRoutingInteger($routing, 'first_response_minutes', 240, 1),
+            'resolution_minutes' => $this->normalizeSupportRoutingInteger($routing, 'resolution_minutes', 1440, 1),
+            'routing_weight' => $this->normalizeSupportRoutingFloat($routing, 'routing_weight', 1.0, 0.1),
+            'min_agent_level' => $this->normalizeSupportRoutingInteger($routing, 'min_agent_level', 1, 1, 5),
+            'overdue_boost' => $this->normalizeSupportRoutingFloat($routing, 'overdue_boost', 1.0, 0.0),
+            'tier_label' => $this->normalizeSupportRoutingLabel($routing['tier_label'] ?? 'standard'),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $routing
+     */
+    private function normalizeSupportRoutingInteger(
+        array $routing,
+        string $field,
+        int $default,
+        int $min,
+        ?int $max = null
+    ): int {
+        if (!array_key_exists($field, $routing) || $routing[$field] === null || $routing[$field] === '') {
+            return $default;
+        }
+
+        try {
+            $normalized = InputValueNormalizer::integer($routing[$field], $field, $default);
+        } catch (\InvalidArgumentException) {
+            return $default;
+        }
+
+        if ($normalized < $min) {
+            $normalized = $min;
+        }
+
+        if ($max !== null && $normalized > $max) {
+            $normalized = $max;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $routing
+     */
+    private function normalizeSupportRoutingFloat(
+        array $routing,
+        string $field,
+        float $default,
+        float $min,
+        ?float $max = null
+    ): float {
+        if (!array_key_exists($field, $routing) || $routing[$field] === null || $routing[$field] === '') {
+            return $default;
+        }
+
+        $value = $routing[$field];
+        if (is_int($value) || is_float($value)) {
+            $normalized = (float) $value;
+        } elseif (is_string($value) && is_numeric(trim($value))) {
+            $normalized = (float) trim($value);
+        } else {
+            return $default;
+        }
+
+        if ($normalized < $min) {
+            $normalized = $min;
+        }
+
+        if ($max !== null && $normalized > $max) {
+            $normalized = $max;
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeSupportRoutingLabel(mixed $value): string
+    {
+        if (!is_string($value)) {
+            return 'standard';
+        }
+
+        $normalized = trim($value);
+        return $normalized !== '' ? $normalized : 'standard';
     }
 }

@@ -225,6 +225,7 @@ $__deps_initializer = function (Container $container) {
     $container->set(SupportMiddleware::class, function (ContainerInterface $c) {
         return new SupportMiddleware(
             $c->get(AuthService::class),
+            $c->get(LoggerInterface::class),
             $c->get(ErrorLogService::class)
         );
     });

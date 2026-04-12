@@ -48,8 +48,17 @@ class AdminAiCronActionsTest extends TestCase
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
             ->method('updateTask')
-            ->with('support_sla_sweep', ['enabled' => false, 'interval_minutes' => 15])
-            ->willReturn(['task_key' => 'support_sla_sweep', 'enabled' => false, 'interval_minutes' => 15]);
+            ->with('support_sla_sweep', [
+                'enabled' => false,
+                'interval_minutes' => 15,
+                'settings' => ['notify' => true],
+            ])
+            ->willReturn([
+                'task_key' => 'support_sla_sweep',
+                'enabled' => false,
+                'interval_minutes' => 15,
+                'settings' => ['notify' => true],
+            ]);
         $scheduler->expects($this->once())
             ->method('runTaskNow')
             ->with('support_sla_sweep', 'admin_manual', $this->arrayHasKey('request_id'))
@@ -68,8 +77,9 @@ class AdminAiCronActionsTest extends TestCase
 
         $updateResult = $service->execute('update_cron_task', [
             'task_key' => 'support_sla_sweep',
-            'enabled' => false,
-            'interval_minutes' => 15,
+            'enabled' => 'false',
+            'interval_minutes' => '15',
+            'settings' => (object) ['notify' => true],
         ], [
             'actor_id' => 1,
             'request_id' => 'req-1',
@@ -87,6 +97,7 @@ class AdminAiCronActionsTest extends TestCase
         $this->assertSame('update_cron_task', $updateResult['action']);
         $this->assertSame('run_cron_task', $runResult['action']);
         $this->assertSame('success', $runResult['task_run']['status']);
+        $this->assertSame(['notify' => true], $updateResult['task']['settings']);
     }
 
     public function testWriteModelThrowsWhenCronRunIsNotSuccessful(): void
@@ -120,6 +131,34 @@ class AdminAiCronActionsTest extends TestCase
             'actor_id' => 1,
             'request_id' => 'req-3',
             'conversation_id' => 'conv-3',
+        ]);
+    }
+
+    public function testWriteModelRejectsInvalidCronTaskUpdatePayload(): void
+    {
+        $scheduler = $this->createMock(CronSchedulerService::class);
+        $scheduler->expects($this->never())->method('updateTask');
+
+        $service = new AdminAiWriteActionService(
+            new \PDO('sqlite::memory:'),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(MessageService::class),
+            $this->createMock(BadgeService::class),
+            $scheduler
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('settings must be an object or array.');
+
+        $service->execute('update_cron_task', [
+            'task_key' => 'support_sla_sweep',
+            'enabled' => 'false',
+            'interval_minutes' => '15',
+            'settings' => 'not-an-object',
+        ], [
+            'actor_id' => 1,
+            'request_id' => 'req-4',
+            'conversation_id' => 'conv-4',
         ]);
     }
 }
