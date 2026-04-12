@@ -190,12 +190,24 @@ class SupportTicketService
             $nextStatus = in_array((string) $ticket['status'], [self::STATUS_WAITING_USER, self::STATUS_RESOLVED], true)
                 ? self::STATUS_OPEN
                 : (string) $ticket['status'];
-            $this->updateTicket($ticketId, [
+            $updates = [
                 'status' => $nextStatus,
                 'last_replied_at' => $now,
                 'last_reply_by_role' => 'user',
                 'updated_at' => $now,
-            ]);
+            ];
+            $reopenedResolvedTicket = $nextStatus === self::STATUS_OPEN && (
+                (string) ($ticket['status'] ?? '') === self::STATUS_RESOLVED
+                || (string) ($ticket['sla_status'] ?? '') === 'resolved'
+                || !empty($ticket['resolved_at'])
+                || !empty($ticket['closed_at'])
+            );
+            if ($reopenedResolvedTicket) {
+                $updates['resolved_at'] = null;
+                $updates['closed_at'] = null;
+                $updates['sla_status'] = 'pending';
+            }
+            $this->updateTicket($ticketId, $updates);
             $this->db->commit();
 
             $this->auditLogService->log([

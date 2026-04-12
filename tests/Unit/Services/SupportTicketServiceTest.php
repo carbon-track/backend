@@ -1321,6 +1321,54 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame((int) $supportUser->id, $result['feedback_candidates'][0]['id']);
     }
 
+    public function testAddUserMessageClearsResolvedMarkersWhenReopeningTicket(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 60,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Need more help',
+            'category' => 'account',
+            'status' => 'resolved',
+            'priority' => 'normal',
+            'sla_status' => 'resolved',
+            'resolved_at' => $now,
+            'closed_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $result = $service->addUserMessage(
+            ['id' => (int) $requester->id, 'role' => 'user', 'username' => 'requester'],
+            60,
+            ['content' => 'Issue is back again']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 60)->first();
+
+        $this->assertSame('open', $result['status']);
+        $this->assertSame('open', $ticketRow->status);
+        $this->assertSame('pending', $ticketRow->sla_status);
+        $this->assertNull($ticketRow->resolved_at);
+        $this->assertNull($ticketRow->closed_at);
+    }
+
     public function testSubmitTicketFeedbackRequiresResolvedOrClosedTicket(): void
     {
         $now = date('Y-m-d H:i:s');

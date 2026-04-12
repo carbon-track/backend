@@ -219,6 +219,11 @@ class SupportRoutingEngineService
                 continue;
             }
 
+            $currentSlaStatus = strtolower((string) ($ticket['sla_status'] ?? 'pending'));
+            if (in_array($currentSlaStatus, ['breached', 'escalated'], true)) {
+                continue;
+            }
+
             $processed++;
             $breached++;
             $updates = ['sla_status' => 'breached', 'updated_at' => $now];

@@ -417,6 +417,68 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('due_soon', $summary['first_response']['state']);
     }
 
+    public function testRunSlaSweepDoesNotReEscalateAlreadyEscalatedTicket(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            ['id' => 31, 'username' => 'requester', 'email' => 'requester@example.com', 'role' => 'user', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 32, 'username' => 'supporter', 'email' => 'support@example.com', 'role' => 'support', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+        self::$capsule->table('support_assignee_profiles')->insert([
+            'user_id' => 32,
+            'level' => 2,
+            'skills_json' => json_encode([]),
+            'languages_json' => json_encode([]),
+            'max_active_tickets' => 10,
+            'is_auto_assignable' => 1,
+            'status' => 'active',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 303,
+            'user_id' => 31,
+            'subject' => 'Already escalated',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'urgent',
+            'assigned_to' => 32,
+            'assignment_source' => 'smart',
+            'assignment_locked' => 0,
+            'first_response_due_at' => date('Y-m-d H:i:s', strtotime('-2 hours')),
+            'resolution_due_at' => date('Y-m-d H:i:s', strtotime('-1 hour')),
+            'sla_status' => 'escalated',
+            'escalation_level' => 3,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('logSystemEvent')->willReturn(true);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $result = $engine->runSlaSweep();
+        $ticket = self::$capsule->table('support_tickets')->where('id', 303)->first();
+
+        $this->assertSame(['processed' => 0, 'breached' => 0, 'rerouted' => 0], $result);
+        $this->assertSame(3, (int) $ticket->escalation_level);
+        $this->assertSame('escalated', $ticket->sla_status);
+        $this->assertSame(0, (int) self::$capsule->table('support_ticket_routing_runs')->count());
+    }
+
     public function testRoutingSummaryKeepsTopFactorsMachineReadable(): void
     {
         $now = date('Y-m-d H:i:s');
