@@ -288,6 +288,91 @@ class SupportAutomationServiceTest extends TestCase
         $this->assertSame([], $detail['recent_tickets']);
     }
 
+    public function testGetAssignableUserDetailIncludesFeedbackSummaryAndEntries(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            [
+                'id' => 1,
+                'uuid' => 'reviewer-uuid',
+                'username' => 'requester',
+                'email' => 'requester@example.com',
+                'role' => 'user',
+                'is_admin' => 0,
+                'status' => 'active',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 2,
+                'uuid' => 'support-uuid',
+                'username' => 'supporter',
+                'email' => 'support@example.com',
+                'role' => 'support',
+                'is_admin' => 0,
+                'status' => 'active',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+        self::$capsule->table('support_tickets')->insert([
+            [
+                'id' => 10,
+                'user_id' => 1,
+                'subject' => 'Bug fix follow-up',
+                'category' => 'website_bug',
+                'status' => 'resolved',
+                'priority' => 'high',
+                'assigned_to' => 2,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 11,
+                'user_id' => 1,
+                'subject' => 'Account issue',
+                'category' => 'account',
+                'status' => 'closed',
+                'priority' => 'normal',
+                'assigned_to' => 2,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+        ]);
+        self::$capsule->table('support_ticket_feedback')->insert([
+            [
+                'ticket_id' => 10,
+                'user_id' => 1,
+                'rated_user_id' => 2,
+                'rating' => 5,
+                'comment' => '很专业',
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'ticket_id' => 11,
+                'user_id' => 1,
+                'rated_user_id' => 2,
+                'rating' => 4,
+                'comment' => '回复很快',
+                'created_at' => date('Y-m-d H:i:s', strtotime('-1 hour')),
+                'updated_at' => date('Y-m-d H:i:s', strtotime('-1 hour')),
+            ],
+        ]);
+
+        $detail = $this->makeService()->getAssignableUserDetail(2);
+
+        $this->assertNotNull($detail);
+        $this->assertSame(4.5, $detail['feedback_summary']['average_rating']);
+        $this->assertSame(2, $detail['feedback_summary']['rating_count']);
+        $this->assertCount(5, $detail['feedback_summary']['distribution']);
+        $this->assertSame(1, $detail['feedback_summary']['distribution'][0]['count']);
+        $this->assertCount(2, $detail['feedback_entries']);
+        $this->assertSame('Bug fix follow-up', $detail['feedback_entries'][0]['ticket']['subject']);
+        $this->assertSame('requester', $detail['feedback_entries'][0]['reviewer']['username']);
+        $this->assertSame('很专业', $detail['feedback_entries'][0]['comment']);
+    }
+
     public function testApplyRulesAddsTagsAndPreservesTicketAssignmentForScoring(): void
     {
         $now = date('Y-m-d H:i:s');

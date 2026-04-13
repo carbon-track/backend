@@ -183,6 +183,8 @@ class SupportAutomationService
         $detail = $this->formatAssignableUser($row);
         $detail['admin_notes'] = $row['admin_notes'] ?? null;
         $detail['recent_tickets'] = $this->recentTicketsForAssignee($userId);
+        $detail['feedback_summary'] = $this->feedbackSummaryForAssignee($userId);
+        $detail['feedback_entries'] = $this->feedbackEntriesForAssignee($userId);
         $detail['routing_profile'] = [
             'user_id' => $detail['id'],
             'level' => (int) ($row['routing_level'] ?? 1),
@@ -1013,6 +1015,88 @@ class SupportAutomationService
             'updated_at' => $row['updated_at'] ?? null,
             'created_at' => $row['created_at'] ?? null,
         ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    }
+
+    private function feedbackSummaryForAssignee(int $userId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                COUNT(*) AS rating_count,
+                AVG(rating) AS avg_rating,
+                MAX(COALESCE(updated_at, created_at)) AS last_feedback_at,
+                SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) AS rating_5_count,
+                SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) AS rating_4_count,
+                SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) AS rating_3_count,
+                SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) AS rating_2_count,
+                SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS rating_1_count
+            FROM support_ticket_feedback
+            WHERE rated_user_id = :user_id
+        ");
+        $stmt->execute(['user_id' => $userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $ratingCount = (int) ($row['rating_count'] ?? 0);
+
+        return [
+            'average_rating' => $ratingCount > 0 ? round((float) ($row['avg_rating'] ?? 0), 2) : null,
+            'rating_count' => $ratingCount,
+            'last_feedback_at' => $row['last_feedback_at'] ?? null,
+            'distribution' => array_map(static function (int $rating) use ($row): array {
+                return [
+                    'rating' => $rating,
+                    'count' => (int) ($row[sprintf('rating_%d_count', $rating)] ?? 0),
+                ];
+            }, [5, 4, 3, 2, 1]),
+        ];
+    }
+
+    private function feedbackEntriesForAssignee(int $userId, int $limit = 20): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                f.id,
+                f.ticket_id,
+                f.user_id,
+                f.rating,
+                f.comment,
+                f.created_at,
+                f.updated_at,
+                reviewer.username AS reviewer_username,
+                reviewer.email AS reviewer_email,
+                ticket.subject AS ticket_subject,
+                ticket.status AS ticket_status,
+                ticket.priority AS ticket_priority
+            FROM support_ticket_feedback f
+            INNER JOIN users reviewer ON reviewer.id = f.user_id
+            INNER JOIN support_tickets ticket ON ticket.id = f.ticket_id
+            WHERE f.rated_user_id = :user_id
+            ORDER BY COALESCE(f.updated_at, f.created_at) DESC, f.id DESC
+            LIMIT :limit
+        ");
+        $stmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(static function (array $row): array {
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'ticket_id' => (int) ($row['ticket_id'] ?? 0),
+                'rating' => (int) ($row['rating'] ?? 0),
+                'comment' => $row['comment'] ?? null,
+                'created_at' => $row['created_at'] ?? null,
+                'updated_at' => $row['updated_at'] ?? null,
+                'reviewer' => [
+                    'id' => (int) ($row['user_id'] ?? 0),
+                    'username' => $row['reviewer_username'] ?? null,
+                    'email' => $row['reviewer_email'] ?? null,
+                ],
+                'ticket' => [
+                    'id' => (int) ($row['ticket_id'] ?? 0),
+                    'subject' => (string) ($row['ticket_subject'] ?? ''),
+                    'status' => (string) ($row['ticket_status'] ?? ''),
+                    'priority' => (string) ($row['ticket_priority'] ?? ''),
+                ],
+            ];
+        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
     }
 
     private function formatRule(array $row): array

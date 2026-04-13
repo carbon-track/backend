@@ -335,6 +335,72 @@ class SupportRoutingEngineServiceTest extends TestCase
         $this->assertSame('smart', $ticket->assignment_source);
     }
 
+    public function testRouteTicketPrefersHigherRatedAssigneeWhenOtherSignalsTie(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            ['id' => 61, 'username' => 'requester', 'email' => 'requester@example.com', 'role' => 'user', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 62, 'username' => 'low-rated', 'email' => 'low@example.com', 'role' => 'support', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 63, 'username' => 'top-rated', 'email' => 'top@example.com', 'role' => 'support', 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_assignee_profiles')->insert([
+            ['user_id' => 62, 'level' => 3, 'skills_json' => json_encode([]), 'languages_json' => json_encode([]), 'max_active_tickets' => 10, 'is_auto_assignable' => 1, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+            ['user_id' => 63, 'level' => 3, 'skills_json' => json_encode([]), 'languages_json' => json_encode([]), 'max_active_tickets' => 10, 'is_auto_assignable' => 1, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_ticket_feedback')->insert([
+            ['ticket_id' => 900, 'user_id' => 61, 'rated_user_id' => 62, 'rating' => 2, 'comment' => 'slow', 'created_at' => $now, 'updated_at' => $now],
+            ['ticket_id' => 901, 'user_id' => 61, 'rated_user_id' => 63, 'rating' => 5, 'comment' => 'great', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
+        self::$capsule->table('support_routing_settings')->insert([
+            'id' => 1,
+            'ai_enabled' => 0,
+            'weights_json' => json_encode(['feedback_weight' => 8]),
+            'fallback_json' => json_encode(['default_feedback_rating' => 3.5]),
+            'defaults_json' => json_encode(['min_agent_level' => 1]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 602,
+            'user_id' => 61,
+            'subject' => 'Rating tie-break',
+            'category' => 'website_bug',
+            'status' => 'open',
+            'priority' => 'normal',
+            'sla_status' => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_messages')->insert([
+            'ticket_id' => 602,
+            'sender_id' => 61,
+            'sender_role' => 'user',
+            'sender_name' => 'requester',
+            'body' => 'Need help',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('logSystemEvent')->willReturn(true);
+
+        $engine = new SupportRoutingEngineService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            new SupportRoutingTriageService(null, $this->createMock(LoggerInterface::class))
+        );
+
+        $result = $engine->routeTicket(602, 'created');
+
+        $this->assertSame(63, $result['assigned_to']);
+    }
+
     public function testNotifyAssigneeLogsFailedWhenNoChannelSucceeds(): void
     {
         $logger = $this->createMock(LoggerInterface::class);
