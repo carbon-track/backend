@@ -270,6 +270,7 @@ return function (App $app) {
             $admin->put('/support/rules/{id:[0-9]+}', [AdminSupportController::class, 'updateRule']);
             $admin->get('/support/tickets', [AdminSupportController::class, 'listTickets']);
             $admin->get('/support/tickets/{id:[0-9]+}', [AdminSupportController::class, 'getTicketDetail']);
+            $admin->patch('/support/tickets/{id:[0-9]+}', [AdminSupportController::class, 'updateTicket']);
             $admin->get('/support/reports', [AdminSupportController::class, 'reports']);
             $admin->get('/cron/tasks', [AdminCronController::class, 'listTasks']);
             $admin->put('/cron/tasks/{taskKey:[^/]+}', [AdminCronController::class, 'updateTask']);

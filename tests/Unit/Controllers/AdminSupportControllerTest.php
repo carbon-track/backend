@@ -21,7 +21,8 @@ class AdminSupportControllerTest extends TestCase
         ?AuthService $authService = null,
         ?SupportTicketService $ticketService = null,
         ?SupportRoutingEngineService $routingEngineService = null,
-        ?AuditLogService $auditLogService = null
+        ?AuditLogService $auditLogService = null,
+        ?ErrorLogService $errorLogService = null
     ): AdminSupportController {
         return new AdminSupportController(
             $automationService ?? $this->createMock(SupportAutomationService::class),
@@ -30,7 +31,7 @@ class AdminSupportControllerTest extends TestCase
             $authService ?? $this->createMock(AuthService::class),
             $auditLogService ?? $this->createMock(AuditLogService::class),
             $this->createMock(LoggerInterface::class),
-            $this->createMock(ErrorLogService::class)
+            $errorLogService ?? $this->createMock(ErrorLogService::class)
         );
     }
 
@@ -231,6 +232,84 @@ class AdminSupportControllerTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertSame(90, $payload['data']['routing_runs'][0]['id']);
+    }
+
+    public function testUpdateTicketReturnsUpdatedPayload(): void
+    {
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('logAdminOperation');
+
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true, 'role' => 'admin']);
+
+        $ticketService = $this->createMock(SupportTicketService::class);
+        $ticketService->expects($this->once())
+            ->method('updateTicketFromSupport')
+            ->with(['id' => 1, 'is_admin' => true, 'role' => 'admin'], 12, ['status' => 'resolved'])
+            ->willReturn(['id' => 12, 'status' => 'resolved']);
+
+        $controller = $this->makeController(
+            authService: $auth,
+            ticketService: $ticketService,
+            auditLogService: $audit
+        );
+
+        $response = $controller->updateTicket(
+            makeRequest('PATCH', '/api/v1/admin/support/tickets/12', ['status' => 'resolved']),
+            new \Slim\Psr7\Response(),
+            ['id' => '12']
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('resolved', $payload['data']['status']);
+    }
+
+    public function testUpdateTicketValidationErrorLogsAuditFailure(): void
+    {
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())
+            ->method('logAdminOperation')
+            ->with(
+                'admin_support_ticket_update_failed',
+                1,
+                'admin_support',
+                $this->callback(static function (array $context): bool {
+                    return ($context['table'] ?? null) === 'support_tickets'
+                        && ($context['record_id'] ?? null) === 12
+                        && ($context['status'] ?? null) === 'failed'
+                        && ($context['data']['error'] ?? null) === 'Invalid status';
+                })
+            );
+
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->expects($this->once())->method('logException');
+
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true, 'role' => 'admin']);
+
+        $ticketService = $this->createMock(SupportTicketService::class);
+        $ticketService->expects($this->once())
+            ->method('updateTicketFromSupport')
+            ->with(['id' => 1, 'is_admin' => true, 'role' => 'admin'], 12, ['status' => 'bad'])
+            ->willThrowException(new \InvalidArgumentException('Invalid status'));
+
+        $controller = $this->makeController(
+            authService: $auth,
+            ticketService: $ticketService,
+            auditLogService: $audit,
+            errorLogService: $errorLog
+        );
+
+        $response = $controller->updateTicket(
+            makeRequest('PATCH', '/api/v1/admin/support/tickets/12', ['status' => 'bad']),
+            new \Slim\Psr7\Response(),
+            ['id' => '12']
+        );
+
+        $this->assertSame(422, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('VALIDATION_ERROR', $payload['code']);
     }
 
 }
