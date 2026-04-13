@@ -1066,7 +1066,7 @@ class SupportAutomationService
                 ticket.status AS ticket_status,
                 ticket.priority AS ticket_priority
             FROM support_ticket_feedback f
-            INNER JOIN users reviewer ON reviewer.id = f.user_id
+            LEFT JOIN users reviewer ON reviewer.id = f.user_id AND reviewer.deleted_at IS NULL
             INNER JOIN support_tickets ticket ON ticket.id = f.ticket_id
             WHERE f.rated_user_id = :user_id
             ORDER BY COALESCE(f.updated_at, f.created_at) DESC, f.id DESC

@@ -373,6 +373,63 @@ class SupportAutomationServiceTest extends TestCase
         $this->assertSame('很专业', $detail['feedback_entries'][0]['comment']);
     }
 
+    public function testGetAssignableUserDetailKeepsFeedbackEntryWhenReviewerIsSoftDeleted(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        self::$capsule->table('users')->insert([
+            'id' => 1,
+            'uuid' => 'reviewer-uuid',
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'is_admin' => 0,
+            'status' => 'active',
+            'deleted_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('users')->insert([
+            'id' => 2,
+            'uuid' => 'support-uuid',
+            'username' => 'supporter',
+            'email' => 'support@example.com',
+            'role' => 'support',
+            'is_admin' => 0,
+            'status' => 'active',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 10,
+            'user_id' => 1,
+            'subject' => 'Historical feedback',
+            'category' => 'website_bug',
+            'status' => 'resolved',
+            'priority' => 'high',
+            'assigned_to' => 2,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        self::$capsule->table('support_ticket_feedback')->insert([
+            'ticket_id' => 10,
+            'user_id' => 1,
+            'rated_user_id' => 2,
+            'rating' => 5,
+            'comment' => '仍应保留',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $detail = $this->makeService()->getAssignableUserDetail(2);
+
+        $this->assertNotNull($detail);
+        $this->assertSame(1, $detail['feedback_summary']['rating_count']);
+        $this->assertCount(1, $detail['feedback_entries']);
+        $this->assertSame(1, $detail['feedback_entries'][0]['reviewer']['id']);
+        $this->assertNull($detail['feedback_entries'][0]['reviewer']['username']);
+        $this->assertNull($detail['feedback_entries'][0]['reviewer']['email']);
+    }
+
     public function testApplyRulesAddsTagsAndPreservesTicketAssignmentForScoring(): void
     {
         $now = date('Y-m-d H:i:s');
