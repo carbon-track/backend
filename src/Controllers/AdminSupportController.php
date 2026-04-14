@@ -248,7 +248,7 @@ class AdminSupportController
     public function updateTicket(Request $request, Response $response, array $args): Response
     {
         $actor = $this->currentUser($request);
-        $ticketId = isset($args['id']) && is_numeric($args['id']) ? (int) $args['id'] : null;
+        $ticketId = null;
         $requestData = $this->body($request);
 
         try {
@@ -272,14 +272,7 @@ class AdminSupportController
             $this->logTicketUpdateFailure($request, $actor, $ticketId, $requestData, $e);
             return $this->json($response, ['success' => false, 'message' => $e->getMessage(), 'code' => 'VALIDATION_ERROR'], 422);
         } catch (\Throwable $e) {
-            $this->auditLogService->logAdminOperation('admin_support_ticket_update_failed', $this->actorId($actor), 'admin_support', [
-                'table' => 'support_tickets',
-                'record_id' => $ticketId,
-                'request_data' => $requestData,
-                'request_id' => $request->getAttribute('request_id'),
-                'status' => 'failed',
-                'data' => ['error' => $e->getMessage()],
-            ]);
+            $this->logTicketUpdateFailure($request, $actor, $ticketId, $requestData, $e);
             return $this->error($request, $response, $e, 'Failed to update support ticket');
         }
     }
