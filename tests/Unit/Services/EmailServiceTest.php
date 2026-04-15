@@ -139,6 +139,85 @@ class EmailServiceTest extends TestCase
         );
     }
 
+    public function testSendSupportTicketNotificationRendersStructuredHtml(): void
+    {
+        $config = [
+            'debug' => false,
+            'host' => 'smtp.example.com',
+            'username' => 'user',
+            'password' => 'pass',
+            'port' => 465,
+            'from_email' => 'noreply@example.com',
+            'from_name' => 'No Reply',
+            'force_simulation' => true,
+            'app_name' => 'CarbonTrack QA',
+            'support_email' => 'help@example.com',
+            'frontend_url' => 'https://app.example.com',
+        ];
+
+        $logger = new Logger('email-service-support-ticket');
+        $logger->pushHandler(new TestHandler());
+        $service = new class($config, $logger, null) extends EmailService {
+            public ?array $capturedEmail = null;
+
+            public function sendEmail(string $toEmail, string $toName, string $subject, string $bodyHtml, string $bodyText = ''): bool
+            {
+                $this->capturedEmail = [
+                    'to' => $toEmail,
+                    'name' => $toName,
+                    'subject' => $subject,
+                    'bodyHtml' => $bodyHtml,
+                    'bodyText' => $bodyText,
+                ];
+
+                return true;
+            }
+        };
+
+        $result = $service->sendSupportTicketNotification(
+            'owner@example.com',
+            'Owner',
+            'Support ticket #42 updated',
+            [
+                'eyebrow' => 'Workflow update',
+                'intro' => 'We updated the workflow details for your support ticket.',
+                'summary' => 'Review the latest status below so you know what changed on our side.',
+                'ticket' => [
+                    'id' => 42,
+                    'subject' => 'Billing mismatch on April export',
+                ],
+                'details' => [
+                    ['label' => 'Status', 'value' => 'In progress'],
+                    ['label' => 'Priority', 'value' => 'High'],
+                ],
+                'changes' => [
+                    ['label' => 'Status', 'from' => 'Open', 'to' => 'In progress'],
+                    ['label' => 'Priority', 'from' => 'Normal', 'to' => 'High'],
+                ],
+                'message' => [
+                    'label' => 'Latest update',
+                    'body' => "We reproduced the export issue.\nA fix is being prepared.",
+                ],
+                'button_label' => 'Review ticket',
+                'button_path' => 'tickets/42',
+                'closing' => 'Open CarbonTrack to review the full thread.',
+            ],
+            NotificationPreferenceService::CATEGORY_SUPPORT,
+            'high'
+        );
+
+        $this->assertTrue($result);
+        $this->assertNotNull($service->capturedEmail);
+        $this->assertStringContainsString('Billing mismatch on April export', $service->capturedEmail['bodyHtml']);
+        $this->assertStringContainsString('What changed', $service->capturedEmail['bodyHtml']);
+        $this->assertStringContainsString('Latest update', $service->capturedEmail['bodyHtml']);
+        $this->assertStringContainsString('/tickets/42', $service->capturedEmail['bodyHtml']);
+        $this->assertStringContainsString('Status:', $service->capturedEmail['bodyText']);
+        $this->assertStringContainsString('In progress', $service->capturedEmail['bodyText']);
+        $this->assertStringContainsString('Review ticket:', $service->capturedEmail['bodyText']);
+        $this->assertStringContainsString('/tickets/42', $service->capturedEmail['bodyText']);
+    }
+
     public function testSendMessageNotificationToManyUsesBroadcastAndPreferences(): void
     {
         $config = [

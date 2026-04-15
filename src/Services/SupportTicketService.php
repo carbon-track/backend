@@ -117,7 +117,15 @@ class SupportTicketService
             $detail = $this->getTicketDetailForUser((int) $actor['id'], (int) $ticket->id);
             $this->notifySupportMailbox(
                 sprintf('New support ticket #%d: %s', (int) $ticket->id, $subject),
-                $this->supportMailboxBody($actor, $detail, $body)
+                $this->supportMailboxBody($actor, $detail, $body),
+                $this->buildSupportMailboxEmailPayload(
+                    $actor,
+                    $detail,
+                    (int) ($ticket->id ?? 0),
+                    'A new support ticket was created and is ready for triage.',
+                    'Original message',
+                    $body
+                )
             );
             return $detail;
         } catch (\Throwable $e) {
@@ -224,7 +232,15 @@ class SupportTicketService
             $detail = $this->getTicketDetailForUser((int) $actor['id'], $ticketId);
             $this->notifySupportMailbox(
                 sprintf('User replied on support ticket #%d: %s', $ticketId, $ticket['subject'] ?? ''),
-                $this->supportMailboxBody($actor, $detail, $body)
+                $this->supportMailboxBody($actor, $detail, $body),
+                $this->buildSupportMailboxEmailPayload(
+                    $actor,
+                    $detail,
+                    $ticketId,
+                    'The requester added a new reply to an existing support ticket.',
+                    'Latest reply',
+                    $body
+                )
             );
             return $detail;
         } catch (\Throwable $e) {
@@ -417,7 +433,11 @@ class SupportTicketService
                 'data' => ['ticket_id' => $ticketId, 'attachment_count' => count($attachments)],
             ]);
 
-            $this->notifyUserReply($ticket, $body, $ticketId);
+            $emailTicket = $ticket;
+            $emailTicket['status'] = self::STATUS_WAITING_USER;
+            $emailTicket['priority'] = $updates['priority'] ?? ($ticket['priority'] ?? 'normal');
+            $emailTicket['last_reply_by_role'] = $senderRole;
+            $this->notifyUserReply($emailTicket, $body, $ticketId);
             return $this->getTicketDetailForSupport($actor, $ticketId);
         } catch (\Throwable $e) {
             if ($this->db->inTransaction()) {
@@ -485,6 +505,7 @@ class SupportTicketService
         }
         $updates['updated_at'] = $now;
         $this->updateTicket($ticketId, $updates);
+        $updatedTicket = $this->applyTicketUpdatesToSnapshot($ticket, $updates, $assigneeToNotify);
         $this->auditLogService->log([
             'user_id' => (int) ($actor['id'] ?? 0),
             'action' => 'support_ticket_updated',
@@ -496,14 +517,39 @@ class SupportTicketService
             'old_data' => $ticket,
             'new_data' => $updates,
         ]);
-        $this->notifyUserTicketUpdated($ticket, $updates, $ticketId);
+        $this->notifyUserTicketUpdated($ticket, $updates, $ticketId, $updatedTicket);
         if ($assigneeToNotify !== null) {
             $this->notifyAssignee(
                 $assigneeToNotify,
                 sprintf('Ticket #%d assigned to you', $ticketId),
                 sprintf("An administrator assigned ticket #%d to you.\nSubject: %s", $ticketId, (string) ($ticket['subject'] ?? '')),
                 $ticketId,
-                'support_ticket_manual_assignment_notified'
+                'support_ticket_manual_assignment_notified',
+                [
+                    'eyebrow' => 'Assignment update',
+                    'intro' => 'An administrator assigned a support ticket to you.',
+                    'summary' => 'Review the ticket context and continue the conversation from the support workbench.',
+                    'ticket' => [
+                        'id' => $ticketId,
+                        'subject' => (string) ($ticket['subject'] ?? ''),
+                    ],
+                    'details' => $this->buildTicketEmailDetails($updatedTicket, [
+                        [
+                            'label' => 'Requester',
+                            'value' => $this->formatRequesterDisplay([
+                                'username' => $ticket['requester_username'] ?? null,
+                                'email' => $ticket['requester_email'] ?? null,
+                            ]),
+                        ],
+                    ]),
+                    'message' => [
+                        'label' => 'Assignment note',
+                        'body' => sprintf("An administrator assigned ticket #%d to you.\nSubject: %s", $ticketId, (string) ($ticket['subject'] ?? '')),
+                    ],
+                    'button_label' => 'Open support ticket',
+                    'button_path' => $this->ticketEmailPath($ticketId, true),
+                    'closing' => 'Open the support queue in CarbonTrack to review the full thread and next steps.',
+                ]
             );
         }
         return $this->getTicketDetailForSupport($actor, $ticketId);
@@ -600,7 +646,26 @@ class SupportTicketService
                     $reason ?? 'No reason provided'
                 ),
                 $ticketId,
-                'support_ticket_transfer_target_notified'
+                'support_ticket_transfer_target_notified',
+                [
+                    'eyebrow' => 'Transfer request',
+                    'intro' => 'A teammate requested to transfer a support ticket to you for review.',
+                    'summary' => 'Review the reason below and decide whether to accept ownership.',
+                    'ticket' => [
+                        'id' => $ticketId,
+                        'subject' => (string) ($ticket['subject'] ?? ''),
+                    ],
+                    'details' => $this->buildTicketEmailDetails($ticket, [
+                        ['label' => 'From', 'value' => $this->actorName($actor)],
+                    ]),
+                    'message' => [
+                        'label' => 'Transfer reason',
+                        'body' => $reason ?? 'No reason provided',
+                    ],
+                    'button_label' => 'Review transfer',
+                    'button_path' => $this->ticketEmailPath($ticketId, true),
+                    'closing' => 'Review the request in CarbonTrack to accept, reject, or follow up with the current owner.',
+                ]
             );
         }
 
@@ -619,6 +684,7 @@ class SupportTicketService
         $now = $this->now();
         $requestRow = null;
         $updatedRequest = null;
+        $ticketBeforeTransfer = null;
 
         try {
             $this->db->beginTransaction();
@@ -645,6 +711,7 @@ class SupportTicketService
                 if ($ticket === null) {
                     throw new \RuntimeException('Ticket not found');
                 }
+                $ticketBeforeTransfer = $ticket;
                 $currentAssigneeId = isset($ticket['assigned_to']) ? (int) $ticket['assigned_to'] : 0;
                 $expectedAssigneeId = isset($requestRow['from_assignee']) ? (int) $requestRow['from_assignee'] : 0;
                 if ($currentAssigneeId !== $expectedAssigneeId) {
@@ -705,6 +772,18 @@ class SupportTicketService
             'old_data' => $requestRow,
             'new_data' => $updatedRequest,
         ]);
+
+        if (
+            $decision === self::TRANSFER_STATUS_APPROVED
+            && $requestRow !== null
+            && $ticketBeforeTransfer !== null
+        ) {
+            $this->notifyUserTicketUpdated(
+                $ticketBeforeTransfer,
+                ['assigned_to' => (int) ($requestRow['to_assignee'] ?? 0)],
+                (int) ($requestRow['ticket_id'] ?? 0)
+            );
+        }
 
         return $updatedRequest ?? [];
     }
@@ -1339,7 +1418,14 @@ class SupportTicketService
         ];
     }
 
-    private function notifyAssignee(array $user, string $subject, string $body, int $ticketId, string $auditAction): void
+    private function notifyAssignee(
+        array $user,
+        string $subject,
+        string $body,
+        int $ticketId,
+        string $auditAction,
+        ?array $emailPayload = null
+    ): void
     {
         $userId = (int) ($user['id'] ?? 0);
         $messageSent = false;
@@ -1374,15 +1460,25 @@ class SupportTicketService
 
         if ($this->emailService !== null && !empty($user['email'])) {
             try {
-                $this->emailService->sendMessageNotification(
-                    (string) $user['email'],
-                    (string) ($user['username'] ?? $user['email']),
-                    $subject,
-                    $body,
-                    NotificationPreferenceService::CATEGORY_SUPPORT,
-                    'normal'
-                );
-                $emailSent = true;
+                if ($emailPayload !== null) {
+                    $emailSent = $this->emailService->sendSupportTicketNotification(
+                        (string) $user['email'],
+                        (string) ($user['username'] ?? $user['email']),
+                        $subject,
+                        $emailPayload,
+                        NotificationPreferenceService::CATEGORY_SUPPORT,
+                        'normal'
+                    );
+                } else {
+                    $emailSent = $this->emailService->sendMessageNotification(
+                        (string) $user['email'],
+                        (string) ($user['username'] ?? $user['email']),
+                        $subject,
+                        $body,
+                        NotificationPreferenceService::CATEGORY_SUPPORT,
+                        'normal'
+                    );
+                }
             } catch (\Throwable $exception) {
                 $this->logger->warning('Failed to send support assignee email notification', [
                     'ticket_id' => $ticketId,
@@ -1415,7 +1511,7 @@ class SupportTicketService
         ]);
     }
 
-    private function notifySupportMailbox(string $subject, string $body): void
+    private function notifySupportMailbox(string $subject, string $body, ?array $emailPayload = null): void
     {
         if ($this->emailService === null) {
             return;
@@ -1425,7 +1521,18 @@ class SupportTicketService
             return;
         }
         try {
-            $this->emailService->sendMessageNotification($supportEmail, 'Support Team', $subject, $body, NotificationPreferenceService::CATEGORY_MESSAGE, 'high');
+            if ($emailPayload !== null) {
+                $this->emailService->sendSupportTicketNotification(
+                    $supportEmail,
+                    'Support Team',
+                    $subject,
+                    $emailPayload,
+                    NotificationPreferenceService::CATEGORY_MESSAGE,
+                    'high'
+                );
+            } else {
+                $this->emailService->sendMessageNotification($supportEmail, 'Support Team', $subject, $body, NotificationPreferenceService::CATEGORY_MESSAGE, 'high');
+            }
         } catch (\Throwable $e) {
             $this->logger->warning('Failed to send support mailbox notification', ['subject' => $subject, 'error' => $e->getMessage()]);
         }
@@ -1444,11 +1551,27 @@ class SupportTicketService
         }
         if ($this->emailService !== null && !empty($ticket['requester_email'])) {
             try {
-                $this->emailService->sendMessageNotification(
+                $this->emailService->sendSupportTicketNotification(
                     (string) $ticket['requester_email'],
                     (string) ($ticket['requester_username'] ?? $ticket['requester_email']),
                     sprintf('Support replied to ticket #%d', $ticketId),
-                    $messageBody,
+                    [
+                        'eyebrow' => 'Support reply',
+                        'intro' => 'Our support team replied to your ticket.',
+                        'summary' => 'We posted a new reply and the ticket is now waiting for your response.',
+                        'ticket' => [
+                            'id' => $ticketId,
+                            'subject' => (string) ($ticket['subject'] ?? ''),
+                        ],
+                        'details' => $this->buildTicketEmailDetails($ticket),
+                        'message' => [
+                            'label' => 'Latest reply',
+                            'body' => $body,
+                        ],
+                        'button_label' => 'View ticket',
+                        'button_path' => $this->ticketEmailPath($ticketId, false),
+                        'closing' => 'Reply in CarbonTrack whenever you are ready so we can keep the thread moving.',
+                    ],
                     NotificationPreferenceService::CATEGORY_MESSAGE,
                     'normal'
                 );
@@ -1458,15 +1581,17 @@ class SupportTicketService
         }
     }
 
-    private function notifyUserTicketUpdated(array $ticket, array $updates, int $ticketId): void
+    private function notifyUserTicketUpdated(array $ticket, array $updates, int $ticketId, ?array $updatedTicket = null): void
     {
-        $summary = $this->buildTicketUpdateSummary($ticket, $updates);
-        if ($summary === '') {
+        $updatedTicket = $updatedTicket ?? $this->applyTicketUpdatesToSnapshot($ticket, $updates);
+        $changeItems = $this->buildTicketUpdateEntries($ticket, $updates, $updatedTicket);
+        if ($changeItems === []) {
             return;
         }
 
         $userId = (int) ($ticket['user_id'] ?? 0);
         $subject = sprintf('Support ticket #%d updated', $ticketId);
+        $summary = $this->formatTicketUpdateEntriesAsText($changeItems);
         $messageBody = "Your support ticket has been updated.\n\n" . $summary;
 
         if ($this->messageService !== null && $userId > 0) {
@@ -1488,11 +1613,24 @@ class SupportTicketService
 
         if ($this->emailService !== null && !empty($ticket['requester_email'])) {
             try {
-                $this->emailService->sendMessageNotification(
+                $this->emailService->sendSupportTicketNotification(
                     (string) $ticket['requester_email'],
                     (string) ($ticket['requester_username'] ?? $ticket['requester_email']),
                     $subject,
-                    $messageBody,
+                    [
+                        'eyebrow' => 'Workflow update',
+                        'intro' => 'We updated the workflow details for your support ticket.',
+                        'summary' => 'Review the latest status below so you know what changed on our side.',
+                        'ticket' => [
+                            'id' => $ticketId,
+                            'subject' => (string) ($ticket['subject'] ?? ''),
+                        ],
+                        'details' => $this->buildTicketEmailDetails($updatedTicket),
+                        'changes' => $changeItems,
+                        'button_label' => 'Review ticket',
+                        'button_path' => $this->ticketEmailPath($ticketId, false),
+                        'closing' => 'You can revisit the ticket thread in CarbonTrack whenever you need the full context.',
+                    ],
                     NotificationPreferenceService::CATEGORY_SUPPORT,
                     'normal'
                 );
@@ -1500,6 +1638,38 @@ class SupportTicketService
                 $this->logger->warning('Failed to send support ticket update email', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
             }
         }
+    }
+
+    private function applyTicketUpdatesToSnapshot(array $ticket, array $updates, ?array $resolvedAssignee = null): array
+    {
+        $updatedTicket = $ticket;
+        foreach ($updates as $key => $value) {
+            $updatedTicket[$key] = $value;
+        }
+
+        if (!array_key_exists('assigned_to', $updates)) {
+            return $updatedTicket;
+        }
+
+        unset($updatedTicket['assigned_username'], $updatedTicket['assigned_user']);
+        $nextAssigneeId = $updates['assigned_to'];
+        if ($nextAssigneeId === null || $nextAssigneeId === '' || (int) $nextAssigneeId <= 0) {
+            return $updatedTicket;
+        }
+
+        $resolvedAssignee = $resolvedAssignee ?? $this->loadUserById((int) $nextAssigneeId);
+        $resolvedAssigneeName = trim((string) ($resolvedAssignee['username'] ?? ''));
+        if ($resolvedAssigneeName === '') {
+            return $updatedTicket;
+        }
+
+        $updatedTicket['assigned_username'] = $resolvedAssigneeName;
+        $updatedTicket['assigned_user'] = [
+            'id' => (int) ($resolvedAssignee['id'] ?? $nextAssigneeId),
+            'username' => $resolvedAssigneeName,
+        ];
+
+        return $updatedTicket;
     }
 
     private function supportMailboxBody(array $actor, array $ticket, string $body): string
@@ -1516,41 +1686,251 @@ class SupportTicketService
         );
     }
 
-    private function buildTicketUpdateSummary(array $ticket, array $updates): string
+    /**
+     * @return array<int, array{label:string,from?:string,to?:string,value?:string}>
+     */
+    private function buildTicketUpdateEntries(array $ticket, array $updates, ?array $updatedTicket = null): array
     {
         $changes = [];
 
         if (array_key_exists('status', $updates)) {
-            $changes[] = sprintf(
-                'Status: %s -> %s',
-                (string) ($ticket['status'] ?? 'unknown'),
-                (string) ($updates['status'] ?? 'unknown')
-            );
+            $changes[] = [
+                'label' => 'Status',
+                'from' => $this->formatTicketStatusLabel((string) ($ticket['status'] ?? 'unknown')),
+                'to' => $this->formatTicketStatusLabel((string) ($updates['status'] ?? 'unknown')),
+            ];
         }
 
         if (array_key_exists('priority', $updates)) {
-            $changes[] = sprintf(
-                'Priority: %s -> %s',
-                (string) ($ticket['priority'] ?? 'unknown'),
-                (string) ($updates['priority'] ?? 'unknown')
-            );
+            $changes[] = [
+                'label' => 'Priority',
+                'from' => $this->formatTicketPriorityLabel((string) ($ticket['priority'] ?? 'unknown')),
+                'to' => $this->formatTicketPriorityLabel((string) ($updates['priority'] ?? 'unknown')),
+            ];
         }
 
         if (array_key_exists('assigned_to', $updates)) {
-            $previous = !empty($ticket['assigned_username'])
-                ? (string) $ticket['assigned_username']
-                : ((isset($ticket['assigned_to']) && $ticket['assigned_to'] !== null) ? 'User #' . (int) $ticket['assigned_to'] : 'Unassigned');
-            $next = $updates['assigned_to'] === null
-                ? 'Unassigned'
-                : 'User #' . (int) $updates['assigned_to'];
-            $changes[] = sprintf('Assigned handler: %s -> %s', $previous, $next);
+            $changes[] = [
+                'label' => 'Assigned handler',
+                'from' => $this->resolveAssigneeLabel($ticket),
+                'to' => $this->resolveAssigneeLabel($updatedTicket ?? ['assigned_to' => $updates['assigned_to']]),
+            ];
         }
 
-        if ($changes === []) {
+        return $changes;
+    }
+
+    private function buildTicketUpdateSummary(array $ticket, array $updates): string
+    {
+        return $this->formatTicketUpdateEntriesAsText($this->buildTicketUpdateEntries($ticket, $updates));
+    }
+
+    /**
+     * @return array{
+     *   eyebrow:string,
+     *   intro:string,
+     *   summary:string,
+     *   ticket:array{id:int,subject:string},
+     *   details:array<int, array{label:string,value:string}>,
+     *   message:array{label:string,body:string},
+     *   button_label:string,
+     *   button_path:string,
+     *   closing:string
+     * }
+     */
+    private function buildSupportMailboxEmailPayload(
+        array $actor,
+        array $ticket,
+        int $ticketId,
+        string $intro,
+        string $messageLabel,
+        string $body
+    ): array {
+        return [
+            'eyebrow' => 'Support inbox',
+            'intro' => $intro,
+            'summary' => 'Review the latest request details below and continue the thread from the support workbench.',
+            'ticket' => [
+                'id' => $ticketId,
+                'subject' => (string) ($ticket['subject'] ?? ''),
+            ],
+            'details' => $this->buildTicketEmailDetails($ticket, [
+                ['label' => 'Requester', 'value' => $this->formatRequesterDisplay($actor)],
+            ]),
+            'message' => [
+                'label' => $messageLabel,
+                'body' => $body,
+            ],
+            'button_label' => 'Open support ticket',
+            'button_path' => $this->ticketEmailPath($ticketId, true),
+            'closing' => 'Open CarbonTrack to review the full conversation, attachments, and workflow state.',
+        ];
+    }
+
+    /**
+     * @param array<int, array{label:string,value:string}> $extraDetails
+     * @return array<int, array{label:string,value:string}>
+     */
+    private function buildTicketEmailDetails(array $ticket, array $extraDetails = []): array
+    {
+        $details = [];
+
+        $status = $this->formatTicketStatusLabel((string) ($ticket['status'] ?? self::STATUS_OPEN));
+        if ($status !== '') {
+            $details[] = ['label' => 'Status', 'value' => $status];
+        }
+
+        $priority = $this->formatTicketPriorityLabel((string) ($ticket['priority'] ?? 'normal'));
+        if ($priority !== '') {
+            $details[] = ['label' => 'Priority', 'value' => $priority];
+        }
+
+        $category = $this->formatTicketCategoryLabel((string) ($ticket['category'] ?? ''));
+        if ($category !== '') {
+            $details[] = ['label' => 'Category', 'value' => $category];
+        }
+
+        $assignee = $this->resolveAssigneeLabel($ticket);
+        if ($assignee !== 'Unassigned') {
+            $details[] = ['label' => 'Assignee', 'value' => $assignee];
+        }
+
+        foreach ($extraDetails as $detail) {
+            $label = trim((string) ($detail['label'] ?? ''));
+            $value = trim((string) ($detail['value'] ?? ''));
+            if ($label === '' || $value === '') {
+                continue;
+            }
+            $details[] = ['label' => $label, 'value' => $value];
+        }
+
+        return $details;
+    }
+
+    private function formatRequesterDisplay(array $actor): string
+    {
+        $name = trim((string) ($actor['username'] ?? $actor['requester_username'] ?? ''));
+        $email = trim((string) ($actor['email'] ?? $actor['requester_email'] ?? ''));
+
+        if ($name === '') {
+            $name = $email !== '' ? $email : 'User';
+        }
+
+        if ($email === '') {
+            return $name;
+        }
+
+        return sprintf('%s <%s>', $name, $email);
+    }
+
+    private function ticketEmailPath(int $ticketId, bool $supportView): string
+    {
+        return ($supportView ? 'support/tickets/' : 'tickets/') . $ticketId;
+    }
+
+    private function formatTicketStatusLabel(string $status): string
+    {
+        $normalized = strtolower(trim($status));
+        return match ($normalized) {
+            self::STATUS_OPEN => 'Open',
+            self::STATUS_IN_PROGRESS => 'In progress',
+            self::STATUS_WAITING_USER => 'Waiting for user',
+            self::STATUS_RESOLVED => 'Resolved',
+            self::STATUS_CLOSED => 'Closed',
+            default => $this->humanizeToken($status),
+        };
+    }
+
+    private function formatTicketPriorityLabel(string $priority): string
+    {
+        $normalized = strtolower(trim($priority));
+        return match ($normalized) {
+            'low' => 'Low',
+            'normal' => 'Normal',
+            'high' => 'High',
+            'urgent' => 'Urgent',
+            default => $this->humanizeToken($priority),
+        };
+    }
+
+    private function formatTicketCategoryLabel(string $category): string
+    {
+        $normalized = strtolower(trim($category));
+        return match ($normalized) {
+            'website_bug' => 'Website bug',
+            'business_issue' => 'Business issue',
+            'feature_request' => 'Feature request',
+            'account' => 'Account',
+            'other' => 'Other',
+            default => $this->humanizeToken($category),
+        };
+    }
+
+    /**
+     * @param array<int, array{label:string,from?:string,to?:string,value?:string}> $entries
+     */
+    private function formatTicketUpdateEntriesAsText(array $entries): string
+    {
+        $lines = [];
+        foreach ($entries as $entry) {
+            $label = trim((string) ($entry['label'] ?? ''));
+            if ($label === '') {
+                continue;
+            }
+
+            $value = trim((string) ($entry['value'] ?? ''));
+            if ($value !== '') {
+                $lines[] = sprintf('%s: %s', $label, $value);
+                continue;
+            }
+
+            $from = trim((string) ($entry['from'] ?? ''));
+            $to = trim((string) ($entry['to'] ?? ''));
+            if ($to !== '') {
+                $lines[] = sprintf('%s: %s -> %s', $label, $from !== '' ? $from : 'Unknown', $to);
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function resolveAssigneeLabel(array $ticket): string
+    {
+        $assignedUser = $ticket['assigned_user'] ?? null;
+        if (is_array($assignedUser)) {
+            $username = trim((string) ($assignedUser['username'] ?? ''));
+            if ($username !== '') {
+                return $username;
+            }
+        }
+
+        $username = trim((string) ($ticket['assigned_username'] ?? ''));
+        if ($username !== '') {
+            return $username;
+        }
+
+        $assignedTo = $ticket['assigned_to'] ?? null;
+        if ($assignedTo === null || $assignedTo === '' || (int) $assignedTo <= 0) {
+            return 'Unassigned';
+        }
+
+        $user = $this->loadUserById((int) $assignedTo);
+        $resolvedName = trim((string) ($user['username'] ?? ''));
+        if ($resolvedName !== '') {
+            return $resolvedName;
+        }
+
+        return 'User #' . (int) $assignedTo;
+    }
+
+    private function humanizeToken(string $value): string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
             return '';
         }
 
-        return implode("\n", $changes);
+        return ucwords(str_replace(['_', '-'], ' ', strtolower($trimmed)));
     }
 
     private function presignedUrl(?string $filePath): ?string
