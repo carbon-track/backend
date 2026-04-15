@@ -2157,22 +2157,6 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 1
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 20
-            }
-          },
-          {
             "name": "category",
             "in": "query",
             "schema": {
@@ -2180,11 +2164,12 @@
             }
           },
           {
-            "name": "is_active",
+            "name": "include_inactive",
             "in": "query",
             "schema": {
               "type": "boolean"
-            }
+            },
+            "description": "设为 true 时返回已停用头像，并在每条记录中携带 is_active 状态。"
           }
         ],
         "responses": {
@@ -2237,7 +2222,7 @@
           "Avatars"
         ],
         "summary": "创建新头像",
-        "description": "管理员创建头像资源，并登记名称、分类、文件路径、缩略图与默认状态。",
+        "description": "管理员创建头像资源，并登记名称、分类、文件路径、缩略图与默认状态。若 is_default=true，会自动取消其他头像的默认状态，且默认头像必须保持启用。",
         "security": [
           {
             "bearerAuth": []
@@ -2392,7 +2377,7 @@
           "Avatars"
         ],
         "summary": "更新头像信息",
-        "description": "管理员更新头像资源信息，可修改名称、分类、排序、启用状态及文件路径。",
+        "description": "管理员更新头像资源信息，可修改名称、分类、排序、启用状态及文件路径。若 is_default=true，会自动取消其他头像的默认状态，确保同一时间最多一个默认头像；默认头像必须保持启用。若将某个正在被用户使用的头像停用，系统会将这些用户自动回退到默认头像，并发送站内信与遵循通知偏好的邮件提醒。",
         "security": [
           {
             "bearerAuth": []
@@ -2462,6 +2447,16 @@
           },
           "404": {
             "description": "头像不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "尝试停用正在被使用的头像，但系统中没有可回退的启用默认头像。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2667,7 +2662,7 @@
           "Avatars"
         ],
         "summary": "设置默认头像",
-        "description": "管理员设置默认头像，供未选择个性头像的用户使用。",
+        "description": "管理员设置默认头像，供未选择个性头像的用户使用。设置后会自动清除其他头像的默认状态。",
         "security": [
           {
             "bearerAuth": []
@@ -21240,7 +21235,10 @@
       "AvatarsResponse": {
         "type": "object",
         "properties": {
-          "avatars": {
+          "success": {
+            "type": "boolean"
+          },
+          "data": {
             "type": "array",
             "items": {
               "type": "object",
@@ -21303,7 +21301,7 @@
                 },
                 "is_active": {
                   "type": "boolean",
-                  "description": "是否有效"
+                  "description": "是否启用"
                 },
                 "is_default": {
                   "type": "boolean",
