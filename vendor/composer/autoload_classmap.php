@@ -1277,6 +1277,7 @@ return array(
     'CarbonTrack\\Models\\AchievementBadge' => $baseDir . '/src/Models/AchievementBadge.php',
     'CarbonTrack\\Models\\AuditLog' => $baseDir . '/src/Models/AuditLog.php',
     'CarbonTrack\\Models\\Avatar' => $baseDir . '/src/Models/Avatar.php',
+    'CarbonTrack\\Models\\AvatarFallbackUnavailableException' => $baseDir . '/src/Models/AvatarFallbackUnavailableException.php',
     'CarbonTrack\\Models\\CarbonActivity' => $baseDir . '/src/Models/CarbonActivity.php',
     'CarbonTrack\\Models\\CronRun' => $baseDir . '/src/Models/CronRun.php',
     'CarbonTrack\\Models\\CronTask' => $baseDir . '/src/Models/CronTask.php',

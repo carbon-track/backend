@@ -808,7 +808,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AuditLogService::class),
             $c->get(CloudflareR2Service::class),
             $c->get(Logger::class),
-            $c->get(ErrorLogService::class)
+            $c->get(ErrorLogService::class),
+            $c->get(MessageService::class)
         );
     });
 

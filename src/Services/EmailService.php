@@ -390,6 +390,63 @@ HTML;
     }
 
     /**
+     * @param array{
+     *   eyebrow?: string,
+     *   intro?: string,
+     *   summary?: string,
+     *   ticket?: array{id?: int|string|null,subject?: string|null},
+     *   details?: array<int, array{label:string,value:string}>,
+     *   changes?: array<int, array{label:string,from?:string|null,to?:string|null,value?:string|null}>,
+     *   message?: array{label?:string,body?:string|null},
+     *   button_label?: string,
+     *   button_path?: string,
+     *   closing?: string,
+     *   footer_note?: string
+     * } $payload
+     */
+    public function sendSupportTicketNotification(
+        string $toEmail,
+        string $toName,
+        string $subject,
+        array $payload,
+        string $category,
+        string $priority = Message::PRIORITY_NORMAL
+    ): bool {
+        if (!$this->shouldSendEmail($toEmail, $category)) {
+            return false;
+        }
+
+        $buttons = [];
+        $buttonPath = trim((string) ($payload['button_path'] ?? ''));
+        $buttonUrl = $buttonPath !== '' ? $this->buildFrontendUrl($buttonPath) : null;
+        if ($buttonUrl) {
+            $buttons[] = [
+                'text' => (string) ($payload['button_label'] ?? 'Open ticket'),
+                'url' => $buttonUrl,
+                'color' => self::DEFAULT_BUTTON_COLOR,
+            ];
+        }
+
+        $priorityNotice = $this->buildPriorityNoticeText($priority);
+        $contentHtml = '<p style="margin:0 0 16px 0;">' . sprintf('Hello %s,', $this->esc($toName)) . '</p>';
+        if ($priorityNotice !== '') {
+            $contentHtml .= '<p style="margin:0 0 16px 0;color:#dc2626;font-weight:600;">' . $this->esc($priorityNotice) . '</p>';
+        }
+
+        $contentHtml .= $this->renderSupportTicketNotificationContent($payload);
+
+        $bodyHtml = $this->renderLayout(
+            $subject,
+            $contentHtml,
+            $buttons,
+            isset($payload['footer_note']) ? (string) $payload['footer_note'] : null
+        );
+        $bodyText = $this->buildTextBody($bodyHtml, $buttons);
+
+        return $this->sendEmail($toEmail, $toName, $subject, $bodyHtml, $bodyText);
+    }
+
+    /**
      * @param array<int, array{email:string,name:string|null}> $recipients
      */
     public function sendAnnouncementBroadcast(
@@ -594,6 +651,149 @@ HTML;
         ];
 
         return str_replace(array_keys($replacements), array_values($replacements), $layout);
+    }
+
+    /**
+     * @param array{
+     *   eyebrow?: string,
+     *   intro?: string,
+     *   summary?: string,
+     *   ticket?: array{id?: int|string|null,subject?: string|null},
+     *   details?: array<int, array{label:string,value:string}>,
+     *   changes?: array<int, array{label:string,from?:string|null,to?:string|null,value?:string|null}>,
+     *   message?: array{label?:string,body?:string|null},
+     *   closing?: string
+     * } $payload
+     */
+    private function renderSupportTicketNotificationContent(array $payload): string
+    {
+        $contentHtml = '';
+        $eyebrow = trim((string) ($payload['eyebrow'] ?? 'Support ticket'));
+        $intro = trim((string) ($payload['intro'] ?? ''));
+        $summary = trim((string) ($payload['summary'] ?? ''));
+        $ticket = is_array($payload['ticket'] ?? null) ? $payload['ticket'] : [];
+        $ticketId = trim((string) ($ticket['id'] ?? ''));
+        $ticketSubject = trim((string) ($ticket['subject'] ?? ''));
+
+        if ($eyebrow !== '') {
+            $contentHtml .= '<div style="display:inline-block;margin:0 0 14px 0;padding:6px 12px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">'
+                . $this->esc($eyebrow)
+                . '</div>';
+        }
+
+        if ($intro !== '') {
+            $contentHtml .= '<p style="margin:0 0 14px 0;">' . $this->esc($intro) . '</p>';
+        }
+
+        $contentHtml .= '<div style="margin:18px 0 22px 0;padding:22px 22px 18px 22px;border-radius:18px;background:linear-gradient(180deg,#f8fbff 0%,#eef6ff 100%);border:1px solid #dbeafe;">';
+        if ($ticketId !== '') {
+            $contentHtml .= '<p style="margin:0 0 8px 0;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0369a1;">Ticket #' . $this->esc($ticketId) . '</p>';
+        }
+        if ($ticketSubject !== '') {
+            $contentHtml .= '<h2 style="margin:0 0 12px 0;font-size:24px;line-height:1.3;color:#0f172a;">' . $this->esc($ticketSubject) . '</h2>';
+        }
+        if ($summary !== '') {
+            $contentHtml .= '<p style="margin:0;color:#334155;font-size:15px;line-height:1.7;">' . $this->esc($summary) . '</p>';
+        }
+        $contentHtml .= $this->renderSupportTicketDetailsHtml(is_array($payload['details'] ?? null) ? $payload['details'] : []);
+        $contentHtml .= '</div>';
+
+        $contentHtml .= $this->renderSupportTicketChangesHtml(is_array($payload['changes'] ?? null) ? $payload['changes'] : []);
+
+        if (is_array($payload['message'] ?? null)) {
+            $message = $payload['message'];
+            $messageBody = trim((string) ($message['body'] ?? ''));
+            if ($messageBody !== '') {
+                $label = trim((string) ($message['label'] ?? 'Latest update'));
+                $contentHtml .= '<div style="margin:0 0 22px 0;padding:20px;border-radius:16px;background:#f8fafc;border-left:4px solid #0ea5e9;">';
+                if ($label !== '') {
+                    $contentHtml .= '<p style="margin:0 0 12px 0;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0369a1;">'
+                        . $this->esc($label)
+                        . '</p>';
+                }
+                $contentHtml .= $this->renderMessageContentHtml($messageBody);
+                $contentHtml .= '</div>';
+            }
+        }
+
+        $closing = trim((string) ($payload['closing'] ?? ''));
+        if ($closing !== '') {
+            $contentHtml .= '<p style="margin:0;">' . $this->esc($closing) . '</p>';
+        }
+
+        return $contentHtml;
+    }
+
+    /**
+     * @param array<int, array{label:string,value:string}> $details
+     */
+    private function renderSupportTicketDetailsHtml(array $details): string
+    {
+        $rows = [];
+        foreach ($details as $detail) {
+            $label = trim((string) ($detail['label'] ?? ''));
+            $value = trim((string) ($detail['value'] ?? ''));
+            if ($label === '' || $value === '') {
+                continue;
+            }
+
+            $rows[] = '<tr>'
+                . '<td style="padding:0 14px 10px 0;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;vertical-align:top;">' . $this->esc($label) . '</td>'
+                . '<td style="padding:0 0 10px 0;font-size:15px;font-weight:600;color:#0f172a;vertical-align:top;">' . $this->esc($value) . '</td>'
+                . '</tr>';
+        }
+
+        if ($rows === []) {
+            return '';
+        }
+
+        return '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:18px;border-collapse:collapse;">'
+            . implode('', $rows)
+            . '</table>';
+    }
+
+    /**
+     * @param array<int, array{label:string,from?:string|null,to?:string|null,value?:string|null}> $changes
+     */
+    private function renderSupportTicketChangesHtml(array $changes): string
+    {
+        $items = [];
+        foreach ($changes as $change) {
+            $label = trim((string) ($change['label'] ?? ''));
+            if ($label === '') {
+                continue;
+            }
+
+            $value = trim((string) ($change['value'] ?? ''));
+            $from = trim((string) ($change['from'] ?? ''));
+            $to = trim((string) ($change['to'] ?? ''));
+
+            if ($value === '' && $to !== '') {
+                $value = $from !== ''
+                    ? $this->esc($from) . ' <span style="color:#94a3b8;">&rarr;</span> ' . $this->esc($to)
+                    : $this->esc($to);
+            } elseif ($value !== '') {
+                $value = $this->esc($value);
+            }
+
+            if ($value === '') {
+                continue;
+            }
+
+            $items[] = '<li style="margin:0 0 10px 0;line-height:1.6;color:#334155;">'
+                . '<strong style="color:#0f172a;">' . $this->esc($label) . ':</strong> '
+                . $value
+                . '</li>';
+        }
+
+        if ($items === []) {
+            return '';
+        }
+
+        return '<div style="margin:0 0 22px 0;">'
+            . '<p style="margin:0 0 10px 0;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0369a1;">What changed</p>'
+            . '<ul style="margin:0;padding-left:20px;">' . implode('', $items) . '</ul>'
+            . '</div>';
     }
 
     private function renderMessageContentHtml(string $messageBody): string
