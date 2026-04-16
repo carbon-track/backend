@@ -257,7 +257,7 @@ class Avatar
     }
 
     /**
-     * @return array{reassigned_user_count:int,users:array<int,array{id:int,username:?string,email:?string}>}
+     * @return array{reassigned_user_count:int,users:array<int,array{id:int,username:?string,email:?string}>,fallback_avatar:array<string,mixed>|null}
      */
     public function updateAvatarAndReassignUsers(int $avatarId, array $data, ?int $fallbackAvatarId): array
     {
@@ -268,6 +268,7 @@ class Avatar
             return [
                 'reassigned_user_count' => 0,
                 'users' => [],
+                'fallback_avatar' => null,
             ];
         }
 
@@ -278,11 +279,13 @@ class Avatar
 
         try {
             $affectedUsers = $this->lockUsersAssignedToAvatar($avatarId);
-            if (
-                $affectedUsers !== []
-                && ($fallbackAvatarId === null || $fallbackAvatarId <= 0 || $fallbackAvatarId === $avatarId)
-            ) {
-                throw new \RuntimeException('DEFAULT_AVATAR_REQUIRED');
+            $fallbackAvatar = null;
+            if ($affectedUsers !== []) {
+                $fallbackAvatar = $this->lockFallbackDefaultAvatar($avatarId, $fallbackAvatarId);
+                if ($fallbackAvatar === null) {
+                    throw new AvatarFallbackUnavailableException();
+                }
+                $fallbackAvatarId = (int) $fallbackAvatar['id'];
             }
 
             if ($this->shouldResetDefaultAvatar($data)) {
@@ -309,6 +312,7 @@ class Avatar
             return [
                 'reassigned_user_count' => $affectedRows,
                 'users' => $affectedUsers,
+                'fallback_avatar' => $fallbackAvatar,
             ];
         } catch (\Throwable $e) {
             $this->db->rollBack();
@@ -331,6 +335,35 @@ class Avatar
         $stmt->execute([$avatarId]);
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function lockFallbackDefaultAvatar(int $avatarId, ?int $fallbackAvatarId): ?array
+    {
+        $sql = "
+            SELECT id, name, file_path, thumbnail_path, category, is_default, is_active
+            FROM avatars
+            WHERE is_default = 1
+              AND is_active = 1
+              AND deleted_at IS NULL
+              AND id <> ?
+        ";
+        $params = [$avatarId];
+
+        if ($fallbackAvatarId !== null && $fallbackAvatarId > 0) {
+            $sql .= " AND id = ?";
+            $params[] = $fallbackAvatarId;
+        }
+
+        $sql .= " ORDER BY sort_order ASC, id ASC LIMIT 1 FOR UPDATE";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+        $fallbackAvatar = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return is_array($fallbackAvatar) ? $fallbackAvatar : null;
     }
 
     /**
@@ -471,7 +504,7 @@ class Avatar
         $sql = "
             UPDATE avatars
             SET is_default = 0, updated_at = NOW()
-            WHERE deleted_at IS NULL
+            WHERE deleted_at IS NULL AND is_default = 1
         ";
 
         $params = [];

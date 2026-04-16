@@ -8,6 +8,7 @@ use CarbonTrack\Models\Message;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\Avatar;
+use CarbonTrack\Models\AvatarFallbackUnavailableException;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CloudflareR2Service;
@@ -39,11 +40,11 @@ class AvatarController
     ) {
         $this->avatarModel = $avatarModel;
         $this->authService = $authService;
-            $this->auditLogService = $auditLogService;
-            $this->r2Service = $r2Service;
-            $this->logger = $logger;
-            $this->errorLogService = $errorLogService;
-            $this->messageService = $messageService;
+        $this->auditLogService = $auditLogService;
+        $this->r2Service = $r2Service;
+        $this->logger = $logger;
+        $this->errorLogService = $errorLogService;
+        $this->messageService = $messageService;
     }
 
     /**
@@ -359,27 +360,20 @@ class AvatarController
             $affectedUsers = [];
 
             if ($isDeactivation) {
-                $fallbackAvatar = $this->avatarModel->getDefaultAvatar();
-            }
-
-            if ($isDeactivation) {
                 try {
                     $reassignment = $this->avatarModel->updateAvatarAndReassignUsers(
                         $avatarId,
                         $updateData,
-                        $fallbackAvatar !== null ? (int) $fallbackAvatar['id'] : null
+                        null
                     );
                     $affectedUsers = $reassignment['users'] ?? [];
-                } catch (\RuntimeException $e) {
-                    if ($e->getMessage() === 'DEFAULT_AVATAR_REQUIRED') {
-                        return $this->jsonResponse($response, [
-                            'success' => false,
-                            'message' => 'Cannot disable avatar without an active default avatar for fallback',
-                            'code' => 'DEFAULT_AVATAR_REQUIRED'
-                        ], 409);
-                    }
-
-                    throw $e;
+                    $fallbackAvatar = $reassignment['fallback_avatar'] ?? null;
+                } catch (AvatarFallbackUnavailableException $e) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => $e->getMessage(),
+                        'code' => 'DEFAULT_AVATAR_REQUIRED'
+                    ], 409);
                 }
             } else {
                 // 更新头像

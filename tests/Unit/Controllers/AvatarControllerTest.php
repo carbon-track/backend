@@ -444,21 +444,19 @@ class AvatarControllerTest extends TestCase
                 ]
             );
         $avatarModel->expects($this->once())
-            ->method('getDefaultAvatar')
-            ->willReturn([
-                'id' => 1,
-                'name' => 'Default Seedling',
-                'file_path' => '/avatars/default.png',
-                'is_default' => 1,
-            ]);
-        $avatarModel->expects($this->once())
             ->method('updateAvatarAndReassignUsers')
-            ->with(5, ['is_active' => false], 1)
+            ->with(5, ['is_active' => false], null)
             ->willReturn([
                 'reassigned_user_count' => 2,
                 'users' => [
                     ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
                     ['id' => 202, 'username' => 'bob', 'email' => 'bob@example.com'],
+                ],
+                'fallback_avatar' => [
+                    'id' => 1,
+                    'name' => 'Default Seedling',
+                    'file_path' => '/avatars/default.png',
+                    'is_default' => 1,
                 ],
             ]);
         $avatarModel->expects($this->never())->method('updateAvatar');
@@ -518,12 +516,9 @@ class AvatarControllerTest extends TestCase
                 'is_active' => 1,
             ]);
         $avatarModel->expects($this->once())
-            ->method('getDefaultAvatar')
-            ->willReturn(null);
-        $avatarModel->expects($this->once())
             ->method('updateAvatarAndReassignUsers')
             ->with(5, ['is_active' => false], null)
-            ->willThrowException(new \RuntimeException('DEFAULT_AVATAR_REQUIRED'));
+            ->willThrowException(new \CarbonTrack\Models\AvatarFallbackUnavailableException());
         $avatarModel->expects($this->never())->method('updateAvatar');
 
         /** @var \CarbonTrack\Models\Avatar $avatarModel */

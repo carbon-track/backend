@@ -172,6 +172,7 @@ class AvatarTest extends TestCase
 
         $this->assertSame(18, $avatarId);
         $this->assertStringContainsString('SET is_default = 0', $prepareCalls[0]);
+        $this->assertStringContainsString('AND is_default = 1', $prepareCalls[0]);
         $this->assertStringContainsString('INSERT INTO avatars', $prepareCalls[1]);
     }
 
@@ -232,6 +233,7 @@ class AvatarTest extends TestCase
 
         $this->assertTrue($result);
         $this->assertStringContainsString('AND id <> ?', $prepareCalls[0]);
+        $this->assertStringContainsString('AND is_default = 1', $prepareCalls[0]);
         $this->assertStringContainsString('SET is_default = ?', $prepareCalls[1]);
     }
 
@@ -261,6 +263,7 @@ class AvatarTest extends TestCase
     {
         $pdo = $this->createMock(\PDO::class);
         $userSelectStmt = $this->createMock(\PDOStatement::class);
+        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
         $avatarStmt = $this->createMock(\PDOStatement::class);
         $userUpdateStmt = $this->createMock(\PDOStatement::class);
         $prepareCalls = [];
@@ -268,13 +271,14 @@ class AvatarTest extends TestCase
         $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
         $pdo->expects($this->once())->method('commit')->willReturn(true);
         $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(3))
+        $pdo->expects($this->exactly(4))
             ->method('prepare')
-            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $avatarStmt, $userUpdateStmt) {
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt, $avatarStmt, $userUpdateStmt) {
                 $prepareCalls[] = $sql;
                 return match (count($prepareCalls)) {
                     1 => $userSelectStmt,
-                    2 => $avatarStmt,
+                    2 => $fallbackSelectStmt,
+                    3 => $avatarStmt,
                     default => $userUpdateStmt,
                 };
             });
@@ -289,6 +293,20 @@ class AvatarTest extends TestCase
             ->willReturn([
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
                 ['id' => 202, 'username' => 'bob', 'email' => 'bob@example.com'],
+            ]);
+
+        $fallbackSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7, 1])
+            ->willReturn(true);
+        $fallbackSelectStmt->expects($this->once())
+            ->method('fetch')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn([
+                'id' => 1,
+                'name' => 'Default Seedling',
+                'is_default' => 1,
+                'is_active' => 1,
             ]);
 
         $avatarStmt->expects($this->once())
@@ -309,23 +327,74 @@ class AvatarTest extends TestCase
 
         $this->assertSame(2, $reassigned['reassigned_user_count']);
         $this->assertSame([101, 202], array_column($reassigned['users'], 'id'));
+        $this->assertSame(1, $reassigned['fallback_avatar']['id']);
         $this->assertStringContainsString('FOR UPDATE', $prepareCalls[0]);
-        $this->assertStringContainsString('UPDATE avatars SET is_active = ?', $prepareCalls[1]);
-        $this->assertStringContainsString('UPDATE users', $prepareCalls[2]);
+        $this->assertStringContainsString('is_default = 1', $prepareCalls[1]);
+        $this->assertStringContainsString('FOR UPDATE', $prepareCalls[1]);
+        $this->assertStringContainsString('UPDATE avatars SET is_active = ?', $prepareCalls[2]);
+        $this->assertStringContainsString('UPDATE users', $prepareCalls[3]);
     }
 
     public function testUpdateAvatarAndReassignUsersRequiresFallbackWhenUsersAreAssigned(): void
     {
         $pdo = $this->createMock(\PDO::class);
         $userSelectStmt = $this->createMock(\PDOStatement::class);
+        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
 
         $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
         $pdo->expects($this->never())->method('commit');
         $pdo->expects($this->once())->method('rollBack')->willReturn(true);
-        $pdo->expects($this->once())
+        $prepareCalls = [];
+        $pdo->expects($this->exactly(2))
             ->method('prepare')
-            ->with($this->stringContains('FOR UPDATE'))
-            ->willReturn($userSelectStmt);
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt) {
+                $prepareCalls[] = $sql;
+                return count($prepareCalls) === 1 ? $userSelectStmt : $fallbackSelectStmt;
+            });
+
+        $userSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7])
+            ->willReturn(true);
+        $userSelectStmt->expects($this->once())
+            ->method('fetchAll')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn([
+                ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
+            ]);
+        $fallbackSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7])
+            ->willReturn(true);
+        $fallbackSelectStmt->expects($this->once())
+            ->method('fetch')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn(false);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $model = new Avatar($pdo, $logger);
+
+        $this->expectException(\CarbonTrack\Models\AvatarFallbackUnavailableException::class);
+
+        $model->updateAvatarAndReassignUsers(7, ['is_active' => false], null);
+    }
+
+    public function testUpdateAvatarAndReassignUsersRejectsStaleFallbackAvatarInsideTransaction(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $userSelectStmt = $this->createMock(\PDOStatement::class);
+        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
+        $prepareCalls = [];
+
+        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $pdo->expects($this->never())->method('commit');
+        $pdo->expects($this->once())->method('rollBack')->willReturn(true);
+        $pdo->expects($this->exactly(2))
+            ->method('prepare')
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt) {
+                $prepareCalls[] = $sql;
+                return count($prepareCalls) === 1 ? $userSelectStmt : $fallbackSelectStmt;
+            });
 
         $userSelectStmt->expects($this->once())
             ->method('execute')
@@ -338,13 +407,21 @@ class AvatarTest extends TestCase
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
             ]);
 
+        $fallbackSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7, 1])
+            ->willReturn(true);
+        $fallbackSelectStmt->expects($this->once())
+            ->method('fetch')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn(false);
+
         $logger = $this->createMock(LoggerInterface::class);
         $model = new Avatar($pdo, $logger);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('DEFAULT_AVATAR_REQUIRED');
+        $this->expectException(\CarbonTrack\Models\AvatarFallbackUnavailableException::class);
 
-        $model->updateAvatarAndReassignUsers(7, ['is_active' => false], null);
+        $model->updateAvatarAndReassignUsers(7, ['is_active' => false], 1);
     }
 
     public function testCreateAvatarRejectsInvalidNonEmptyNumericStrings(): void

@@ -1685,6 +1685,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Models\\AchievementBadge' => __DIR__ . '/../..' . '/src/Models/AchievementBadge.php',
         'CarbonTrack\\Models\\AuditLog' => __DIR__ . '/../..' . '/src/Models/AuditLog.php',
         'CarbonTrack\\Models\\Avatar' => __DIR__ . '/../..' . '/src/Models/Avatar.php',
+        'CarbonTrack\\Models\\AvatarFallbackUnavailableException' => __DIR__ . '/../..' . '/src/Models/AvatarFallbackUnavailableException.php',
         'CarbonTrack\\Models\\CarbonActivity' => __DIR__ . '/../..' . '/src/Models/CarbonActivity.php',
         'CarbonTrack\\Models\\CronRun' => __DIR__ . '/../..' . '/src/Models/CronRun.php',
         'CarbonTrack\\Models\\CronTask' => __DIR__ . '/../..' . '/src/Models/CronTask.php',
