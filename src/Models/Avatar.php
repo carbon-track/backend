@@ -256,13 +256,19 @@ class Avatar
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
-    public function updateAvatarAndReassignUsers(int $avatarId, array $data, int $fallbackAvatarId): int
+    /**
+     * @return array{reassigned_user_count:int,users:array<int,array{id:int,username:?string,email:?string}>}
+     */
+    public function updateAvatarAndReassignUsers(int $avatarId, array $data, ?int $fallbackAvatarId): array
     {
         $data = $this->normalizePersistenceData($data);
         ['fields' => $fields, 'params' => $params] = $this->buildUpdatePayload($data);
 
         if (empty($fields)) {
-            return 0;
+            return [
+                'reassigned_user_count' => 0,
+                'users' => [],
+            ];
         }
 
         $fields[] = "updated_at = NOW()";
@@ -271,6 +277,14 @@ class Avatar
         $this->db->beginTransaction();
 
         try {
+            $affectedUsers = $this->lockUsersAssignedToAvatar($avatarId);
+            if (
+                $affectedUsers !== []
+                && ($fallbackAvatarId === null || $fallbackAvatarId <= 0 || $fallbackAvatarId === $avatarId)
+            ) {
+                throw new \RuntimeException('DEFAULT_AVATAR_REQUIRED');
+            }
+
             if ($this->shouldResetDefaultAvatar($data)) {
                 $this->clearDefaultAvatarFlags($avatarId);
             }
@@ -279,21 +293,44 @@ class Avatar
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
 
-            $stmt = $this->db->prepare("
-                UPDATE users
-                SET avatar_id = ?, updated_at = NOW()
-                WHERE avatar_id = ? AND deleted_at IS NULL
-            ");
-            $stmt->execute([$fallbackAvatarId, $avatarId]);
-            $affectedRows = $stmt->rowCount();
+            $affectedRows = 0;
+            if ($affectedUsers !== []) {
+                $stmt = $this->db->prepare("
+                    UPDATE users
+                    SET avatar_id = ?, updated_at = NOW()
+                    WHERE avatar_id = ? AND deleted_at IS NULL
+                ");
+                $stmt->execute([$fallbackAvatarId, $avatarId]);
+                $affectedRows = $stmt->rowCount();
+            }
 
             $this->db->commit();
 
-            return $affectedRows;
+            return [
+                'reassigned_user_count' => $affectedRows,
+                'users' => $affectedUsers,
+            ];
         } catch (\Throwable $e) {
             $this->db->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * @return array<int, array{id:int, username:?string, email:?string}>
+     */
+    private function lockUsersAssignedToAvatar(int $avatarId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT id, username, email
+            FROM users
+            WHERE avatar_id = ? AND deleted_at IS NULL
+            ORDER BY id ASC
+            FOR UPDATE
+        ");
+        $stmt->execute([$avatarId]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     }
 
     /**

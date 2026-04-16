@@ -359,23 +359,28 @@ class AvatarController
             $affectedUsers = [];
 
             if ($isDeactivation) {
-                $affectedUsers = $this->avatarModel->getUsersAssignedToAvatar($avatarId);
+                $fallbackAvatar = $this->avatarModel->getDefaultAvatar();
+            }
 
-                if ($affectedUsers !== []) {
-                    $fallbackAvatar = $this->avatarModel->getDefaultAvatar();
-
-                    if (!$fallbackAvatar) {
+            if ($isDeactivation) {
+                try {
+                    $reassignment = $this->avatarModel->updateAvatarAndReassignUsers(
+                        $avatarId,
+                        $updateData,
+                        $fallbackAvatar !== null ? (int) $fallbackAvatar['id'] : null
+                    );
+                    $affectedUsers = $reassignment['users'] ?? [];
+                } catch (\RuntimeException $e) {
+                    if ($e->getMessage() === 'DEFAULT_AVATAR_REQUIRED') {
                         return $this->jsonResponse($response, [
                             'success' => false,
                             'message' => 'Cannot disable avatar without an active default avatar for fallback',
                             'code' => 'DEFAULT_AVATAR_REQUIRED'
                         ], 409);
                     }
-                }
-            }
 
-            if ($isDeactivation && $fallbackAvatar !== null) {
-                $this->avatarModel->updateAvatarAndReassignUsers($avatarId, $updateData, (int) $fallbackAvatar['id']);
+                    throw $e;
+                }
             } else {
                 // 更新头像
                 $success = $this->avatarModel->updateAvatar($avatarId, $updateData);
@@ -1021,15 +1026,17 @@ class AvatarController
      */
     private function assertDefaultAvatarStateIsValid(array $payload, ?array $existingAvatar = null): void
     {
+        $wasDefault = $this->normalizeBooleanValue($existingAvatar['is_default'] ?? false);
+
         $isDefault = array_key_exists('is_default', $payload)
             ? (bool) $payload['is_default']
-            : $this->normalizeBooleanValue($existingAvatar['is_default'] ?? false);
+            : $wasDefault;
 
         $isActive = array_key_exists('is_active', $payload)
             ? (bool) $payload['is_active']
             : $this->normalizeBooleanValue($existingAvatar['is_active'] ?? true);
 
-        if ($isDefault && !$isActive) {
+        if (($isDefault || $wasDefault) && !$isActive) {
             throw new \InvalidArgumentException('Default avatar must remain active');
         }
     }

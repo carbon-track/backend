@@ -260,39 +260,91 @@ class AvatarTest extends TestCase
     public function testUpdateAvatarAndReassignUsersWrapsAvatarAndUserUpdatesInTransaction(): void
     {
         $pdo = $this->createMock(\PDO::class);
+        $userSelectStmt = $this->createMock(\PDOStatement::class);
         $avatarStmt = $this->createMock(\PDOStatement::class);
-        $userStmt = $this->createMock(\PDOStatement::class);
+        $userUpdateStmt = $this->createMock(\PDOStatement::class);
         $prepareCalls = [];
 
         $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
         $pdo->expects($this->once())->method('commit')->willReturn(true);
         $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(2))
+        $pdo->expects($this->exactly(3))
             ->method('prepare')
-            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $avatarStmt, $userStmt) {
+            ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $avatarStmt, $userUpdateStmt) {
                 $prepareCalls[] = $sql;
-                return count($prepareCalls) === 1 ? $avatarStmt : $userStmt;
+                return match (count($prepareCalls)) {
+                    1 => $userSelectStmt,
+                    2 => $avatarStmt,
+                    default => $userUpdateStmt,
+                };
             });
+
+        $userSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7])
+            ->willReturn(true);
+        $userSelectStmt->expects($this->once())
+            ->method('fetchAll')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn([
+                ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
+                ['id' => 202, 'username' => 'bob', 'email' => 'bob@example.com'],
+            ]);
 
         $avatarStmt->expects($this->once())
             ->method('execute')
             ->with([0, 7])
             ->willReturn(true);
 
-        $userStmt->expects($this->once())
+        $userUpdateStmt->expects($this->once())
             ->method('execute')
             ->with([1, 7])
             ->willReturn(true);
-        $userStmt->method('rowCount')->willReturn(3);
+        $userUpdateStmt->method('rowCount')->willReturn(2);
 
         $logger = $this->createMock(LoggerInterface::class);
 
         $model = new Avatar($pdo, $logger);
         $reassigned = $model->updateAvatarAndReassignUsers(7, ['is_active' => false], 1);
 
-        $this->assertSame(3, $reassigned);
-        $this->assertStringContainsString('UPDATE avatars SET is_active = ?', $prepareCalls[0]);
-        $this->assertStringContainsString('UPDATE users', $prepareCalls[1]);
+        $this->assertSame(2, $reassigned['reassigned_user_count']);
+        $this->assertSame([101, 202], array_column($reassigned['users'], 'id'));
+        $this->assertStringContainsString('FOR UPDATE', $prepareCalls[0]);
+        $this->assertStringContainsString('UPDATE avatars SET is_active = ?', $prepareCalls[1]);
+        $this->assertStringContainsString('UPDATE users', $prepareCalls[2]);
+    }
+
+    public function testUpdateAvatarAndReassignUsersRequiresFallbackWhenUsersAreAssigned(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $userSelectStmt = $this->createMock(\PDOStatement::class);
+
+        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $pdo->expects($this->never())->method('commit');
+        $pdo->expects($this->once())->method('rollBack')->willReturn(true);
+        $pdo->expects($this->once())
+            ->method('prepare')
+            ->with($this->stringContains('FOR UPDATE'))
+            ->willReturn($userSelectStmt);
+
+        $userSelectStmt->expects($this->once())
+            ->method('execute')
+            ->with([7])
+            ->willReturn(true);
+        $userSelectStmt->expects($this->once())
+            ->method('fetchAll')
+            ->with(\PDO::FETCH_ASSOC)
+            ->willReturn([
+                ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
+            ]);
+
+        $logger = $this->createMock(LoggerInterface::class);
+        $model = new Avatar($pdo, $logger);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('DEFAULT_AVATAR_REQUIRED');
+
+        $model->updateAvatarAndReassignUsers(7, ['is_active' => false], null);
     }
 
     public function testCreateAvatarRejectsInvalidNonEmptyNumericStrings(): void
