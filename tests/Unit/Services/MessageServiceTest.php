@@ -162,6 +162,30 @@ class MessageServiceTest extends TestCase
         $this->assertSame(NotificationPreferenceService::CATEGORY_SYSTEM, $notification['category']);
     }
 
+    public function testNotificationMessagesUseSystemEmailPreferenceCategory(): void
+    {
+        $logger = $this->createMock(Logger::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $emailStub = new MessageServiceEmailStub();
+        $service = new MessageService($logger, $audit, $emailStub);
+
+        $user = new User(['id' => 84, 'username' => 'avatar-user', 'email' => 'avatar@example.com']);
+        $service->setUserResolver(static function (int $userId) use ($user): ?User {
+            return $userId === 84 ? $user : null;
+        });
+
+        $reflection = new \ReflectionClass($service);
+        $method = $reflection->getMethod('maybeSendLinkedEmail');
+        $method->setAccessible(true);
+        $method->invoke($service, 84, 'Selected avatar unavailable', 'Avatar fallback body', Message::TYPE_NOTIFICATION, Message::PRIORITY_NORMAL);
+
+        $this->assertCount(1, $emailStub->messageNotifications);
+        $notification = $emailStub->messageNotifications[0];
+        $this->assertSame('avatar@example.com', $notification['toEmail']);
+        $this->assertSame('Selected avatar unavailable', $notification['subject']);
+        $this->assertSame(NotificationPreferenceService::CATEGORY_SYSTEM, $notification['category']);
+    }
+
     public function testMaybeSendLinkedEmailSkipsWhenResolverReturnsNull(): void
     {
         $logger = $this->createMock(Logger::class);
