@@ -325,12 +325,13 @@ class Avatar
      */
     private function lockUsersAssignedToAvatar(int $avatarId): array
     {
+        $lockClause = $this->rowLockClause();
         $stmt = $this->db->prepare("
             SELECT id, username, email
             FROM users
             WHERE avatar_id = ? AND deleted_at IS NULL
             ORDER BY id ASC
-            FOR UPDATE
+            {$lockClause}
         ");
         $stmt->execute([$avatarId]);
 
@@ -357,13 +358,24 @@ class Avatar
             $params[] = $fallbackAvatarId;
         }
 
-        $sql .= " ORDER BY sort_order ASC, id ASC LIMIT 1 FOR UPDATE";
+        $sql .= " ORDER BY sort_order ASC, id ASC LIMIT 1" . $this->rowLockClause();
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         $fallbackAvatar = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return is_array($fallbackAvatar) ? $fallbackAvatar : null;
+    }
+
+    private function rowLockClause(): string
+    {
+        try {
+            $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+        } catch (\Throwable) {
+            return '';
+        }
+
+        return in_array($driver, ['mysql', 'pgsql'], true) ? ' FOR UPDATE' : '';
     }
 
     /**
