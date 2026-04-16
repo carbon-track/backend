@@ -412,6 +412,52 @@ class AvatarControllerTest extends TestCase
         $this->assertSame('Default avatar must remain active', $payload['message']);
     }
 
+    public function testUpdateAvatarSucceedsWhenOptionalAuditAndLoggerAreMissing(): void
+    {
+        $avatarModel = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => 1]);
+        $avatarModel->expects($this->exactly(2))
+            ->method('getAvatarById')
+            ->with(5)
+            ->willReturnOnConsecutiveCalls(
+                [
+                    'id' => 5,
+                    'name' => 'Leaf',
+                    'file_path' => '/avatars/leaf.png',
+                    'is_default' => 0,
+                    'is_active' => 1,
+                ],
+                [
+                    'id' => 5,
+                    'name' => 'Leaf Prime',
+                    'file_path' => '/avatars/leaf.png',
+                    'is_default' => 0,
+                    'is_active' => 1,
+                ]
+            );
+        $avatarModel->expects($this->once())
+            ->method('updateAvatar')
+            ->with(5, ['name' => 'Leaf Prime'])
+            ->willReturn(true);
+
+        /** @var \CarbonTrack\Models\Avatar $avatarModel */
+        /** @var \CarbonTrack\Services\AuthService $auth */
+        $controller = new AvatarController($avatarModel, $auth);
+
+        $response = $controller->updateAvatar(
+            makeRequest('PUT', '/admin/avatars/5', ['name' => 'Leaf Prime']),
+            new \Slim\Psr7\Response(),
+            ['id' => 5]
+        );
+
+        $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['success']);
+        $this->assertSame('Leaf Prime', $payload['data']['name']);
+    }
+
     public function testUpdateAvatarDisablesAvatarReassignsUsersAndSendsNotifications(): void
     {
         $avatarModel = $this->createMock(\CarbonTrack\Models\Avatar::class);

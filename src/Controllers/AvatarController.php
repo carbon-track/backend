@@ -396,46 +396,52 @@ class AvatarController
                     $request
                 );
 
-                $this->auditLogService->log([
-                    'user_id' => $user['id'],
-                    'action' => 'avatar_users_reassigned_to_default',
-                    'entity_type' => 'avatar',
-                    'entity_id' => $avatarId,
-                    'new_value' => json_encode([
-                        'fallback_avatar_id' => (int) $fallbackAvatar['id'],
-                        'fallback_avatar_name' => $fallbackAvatar['name'] ?? null,
-                        'affected_user_ids' => array_map(
-                            static fn (array $entry): int => (int) ($entry['id'] ?? 0),
-                            $affectedUsers
-                        ),
-                        'notified_count' => $notificationSummary['notified_count'],
-                        'notification_failures' => $notificationSummary['failed_user_ids'],
-                    ], JSON_UNESCAPED_UNICODE),
-                    'notes' => 'Users were reassigned to the default avatar after avatar deactivation'
-                ]);
+                if ($this->auditLogService !== null) {
+                    $this->auditLogService->log([
+                        'user_id' => $user['id'],
+                        'action' => 'avatar_users_reassigned_to_default',
+                        'entity_type' => 'avatar',
+                        'entity_id' => $avatarId,
+                        'new_value' => json_encode([
+                            'fallback_avatar_id' => (int) $fallbackAvatar['id'],
+                            'fallback_avatar_name' => $fallbackAvatar['name'] ?? null,
+                            'affected_user_ids' => array_map(
+                                static fn (array $entry): int => (int) ($entry['id'] ?? 0),
+                                $affectedUsers
+                            ),
+                            'notified_count' => $notificationSummary['notified_count'],
+                            'notification_failures' => $notificationSummary['failed_user_ids'],
+                        ], JSON_UNESCAPED_UNICODE),
+                        'notes' => 'Users were reassigned to the default avatar after avatar deactivation'
+                    ]);
+                }
             }
 
             // 记录审计日志
-            $this->auditLogService->log([
-                'user_id' => $user['id'],
-                'action' => 'avatar_updated',
-                'entity_type' => 'avatar',
-                'entity_id' => $avatarId,
-                'old_value' => json_encode($existingAvatar),
-                'new_value' => json_encode(array_merge($updateData, [
-                    'fallback_avatar_id' => $fallbackAvatar['id'] ?? null,
-                    'reassigned_user_count' => is_array($affectedUsers) ? count($affectedUsers) : 0,
-                ]), JSON_UNESCAPED_UNICODE),
-                'notes' => 'Avatar updated by admin'
-            ]);
+            if ($this->auditLogService !== null) {
+                $this->auditLogService->log([
+                    'user_id' => $user['id'],
+                    'action' => 'avatar_updated',
+                    'entity_type' => 'avatar',
+                    'entity_id' => $avatarId,
+                    'old_value' => json_encode($existingAvatar),
+                    'new_value' => json_encode(array_merge($updateData, [
+                        'fallback_avatar_id' => $fallbackAvatar['id'] ?? null,
+                        'reassigned_user_count' => is_array($affectedUsers) ? count($affectedUsers) : 0,
+                    ]), JSON_UNESCAPED_UNICODE),
+                    'notes' => 'Avatar updated by admin'
+                ]);
+            }
 
-            $this->logger->info('Avatar updated', [
-                'avatar_id' => $avatarId,
-                'admin_id' => $user['id'],
-                'updated_fields' => array_keys($updateData),
-                'reassigned_user_count' => is_array($affectedUsers) ? count($affectedUsers) : 0,
-                'notification_failures' => $notificationSummary['failed_user_ids'] ?? [],
-            ]);
+            if ($this->logger !== null) {
+                $this->logger->info('Avatar updated', [
+                    'avatar_id' => $avatarId,
+                    'admin_id' => $user['id'],
+                    'updated_fields' => array_keys($updateData),
+                    'reassigned_user_count' => is_array($affectedUsers) ? count($affectedUsers) : 0,
+                    'notification_failures' => $notificationSummary['failed_user_ids'] ?? [],
+                ]);
+            }
 
             // 获取更新后的头像信息
             $updatedAvatar = $this->avatarModel->getAvatarById($avatarId);
@@ -455,13 +461,17 @@ class AvatarController
                 'code' => $this->avatarValidationErrorCode($e),
             ], 400);
         } catch (\Exception $e) {
-            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
-            $this->logger->error('Update avatar failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'avatar_id' => $args['id'] ?? null,
-                'admin_id' => $user['id'] ?? null
-            ]);
+            if ($this->errorLogService !== null) {
+                try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) {}
+            }
+            if ($this->logger !== null) {
+                $this->logger->error('Update avatar failed', [
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                    'avatar_id' => $args['id'] ?? null,
+                    'admin_id' => $user['id'] ?? null
+                ]);
+            }
 
             return $this->jsonResponse($response, [
                 'success' => false,
