@@ -2279,6 +2279,16 @@
               }
             }
           },
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "创建头像失败。",
             "content": {
@@ -2457,6 +2467,16 @@
           },
           "409": {
             "description": "尝试停用正在被使用的头像，但系统中没有可回退的启用默认头像。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
             "content": {
               "application/json": {
                 "schema": {

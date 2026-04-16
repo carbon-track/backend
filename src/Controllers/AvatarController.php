@@ -217,6 +217,10 @@ class AvatarController
             // 验证文件路径是否存在（如果是R2路径）
             if (strpos($data['file_path'], '/avatars/') === 0) {
                 $filePath = ltrim($data['file_path'], '/');
+                if ($this->r2Service === null) {
+                    return $this->avatarStorageUnavailableResponse($response);
+                }
+
                 if (!$this->r2Service->fileExists($filePath)) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -321,6 +325,10 @@ class AvatarController
             // 验证文件路径是否存在（如果提供了新的文件路径）
             if (!empty($data['file_path']) && strpos($data['file_path'], '/avatars/') === 0) {
                 $filePath = ltrim($data['file_path'], '/');
+                if ($this->r2Service === null) {
+                    return $this->avatarStorageUnavailableResponse($response);
+                }
+
                 if (!$this->r2Service->fileExists($filePath)) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -1020,6 +1028,19 @@ class AvatarController
         }
 
         return 'VALIDATION_ERROR';
+    }
+
+    private function avatarStorageUnavailableResponse(Response $response): Response
+    {
+        if ($this->logger !== null) {
+            $this->logger->error('Avatar storage service is unavailable');
+        }
+
+        return $this->jsonResponse($response, [
+            'success' => false,
+            'message' => 'Avatar storage service is unavailable',
+            'code' => 'AVATAR_STORAGE_UNAVAILABLE',
+        ], 503);
     }
 
     /**
