@@ -452,6 +452,96 @@ class SupportTicketServiceTest extends TestCase
         $this->assertNull($ticketRow->closed_at);
     }
 
+    public function testSupportReplyCanResolveTicketWithFinalStatusNotification(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'notification_email_mask' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 53,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Reply and resolve',
+            'category' => 'account',
+            'status' => 'in_progress',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'pending',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $messages = $this->createMock(MessageService::class);
+        $messages->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with(
+                (int) $requester->id,
+                'Support replied to your ticket',
+                $this->stringContains('Status: Resolved'),
+                'message',
+                'normal',
+                'support_ticket',
+                53,
+                false
+            );
+
+        $email = $this->createMock(EmailService::class);
+        $email->expects($this->once())
+            ->method('sendSupportTicketNotification')
+            ->with(
+                'requester@example.com',
+                'requester',
+                'Support replied to ticket #53',
+                $this->callback(function (array $payload): bool {
+                    return ($payload['summary'] ?? null) === 'We posted a new reply and marked the ticket as resolved.'
+                        && in_array(['label' => 'Status', 'value' => 'Resolved'], $payload['details'] ?? [], true)
+                        && ($payload['message']['body'] ?? null) === 'All set now';
+                }),
+                NotificationPreferenceService::CATEGORY_MESSAGE,
+                'normal'
+            )
+            ->willReturn(true);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('log')->willReturn(true);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class),
+            $email,
+            $messages
+        );
+
+        $result = $service->addSupportMessage(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            53,
+            ['content' => 'All set now', 'status' => 'resolved']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 53)->first();
+
+        $this->assertSame('resolved', $result['status']);
+        $this->assertSame('resolved', $ticketRow->status);
+        $this->assertSame('resolved', $ticketRow->sla_status);
+        $this->assertNotNull($ticketRow->resolved_at);
+    }
+
     public function testUpdateTicketFromSupportSendsUserSupportNotification(): void
     {
         $now = date('Y-m-d H:i:s');

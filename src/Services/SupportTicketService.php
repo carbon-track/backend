@@ -399,8 +399,13 @@ class SupportTicketService
                 'body' => $body,
             ]);
             $this->attachFiles($ticketId, (int) $message->id, $attachments, (int) $actor['id'], true);
+            $targetStatus = self::STATUS_WAITING_USER;
+            if (array_key_exists('status', $payload) && $payload['status'] !== null && $payload['status'] !== '') {
+                $targetStatus = $this->normalizeStatus($payload['status']);
+            }
+
             $updates = [
-                'status' => self::STATUS_WAITING_USER,
+                'status' => $targetStatus,
                 'last_replied_at' => $now,
                 'last_reply_by_role' => $senderRole,
                 'updated_at' => $now,
@@ -409,14 +414,21 @@ class SupportTicketService
                 || (string) ($ticket['sla_status'] ?? 'pending') === 'resolved'
                 || !empty($ticket['resolved_at'])
                 || !empty($ticket['closed_at']);
-            if ($reopenedTicket) {
+            if ($targetStatus === self::STATUS_RESOLVED) {
+                $updates['resolved_at'] = $now;
+                $updates['closed_at'] = null;
+                $updates['sla_status'] = 'resolved';
+            } elseif ($targetStatus === self::STATUS_CLOSED) {
+                $updates['closed_at'] = $now;
+                $updates['sla_status'] = 'resolved';
+            } elseif ($reopenedTicket) {
                 $updates['resolved_at'] = null;
                 $updates['closed_at'] = null;
             }
             if (empty($ticket['first_support_response_at'])) {
                 $updates['first_support_response_at'] = $now;
             }
-            if ($reopenedTicket) {
+            if ($reopenedTicket && !in_array($targetStatus, [self::STATUS_RESOLVED, self::STATUS_CLOSED], true)) {
                 $updates['sla_status'] = 'pending';
             }
             $this->updateTicket($ticketId, $updates);
@@ -433,10 +445,7 @@ class SupportTicketService
                 'data' => ['ticket_id' => $ticketId, 'attachment_count' => count($attachments)],
             ]);
 
-            $emailTicket = $ticket;
-            $emailTicket['status'] = self::STATUS_WAITING_USER;
-            $emailTicket['priority'] = $updates['priority'] ?? ($ticket['priority'] ?? 'normal');
-            $emailTicket['last_reply_by_role'] = $senderRole;
+            $emailTicket = $this->applyTicketUpdatesToSnapshot($ticket, $updates);
             $this->notifyUserReply($emailTicket, $body, $ticketId);
             return $this->getTicketDetailForSupport($actor, $ticketId);
         } catch (\Throwable $e) {
@@ -1541,7 +1550,8 @@ class SupportTicketService
     private function notifyUserReply(array $ticket, string $body, int $ticketId): void
     {
         $userId = (int) ($ticket['user_id'] ?? 0);
-        $messageBody = "Your support ticket has a new reply.\n\n" . $body;
+        $statusLabel = $this->formatTicketStatusLabel((string) ($ticket['status'] ?? self::STATUS_WAITING_USER));
+        $messageBody = "Your support ticket has a new reply.\n\nStatus: {$statusLabel}\n\n" . $body;
         if ($this->messageService !== null && $userId > 0) {
             try {
                 $this->messageService->sendSystemMessage($userId, 'Support replied to your ticket', $messageBody, 'message', 'normal', 'support_ticket', $ticketId, false);
@@ -1558,7 +1568,7 @@ class SupportTicketService
                     [
                         'eyebrow' => 'Support reply',
                         'intro' => 'Our support team replied to your ticket.',
-                        'summary' => 'We posted a new reply and the ticket is now waiting for your response.',
+                        'summary' => $this->supportReplySummary((string) ($ticket['status'] ?? self::STATUS_WAITING_USER)),
                         'ticket' => [
                             'id' => $ticketId,
                             'subject' => (string) ($ticket['subject'] ?? ''),
@@ -1570,7 +1580,7 @@ class SupportTicketService
                         ],
                         'button_label' => 'View ticket',
                         'button_path' => $this->ticketEmailPath($ticketId, false),
-                        'closing' => 'Reply in CarbonTrack whenever you are ready so we can keep the thread moving.',
+                        'closing' => $this->supportReplyClosing((string) ($ticket['status'] ?? self::STATUS_WAITING_USER)),
                     ],
                     NotificationPreferenceService::CATEGORY_MESSAGE,
                     'normal'
@@ -1579,6 +1589,25 @@ class SupportTicketService
                 $this->logger->warning('Failed to send support reply email', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
             }
         }
+    }
+
+    private function supportReplySummary(string $status): string
+    {
+        return match ($status) {
+            self::STATUS_RESOLVED => 'We posted a new reply and marked the ticket as resolved.',
+            self::STATUS_CLOSED => 'We posted a new reply and closed the ticket.',
+            self::STATUS_IN_PROGRESS => 'We posted a new reply and kept the ticket in progress.',
+            self::STATUS_OPEN => 'We posted a new reply and kept the ticket open.',
+            default => 'We posted a new reply and the ticket is now waiting for your response.',
+        };
+    }
+
+    private function supportReplyClosing(string $status): string
+    {
+        return match ($status) {
+            self::STATUS_RESOLVED, self::STATUS_CLOSED => 'If anything is still unclear, open CarbonTrack to review the thread and follow up.',
+            default => 'Reply in CarbonTrack whenever you are ready so we can keep the thread moving.',
+        };
     }
 
     private function notifyUserTicketUpdated(array $ticket, array $updates, int $ticketId, ?array $updatedTicket = null): void

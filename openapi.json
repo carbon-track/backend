@@ -28165,6 +28165,17 @@
             },
             "description": "已上传附件的 file_path 列表。"
           },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "waiting_user",
+              "resolved",
+              "closed"
+            ],
+            "description": "客服端回复可选。用于在同一请求中追加回复并设置最终工单状态，例如发送回复并标记为 resolved，避免先发 waiting_user 再发 workflow update。用户端回复会忽略该字段。"
+          },
           "cf_turnstile_response": {
             "type": "string",
             "description": "用户回复时必填；客服端回复不需要提供。"
