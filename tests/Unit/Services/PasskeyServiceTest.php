@@ -13,6 +13,7 @@ use CarbonTrack\Services\PasskeyConfig;
 use CarbonTrack\Services\PasskeyOperationException;
 use CarbonTrack\Services\PasskeyService;
 use CarbonTrack\Services\RegionService;
+use CarbonTrack\Services\Webauthn\Base64Url;
 use CarbonTrack\Services\WebauthnProviderInterface;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use Monolog\Logger;
@@ -148,6 +149,42 @@ class PasskeyServiceTest extends TestCase
         $publicKey = json_decode((string) $stored['public_key'], true);
         $this->assertSame('EC2', $publicKey['kty']);
         $this->assertSame(-7, $publicKey['alg']);
+    }
+
+    public function testCompleteRegistrationPadsShortEcCoordinates(): void
+    {
+        $registration = $this->service->beginRegistration($this->userFixture(), [
+            'label' => 'Short Coordinate Key',
+        ]);
+        $x = hex2bin('0067dce7466434824f4420e0530a34ecb456c905c171ea359439c33dfb2b2805');
+        $y = hex2bin('c9840e9bc590f5b5a8c5c5f7a1fb85229eb0b84120d1d56bb156e9ad3c56229b');
+        $this->assertIsString($x);
+        $this->assertIsString($y);
+        $shortX = substr($x, 1);
+        $credentialIdBytes = 'credential-short-coordinate-1';
+
+        $result = $this->service->completeRegistration($this->userFixture(), [
+            'challenge_id' => $registration['challenge_id'],
+            'credential' => $this->buildRegistrationCredential(
+                $registration['public_key']['challenge'],
+                'https://app.example.test',
+                $shortX,
+                $y,
+                $credentialIdBytes
+            ),
+        ]);
+
+        $stored = $this->pdo->query('SELECT public_key FROM user_passkeys WHERE credential_id = "' . $result['credential_id'] . '"')->fetch(PDO::FETCH_ASSOC);
+        $this->assertIsArray($stored);
+        $publicKey = json_decode((string) $stored['public_key'], true);
+        $this->assertSame($x, Base64Url::decode((string) $publicKey['x']));
+        $this->assertSame($y, Base64Url::decode((string) $publicKey['y']));
+
+        $parsedKey = openssl_pkey_get_public((string) $publicKey['pem']);
+        $this->assertNotFalse($parsedKey);
+        $details = openssl_pkey_get_details($parsedKey);
+        $this->assertIsArray($details);
+        $this->assertSame(OPENSSL_KEYTYPE_EC, $details['type']);
     }
 
     public function testCompleteAuthenticationVerifiesAssertionAndUpdatesCounter(): void
@@ -729,6 +766,6 @@ class PasskeyServiceTest extends TestCase
 
     private function base64UrlEncode(string $value): string
     {
-        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+        return Base64Url::encode($value);
     }
 }
