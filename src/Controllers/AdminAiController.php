@@ -190,19 +190,32 @@ class AdminAiController
 
             @ini_set('zlib.output_compression', '0');
             @ini_set('implicit_flush', '1');
-            while (ob_get_level() > 0) {
-                @ob_end_flush();
+            if (PHP_SAPI !== 'cli') {
+                while (ob_get_level() > 0) {
+                    @ob_end_flush();
+                }
+                ob_implicit_flush(true);
             }
-            ob_implicit_flush(true);
             @set_time_limit(300);
 
-            $streamResponse = new \Slim\Psr7\Response(200, [], new \Slim\Psr7\NonBufferedBody());
-            $streamResponse = $streamResponse
-                ->withHeader('Content-Type', 'text/event-stream; charset=utf-8')
-                ->withHeader('Cache-Control', 'no-cache, no-transform')
-                ->withHeader('Connection', 'keep-alive')
-                ->withHeader('X-Accel-Buffering', 'no')
-                ->withHeader('X-Content-Type-Options', 'nosniff');
+            $streamHeaders = [
+                'Content-Type' => 'text/event-stream; charset=utf-8',
+                'Cache-Control' => 'no-cache, no-transform',
+                'Connection' => 'keep-alive',
+                'X-Accel-Buffering' => 'no',
+                'X-Content-Type-Options' => 'nosniff',
+            ];
+            $streamResponse = new \Slim\Psr7\Response(
+                200,
+                new \Slim\Psr7\Headers($streamHeaders, []),
+                new \Slim\Psr7\NonBufferedBody()
+            );
+            if (PHP_SAPI !== 'cli' && !headers_sent()) {
+                // streamChat writes before Slim's emitter runs, so SSE headers must be sent first.
+                foreach ($streamResponse->getHeaders() as $name => $values) {
+                    header($name . ': ' . implode(', ', $values), true);
+                }
+            }
             $body = $streamResponse->getBody();
 
             $emit = static function (string $event, array $payload) use ($body): void {
