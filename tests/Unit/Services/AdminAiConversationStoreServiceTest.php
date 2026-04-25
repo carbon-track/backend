@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
@@ -124,5 +125,56 @@ class AdminAiConversationStoreServiceTest extends TestCase
         $this->assertSame('waiting_confirmation', $filtered[0]['status']);
         $this->assertSame(1, $filtered[0]['pending_action_count']);
         $this->assertSame('gpt-5.4', $filtered[0]['last_model']);
+    }
+
+    public function testRunStepsPersistHighPrecisionDuration(): void
+    {
+        $pdo = $this->makePdo();
+        $service = new AdminAiConversationStoreService($pdo, new NullLogger());
+        $conversationId = 'admin-ai-store-steps-1';
+
+        $service->startRun('run-steps-1', $conversationId, [
+            'actor_id' => 7,
+            'source' => '/admin/ai/chat/stream',
+        ], 'read_only_auto');
+        $service->startRunStep('run-steps-1', 'step-1', 1, 'tool', 'get_user_overview', ['limit' => 1]);
+        usleep(20000);
+        $service->finishRunStep('run-steps-1', 'step-1', 'success', ['ok' => true]);
+
+        $row = $pdo->query("SELECT duration_ms, started_at, finished_at FROM admin_ai_steps WHERE step_id = 'step-1'")
+            ->fetch(PDO::FETCH_ASSOC);
+
+        $this->assertIsArray($row);
+        $this->assertGreaterThan(0, (float) $row['duration_ms']);
+        $this->assertLessThan(1000, (float) $row['duration_ms']);
+        $this->assertNotEmpty($row['started_at']);
+        $this->assertNotEmpty($row['finished_at']);
+    }
+
+    public function testRunPersistenceFailuresArePersistedToErrorLog(): void
+    {
+        $pdo = $this->makePdo();
+        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $service = new AdminAiConversationStoreService($pdo, new NullLogger(), null, $errorLogService);
+        $conversationId = 'admin-ai-store-error-1';
+
+        $service->startRun('run-error-1', $conversationId, [
+            'actor_id' => 7,
+            'request_id' => 'req-run-error-1',
+            'source' => '/admin/ai/chat/stream',
+        ], 'read_only_auto');
+        $service->startRun('run-error-1', $conversationId, [
+            'actor_id' => 7,
+            'request_id' => 'req-run-error-1',
+            'source' => '/admin/ai/chat/stream',
+        ], 'read_only_auto');
+
+        $row = $pdo->query("SELECT error_type, request_id, client_server FROM error_logs ORDER BY id DESC LIMIT 1")
+            ->fetch(PDO::FETCH_ASSOC);
+
+        $this->assertIsArray($row);
+        $this->assertSame('PDOException', $row['error_type']);
+        $this->assertSame('req-run-error-1', $row['request_id']);
+        $this->assertStringContainsString('admin_ai_run_start_failed', (string) $row['client_server']);
     }
 }

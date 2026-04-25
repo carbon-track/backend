@@ -1925,8 +1925,28 @@
               }
             }
           },
+          "500": {
+            "description": "管理员 AI 会话处理失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "AI 服务暂时不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "AI 服务处理超时。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1937,6 +1957,104 @@
           }
         },
         "operationId": "adminAiChat"
+      }
+    },
+    "/api/v1/admin/ai/chat/stream": {
+      "post": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "管理员 AI 流式 Agent 会话入口",
+        "description": "以 Server-Sent Events 返回管理员 AI run 生命周期、模型增量、工具调用、审批请求和最终结果。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAiChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream. Events include run.started, assistant.delta, assistant.message, tool.started, tool.result, tool.error, approval.required, approval.resolved, rollback.available, run.finished, and run.error. assistant.message events may include message_i18n for frontend-side localization.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求缺少必要字段或会话参数无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "流式会话启动失败或服务端运行异常。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI 服务未配置或暂时不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "AI 服务处理超时；已建立的 SSE 连接也可能以 run.error 事件返回 AI_PROVIDER_TIMEOUT。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiChatStream"
       }
     },
     "/api/v1/admin/ai/conversations": {
@@ -2279,8 +2397,8 @@
               }
             }
           },
-          "503": {
-            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
+          "500": {
+            "description": "创建头像失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2289,8 +2407,8 @@
               }
             }
           },
-          "500": {
-            "description": "创建头像失败。",
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2475,8 +2593,8 @@
               }
             }
           },
-          "503": {
-            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
+          "500": {
+            "description": "更新头像失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2485,8 +2603,8 @@
               }
             }
           },
-          "500": {
-            "description": "更新头像失败。",
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
             "content": {
               "application/json": {
                 "schema": {
@@ -24427,8 +24545,54 @@
             "type": "string",
             "enum": [
               "confirm",
-              "reject"
+              "reject",
+              "rollback"
             ]
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/AdminAiRollbackDescriptor"
+          }
+        }
+      },
+      "AdminAiRollbackDescriptor": {
+        "type": "object",
+        "properties": {
+          "source_proposal_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action_name": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "requires_confirmation": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_i18n": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       },
@@ -24438,6 +24602,10 @@
           "conversation_id": {
             "type": "string"
           },
+          "run_id": {
+            "type": "string",
+            "description": "Present for streamed agent runs."
+          },
           "message": {
             "type": "string"
           },
@@ -24446,7 +24614,17 @@
           },
           "context": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "properties": {
+              "autonomyMode": {
+                "type": "string",
+                "enum": [
+                  "read_only_auto",
+                  "low_risk_auto",
+                  "full_auto"
+                ]
+              }
+            }
           },
           "decision": {
             "$ref": "#/components/schemas/AdminAiDecision"
@@ -24861,8 +25039,32 @@
             "items": {
               "$ref": "#/components/schemas/AdminAiPendingAction"
             }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiRun"
+            }
           }
         }
+      },
+      "AdminAiI18nMessage": {
+        "type": "object",
+        "required": [
+          "key",
+          "values"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "admin.aiWorkspace.messages.rollbackConfirmationGenerated"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
       },
       "AdminAiChatResponse": {
         "type": "object",
@@ -24875,6 +25077,17 @@
           },
           "message": {
             "type": "string"
+          },
+          "message_i18n": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdminAiI18nMessage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional i18n key/value payload. Frontend clients should translate this when present; the message field remains a compatibility string and may contain the same i18n key."
           },
           "metadata": {
             "type": "object",
@@ -27423,6 +27636,42 @@
           "requires_confirmation": {
             "type": "boolean"
           },
+          "approval_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "autonomy_min_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "read_only_auto",
+              "low_risk_auto",
+              "full_auto",
+              null
+            ]
+          },
+          "rollback_strategy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_window_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "side_effects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "context_hints": {
             "type": "array",
             "items": {
@@ -29082,19 +29331,19 @@
           "task_name": {
             "type": "string"
           },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "is_registered": {
-          "type": "boolean",
-          "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
-        },
-        "interval_minutes": {
-          "type": "integer"
-        },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_registered": {
+            "type": "boolean",
+            "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
+          },
+          "interval_minutes": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -29399,6 +29648,179 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "AdminAiRunStep": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "output": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminAiRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "admin_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "autonomy_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "read_only_auto",
+              "low_risk_auto",
+              "full_auto",
+              null
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiRunStep"
+            }
           }
         }
       }

@@ -50,11 +50,13 @@ class AdminAiReadModelServiceTest extends TestCase
     {
         $pdo = $this->makePdo();
         $activityId = '550e8400-e29b-41d4-a716-446655440201';
+        $today = gmdate('Y-m-d');
+        $now = gmdate('Y-m-d H:i:s');
         $llmCreatedAt = gmdate('Y-m-d H:i:s');
         $pdo->exec("INSERT INTO users (id, uuid, username, email, status, is_admin, points) VALUES
             (103, '550e8400-e29b-41d4-a716-446655440203', 'review_target', 'review@example.com', 'active', 0, 18)");
         $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned, created_at) VALUES
-            ('rec-report-1', 103, '{$activityId}', 'pending', '2026-03-22', 2.5, 5, '2026-03-22 08:00:00')");
+            ('rec-report-1', 103, '{$activityId}', 'pending', '{$today}', 2.5, 5, '{$now}')");
         $pdo->exec("INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, latency_ms, created_at)
             VALUES ('req-report-1', 'admin', 1, 'admin-ai-report-1', 1, '/admin/ai/chat', 'test-model', 'prompt', 'response', 'success', 321, 180, '{$llmCreatedAt}')");
 

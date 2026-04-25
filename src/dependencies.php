@@ -56,6 +56,7 @@ use CarbonTrack\Services\AdminAiAgentService;
 use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\AdminAiReadModelService;
 use CarbonTrack\Services\AdminAiResultFormatterService;
+use CarbonTrack\Services\AdminAiRollbackService;
 use CarbonTrack\Services\AdminAiWriteActionService;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
@@ -353,10 +354,52 @@ $__deps_initializer = function (Container $container) {
                 return $response->withBody(Utils::streamFor($stream))->withoutHeader('Content-Length');
             }));
 
+            $timeout = isset($_ENV['LLM_TIMEOUT_SECONDS']) && is_numeric((string) $_ENV['LLM_TIMEOUT_SECONDS'])
+                ? max(10, (int) $_ENV['LLM_TIMEOUT_SECONDS'])
+                : 90;
+            $connectTimeout = isset($_ENV['LLM_CONNECT_TIMEOUT_SECONDS']) && is_numeric((string) $_ENV['LLM_CONNECT_TIMEOUT_SECONDS'])
+                ? max(1, (int) $_ENV['LLM_CONNECT_TIMEOUT_SECONDS'])
+                : 10;
+
             $httpClient = new GuzzleClient([
-                'timeout' => 15,
-                'connect_timeout' => 5,
+                'timeout' => $timeout,
+                'connect_timeout' => $connectTimeout,
                 'handler' => $handlerStack,
+            ]);
+            $streamHandlerStack = HandlerStack::create();
+            $streamHandlerStack->push(Middleware::mapResponse(function (ResponseInterface $response) {
+                $headers = array_filter(
+                    array_map(static fn (string $value): string => trim($value), $response->getHeader('x-request-id')),
+                    static fn (string $value): bool => $value !== ''
+                );
+                if ($headers !== []) {
+                    return $response;
+                }
+
+                $requestIdBytes = null;
+                try {
+                    $requestIdBytes = random_bytes(8);
+                } catch (\Throwable) {
+                    $requestIdBytes = null;
+                }
+                if ($requestIdBytes === null && function_exists('openssl_random_pseudo_bytes')) {
+                    try {
+                        $opensslBytes = openssl_random_pseudo_bytes(8);
+                        $requestIdBytes = is_string($opensslBytes) && $opensslBytes !== '' ? $opensslBytes : null;
+                    } catch (\Throwable) {
+                        $requestIdBytes = null;
+                    }
+                }
+                $requestId = $requestIdBytes !== null
+                    ? 'llm-stream-' . bin2hex($requestIdBytes)
+                    : 'llm-stream-' . str_replace('.', '', uniqid('', true));
+
+                return $response->withHeader('x-request-id', $requestId);
+            }));
+            $streamHttpClient = new GuzzleClient([
+                'timeout' => $timeout,
+                'connect_timeout' => $connectTimeout,
+                'handler' => $streamHandlerStack,
             ]);
 
             $factory = $factory->withHttpClient($httpClient);
@@ -382,7 +425,8 @@ $__deps_initializer = function (Container $container) {
             $httpClient,
             $baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1',
             $apiKey,
-            $organization !== '' ? $organization : null
+            $organization !== '' ? $organization : null,
+            $streamHttpClient
         );
     });
 
@@ -466,7 +510,8 @@ $__deps_initializer = function (Container $container) {
         return new AdminAiConversationStoreService(
             $c->get(PDO::class),
             $c->get(LoggerInterface::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -482,6 +527,10 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminAiResultFormatterService::class, function () {
         return new AdminAiResultFormatterService();
+    });
+
+    $container->set(AdminAiRollbackService::class, function () {
+        return new AdminAiRollbackService();
     });
 
     $container->set(UserAiService::class, function (ContainerInterface $c) {
@@ -623,7 +672,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AdminAiReadModelService::class),
             $c->get(AdminAiWriteActionService::class),
             $c->get(AdminAiConversationStoreService::class),
-            $c->get(AdminAiResultFormatterService::class)
+            $c->get(AdminAiResultFormatterService::class),
+            $c->get(AdminAiRollbackService::class)
         );
     });
 

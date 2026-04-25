@@ -3,6 +3,7 @@
     "max_history_messages": 12,
     "default_confirmation_policy": "write_requires_confirmation",
     "max_auto_read_steps": 1,
+    "max_run_steps": 6,
     "systemBehavior": [
       "Use tools for navigation, analytics, approvals, and audit-friendly admin work.",
       "Ask follow-up questions when required fields are missing.",
@@ -460,7 +461,12 @@
         "dashboard stats",
         "后台统计",
         "总览数据"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_pending_carbon_records",
@@ -490,7 +496,12 @@
         "碳记录列表",
         "待审批",
         "待处理碳记录"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_llm_usage_analytics",
@@ -512,7 +523,12 @@
         "ai usage analytics",
         "会话统计",
         "token 趋势"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_activity_statistics",
@@ -533,7 +549,12 @@
         "activity statistics",
         "活动统计",
         "碳活动排行"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "generate_admin_report",
@@ -556,7 +577,12 @@
         "日报",
         "周报",
         "总结"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "approve_carbon_records",
@@ -587,6 +613,15 @@
         "approve carbon records",
         "批量通过碳记录",
         "通过这些碳记录"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "conditional_snapshot_compensation",
+      "rollback_window_minutes": 15,
+      "side_effects": [
+        "database_write",
+        "points_adjustment",
+        "notification_possible"
       ]
     },
     {
@@ -618,6 +653,15 @@
         "reject carbon records",
         "批量驳回碳记录",
         "驳回这些碳记录"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "conditional_snapshot_compensation",
+      "rollback_window_minutes": 15,
+      "side_effects": [
+        "database_write",
+        "points_adjustment",
+        "notification_possible"
       ]
     },
     {
@@ -647,7 +691,12 @@
         "查用户",
         "搜索用户",
         "用户列表"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_user_overview",
@@ -681,7 +730,12 @@
         "用户概览",
         "用户详情",
         "账号画像"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "adjust_user_points",
@@ -719,6 +773,13 @@
         "调整积分",
         "补积分",
         "扣积分"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -755,6 +816,14 @@
         "新增用户",
         "创建用户",
         "添加账号"
+      ],
+      "approval_policy": "always_confirm",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "advice_only",
+      "rollback_window_minutes": 0,
+      "side_effects": [
+        "database_write",
+        "notification_possible"
       ]
     },
     {
@@ -795,6 +864,13 @@
         "封禁用户",
         "禁用用户",
         "冻结账号"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -832,6 +908,14 @@
         "发放徽章",
         "授予徽章",
         "给用户发徽章"
+      ],
+      "approval_policy": "always_confirm",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "advice_only",
+      "rollback_window_minutes": 0,
+      "side_effects": [
+        "database_write",
+        "notification_possible"
       ]
     },
     {
@@ -869,6 +953,14 @@
         "撤销徽章",
         "移除徽章",
         "收回徽章"
+      ],
+      "approval_policy": "always_confirm",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "advice_only",
+      "rollback_window_minutes": 0,
+      "side_effects": [
+        "database_write",
+        "notification_possible"
       ]
     },
     {
@@ -896,7 +988,12 @@
         "兑换单",
         "兑换订单",
         "待发货"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_exchange_order_detail",
@@ -920,7 +1017,12 @@
         "order detail",
         "兑换单详情",
         "订单详情"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "update_exchange_status",
@@ -950,6 +1052,13 @@
         "更新兑换状态",
         "发货",
         "完成兑换"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -977,7 +1086,12 @@
         "reward store",
         "商品列表",
         "奖励目录"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "update_product_status",
@@ -1006,6 +1120,13 @@
         "商品下架",
         "启用商品",
         "停用商品"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -1043,6 +1164,13 @@
         "补货",
         "扣减库存",
         "设置库存"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -1063,7 +1191,12 @@
         "webauthn stats",
         "通行密钥统计",
         "认证器统计"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_passkey_admin_list",
@@ -1088,7 +1221,12 @@
         "webauthn list",
         "通行密钥列表",
         "认证器列表"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "search_system_logs",
@@ -1119,7 +1257,12 @@
         "trace logs",
         "日志检索",
         "查日志"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_broadcast_history",
@@ -1141,7 +1284,12 @@
         "announcement history",
         "广播历史",
         "公告历史"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "search_broadcast_recipients",
@@ -1165,7 +1313,12 @@
         "recipient search",
         "广播接收人",
         "目标用户"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_cron_tasks",
@@ -1185,7 +1338,12 @@
         "scheduler state",
         "定时任务",
         "调度状态"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "get_cron_runs",
@@ -1209,7 +1367,12 @@
         "scheduler history",
         "任务运行记录",
         "调度历史"
-      ]
+      ],
+      "approval_policy": "never",
+      "autonomy_min_mode": "read_only_auto",
+      "rollback_strategy": "none",
+      "side_effects": [],
+      "rollback_window_minutes": 0
     },
     {
       "name": "update_cron_task",
@@ -1234,6 +1397,13 @@
         "enable cron",
         "修改定时任务",
         "启停cron"
+      ],
+      "approval_policy": "write_requires_confirmation",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "explicit_compensation",
+      "rollback_window_minutes": 30,
+      "side_effects": [
+        "database_write"
       ]
     },
     {
@@ -1258,6 +1428,14 @@
         "trigger cron",
         "执行定时任务",
         "手动跑任务"
+      ],
+      "approval_policy": "always_confirm",
+      "autonomy_min_mode": "full_auto",
+      "rollback_strategy": "advice_only",
+      "rollback_window_minutes": 0,
+      "side_effects": [
+        "database_write",
+        "notification_possible"
       ]
     }
   ]

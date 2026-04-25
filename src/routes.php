@@ -251,6 +251,7 @@ return function (App $app) {
             $admin->get('/logs', [AdminController::class, 'getLogs']);
             $admin->get('/ai/workspace', [AdminAiController::class, 'workspace']);
             $admin->post('/ai/chat', [AdminAiController::class, 'chat']);
+            $admin->post('/ai/chat/stream', [AdminAiController::class, 'chatStream']);
             $admin->get('/ai/conversations', [AdminAiController::class, 'conversations']);
             $admin->get('/ai/conversations/{conversation_id}', [AdminAiController::class, 'conversationDetail']);
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);

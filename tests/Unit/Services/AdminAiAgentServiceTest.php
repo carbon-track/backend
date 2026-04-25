@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\AdminAiAgentService;
+use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\Ai\LlmClientInterface;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\BadgeService;
@@ -346,6 +347,106 @@ class AdminAiAgentServiceTest extends TestCase
 
         $executedCount = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'")->fetchColumn();
         $this->assertSame(1, $executedCount);
+    }
+
+    public function testRollbackDecisionCreatesInlineConfirmationProposal(): void
+    {
+        $pdo = $this->makePdo();
+        $logger = new Logger('test');
+        $auditLogService = new AuditLogService($pdo, $logger);
+        $llmLogService = new LlmLogService($pdo, $logger);
+        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'points_user', 'points@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400c2')");
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'adjust_user_points',
+                    'payload' => [
+                        'user_id' => 2,
+                        'delta' => 5,
+                        'reason' => 'rollback test',
+                    ],
+                ]),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12],
+                'managementActions' => [
+                    [
+                        'name' => 'adjust_user_points',
+                        'label' => 'Adjust user points',
+                        'description' => 'Adjust user points.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id', 'delta', 'reason'],
+                        'contextHints' => [],
+                        'risk_level' => 'write',
+                        'requires_confirmation' => true,
+                        'approval_policy' => 'write_requires_confirmation',
+                        'rollback_strategy' => 'explicit_compensation',
+                        'side_effects' => ['database_write'],
+                        'rollback_window_minutes' => 30,
+                    ],
+                ],
+            ],
+            $llmLogService,
+            $auditLogService,
+            $errorLogService
+        );
+
+        $proposalResult = $service->chat(null, '给用户加 5 分', [], null, [
+            'request_id' => 'req-rollback-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+        $proposalId = (int) $proposalResult['conversation']['pending_actions'][0]['proposal_id'];
+
+        $confirmed = $service->chat(
+            $proposalResult['conversation_id'],
+            null,
+            [],
+            ['proposal_id' => $proposalId, 'outcome' => 'confirm'],
+            [
+                'request_id' => 'req-rollback-2',
+                'actor_type' => 'admin',
+                'actor_id' => 1,
+                'source' => '/admin/ai/chat',
+            ]
+        );
+
+        $rollback = $confirmed['metadata']['rollback_available'] ?? null;
+        $this->assertIsArray($rollback);
+        $this->assertSame('adjust_user_points', $rollback['action_name']);
+        $this->assertSame(-5.0, $rollback['payload']['delta']);
+
+        $rollbackResult = $service->chat(
+            $proposalResult['conversation_id'],
+            null,
+            ['locale' => 'zh'],
+            ['proposal_id' => $proposalId, 'outcome' => 'rollback', 'rollback' => $rollback],
+            [
+                'request_id' => 'req-rollback-3',
+                'actor_type' => 'admin',
+                'actor_id' => 1,
+                'source' => '/admin/ai/chat',
+            ]
+        );
+
+        $this->assertTrue($rollbackResult['success']);
+        $this->assertSame('rollback', $rollbackResult['metadata']['decision']);
+        $this->assertSame('adjust_user_points', $rollbackResult['proposal']['action_name']);
+        $this->assertSame('pending', $rollbackResult['proposal']['status']);
+        $this->assertSame(-5.0, $rollbackResult['proposal']['payload']['delta']);
+        $rollbackEvents = array_values(array_filter(
+            $rollbackResult['conversation']['messages'],
+            static fn (array $message): bool => ($message['action'] ?? null) === 'admin_ai_rollback_proposed'
+        ));
+        $this->assertNotEmpty($rollbackEvents);
+        $this->assertStringContainsString('回滚刚才的 adjust_user_points 操作', (string) $rollbackEvents[0]['content']);
     }
 
     public function testListConversationsSupportsStatusModelDateAndPendingFilters(): void
@@ -955,6 +1056,384 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame(20, (int) $pdo->query("SELECT stock FROM products WHERE id = 5")->fetchColumn());
     }
 
+    public function testStreamChatEmitsRunToolApprovalAndFinishEvents(): void
+    {
+        $pdo = $this->makePdo();
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (2, 'stream_user', 'stream@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c1', 10)");
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'adjust_user_points',
+                    'payload' => [
+                        'user_id' => 2,
+                        'delta' => 5,
+                        'reason' => 'stream test',
+                    ],
+                ]),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12],
+                'managementActions' => [
+                    [
+                        'name' => 'adjust_user_points',
+                        'label' => 'Adjust user points',
+                        'description' => 'Adjust user points.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id', 'delta', 'reason'],
+                        'contextHints' => [],
+                        'risk_level' => 'write',
+                        'requires_confirmation' => true,
+                    ],
+                ],
+            ]
+        );
+
+        $events = [];
+        $result = $service->streamChat(null, 'prepare points adjustment', [], null, [
+            'request_id' => 'req-stream-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat/stream',
+        ], static function (string $event, array $payload) use (&$events): void {
+            $events[] = [$event, $payload];
+        });
+
+        $this->assertTrue($result['success']);
+        $this->assertNotEmpty($result['run_id']);
+        $eventNames = array_map(static fn (array $item): string => $item[0], $events);
+        $this->assertContains('run.started', $eventNames);
+        $this->assertContains('tool.started', $eventNames);
+        $this->assertContains('tool.result', $eventNames);
+        $this->assertContains('approval.required', $eventNames);
+        $this->assertContains('assistant.message', $eventNames);
+        $this->assertSame('run.finished', end($eventNames));
+        $this->assertSame(1, $result['conversation']['summary']['pending_action_count']);
+
+        $proposalId = $result['conversation']['pending_actions'][0]['proposal_id'];
+        $decisionEvents = [];
+        $decisionResult = $service->streamChat(
+            $result['conversation_id'],
+            null,
+            [],
+            ['proposal_id' => $proposalId, 'outcome' => 'confirm'],
+            [
+                'request_id' => 'req-stream-2',
+                'actor_type' => 'admin',
+                'actor_id' => 1,
+                'source' => '/admin/ai/chat/stream',
+            ],
+            static function (string $event, array $payload) use (&$decisionEvents): void {
+                $decisionEvents[] = [$event, $payload];
+            }
+        );
+
+        $decisionEventNames = array_map(static fn (array $item): string => $item[0], $decisionEvents);
+        $this->assertContains('approval.resolved', $decisionEventNames);
+        $this->assertContains('rollback.available', $decisionEventNames);
+        $this->assertSame('adjust_user_points', $decisionResult['metadata']['rollback_available']['action_name']);
+        $this->assertSame(-5.0, $decisionResult['metadata']['rollback_available']['payload']['delta']);
+        $this->assertSame(15, (int) $pdo->query("SELECT points FROM users WHERE id = 2")->fetchColumn());
+        $decisionRuns = $decisionResult['conversation']['runs'];
+        $decisionRun = end($decisionRuns);
+        $this->assertIsArray($decisionRun);
+        $this->assertSame('finished', $decisionRun['status']);
+    }
+
+    public function testStreamChatRejectsInvalidDecisionBeforePersistingRun(): void
+    {
+        $pdo = $this->makePdo();
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            ['agent' => ['max_history_messages' => 12]]
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid decision payload.');
+
+        try {
+            $service->streamChat(
+                'admin-ai-invalid-decision-1',
+                null,
+                [],
+                ['proposal_id' => 0, 'outcome' => 'confirm'],
+                [
+                    'request_id' => 'req-invalid-decision',
+                    'actor_type' => 'admin',
+                    'actor_id' => 1,
+                    'source' => '/admin/ai/chat/stream',
+                ],
+                static function (string $event, array $payload): void {
+                }
+            );
+        } finally {
+            $this->assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM admin_ai_runs')->fetchColumn());
+        }
+    }
+
+    public function testStreamChatRejectsCrossConversationRollbackBeforePersistingRun(): void
+    {
+        $pdo = $this->makePdo();
+        $store = new AdminAiConversationStoreService($pdo, new NullLogger());
+        $proposalId = $store->logConversationEvent('admin_ai_action_proposed', [
+            'request_id' => 'req-source-proposal',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ], [
+            'conversation_id' => 'admin-ai-source-conversation',
+            'visible_text' => 'Adjust user points',
+            'status' => 'success',
+            'action_name' => 'adjust_user_points',
+            'request_data' => [
+                'action_name' => 'adjust_user_points',
+                'payload' => ['user_id' => 2, 'delta' => 5, 'reason' => 'test'],
+            ],
+        ]);
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12],
+                'managementActions' => [
+                    [
+                        'name' => 'adjust_user_points',
+                        'label' => 'Adjust user points',
+                        'description' => 'Adjust user points.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id', 'delta', 'reason'],
+                        'contextHints' => [],
+                        'risk_level' => 'low_write',
+                        'rollback_strategy' => 'explicit_compensation',
+                        'requires_confirmation' => true,
+                    ],
+                ],
+            ]
+        );
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid rollback source proposal.');
+
+        try {
+            $service->streamChat(
+                'admin-ai-other-conversation',
+                null,
+                [],
+                [
+                    'outcome' => 'rollback',
+                    'rollback' => [
+                        'source_proposal_id' => $proposalId,
+                        'source_action' => 'adjust_user_points',
+                        'action_name' => 'adjust_user_points',
+                        'payload' => ['user_id' => 2, 'delta' => -5, 'reason' => 'rollback'],
+                    ],
+                ],
+                [
+                    'request_id' => 'req-cross-conversation-rollback',
+                    'actor_type' => 'admin',
+                    'actor_id' => 1,
+                    'source' => '/admin/ai/chat/stream',
+                ],
+                static function (string $event, array $payload): void {
+                }
+            );
+        } finally {
+            $this->assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM admin_ai_runs')->fetchColumn());
+        }
+    }
+
+    public function testStreamChatPersistsRunStepsAndContinuesAfterReadTool(): void
+    {
+        $pdo = $this->makePdo();
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (3, 'multi_user', 'multi@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c3', 42)");
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'get_user_overview',
+                    'payload' => [
+                        'user_id' => 3,
+                    ],
+                ]),
+                $this->plainTextResponse('用户信息已查询完毕。'),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12, 'max_run_steps' => 4],
+                'managementActions' => [
+                    [
+                        'name' => 'get_user_overview',
+                        'label' => 'Get user overview',
+                        'description' => 'Read user overview.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id'],
+                        'contextHints' => [],
+                        'risk_level' => 'read',
+                        'requires_confirmation' => false,
+                    ],
+                ],
+            ],
+            new LlmLogService($pdo, new Logger('test'))
+        );
+
+        $events = [];
+        $result = $service->streamChat(null, '先查用户再总结', [], null, [
+            'request_id' => 'req-stream-read-loop-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat/stream',
+        ], static function (string $event, array $payload) use (&$events): void {
+            $events[] = [$event, $payload];
+        });
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('用户信息已查询完毕。', $result['message']);
+        $this->assertCount(1, $result['conversation']['runs']);
+        $this->assertSame('finished', $result['conversation']['runs'][0]['status']);
+        $this->assertCount(1, $result['conversation']['runs'][0]['steps']);
+        $this->assertSame('success', $result['conversation']['runs'][0]['steps'][0]['status']);
+        $this->assertSame('manage_admin', $result['conversation']['runs'][0]['steps'][0]['tool_name']);
+        $this->assertSame(2, $result['conversation']['summary']['llm_calls']);
+
+        $eventNames = array_map(static fn (array $item): string => $item[0], $events);
+        $this->assertContains('tool.started', $eventNames);
+        $this->assertContains('tool.result', $eventNames);
+        $this->assertSame('run.finished', end($eventNames));
+
+        $secondService = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'get_user_overview',
+                    'payload' => [
+                        'user_id' => 3,
+                    ],
+                ]),
+                $this->plainTextResponse('用户信息第二次查询完毕。'),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12, 'max_run_steps' => 4],
+                'managementActions' => [
+                    [
+                        'name' => 'get_user_overview',
+                        'label' => 'Get user overview',
+                        'description' => 'Read user overview.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id'],
+                        'contextHints' => [],
+                        'risk_level' => 'read',
+                        'requires_confirmation' => false,
+                    ],
+                ],
+            ],
+            new LlmLogService($pdo, new Logger('test'))
+        );
+
+        $secondResult = $secondService->streamChat($result['conversation_id'], '再查一次', [], null, [
+            'request_id' => 'req-stream-read-loop-2',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat/stream',
+        ]);
+
+        $this->assertTrue($secondResult['success']);
+        $this->assertCount(2, $secondResult['conversation']['runs']);
+        $this->assertSame('success', $secondResult['conversation']['runs'][0]['steps'][0]['status']);
+        $this->assertSame('success', $secondResult['conversation']['runs'][1]['steps'][0]['status']);
+    }
+
+    public function testStreamChatUsesUniqueStepIdsWhenProviderRepeatsToolCallIdsInSameRun(): void
+    {
+        $pdo = $this->makePdo();
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (4, 'repeat_user', 'repeat@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c4', 18)");
+
+        $service = new AdminAiAgentService(
+            $pdo,
+            new QueueLlmClient([
+                $this->toolResponse('manage_admin', [
+                    'action' => 'get_user_overview',
+                    'payload' => [
+                        'user_id' => 4,
+                    ],
+                ]),
+                $this->toolResponse('manage_admin', [
+                    'action' => 'get_user_overview',
+                    'payload' => [
+                        'user_id' => 4,
+                    ],
+                ]),
+                $this->plainTextResponse('两次查询均已完成。'),
+            ]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'agent' => ['max_history_messages' => 12, 'max_run_steps' => 4, 'max_run_tool_executions' => 4],
+                'managementActions' => [
+                    [
+                        'name' => 'get_user_overview',
+                        'label' => 'Get user overview',
+                        'description' => 'Read user overview.',
+                        'api' => ['payloadTemplate' => []],
+                        'requires' => ['user_id'],
+                        'contextHints' => [],
+                        'risk_level' => 'read',
+                        'requires_confirmation' => false,
+                    ],
+                ],
+            ],
+            new LlmLogService($pdo, new Logger('test'))
+        );
+
+        $result = $service->streamChat(null, '连续查两次用户', [], null, [
+            'request_id' => 'req-stream-repeat-tool-id',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat/stream',
+        ]);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('两次查询均已完成。', $result['message']);
+        $steps = $result['conversation']['runs'][0]['steps'];
+        $this->assertCount(2, $steps);
+        $this->assertNotSame($steps[0]['step_id'], $steps[1]['step_id']);
+        $this->assertSame([1, 2], array_map(static fn (array $step): int => (int) $step['sequence'], $steps));
+        $this->assertSame(['success', 'success'], array_column($steps, 'status'));
+    }
+
+    public function testLlmTimeoutIsMappedSeparatelyFromProviderUnavailable(): void
+    {
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            new ThrowingTimeoutLlmClient(),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            [
+                'managementActions' => [],
+            ]
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('LLM_TIMEOUT');
+
+        $service->chat(null, 'long request', [], null, [
+            'request_id' => 'req-timeout-1',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+    }
+
     /**
      * @param array<string,mixed> $arguments
      * @return array<string,mixed>
@@ -1020,5 +1499,13 @@ class QueueLlmClient implements LlmClientInterface
         }
 
         return array_shift($this->responses);
+    }
+}
+
+class ThrowingTimeoutLlmClient implements LlmClientInterface
+{
+    public function createChatCompletion(array $payload): array
+    {
+        throw new \RuntimeException('cURL error 28: Operation timed out after 15000 milliseconds');
     }
 }

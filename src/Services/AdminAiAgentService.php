@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Services\Ai\LlmClientInterface;
+use CarbonTrack\Services\Ai\StreamCapableLlmClientInterface;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use PDO;
 use Psr\Log\LoggerInterface;
@@ -17,6 +18,8 @@ class AdminAiAgentService
         'selectedUserId',
         'locale',
         'timezone',
+        'autonomyMode',
+        'autonomy_mode',
     ];
 
     private string $model;
@@ -40,6 +43,7 @@ class AdminAiAgentService
     private AdminAiReadModelService $readModelService;
     private AdminAiWriteActionService $writeActionService;
     private AdminAiResultFormatterService $resultFormatterService;
+    private AdminAiRollbackService $rollbackService;
 
     public function __construct(
         private PDO $db,
@@ -56,16 +60,23 @@ class AdminAiAgentService
         ?AdminAiReadModelService $readModelService = null,
         ?AdminAiWriteActionService $writeActionService = null,
         ?AdminAiConversationStoreService $conversationStoreService = null,
-        ?AdminAiResultFormatterService $resultFormatterService = null
+        ?AdminAiResultFormatterService $resultFormatterService = null,
+        ?AdminAiRollbackService $rollbackService = null
     ) {
         $this->model = (string) ($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float) $config['temperature'] : 0.2;
         $this->maxTokens = isset($config['max_tokens']) ? (int) $config['max_tokens'] : 900;
         $this->enabled = $client !== null;
-        $this->conversationStoreService = $conversationStoreService ?? new AdminAiConversationStoreService($db, $logger, $this->auditLogService);
+        $this->conversationStoreService = $conversationStoreService ?? new AdminAiConversationStoreService(
+            $db,
+            $logger,
+            $this->auditLogService,
+            $this->errorLogService
+        );
         $this->readModelService = $readModelService ?? new AdminAiReadModelService($db, $this->statisticsService);
         $this->writeActionService = $writeActionService ?? new AdminAiWriteActionService($db, $this->auditLogService, $this->messageService, $this->badgeService);
         $this->resultFormatterService = $resultFormatterService ?? new AdminAiResultFormatterService();
+        $this->rollbackService = $rollbackService ?? new AdminAiRollbackService();
         $this->loadCommandConfig($commandConfig ?? []);
     }
 
@@ -136,7 +147,7 @@ class AdminAiAgentService
                 'message' => $normalizedMessage,
                 'context' => $normalizedContext,
             ]);
-            throw new \RuntimeException('LLM_UNAVAILABLE', 0, $exception);
+            throw $this->buildLlmRuntimeException($exception);
         }
 
         $outcome = $this->processModelResponse($conversationId, $normalizedMessage, $normalizedContext, $logContext, $rawResponse);
@@ -163,6 +174,191 @@ class AdminAiAgentService
             ]),
             'conversation' => $this->getConversationDetail($conversationId),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     * @param array<string,mixed>|null $decision
+     * @param array<string,mixed> $logContext
+     * @param callable(string,array<string,mixed>):void|null $emit
+     * @return array<string,mixed>
+     */
+    public function streamChat(
+        ?string $conversationId,
+        ?string $message,
+        array $context = [],
+        ?array $decision = null,
+        array $logContext = [],
+        ?callable $emit = null
+    ): array {
+        if (!$this->enabled) {
+            throw new \RuntimeException('AI agent service is disabled');
+        }
+
+        $emit ??= static function (string $event, array $payload): void {
+        };
+
+        $normalizedContext = $this->normalizeContext($context);
+        $normalizedMessage = trim((string) ($message ?? ''));
+        $conversationId = $this->normalizeConversationId($conversationId) ?? $this->generateConversationId();
+        $runId = $this->generateRunId();
+        $autonomyMode = $this->normalizeAutonomyMode($context['autonomyMode'] ?? $context['autonomy_mode'] ?? null);
+        $sequence = 0;
+        $emitEvent = function (string $event, array $payload = []) use ($emit, $runId, $conversationId, &$sequence): void {
+            $sequence++;
+            $emit($event, array_merge([
+                'run_id' => $runId,
+                'conversation_id' => $conversationId,
+                'sequence' => $sequence,
+                'timestamp' => gmdate(DATE_ATOM),
+            ], $payload));
+        };
+
+        if ($normalizedMessage === '' && $decision === null) {
+            throw new \InvalidArgumentException('Either message or decision is required.');
+        }
+
+        if ($decision !== null) {
+            $this->assertDecisionCanStart($conversationId, $decision);
+        }
+
+        $this->conversationStoreService->startRun($runId, $conversationId, $logContext, $autonomyMode, [
+            'has_decision' => $decision !== null,
+        ]);
+
+        $emitEvent('run.started', [
+            'source' => $logContext['source'] ?? '/admin/ai/chat/stream',
+            'has_decision' => $decision !== null,
+            'autonomy_mode' => $autonomyMode,
+        ]);
+
+        if ($decision !== null) {
+            $emitEvent('approval.resolved', [
+                'proposal_id' => isset($decision['proposal_id']) ? (int) $decision['proposal_id'] : null,
+                'outcome' => isset($decision['outcome']) ? (string) $decision['outcome'] : null,
+            ]);
+            try {
+                $result = $this->handleDecision($conversationId, $decision, $normalizedContext, array_merge($logContext, [
+                    'run_id' => $runId,
+                ]));
+            } catch (\Throwable $exception) {
+                $this->conversationStoreService->finishRun($runId, 'error', $exception->getMessage(), [
+                    'decision' => $decision,
+                ]);
+                throw $exception;
+            }
+            $rollback = $result['metadata']['rollback_available'] ?? null;
+            if (is_array($rollback)) {
+                $emitEvent('rollback.available', [
+                    'rollback' => $rollback,
+                ]);
+            }
+            $emitEvent('assistant.message', [
+                'content' => (string) ($result['message'] ?? ''),
+                'message_i18n' => $result['message_i18n'] ?? $result['metadata']['message_i18n'] ?? null,
+                'metadata' => $result['metadata'] ?? [],
+            ]);
+            $this->conversationStoreService->finishRun($runId, 'finished', null, [
+                'decision' => $decision,
+                'result' => $result['metadata'] ?? [],
+            ]);
+            $result['conversation'] = $this->getConversationDetail($conversationId);
+            $result['run_id'] = $runId;
+            $emitEvent('run.finished', ['result' => $result]);
+            return $result;
+        }
+
+        $this->conversationStoreService->logConversationEvent('admin_ai_user_message', $logContext, [
+            'conversation_id' => $conversationId,
+            'visible_text' => $normalizedMessage,
+            'role' => 'user',
+            'context' => $normalizedContext,
+            'meta' => [
+                'run_id' => $runId,
+            ],
+        ]);
+
+        $turnNo = $this->conversationStoreService->getNextTurnNo($conversationId);
+        $history = $this->conversationStoreService->fetchHistoryMessages(
+            $conversationId,
+            max(2, (int) ($this->agentConfig['max_history_messages'] ?? 12))
+        );
+        try {
+            $outcome = $this->runAgentLoopForStream(
+                $conversationId,
+                $runId,
+                $normalizedMessage,
+                $normalizedContext,
+                array_merge($logContext, ['run_id' => $runId, 'autonomy_mode' => $autonomyMode]),
+                $this->buildMessages($history, $normalizedMessage, $normalizedContext),
+                $turnNo,
+                $emitEvent,
+                $autonomyMode
+            );
+        } catch (\Throwable $exception) {
+            $this->conversationStoreService->finishRun($runId, 'error', $exception->getMessage(), [
+                'message' => $normalizedMessage,
+            ]);
+            throw $exception;
+        }
+
+        if (($outcome['assistant_text'] ?? '') !== '') {
+            $this->conversationStoreService->logConversationEvent('admin_ai_assistant_message', $logContext, [
+                'conversation_id' => $conversationId,
+                'visible_text' => $outcome['assistant_text'],
+                'role' => 'assistant',
+                'meta' => array_merge($outcome['meta'] ?? [], ['run_id' => $runId]),
+                'suggestion' => $outcome['suggestion'] ?? null,
+                'proposal' => $outcome['proposal'] ?? null,
+                'result' => $outcome['result'] ?? null,
+            ]);
+
+            $emitEvent('assistant.message', [
+                'content' => (string) $outcome['assistant_text'],
+                'meta' => $outcome['meta'] ?? [],
+            ]);
+        }
+
+        $rollback = $outcome['meta']['rollback_available'] ?? null;
+        if (is_array($rollback)) {
+            $emitEvent('rollback.available', [
+                'rollback' => $rollback,
+            ]);
+        }
+
+        $approvalProposals = [];
+        if (isset($outcome['proposals']) && is_array($outcome['proposals'])) {
+            $approvalProposals = array_values(array_filter($outcome['proposals'], 'is_array'));
+        } elseif (isset($outcome['proposal']) && is_array($outcome['proposal'])) {
+            $approvalProposals = [$outcome['proposal']];
+        }
+
+        foreach ($approvalProposals as $proposal) {
+            $emitEvent('approval.required', [
+                'proposal' => $proposal,
+            ]);
+        }
+
+        $hasMissingInput = isset($outcome['meta']['missing']) && $outcome['meta']['missing'] !== null;
+        $runStatus = $approvalProposals !== [] ? 'waiting_approval' : ($hasMissingInput ? 'waiting_input' : 'finished');
+        $this->conversationStoreService->finishRun($runId, $runStatus, null, [
+            'message' => $outcome['assistant_text'] ?? '',
+        ]);
+
+        $result = [
+            'success' => true,
+            'conversation_id' => $conversationId,
+            'run_id' => $runId,
+            'message' => $outcome['assistant_text'] ?? '',
+            'metadata' => array_merge($outcome['metadata'] ?? [], [
+                'timestamp' => gmdate(DATE_ATOM),
+                'streamed' => true,
+            ]),
+            'conversation' => $this->getConversationDetail($conversationId),
+        ];
+
+        $emitEvent('run.finished', ['result' => $result]);
+        return $result;
     }
 
     /**
@@ -216,6 +412,7 @@ class AdminAiAgentService
         return [
             'agent' => [
                 'max_history_messages' => 12,
+                'max_run_steps' => 6,
                 'default_confirmation_policy' => 'write_requires_confirmation',
             ],
             'navigationTargets' => [],
@@ -401,6 +598,342 @@ class AdminAiAgentService
         };
     }
 
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @param array<string,mixed> $context
+     * @param array<string,mixed> $logContext
+     * @param callable(string,array<string,mixed>):void $emitEvent
+     * @return array<string,mixed>
+     */
+    private function runAgentLoopForStream(
+        string $conversationId,
+        string $runId,
+        string $userMessage,
+        array $context,
+        array $logContext,
+        array $messages,
+        int $turnNo,
+        callable $emitEvent,
+        string $autonomyMode
+    ): array {
+        $maxSteps = max(1, min(12, (int) ($this->agentConfig['max_run_steps'] ?? 6)));
+        $maxToolExecutions = max(1, min(24, (int) ($this->agentConfig['max_run_tool_executions'] ?? ($maxSteps * 2))));
+        $assistantParts = [];
+        $lastOutcome = [
+            'assistant_text' => '',
+            'metadata' => ['run_id' => $runId],
+        ];
+        $runStepSequence = 0;
+
+        for ($stepIndex = 0; $stepIndex < $maxSteps; $stepIndex++) {
+            $payload = [
+                'model' => $this->model,
+                'temperature' => $this->temperature,
+                'max_tokens' => $this->maxTokens,
+                'messages' => $messages,
+                'tools' => $this->buildTools(),
+                'tool_choice' => 'auto',
+            ];
+
+            $startedAt = microtime(true);
+            $llmLogId = null;
+            try {
+                if ($this->client instanceof StreamCapableLlmClientInterface) {
+                    $rawResponse = $this->client->streamChatCompletion($payload, function (array $event) use ($emitEvent): void {
+                        if (($event['type'] ?? null) === 'content.delta') {
+                            $content = (string) ($event['content'] ?? '');
+                            if ($content !== '') {
+                                $emitEvent('assistant.delta', ['content' => $content]);
+                            }
+                        }
+                    });
+                } else {
+                    $rawResponse = $this->client->createChatCompletion($payload);
+                }
+                $llmLogId = $this->logLlmCall($payload['messages'], $rawResponse, $logContext, $context, $conversationId, $turnNo + $stepIndex, $startedAt);
+            } catch (\Throwable $exception) {
+                if ($exception->getMessage() === 'STREAM_CLIENT_DISCONNECTED') {
+                    throw $exception;
+                }
+                $this->logLlmFailure($payload['messages'], $logContext, $context, $conversationId, $turnNo + $stepIndex, $startedAt, $exception);
+                $this->logError($exception, $logContext, [
+                    'conversation_id' => $conversationId,
+                    'run_id' => $runId,
+                    'message' => $userMessage,
+                    'context' => $context,
+                ]);
+                throw $this->buildLlmRuntimeException($exception);
+            }
+
+            $choice = $rawResponse['choices'][0] ?? [];
+            $message = is_array($choice['message'] ?? null) ? $choice['message'] : [];
+            $toolCalls = isset($message['tool_calls']) && is_array($message['tool_calls']) ? $message['tool_calls'] : [];
+            $content = isset($message['content']) ? trim((string) $message['content']) : '';
+
+            if ($toolCalls === []) {
+                $fallback = $stepIndex === 0 ? $this->resolveKeywordFallbackAction($userMessage, $content) : null;
+                if ($fallback !== null) {
+                    $toolCalls = [[
+                        'id' => $this->generateStepId(),
+                        'type' => 'function',
+                        'function' => [
+                            'name' => 'manage_admin',
+                            'arguments' => json_encode($fallback, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                        ],
+                    ]];
+                } else {
+                    $outcome = [
+                        'assistant_text' => $content !== '' ? $content : ($assistantParts !== [] ? implode("\n\n", $assistantParts) : '我暂时无法完成这项操作，请再具体一些。'),
+                        'metadata' => $this->extractMetadata($rawResponse),
+                    ];
+                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $outcome, $context);
+                    return $outcome;
+                }
+            }
+
+            $assistantMessage = [
+                'role' => 'assistant',
+                'content' => $content,
+                'tool_calls' => $toolCalls,
+            ];
+            $messages[] = $assistantMessage;
+            if ($content !== '') {
+                $assistantParts[] = $content;
+            }
+
+            $blockingOutcomes = [];
+            foreach ($toolCalls as $toolCall) {
+                if (!is_array($toolCall)) {
+                    continue;
+                }
+
+                if ($runStepSequence >= $maxToolExecutions) {
+                    $lastOutcome = $blockingOutcomes !== []
+                        ? $this->mergeBlockingToolOutcomes($blockingOutcomes, $assistantParts, $lastOutcome, $runId)
+                        : $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_tool_executions');
+                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+                    return $lastOutcome;
+                }
+
+                $outcome = $this->executeToolCallForRun(
+                    $conversationId,
+                    $runId,
+                    $runStepSequence,
+                    $toolCall,
+                    $context,
+                    $logContext,
+                    $rawResponse,
+                    $emitEvent,
+                    $autonomyMode
+                );
+                $lastOutcome = $outcome;
+
+                if (($outcome['assistant_text'] ?? '') !== '') {
+                    $assistantParts[] = trim((string) $outcome['assistant_text']);
+                }
+
+                if (isset($outcome['proposal']) || isset($outcome['meta']['missing'])) {
+                    $blockingOutcomes[] = $outcome;
+                    continue;
+                }
+
+                $toolCallId = (string) ($toolCall['id'] ?? $this->generateStepId());
+                $messages[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $toolCallId,
+                    'name' => (string) ($toolCall['function']['name'] ?? ''),
+                    'content' => json_encode([
+                        'result' => $outcome['result'] ?? null,
+                        'suggestion' => $outcome['suggestion'] ?? null,
+                        'assistant_text' => $outcome['assistant_text'] ?? null,
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ];
+            }
+
+            if ($blockingOutcomes !== []) {
+                $lastOutcome = $this->mergeBlockingToolOutcomes($blockingOutcomes, $assistantParts, $lastOutcome, $runId);
+                $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+                return $lastOutcome;
+            }
+
+            $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+        }
+
+        return $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_steps', $lastOutcome);
+    }
+
+    /**
+     * @param array<int,string> $assistantParts
+     * @param array<string,mixed> $baseOutcome
+     * @return array<string,mixed>
+     */
+    private function buildAgentLimitOutcome(
+        array $assistantParts,
+        string $runId,
+        string $stopReason,
+        array $baseOutcome = []
+    ): array {
+        $assistantText = implode("\n\n", array_values(array_unique(array_filter($assistantParts))));
+        $warning = $stopReason === 'max_tool_executions'
+            ? '已达到本次 agent 运行的最大工具执行数，请缩小请求范围后继续。'
+            : '已达到本次 agent 运行的最大步骤数，请缩小请求范围后继续。';
+        $baseOutcome['assistant_text'] = ($assistantText !== '' ? $assistantText . "\n\n" : '') . $warning;
+        $baseOutcome['metadata'] = array_merge($baseOutcome['metadata'] ?? [], [
+            'run_id' => $runId,
+            'stop_reason' => $stopReason,
+        ]);
+
+        return $baseOutcome;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $outcomes
+     * @param array<int,string> $assistantParts
+     * @param array<string,mixed> $baseOutcome
+     * @return array<string,mixed>
+     */
+    private function mergeBlockingToolOutcomes(array $outcomes, array $assistantParts, array $baseOutcome, string $runId): array
+    {
+        $merged = $outcomes[0] ?? $baseOutcome;
+        $proposals = [];
+        $missing = [];
+        foreach ($outcomes as $outcome) {
+            if (isset($outcome['proposal']) && is_array($outcome['proposal'])) {
+                $proposals[] = $outcome['proposal'];
+            }
+            if (isset($outcome['meta']['missing']) && is_array($outcome['meta']['missing'])) {
+                $missing = array_merge($missing, $outcome['meta']['missing']);
+            }
+        }
+
+        $assistantText = implode("\n\n", array_values(array_unique(array_filter($assistantParts))));
+        if ($assistantText !== '') {
+            $merged['assistant_text'] = $assistantText;
+        }
+
+        if ($proposals !== []) {
+            $merged['proposal'] = $proposals[0];
+            $merged['proposals'] = $proposals;
+        }
+        if ($missing !== []) {
+            if (!isset($merged['meta']) || !is_array($merged['meta'])) {
+                $merged['meta'] = [];
+            }
+            $merged['meta']['missing'] = $missing;
+        }
+        $merged['metadata'] = array_merge($merged['metadata'] ?? [], [
+            'run_id' => $runId,
+            'blocking_tool_count' => count($outcomes),
+        ]);
+
+        return $merged;
+    }
+
+    /**
+     * @param array<string,mixed> $toolCall
+     * @param array<string,mixed> $context
+     * @param array<string,mixed> $logContext
+     * @param array<string,mixed> $rawResponse
+     * @param callable(string,array<string,mixed>):void $emitEvent
+     * @return array<string,mixed>
+     */
+    private function executeToolCallForRun(
+        string $conversationId,
+        string $runId,
+        int &$runStepSequence,
+        array $toolCall,
+        array $context,
+        array $logContext,
+        array $rawResponse,
+        callable $emitEvent,
+        string $autonomyMode
+    ): array {
+        $modelToolCallId = isset($toolCall['id']) && is_string($toolCall['id']) ? trim($toolCall['id']) : '';
+        $functionName = (string) ($toolCall['function']['name'] ?? '');
+        $arguments = json_decode((string) ($toolCall['function']['arguments'] ?? '{}'), true);
+        if (!is_array($arguments)) {
+            $arguments = [];
+        }
+
+        $sequence = ++$runStepSequence;
+        $stepId = $this->generateStepId();
+        $this->conversationStoreService->startRunStep($runId, $stepId, $sequence, 'tool', $functionName, $arguments);
+        $emitEvent('tool.started', [
+            'step_id' => $stepId,
+            'model_tool_call_id' => $modelToolCallId !== '' ? $modelToolCallId : null,
+            'tool_name' => $functionName,
+            'arguments' => $arguments,
+        ]);
+
+        try {
+            $outcome = match ($functionName) {
+                'navigate' => $this->handleNavigationTool($arguments, $rawResponse),
+                'execute_shortcut' => $this->handleShortcutTool($arguments, $rawResponse),
+                'manage_admin' => $this->handleManageAdminTool($conversationId, $arguments, $context, $logContext, $rawResponse, [
+                    'step_id' => $stepId,
+                    'run_id' => $runId,
+                    'autonomy_mode' => $autonomyMode,
+                ]),
+                default => [
+                    'assistant_text' => '我没有找到可执行的管理员工具，请换个说法再试一次。',
+                    'metadata' => $this->extractMetadata($rawResponse),
+                ],
+            };
+        } catch (\Throwable $exception) {
+            $this->conversationStoreService->finishRunStep($runId, $stepId, 'error', null, $exception->getMessage());
+            $emitEvent('tool.error', [
+                'step_id' => $stepId,
+                'model_tool_call_id' => $modelToolCallId !== '' ? $modelToolCallId : null,
+                'tool_name' => $functionName,
+                'error' => $exception->getMessage(),
+            ]);
+            throw $exception;
+        }
+
+        $status = 'success';
+        $approvalState = null;
+        if (isset($outcome['proposal']) && is_array($outcome['proposal'])) {
+            $status = 'waiting_approval';
+            $approvalState = 'pending';
+        } elseif (isset($outcome['meta']['missing'])) {
+            $status = 'waiting_input';
+        }
+
+        $output = [
+            'result' => $outcome['result'] ?? null,
+            'proposal' => $outcome['proposal'] ?? null,
+            'suggestion' => $outcome['suggestion'] ?? null,
+            'meta' => $outcome['meta'] ?? null,
+            'assistant_text' => $outcome['assistant_text'] ?? null,
+        ];
+        $rollbackState = isset($outcome['meta']['rollback_available']) ? 'available' : null;
+        $this->conversationStoreService->finishRunStep($runId, $stepId, $status, $output, null, $approvalState, $rollbackState);
+
+        $eventPayload = [
+            'step_id' => $stepId,
+            'model_tool_call_id' => $modelToolCallId !== '' ? $modelToolCallId : null,
+            'tool_name' => $functionName,
+            'status' => $status,
+            'result' => $outcome['result'] ?? null,
+            'proposal' => $outcome['proposal'] ?? null,
+            'suggestion' => $outcome['suggestion'] ?? null,
+            'meta' => $outcome['meta'] ?? null,
+        ];
+        $emitEvent('tool.result', $eventPayload);
+
+        if ($status === 'waiting_input') {
+            $emitEvent('missing.input', [
+                'step_id' => $stepId,
+                'model_tool_call_id' => $modelToolCallId !== '' ? $modelToolCallId : null,
+                'tool_name' => $functionName,
+                'missing' => $outcome['meta']['missing'] ?? [],
+                'message' => $outcome['assistant_text'] ?? null,
+            ]);
+        }
+
+        return $outcome;
+    }
+
     private function handleNavigationTool(array $arguments, array $rawResponse): array
     {
         $destination = $arguments['destination'] ?? null;
@@ -454,7 +987,8 @@ class AdminAiAgentService
         array $arguments,
         array $context,
         array $logContext,
-        array $rawResponse
+        array $rawResponse,
+        array $stepMeta = []
     ): array {
         $actionName = $arguments['action'] ?? null;
         if (!is_string($actionName) || !isset($this->actionDefinitions[$actionName])) {
@@ -494,6 +1028,7 @@ class AdminAiAgentService
                 'summary' => $toolSummary,
                 'payload' => $persistedPayload,
             ],
+            'meta' => $stepMeta,
         ]);
 
         $isReadAction = ($definition['risk_level'] ?? 'read') === 'read' && empty($definition['requires_confirmation']);
@@ -507,6 +1042,30 @@ class AdminAiAgentService
             ];
         }
 
+        $autonomyMode = $this->normalizeAutonomyMode($stepMeta['autonomy_mode'] ?? null);
+        if ($this->canAutoExecuteWriteAction($definition, $autonomyMode)) {
+            $executeLogContext = $logContext;
+            $executeLogContext['conversation_id'] = $conversationId;
+            $result = $this->executeWriteAction($actionName, $persistedPayload, $executeLogContext);
+            $rollback = $this->buildRollbackDescriptor(0, $actionName, $persistedPayload, $result);
+            $meta = array_filter([
+                'action_name' => $actionName,
+                'autonomy_mode' => $autonomyMode,
+                'approval_policy' => $definition['approval_policy'] ?? 'write_requires_confirmation',
+                'rollback_available' => $rollback,
+            ], static fn ($value) => $value !== null && $value !== []);
+
+            return [
+                'assistant_text' => $this->resultFormatterService->formatWriteActionResult($actionName, $result),
+                'result' => $result,
+                'metadata' => array_merge($this->extractMetadata($rawResponse), [
+                    'auto_executed' => true,
+                    'autonomy_mode' => $autonomyMode,
+                ]),
+                'meta' => $meta,
+            ];
+        }
+
         $summary = $this->resultFormatterService->buildProposalSummary($definition, $payload);
         $proposalData = [
             'conversation_id' => $conversationId,
@@ -515,7 +1074,14 @@ class AdminAiAgentService
             'summary' => $summary,
             'payload' => $persistedPayload,
             'risk_level' => $definition['risk_level'] ?? 'write',
+            'approval_policy' => $definition['approval_policy'] ?? 'write_requires_confirmation',
+            'autonomy_min_mode' => $definition['autonomy_min_mode'] ?? null,
+            'rollback_strategy' => $definition['rollback_strategy'] ?? 'manual_reverse_action',
+            'rollback_window_minutes' => $definition['rollback_window_minutes'] ?? null,
+            'side_effects' => is_array($definition['side_effects'] ?? null) ? $definition['side_effects'] : [],
             'requires_confirmation' => true,
+            'run_id' => $stepMeta['run_id'] ?? null,
+            'step_id' => $stepMeta['step_id'] ?? null,
         ];
 
         $proposalId = $this->conversationStoreService->logConversationEvent('admin_ai_action_proposed', $logContext, [
@@ -525,14 +1091,16 @@ class AdminAiAgentService
             'status' => 'pending',
         ]);
 
+        $assistantMessageI18n = $this->buildAssistantMessageI18n('proposalReady', ['summary' => $summary]);
+
         return [
-            'assistant_text' => sprintf("已整理待执行操作：%s\n如需执行，请确认。", $summary),
+            'assistant_text' => $this->assistantMessageFallback($assistantMessageI18n),
             'proposal' => array_merge($proposalData, [
                 'proposal_id' => $proposalId,
                 'status' => 'pending',
             ]),
             'metadata' => $this->extractMetadata($rawResponse),
-            'meta' => ['action_name' => $actionName, 'proposal_id' => $proposalId],
+            'meta' => ['action_name' => $actionName, 'proposal_id' => $proposalId, 'message_i18n' => $assistantMessageI18n],
         ];
     }
 
@@ -542,6 +1110,10 @@ class AdminAiAgentService
             ? (int) $decision['proposal_id']
             : 0;
         $outcome = strtolower(trim((string) ($decision['outcome'] ?? '')));
+
+        if ($outcome === 'rollback') {
+            return $this->handleRollbackDecision($conversationId, $decision, $context, $logContext);
+        }
 
         if ($proposalId <= 0 || !in_array($outcome, ['confirm', 'reject'], true)) {
             throw new \InvalidArgumentException('Invalid decision payload.');
@@ -563,18 +1135,20 @@ class AdminAiAgentService
                 'action_name' => $actionName,
                 'request_data' => $payload,
             ]);
-            $assistantText = '已取消该待执行操作。你可以补充条件后重新下达指令。';
+            $assistantMessageI18n = $this->buildAssistantMessageI18n('actionRejected');
+            $assistantText = $this->assistantMessageFallback($assistantMessageI18n);
             $this->conversationStoreService->logConversationEvent('admin_ai_assistant_message', $logContext, [
                 'conversation_id' => $conversationId,
                 'visible_text' => $assistantText,
                 'role' => 'assistant',
-                'meta' => ['decision' => 'rejected', 'proposal_id' => $proposalId],
+                'meta' => ['decision' => 'rejected', 'proposal_id' => $proposalId, 'message_i18n' => $assistantMessageI18n],
             ]);
             return [
                 'success' => true,
                 'conversation_id' => $conversationId,
                 'message' => $assistantText,
-                'metadata' => ['decision' => 'rejected', 'timestamp' => gmdate(DATE_ATOM)],
+                'message_i18n' => $assistantMessageI18n,
+                'metadata' => ['decision' => 'rejected', 'message_i18n' => $assistantMessageI18n, 'timestamp' => gmdate(DATE_ATOM)],
                 'conversation' => $this->getConversationDetail($conversationId),
             ];
         }
@@ -590,7 +1164,12 @@ class AdminAiAgentService
             $executeLogContext = $logContext;
             $executeLogContext['conversation_id'] = $conversationId;
             $result = $this->executeWriteAction($actionName, $payload, $executeLogContext);
-            $this->conversationStoreService->updateProposalStatus($proposalId, 'success', ['decision' => 'confirmed', 'result' => $result]);
+            $rollback = $this->buildRollbackDescriptor($proposalId, $actionName, $payload, $result);
+            $decisionMeta = ['decision' => 'confirmed', 'result' => $result];
+            if ($rollback !== null) {
+                $decisionMeta['rollback_available'] = $rollback;
+            }
+            $this->conversationStoreService->updateProposalStatus($proposalId, 'success', $decisionMeta);
             $this->conversationStoreService->logConversationEvent('admin_ai_action_executed', $logContext, [
                 'conversation_id' => $conversationId,
                 'proposal_id' => $proposalId,
@@ -600,6 +1179,9 @@ class AdminAiAgentService
             ]);
             $assistantText = $this->resultFormatterService->formatWriteActionResult($actionName, $result);
             $meta = ['decision' => 'confirmed', 'proposal_id' => $proposalId, 'result' => $result];
+            if ($rollback !== null) {
+                $meta['rollback_available'] = $rollback;
+            }
         } catch (\Throwable $exception) {
             $this->conversationStoreService->updateProposalStatus($proposalId, 'failed', ['decision' => 'confirmed', 'error' => $exception->getMessage()]);
             $this->conversationStoreService->logConversationEvent('admin_ai_action_failed', $logContext, [
@@ -614,8 +1196,14 @@ class AdminAiAgentService
                 'proposal_id' => $proposalId,
                 'action_name' => $actionName,
             ]);
-            $assistantText = '执行该操作时出现错误，请稍后重试。';
-            $meta = ['decision' => 'confirmed', 'proposal_id' => $proposalId, 'error' => $exception->getMessage()];
+            $assistantMessageI18n = $this->buildAssistantMessageI18n('actionExecutionFailed');
+            $assistantText = $this->assistantMessageFallback($assistantMessageI18n);
+            $meta = [
+                'decision' => 'confirmed',
+                'proposal_id' => $proposalId,
+                'error' => $exception->getMessage(),
+                'message_i18n' => $assistantMessageI18n,
+            ];
         }
 
         $this->conversationStoreService->logConversationEvent('admin_ai_assistant_message', $logContext, [
@@ -629,9 +1217,227 @@ class AdminAiAgentService
             'success' => true,
             'conversation_id' => $conversationId,
             'message' => $assistantText,
+            'message_i18n' => $meta['message_i18n'] ?? null,
             'metadata' => array_merge($meta, ['timestamp' => gmdate(DATE_ATOM)]),
             'conversation' => $this->getConversationDetail($conversationId),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $decision
+     */
+    private function assertDecisionCanStart(string $conversationId, array $decision): void
+    {
+        $outcome = strtolower(trim((string) ($decision['outcome'] ?? '')));
+        if ($outcome === 'rollback') {
+            $descriptor = isset($decision['rollback']) && is_array($decision['rollback'])
+                ? $this->rollbackService->normalizeDescriptor($decision['rollback'])
+                : null;
+            if ($descriptor === null || !isset($this->actionDefinitions[$descriptor['action_name']])) {
+                throw new \InvalidArgumentException('Invalid rollback payload.');
+            }
+            $this->assertRollbackDescriptorBelongsToConversation($conversationId, $descriptor);
+            return;
+        }
+
+        $proposalId = isset($decision['proposal_id']) && is_numeric((string) $decision['proposal_id'])
+            ? (int) $decision['proposal_id']
+            : 0;
+        if ($proposalId <= 0 || !in_array($outcome, ['confirm', 'reject'], true)) {
+            throw new \InvalidArgumentException('Invalid decision payload.');
+        }
+        if ($this->conversationStoreService->findProposal($conversationId, $proposalId) === null) {
+            throw new \RuntimeException('PROPOSAL_NOT_FOUND');
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $decision
+     * @param array<string,mixed> $logContext
+     * @return array<string,mixed>
+     */
+    private function handleRollbackDecision(string $conversationId, array $decision, array $context, array $logContext): array
+    {
+        $descriptor = isset($decision['rollback']) && is_array($decision['rollback'])
+            ? $this->rollbackService->normalizeDescriptor($decision['rollback'])
+            : null;
+        if ($descriptor === null) {
+            throw new \InvalidArgumentException('Invalid rollback payload.');
+        }
+        $this->assertRollbackDescriptorBelongsToConversation($conversationId, $descriptor);
+
+        $actionName = $descriptor['action_name'];
+        if (!isset($this->actionDefinitions[$actionName])) {
+            throw new \InvalidArgumentException('Unsupported rollback action.');
+        }
+
+        $definition = $this->actionDefinitions[$actionName];
+        $riskLevel = (string) ($definition['risk_level'] ?? 'write');
+        if ($riskLevel === 'read') {
+            throw new \InvalidArgumentException('Rollback action must be a write action.');
+        }
+
+        $payload = $this->preparePersistedActionPayload($actionName, $descriptor['payload']);
+        $summary = $descriptor['prompt'] !== null && $descriptor['prompt'] !== ''
+            ? $descriptor['prompt']
+            : '回滚操作：' . $this->resultFormatterService->buildProposalSummary($definition, $payload);
+        $visibleText = $this->localizedRollbackPrompt($descriptor, $context, $summary);
+        $proposalData = [
+            'conversation_id' => $conversationId,
+            'action_name' => $actionName,
+            'label' => $definition['label'] ?? $actionName,
+            'summary' => $summary,
+            'prompt_i18n' => $descriptor['prompt_i18n'] ?? [],
+            'payload' => $payload,
+            'risk_level' => $definition['risk_level'] ?? 'write',
+            'approval_policy' => 'rollback_requires_confirmation',
+            'autonomy_min_mode' => 'read_only_auto',
+            'rollback_strategy' => $definition['rollback_strategy'] ?? 'explicit_compensation',
+            'rollback_window_minutes' => $definition['rollback_window_minutes'] ?? null,
+            'side_effects' => is_array($definition['side_effects'] ?? null) ? $definition['side_effects'] : [],
+            'requires_confirmation' => true,
+            'rollback_of_proposal_id' => $descriptor['source_proposal_id'],
+            'source_action' => $descriptor['source_action'],
+        ];
+
+        $proposalId = $this->conversationStoreService->logConversationEvent('admin_ai_action_proposed', $logContext, [
+            'conversation_id' => $conversationId,
+            'visible_text' => $visibleText,
+            'request_data' => $proposalData,
+            'status' => 'pending',
+        ]);
+        $this->conversationStoreService->logConversationEvent('admin_ai_rollback_proposed', $logContext, [
+            'conversation_id' => $conversationId,
+            'visible_text' => $visibleText,
+            'action_name' => $actionName,
+            'request_data' => $proposalData + ['proposal_id' => $proposalId],
+            'status' => 'pending',
+        ]);
+
+        $assistantMessageI18n = $this->buildAssistantMessageI18n('rollbackConfirmationGenerated');
+        $assistantText = $this->assistantMessageFallback($assistantMessageI18n);
+        $this->conversationStoreService->logConversationEvent('admin_ai_assistant_message', $logContext, [
+            'conversation_id' => $conversationId,
+            'visible_text' => $assistantText,
+            'role' => 'assistant',
+            'meta' => ['decision' => 'rollback', 'proposal_id' => $proposalId, 'message_i18n' => $assistantMessageI18n],
+        ]);
+
+        return [
+            'success' => true,
+            'conversation_id' => $conversationId,
+            'message' => $assistantText,
+            'message_i18n' => $assistantMessageI18n,
+            'proposal' => array_merge($proposalData, [
+                'proposal_id' => $proposalId,
+                'status' => 'pending',
+            ]),
+            'metadata' => [
+                'decision' => 'rollback',
+                'proposal_id' => $proposalId,
+                'message_i18n' => $assistantMessageI18n,
+                'timestamp' => gmdate(DATE_ATOM),
+            ],
+            'conversation' => $this->getConversationDetail($conversationId),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $values
+     * @return array{key:string,values:array<string,mixed>}
+     */
+    private function buildAssistantMessageI18n(string $messageId, array $values = []): array
+    {
+        return [
+            'key' => 'admin.aiWorkspace.messages.' . $messageId,
+            'values' => $values,
+        ];
+    }
+
+    /**
+     * @param array{key:string,values:array<string,mixed>} $messageI18n
+     */
+    private function assistantMessageFallback(array $messageI18n): string
+    {
+        return $messageI18n['key'];
+    }
+
+    /**
+     * @param array{prompt_i18n:array<string,string>} $descriptor
+     * @param array<string,mixed> $context
+     */
+    private function localizedRollbackPrompt(array $descriptor, array $context, string $fallback): string
+    {
+        $locale = isset($context['locale']) && is_string($context['locale'])
+            ? strtolower(substr(trim($context['locale']), 0, 2))
+            : 'en';
+        $prompts = is_array($descriptor['prompt_i18n'] ?? null) ? $descriptor['prompt_i18n'] : [];
+        $localized = isset($prompts[$locale]) && is_string($prompts[$locale]) ? trim($prompts[$locale]) : '';
+        if ($localized !== '') {
+            return $localized;
+        }
+
+        $english = isset($prompts['en']) && is_string($prompts['en']) ? trim($prompts['en']) : '';
+        return $english !== '' ? $english : $fallback;
+    }
+
+    /**
+     * @param array{source_proposal_id:int|null} $descriptor
+     */
+    private function assertRollbackDescriptorBelongsToConversation(string $conversationId, array $descriptor): void
+    {
+        $sourceProposalId = $descriptor['source_proposal_id'] ?? null;
+        if (!is_int($sourceProposalId) || $sourceProposalId <= 0) {
+            return;
+        }
+
+        if ($this->conversationStoreService->findProposal($conversationId, $sourceProposalId) === null) {
+            throw new \InvalidArgumentException('Invalid rollback source proposal.');
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @param array<string,mixed> $result
+     * @return array<string,mixed>|null
+     */
+    private function buildRollbackDescriptor(int $proposalId, string $actionName, array $payload, array $result): ?array
+    {
+        return $this->rollbackService->buildDescriptor($proposalId, $actionName, $payload, $result);
+    }
+
+    private function normalizeAutonomyMode(mixed $value): string
+    {
+        $mode = is_string($value) ? strtolower(trim($value)) : '';
+        return in_array($mode, ['read_only_auto', 'low_risk_auto', 'full_auto'], true) ? $mode : 'read_only_auto';
+    }
+
+    /**
+     * @param array<string,mixed> $definition
+     */
+    private function canAutoExecuteWriteAction(array $definition, string $autonomyMode): bool
+    {
+        if ($autonomyMode === 'read_only_auto') {
+            return false;
+        }
+
+        $approvalPolicy = (string) ($definition['approval_policy'] ?? 'write_requires_confirmation');
+        if ($approvalPolicy === 'always_confirm') {
+            return false;
+        }
+
+        $riskLevel = (string) ($definition['risk_level'] ?? 'write');
+        $rollbackStrategy = (string) ($definition['rollback_strategy'] ?? 'none');
+        $isRollbackCapable = !in_array($rollbackStrategy, ['none', 'manual_only', 'advice_only'], true);
+        $minMode = (string) ($definition['autonomy_min_mode'] ?? 'full_auto');
+
+        if ($autonomyMode === 'low_risk_auto') {
+            return in_array($minMode, ['read_only_auto', 'low_risk_auto'], true)
+                && in_array($riskLevel, ['low', 'low_write'], true)
+                && $isRollbackCapable;
+        }
+
+        return $autonomyMode === 'full_auto' && in_array($minMode, ['read_only_auto', 'low_risk_auto', 'full_auto'], true);
     }
 
     private function applyPayloadTemplate(array $definition, array $payload, array $context): array
@@ -984,6 +1790,45 @@ class AdminAiAgentService
         } catch (\Throwable) {
             return 'admin-ai-' . str_replace('.', '', uniqid('', true));
         }
+    }
+
+    private function generateRunId(): string
+    {
+        try {
+            return 'run-' . bin2hex(random_bytes(8));
+        } catch (\Throwable) {
+            return 'run-' . str_replace('.', '', uniqid('', true));
+        }
+    }
+
+    private function generateStepId(): string
+    {
+        try {
+            return 'step-' . bin2hex(random_bytes(6));
+        } catch (\Throwable) {
+            return 'step-' . str_replace('.', '', uniqid('', true));
+        }
+    }
+
+    private function buildLlmRuntimeException(\Throwable $exception): \RuntimeException
+    {
+        $message = $this->flattenExceptionMessages($exception);
+        if (preg_match('/(timed out|timeout|cURL error 28|Operation timed out|Connection timed out)/i', $message) === 1) {
+            return new \RuntimeException('LLM_TIMEOUT', 0, $exception);
+        }
+
+        return new \RuntimeException('LLM_UNAVAILABLE', 0, $exception);
+    }
+
+    private function flattenExceptionMessages(\Throwable $exception): string
+    {
+        $messages = [];
+        do {
+            $messages[] = $exception::class . ': ' . $exception->getMessage();
+            $exception = $exception->getPrevious();
+        } while ($exception instanceof \Throwable);
+
+        return implode(' | ', $messages);
     }
 
     private function preparePersistedActionPayload(string $actionName, array $payload): array
