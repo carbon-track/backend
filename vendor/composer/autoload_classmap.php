@@ -1359,6 +1359,7 @@ return array(
     'CarbonTrack\\Services\\WebauthnProviderInterface' => $baseDir . '/src/Services/WebauthnProviderInterface.php',
     'CarbonTrack\\Services\\Webauthn\\Base64Url' => $baseDir . '/src/Services/Webauthn/Base64Url.php',
     'CarbonTrack\\Services\\Webauthn\\CborDecoder' => $baseDir . '/src/Services/Webauthn/CborDecoder.php',
+    'CarbonTrack\\Support\\CorsHeaderBuilder' => $baseDir . '/src/Support/CorsHeaderBuilder.php',
     'CarbonTrack\\Support\\ErrorResponseBuilder' => $baseDir . '/src/Support/ErrorResponseBuilder.php',
     'CarbonTrack\\Support\\InputValueNormalizer' => $baseDir . '/src/Support/InputValueNormalizer.php',
     'CarbonTrack\\Support\\RequestIdNormalizer' => $baseDir . '/src/Support/RequestIdNormalizer.php',

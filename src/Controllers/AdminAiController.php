@@ -13,6 +13,7 @@ use CarbonTrack\Services\AdminAiCommandRepository;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\CorsHeaderBuilder;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -204,7 +205,7 @@ class AdminAiController
                 'Connection' => 'keep-alive',
                 'X-Accel-Buffering' => 'no',
                 'X-Content-Type-Options' => 'nosniff',
-            ];
+            ] + CorsHeaderBuilder::forRequest($request);
             $streamResponse = new \Slim\Psr7\Response(
                 200,
                 new \Slim\Psr7\Headers($streamHeaders, []),

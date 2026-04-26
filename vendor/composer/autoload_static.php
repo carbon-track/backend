@@ -1767,6 +1767,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Services\\WebauthnProviderInterface' => __DIR__ . '/../..' . '/src/Services/WebauthnProviderInterface.php',
         'CarbonTrack\\Services\\Webauthn\\Base64Url' => __DIR__ . '/../..' . '/src/Services/Webauthn/Base64Url.php',
         'CarbonTrack\\Services\\Webauthn\\CborDecoder' => __DIR__ . '/../..' . '/src/Services/Webauthn/CborDecoder.php',
+        'CarbonTrack\\Support\\CorsHeaderBuilder' => __DIR__ . '/../..' . '/src/Support/CorsHeaderBuilder.php',
         'CarbonTrack\\Support\\ErrorResponseBuilder' => __DIR__ . '/../..' . '/src/Support/ErrorResponseBuilder.php',
         'CarbonTrack\\Support\\InputValueNormalizer' => __DIR__ . '/../..' . '/src/Support/InputValueNormalizer.php',
         'CarbonTrack\\Support\\RequestIdNormalizer' => __DIR__ . '/../..' . '/src/Support/RequestIdNormalizer.php',

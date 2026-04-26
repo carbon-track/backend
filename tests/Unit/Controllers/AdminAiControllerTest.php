@@ -148,9 +148,26 @@ class AdminAiControllerTest extends TestCase
         $hadRedirectAuthorization = array_key_exists('REDIRECT_HTTP_AUTHORIZATION', $_SERVER);
         $previousHttpAuthorization = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
         $previousRedirectAuthorization = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null;
+        $corsEnvKeys = [
+            'CORS_ALLOWED_ORIGINS',
+            'CORS_ALLOWED_HEADERS',
+            'CORS_EXPOSE_HEADERS',
+            'CORS_ALLOW_CREDENTIALS',
+        ];
+        $previousCorsEnv = [];
+        foreach ($corsEnvKeys as $key) {
+            $previousCorsEnv[$key] = [
+                'exists' => array_key_exists($key, $_ENV),
+                'value' => $_ENV[$key] ?? null,
+            ];
+        }
 
         $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer should-not-leak';
         $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = 'Bearer should-not-leak';
+        $_ENV['CORS_ALLOWED_ORIGINS'] = 'http://localhost:5173';
+        $_ENV['CORS_ALLOWED_HEADERS'] = 'Content-Type,Authorization,X-Request-ID,X-Requested-With,X-Turnstile-Token';
+        $_ENV['CORS_EXPOSE_HEADERS'] = 'Content-Type,Authorization,X-Request-ID';
+        $_ENV['CORS_ALLOW_CREDENTIALS'] = 'true';
 
         try {
             $authService = $this->createMock(AuthService::class);
@@ -202,6 +219,8 @@ class AdminAiControllerTest extends TestCase
             $request = makeRequest('POST', self::CHAT_ROUTE . '/stream', [
                 'message' => '帮我总结最近 7 天后台运营',
                 'context' => ['activeRoute' => '/admin/ai'],
+            ], null, [
+                'Origin' => 'http://localhost:5173',
             ])->withAttribute('request_id', 'req-stream-controller-test');
 
             $response = $controller->chatStream($request, new Response());
@@ -209,6 +228,11 @@ class AdminAiControllerTest extends TestCase
             $this->assertSame(200, $response->getStatusCode());
             $this->assertStringContainsString('text/event-stream', $response->getHeaderLine('Content-Type'));
             $this->assertSame('no-cache, no-transform', $response->getHeaderLine('Cache-Control'));
+            $this->assertSame('http://localhost:5173', $response->getHeaderLine('Access-Control-Allow-Origin'));
+            $this->assertSame('true', $response->getHeaderLine('Access-Control-Allow-Credentials'));
+            $this->assertStringContainsString('Authorization', $response->getHeaderLine('Access-Control-Allow-Headers'));
+            $this->assertStringContainsString('Origin', $response->getHeaderLine('Vary'));
+            $this->assertSame('active', $response->getHeaderLine('X-CORS-Middleware'));
             $this->assertSame('', $response->getHeaderLine('Authorization'));
         } finally {
             if ($hadHttpAuthorization) {
@@ -221,6 +245,14 @@ class AdminAiControllerTest extends TestCase
                 $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = $previousRedirectAuthorization;
             } else {
                 unset($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+            }
+
+            foreach ($previousCorsEnv as $key => $state) {
+                if ($state['exists']) {
+                    $_ENV[$key] = $state['value'];
+                } else {
+                    unset($_ENV[$key]);
+                }
             }
         }
     }
