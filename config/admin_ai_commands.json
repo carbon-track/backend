@@ -4,6 +4,7 @@
     "default_confirmation_policy": "write_requires_confirmation",
     "max_auto_read_steps": 1,
     "max_run_steps": 6,
+    "tool_result_message_mode": "text",
     "systemBehavior": [
       "Use tools for navigation, analytics, approvals, and audit-friendly admin work.",
       "Ask follow-up questions when required fields are missing.",

@@ -441,12 +441,13 @@ class AdminAiConversationStoreService
                     error_message = :error_message,
                     finished_at = :finished_at,
                     meta_json = :meta_json,
-                    updated_at = :finished_at
+                    updated_at = :updated_at
                 WHERE run_id = :run_id");
             $stmt->execute([
                 ':status' => $status,
                 ':error_message' => $errorMessage,
                 ':finished_at' => $finishedAt,
+                ':updated_at' => $finishedAt,
                 ':meta_json' => json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 ':run_id' => $runId,
             ]);
@@ -554,7 +555,7 @@ class AdminAiConversationStoreService
                     rollback_state = COALESCE(:rollback_state, rollback_state),
                     finished_at = :finished_at,
                     duration_ms = :duration_ms,
-                    updated_at = :finished_at
+                    updated_at = :updated_at
                 WHERE run_id = :run_id AND step_id = :step_id");
             $stmt->execute([
                 ':run_id' => $runId,
@@ -564,6 +565,7 @@ class AdminAiConversationStoreService
                 ':approval_state' => $approvalState,
                 ':rollback_state' => $rollbackState,
                 ':finished_at' => $finishedAt,
+                ':updated_at' => $finishedAt,
                 ':duration_ms' => $durationMs,
                 ':step_id' => $stepId,
             ]);
