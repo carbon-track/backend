@@ -5,6 +5,7 @@
     "max_auto_read_steps": 1,
     "max_run_steps": 6,
     "tool_result_message_mode": "text",
+    "tool_result_replay_max_bytes": 0,
     "systemBehavior": [
       "Use tools for navigation, analytics, approvals, and audit-friendly admin work.",
       "Ask follow-up questions when required fields are missing.",

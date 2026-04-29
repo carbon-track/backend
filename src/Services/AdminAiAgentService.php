@@ -12,7 +12,9 @@ use Psr\Log\LoggerInterface;
 
 class AdminAiAgentService
 {
-    private const MAX_TEXT_TOOL_RESULT_JSON_BYTES = 7000;
+    public const DEFAULT_MAX_TOKENS = 4096;
+
+    private const DEFAULT_TEXT_TOOL_RESULT_REPLAY_MAX_BYTES = 7000;
     private const MAX_TEXT_TOOL_RESULT_STRING_BYTES = 1200;
     private const MAX_TEXT_TOOL_RESULT_FALLBACK_FIELD_BYTES = 300;
     private const MAX_TEXT_TOOL_RESULT_SUMMARY_STRING_BYTES = 600;
@@ -32,7 +34,7 @@ class AdminAiAgentService
 
     private string $model;
     private float $temperature;
-    private int $maxTokens;
+    private ?int $maxTokens;
     private bool $enabled;
 
     /** @var array<string,mixed> */
@@ -73,7 +75,7 @@ class AdminAiAgentService
     ) {
         $this->model = (string) ($config['model'] ?? 'google/gemini-2.5-flash-lite');
         $this->temperature = isset($config['temperature']) ? (float) $config['temperature'] : 0.2;
-        $this->maxTokens = isset($config['max_tokens']) ? (int) $config['max_tokens'] : 900;
+        $this->maxTokens = $this->resolveMaxTokens($config['max_tokens'] ?? null);
         $this->enabled = $client !== null;
         $this->conversationStoreService = $conversationStoreService ?? new AdminAiConversationStoreService(
             $db,
@@ -86,6 +88,43 @@ class AdminAiAgentService
         $this->resultFormatterService = $resultFormatterService ?? new AdminAiResultFormatterService();
         $this->rollbackService = $rollbackService ?? new AdminAiRollbackService();
         $this->loadCommandConfig($commandConfig ?? []);
+    }
+
+    private function resolveMaxTokens(mixed $configured): ?int
+    {
+        if (is_numeric($configured)) {
+            $maxTokens = (int) $configured;
+            if ($maxTokens === 0) {
+                return null;
+            }
+
+            if ($maxTokens > 0) {
+                return $maxTokens;
+            }
+        }
+
+        return self::DEFAULT_MAX_TOKENS;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $messages
+     * @return array<string,mixed>
+     */
+    private function buildChatCompletionPayload(array $messages): array
+    {
+        $payload = [
+            'model' => $this->model,
+            'temperature' => $this->temperature,
+            'messages' => $messages,
+            'tools' => $this->buildTools(),
+            'tool_choice' => 'auto',
+        ];
+
+        if ($this->maxTokens !== null) {
+            $payload['max_tokens'] = $this->maxTokens;
+        }
+
+        return $payload;
     }
 
     public function isEnabled(): bool
@@ -134,14 +173,9 @@ class AdminAiAgentService
             $conversationId,
             max(2, (int) ($this->agentConfig['max_history_messages'] ?? 12))
         );
-        $payload = [
-            'model' => $this->model,
-            'temperature' => $this->temperature,
-            'max_tokens' => $this->maxTokens,
-            'messages' => $this->buildMessages($history, $normalizedMessage, $normalizedContext),
-            'tools' => $this->buildTools(),
-            'tool_choice' => 'auto',
-        ];
+        $payload = $this->buildChatCompletionPayload(
+            $this->buildMessages($history, $normalizedMessage, $normalizedContext)
+        );
 
         $startedAt = microtime(true);
         $llmLogId = null;
@@ -635,14 +669,7 @@ class AdminAiAgentService
         $runStepSequence = 0;
 
         for ($stepIndex = 0; $stepIndex < $maxSteps; $stepIndex++) {
-            $payload = [
-                'model' => $this->model,
-                'temperature' => $this->temperature,
-                'max_tokens' => $this->maxTokens,
-                'messages' => $messages,
-                'tools' => $this->buildTools(),
-                'tool_choice' => 'auto',
-            ];
+            $payload = $this->buildChatCompletionPayload($messages);
 
             $startedAt = microtime(true);
             $llmLogId = null;
@@ -897,6 +924,16 @@ class AdminAiAgentService
      */
     private function truncateToolOutcomePayloadForTextReplay(array $payload, string $locale): array
     {
+        $maxReplayBytes = $this->getTextToolResultReplayMaxBytes();
+        if ($maxReplayBytes <= 0) {
+            return $payload;
+        }
+
+        $encodedPayload = $this->encodeToolOutcomePayload($payload);
+        if (strlen($encodedPayload) <= $maxReplayBytes) {
+            return $payload;
+        }
+
         $wasTruncated = false;
         $truncated = $this->truncateToolOutcomeValue($payload, 0, $wasTruncated);
         $structured = is_array($truncated) ? $truncated : ['result' => $truncated];
@@ -905,7 +942,8 @@ class AdminAiAgentService
             $structured['_truncation_note'] = $this->toolOutcomeTruncationNotice($locale);
         }
 
-        if (strlen($this->encodeToolOutcomePayload($structured)) <= self::MAX_TEXT_TOOL_RESULT_JSON_BYTES) {
+        $encodedStructured = $this->encodeToolOutcomePayload($structured);
+        if (strlen($encodedStructured) <= $maxReplayBytes) {
             return $structured;
         }
 
@@ -923,12 +961,14 @@ class AdminAiAgentService
             '_truncation_note' => $this->toolOutcomeTruncationNotice($locale),
         ];
 
-        if (strlen($this->encodeToolOutcomePayload($fallback)) > self::MAX_TEXT_TOOL_RESULT_JSON_BYTES) {
+        $encodedFallback = $this->encodeToolOutcomePayload($fallback);
+        if (strlen($encodedFallback) > $maxReplayBytes) {
             unset($fallback['suggestion'], $fallback['assistant_text']);
             $fallback['_dropped_fields'] = ['suggestion', 'assistant_text'];
+            $encodedFallback = $this->encodeToolOutcomePayload($fallback);
         }
 
-        if (strlen($this->encodeToolOutcomePayload($fallback)) > self::MAX_TEXT_TOOL_RESULT_JSON_BYTES) {
+        if (strlen($encodedFallback) > $maxReplayBytes) {
             $fallback['result_summary'] = [
                 'type' => get_debug_type($payload['result'] ?? null),
                 'omitted' => true,
@@ -936,6 +976,14 @@ class AdminAiAgentService
         }
 
         return $fallback;
+    }
+
+    private function getTextToolResultReplayMaxBytes(): int
+    {
+        $configured = $this->agentConfig['tool_result_replay_max_bytes']
+            ?? self::DEFAULT_TEXT_TOOL_RESULT_REPLAY_MAX_BYTES;
+
+        return max(0, (int) $configured);
     }
 
     /**

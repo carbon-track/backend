@@ -654,7 +654,7 @@ $__deps_initializer = function (Container $container) {
         $config = [
             'model' => $_ENV['LLM_API_MODEL'] ?? null,
             'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
-            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+            'max_tokens' => $_ENV['ADMIN_AI_MAX_TOKENS'] ?? ($_ENV['LLM_API_MAX_TOKENS'] ?? AdminAiAgentService::DEFAULT_MAX_TOKENS),
         ];
 
         return new AdminAiAgentService(

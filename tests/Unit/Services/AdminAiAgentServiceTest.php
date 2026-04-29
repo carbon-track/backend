@@ -28,6 +28,48 @@ class AdminAiAgentServiceTest extends TestCase
         return $pdo;
     }
 
+    public function testEmptyMaxTokensFallsBackToAgentDefault(): void
+    {
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model', 'max_tokens' => ''],
+            ['managementActions' => []]
+        );
+
+        $property = new \ReflectionProperty($service, 'maxTokens');
+        $property->setAccessible(true);
+
+        $this->assertSame(AdminAiAgentService::DEFAULT_MAX_TOKENS, $property->getValue($service));
+    }
+
+    public function testZeroMaxTokensOmitsProviderLimit(): void
+    {
+        $client = new QueueLlmClient([
+            $this->plainTextResponse('ok'),
+        ]);
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            $client,
+            new NullLogger(),
+            ['model' => 'test-model', 'max_tokens' => 0],
+            ['managementActions' => []]
+        );
+
+        $result = $service->chat(null, 'hello', [], null, [
+            'request_id' => 'req-zero-max-tokens',
+            'actor_type' => 'admin',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+
+        $payloads = $client->payloads();
+        $this->assertTrue($result['success']);
+        $this->assertCount(1, $payloads);
+        $this->assertArrayNotHasKey('max_tokens', $payloads[0]);
+    }
+
     public function testChatCreatesConversationAndRestoresHistoryFromLogs(): void
     {
         $pdo = $this->makePdo();
@@ -1547,7 +1589,7 @@ class AdminAiAgentServiceTest extends TestCase
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
-            ['managementActions' => []]
+            ['agent' => ['tool_result_replay_max_bytes' => 7000], 'managementActions' => []]
         );
 
         $method = new \ReflectionMethod($service, 'appendToolOutcomeMessage');
@@ -1586,6 +1628,46 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertLessThan(8000, strlen(substr($content, $jsonStart)));
     }
 
+    public function testTextReplayToolOutcomeIsNotTruncatedWhenConfiguredUnlimited(): void
+    {
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            ['agent' => ['tool_result_replay_max_bytes' => 0], 'managementActions' => []]
+        );
+
+        $method = new \ReflectionMethod($service, 'appendToolOutcomeMessage');
+        $method->setAccessible(true);
+
+        $messages = [
+            [
+                'role' => 'assistant',
+                'content' => 'I will call admin tools: manage_admin.',
+            ],
+        ];
+        $largeValue = str_repeat('x', 30000);
+        $method->invokeArgs($service, [
+            &$messages,
+            0,
+            [
+                'id' => 'tool-call-large-default',
+                'function' => ['name' => 'manage_admin'],
+            ],
+            [
+                'result' => ['large' => $largeValue],
+                'suggestion' => null,
+                'assistant_text' => null,
+            ],
+            ['locale' => 'en'],
+        ]);
+
+        $content = (string) ($messages[0]['content'] ?? '');
+        $this->assertStringContainsString($largeValue, $content);
+        $this->assertStringNotContainsString('_truncated', $content);
+    }
+
     public function testTextReplayOversizeFallbackKeepsArraySuggestionStructured(): void
     {
         $service = new AdminAiAgentService(
@@ -1593,7 +1675,7 @@ class AdminAiAgentServiceTest extends TestCase
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
-            ['managementActions' => []]
+            ['agent' => ['tool_result_replay_max_bytes' => 7000], 'managementActions' => []]
         );
 
         $method = new \ReflectionMethod($service, 'appendToolOutcomeMessage');
