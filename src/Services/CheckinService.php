@@ -10,6 +10,7 @@ use DateTimeInterface;
 use DateTimeZone;
 use Monolog\Logger;
 use PDO;
+use PDOException;
 
 class CheckinService
 {
@@ -315,7 +316,7 @@ class CheckinService
             }
 
             return $inserted;
-        } catch (\Throwable $e) {
+        } catch (PDOException $e) {
             $this->logAudit('checkin_persist_failed', [
                 'user_id' => $userId,
                 'checkin_date' => $date,
@@ -334,8 +335,24 @@ class CheckinService
                 'checkin_date' => $date,
                 'source' => $source,
             ]);
-            return false;
+            if ($this->isUniqueConstraintViolation($e)) {
+                return false;
+            }
+            throw $e;
         }
+    }
+
+    private function isUniqueConstraintViolation(PDOException $e): bool
+    {
+        $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
+        $driverCode = (string) ($e->errorInfo[1] ?? '');
+        if ($sqlState === '23000' && $driverCode === '1062') {
+            return true;
+        }
+
+        return $sqlState === '23000'
+            && $this->driver === 'sqlite'
+            && stripos($e->getMessage(), 'UNIQUE constraint failed') !== false;
     }
 
     private function formatDate(DateTimeInterface $date): string

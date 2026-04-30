@@ -14713,7 +14713,7 @@
           "Users"
         ],
         "summary": "Makeup Checkin",
-        "description": "为指定日期补打卡。",
+        "description": "为指定日期补打卡。成功后关联碳减排记录的活动日期会同步修正为补打卡日期，并且只在打卡写入成功后消耗补打卡额度。专用补卡接口只能移动仍处于 pending 的用户本人记录，已审核记录会返回 409 RECORD_NOT_MUTABLE。",
         "security": [
           {
             "bearerAuth": []
@@ -14771,7 +14771,7 @@
             }
           },
           "409": {
-            "description": "日期已打卡",
+            "description": "日期已打卡，或关联记录已审核不可再移动（ALREADY_CHECKED_IN / RECORD_NOT_MUTABLE）",
             "content": {
               "application/json": {
                 "schema": {
@@ -20573,7 +20573,7 @@
               "null"
             ],
             "format": "date",
-            "description": "可选，补打卡日期（不影响活动日期，非今日会消耗补打卡额度）"
+            "description": "可选，补打卡日期。非今日会消耗补打卡额度，且活动日期会以该补打卡日期为准。"
           },
           "description": {
             "type": [
@@ -21446,7 +21446,7 @@
           },
           "record_id": {
             "type": "string",
-            "description": "关联的碳减排记录ID (UUID)"
+            "description": "关联的碳减排记录ID (UUID)。补打卡成功后该记录的活动日期会同步修正为补打卡日期。"
           },
           "note": {
             "type": [
