@@ -9,6 +9,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
@@ -25,6 +26,7 @@ class AuthController
     private AuthService $authService;
     private EmailService $emailService;
     private TurnstileService $turnstileService;
+    private ProofOfWorkService $proofOfWorkService;
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
     private MessageService $messageService;
@@ -45,17 +47,27 @@ class AuthController
         TurnstileService $turnstileService,
         AuditLogService $auditLogService,
         MessageService $messageService,
-        CloudflareR2Service $r2Service = null,
+        ?CloudflareR2Service $r2Service,
         Logger $logger,
         PDO $db,
-        ErrorLogService $errorLogService = null,
+        ?ErrorLogService $errorLogService,
         RegionService $regionService,
         ?CheckinService $checkinService = null,
-        ?UserProfileViewService $userProfileViewService = null
+        ?UserProfileViewService $userProfileViewService = null,
+        ?ProofOfWorkService $proofOfWorkService = null
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
         $this->turnstileService = $turnstileService;
+        $this->proofOfWorkService = $proofOfWorkService ?? new ProofOfWorkService(
+            $_ENV['POW_SECRET'] ?? ($_ENV['JWT_SECRET'] ?? ''),
+            $logger,
+            $auditLogService,
+            $errorLogService,
+            (int)($_ENV['POW_DIFFICULTY'] ?? 16),
+            (int)($_ENV['POW_TTL_SECONDS'] ?? 120),
+            $db
+        );
         $this->auditLogService = $auditLogService;
         $this->messageService = $messageService;
         $this->r2Service = $r2Service;
@@ -65,6 +77,45 @@ class AuthController
         $this->regionService = $regionService;
         $this->checkinService = $checkinService;
         $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
+    }
+
+    public function createProofOfWorkChallenge(Request $request, Response $response): Response
+    {
+        try {
+            $data = $request->getParsedBody() ?? [];
+            $scope = is_string($data['scope'] ?? null) ? trim($data['scope']) : '';
+
+            if (!in_array($scope, ProofOfWorkService::ALLOWED_SCOPES, true)) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid proof-of-work scope',
+                    'code' => 'INVALID_POW_SCOPE',
+                ], 400);
+            }
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Proof-of-work challenge created',
+                'data' => $this->proofOfWorkService->createChallenge($scope),
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Proof-of-work challenge creation failed', ['error' => $e->getMessage()]);
+            try {
+                if ($this->errorLogService) {
+                    $this->errorLogService->logException($e, $request);
+                }
+            } catch (\Throwable $loggingError) {
+                $this->logger->warning('ErrorLogService failed while logging proof-of-work challenge error', [
+                    'error' => $loggingError->getMessage(),
+                    'original_error' => $e->getMessage(),
+                ]);
+            }
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Failed to create proof-of-work challenge',
+                'code' => 'POW_CHALLENGE_FAILED',
+            ], 500);
+        }
     }
 
     public function register(Request $request, Response $response): Response
@@ -88,11 +139,12 @@ class AuthController
                     'code' => 'PASSWORD_MISMATCH'
                 ], 400);
             }
-            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
+            $challenge = $this->verifyClientChallenge($request, $data, 'auth.register');
+            if (!$challenge['success']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
-                    'message' => 'Turnstile verification failed',
-                    'code' => 'TURNSTILE_FAILED'
+                    'message' => $challenge['message'],
+                    'code' => $challenge['code']
                 ], 400);
             }
             $stmt = $this->db->prepare('SELECT id FROM users WHERE username = ? AND deleted_at IS NULL');
@@ -246,14 +298,13 @@ class AuthController
                     'code' => 'MISSING_CREDENTIALS'
                 ], 400);
             }
-            if (!empty($data['cf_turnstile_response'])) {
-                if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'])) {
-                    return $this->jsonResponse($response, [
-                        'success' => false,
-                        'message' => 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED'
-                    ], 400);
-                }
+            $challenge = $this->verifyClientChallenge($request, $data, 'auth.login');
+            if (!$challenge['success']) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => $challenge['message'],
+                    'code' => $challenge['code']
+                ], 400);
             }
             $isEmail = filter_var($identifier, FILTER_VALIDATE_EMAIL) !== false;
             $field = $isEmail ? 'u.email' : 'u.username';
@@ -375,6 +426,105 @@ class AuthController
         }
     }
 
+    public function refresh(Request $request, Response $response): Response
+    {
+        try {
+            $token = $this->extractBearerToken($request);
+            if ($token === null) {
+                $this->logTokenRefreshFailure($request, null, 'AUTH_REQUIRED');
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Authentication token is required',
+                    'code' => 'AUTH_REQUIRED'
+                ], 401);
+            }
+
+            try {
+                $payload = $this->authService->validateToken($token);
+            } catch (\Throwable $e) {
+                $this->logTokenRefreshFailure($request, null, 'INVALID_TOKEN');
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Authentication token is invalid or expired',
+                    'code' => 'INVALID_TOKEN'
+                ], 401);
+            }
+
+            $identity = $this->extractUserIdentityFromPayload($payload);
+            $userId = $identity['id'];
+            $userUuid = $identity['uuid'];
+            $userDetail = $userId > 0 ? $this->findUserDetailed($userId) : null;
+            if ($userDetail === null && $userUuid !== null) {
+                $userDetail = $this->findUserDetailedByUuid($userUuid);
+                $userId = (int)($userDetail['id'] ?? 0);
+            }
+            if ($userDetail === null) {
+                $this->logTokenRefreshFailure($request, $userId > 0 ? $userId : null, 'USER_NOT_FOUND');
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'User not found',
+                    'code' => 'USER_NOT_FOUND'
+                ], 401);
+            }
+
+            $refreshedToken = $this->authService->refreshToken($token, $payload, $this->formatUserPayload($userDetail));
+            if ($refreshedToken === null) {
+                $this->logTokenRefreshFailure($request, $userId > 0 ? $userId : null, 'INVALID_TOKEN');
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Authentication token is invalid or expired',
+                    'code' => 'INVALID_TOKEN'
+                ], 401);
+            }
+
+            $expiresIn = $refreshedToken === $token
+                ? $this->authService->getTokenRemainingTimeFromPayload($payload)
+                : $this->authService->getTokenRemainingTime($refreshedToken);
+
+            $this->auditLogService->logAuthOperation('token_refresh', $userId, true, [
+                'ip_address' => $this->getClientIP($request),
+                'user_agent' => $request->getHeaderLine('User-Agent'),
+                'refreshed' => $refreshedToken !== $token
+            ]);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Token refreshed successfully',
+                'data' => [
+                    'token' => $refreshedToken,
+                    'user' => $this->formatUserPayload($userDetail),
+                    'expires_in' => $expiresIn
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->error('Token refresh failed', ['error' => $e->getMessage()]);
+            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Token refresh failed',
+                'code' => 'TOKEN_REFRESH_FAILED'
+            ], 500);
+        }
+    }
+
+    private function extractUserIdentityFromPayload(array $payload): array
+    {
+        $decodedUser = (array)($payload['user'] ?? []);
+        $userId = isset($decodedUser['id']) ? (int)$decodedUser['id'] : 0;
+        $userUuid = isset($decodedUser['uuid']) && Uuid::isValid((string)$decodedUser['uuid'])
+            ? strtolower((string)$decodedUser['uuid'])
+            : null;
+        $subject = isset($payload['sub']) ? trim((string)$payload['sub']) : '';
+
+        if ($userId <= 0 && $subject !== '' && ctype_digit($subject)) {
+            $userId = (int)$subject;
+        } elseif ($userUuid === null && $subject !== '' && Uuid::isValid($subject)) {
+            $userUuid = strtolower($subject);
+        }
+
+        return ['id' => $userId, 'uuid' => $userUuid];
+    }
+
     public function sendVerificationCode(Request $request, Response $response): Response
     {
         try {
@@ -389,11 +539,12 @@ class AuthController
                 ], 400);
             }
 
-            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
+            $challenge = $this->verifyClientChallenge($request, $data, 'auth.send_verification_code');
+            if (!$challenge['success']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
-                    'message' => 'Turnstile verification failed',
-                    'code' => 'TURNSTILE_FAILED'
+                    'message' => $challenge['message'],
+                    'code' => $challenge['code']
                 ], 400);
             }
 
@@ -483,11 +634,12 @@ class AuthController
                 $stmt = $this->db->prepare('SELECT id, username, email, email_verified_at, verification_code_expires_at FROM users WHERE verification_token = ? AND deleted_at IS NULL LIMIT 1');
                 $stmt->execute([$token]);
             } else {
-                if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
+                $challenge = $this->verifyClientChallenge($request, $data, 'auth.verify_email');
+                if (!$challenge['success']) {
                     return $this->jsonResponse($response, [
                         'success' => false,
-                        'message' => 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED'
+                        'message' => $challenge['message'],
+                        'code' => $challenge['code']
                     ], 400);
                 }
 
@@ -642,11 +794,12 @@ class AuthController
                     'code' => 'MISSING_EMAIL'
                 ], 400);
             }
-            if (!$this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
+            $challenge = $this->verifyClientChallenge($request, $data, 'auth.forgot_password');
+            if (!$challenge['success']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
-                    'message' => 'Turnstile verification failed',
-                    'code' => 'TURNSTILE_FAILED'
+                    'message' => $challenge['message'],
+                    'code' => $challenge['code']
                 ], 400);
             }
             $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ? AND deleted_at IS NULL');
@@ -1205,6 +1358,77 @@ class AuthController
         return is_array($verification) && !empty($verification['success']);
     }
 
+    private function verifyClientChallenge(Request $request, array $data, string $scope): array
+    {
+        if ($this->shouldUseMobileProofOfWork($request, $data)) {
+            $verification = $this->proofOfWorkService->verify(
+                $data['pow_challenge'] ?? null,
+                $data['pow_nonce'] ?? null,
+                $scope
+            );
+
+            if (!empty($verification['success'])) {
+                return ['success' => true];
+            }
+
+            $this->logChallengeFailure('pow_challenge_failed', $request, $scope, $verification['error'] ?? null);
+            return [
+                'success' => false,
+                'message' => 'Proof-of-work verification failed',
+                'code' => 'POW_FAILED',
+            ];
+        }
+
+        if ($this->isTurnstileVerificationSuccessful($data['cf_turnstile_response'] ?? null)) {
+            return ['success' => true];
+        }
+
+        $this->logChallengeFailure('turnstile_challenge_failed', $request, $scope);
+        return [
+            'success' => false,
+            'message' => 'Turnstile verification failed',
+            'code' => 'TURNSTILE_FAILED',
+        ];
+    }
+
+    private function shouldUseMobileProofOfWork(Request $request, array $data): bool
+    {
+        $bodyClientType = strtolower(trim((string)($data['client_type'] ?? '')));
+        $headerClientType = strtolower(trim($request->getHeaderLine('X-Client-Platform')));
+        if ($bodyClientType !== 'mobile' || $headerClientType !== 'mobile') {
+            return false;
+        }
+
+        // Browser-originated requests must stay on Turnstile even if a caller spoofs mobile markers.
+        return trim($request->getHeaderLine('Origin')) === ''
+            && trim($request->getHeaderLine('Sec-Fetch-Site')) === '';
+    }
+
+    private function logChallengeFailure(string $action, Request $request, string $scope, ?string $reason = null): void
+    {
+        try {
+            $this->auditLogService->log([
+                'action' => $action,
+                'operation_category' => 'security',
+                'actor_type' => 'anonymous',
+                'status' => 'failed',
+                'data' => [
+                    'scope' => $scope,
+                    'reason' => $reason,
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                ],
+            ]);
+        } catch (\Throwable $auditError) {
+            $this->logger->warning('AuditLogService failed while logging challenge rejection', [
+                'action' => $action,
+                'scope' => $scope,
+                'reason' => $reason,
+                'error' => $auditError->getMessage(),
+            ]);
+        }
+    }
+
     private function updateVerificationAttempts(int $userId, int $attempts): void
     {
         $stmt = $this->db->prepare('UPDATE users SET verification_attempts = ?, updated_at = ? WHERE id = ?');
@@ -1222,6 +1446,25 @@ class AuthController
             LIMIT 1
         ");
         $stmt->execute([$userId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
+
+        return $row;
+    }
+
+    private function findUserDetailedByUuid(string $userUuid): ?array
+    {
+        $stmt = $this->db->prepare("
+            SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
+            FROM users u
+            LEFT JOIN schools s ON u.school_id = s.id
+            LEFT JOIN avatars a ON u.avatar_id = a.id
+            WHERE u.uuid = ? AND u.deleted_at IS NULL
+            LIMIT 1
+        ");
+        $stmt->execute([$userUuid]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
             return null;
@@ -1278,10 +1521,39 @@ class AuthController
         ];
     }
 
+    private function logTokenRefreshFailure(Request $request, ?int $userId, string $code): void
+    {
+        try {
+            $this->auditLogService->logAuthOperation('token_refresh', $userId, false, [
+                'request_data' => [
+                    'code' => $code,
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent')
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->debug('Failed to record token refresh failure audit log', [
+                'error' => $e->getMessage(),
+                'code' => $code
+            ]);
+        }
+    }
+
     private function jsonResponse(Response $response, array $data, int $status = 200): Response
     {
         $response->getBody()->write(json_encode($data, JSON_UNESCAPED_UNICODE));
         return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+    }
+
+    private function extractBearerToken(Request $request): ?string
+    {
+        $authHeader = $request->getHeaderLine('Authorization');
+        if (!preg_match('/Bearer\s+(.*)$/i', $authHeader, $matches)) {
+            return null;
+        }
+
+        $token = trim($matches[1]);
+        return $token !== '' ? $token : null;
     }
 
     private function getClientIP(Request $request): string

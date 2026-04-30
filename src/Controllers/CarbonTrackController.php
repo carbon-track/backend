@@ -14,6 +14,8 @@ use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -30,6 +32,8 @@ class CarbonTrackController
     private ?QuotaService $quotaService;
     private ?BadgeService $badgeService;
     private UserProfileViewService $userProfileViewService;
+    private ?TurnstileService $turnstileService;
+    private ?ProofOfWorkService $proofOfWorkService;
 
     private const ERR_INTERNAL = 'Internal server error';
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
@@ -45,7 +49,9 @@ class CarbonTrackController
         $r2Service = null,
         $checkinService = null,
         $quotaService = null,
-        ?BadgeService $badgeService = null
+        ?BadgeService $badgeService = null,
+        ?TurnstileService $turnstileService = null,
+        ?ProofOfWorkService $proofOfWorkService = null
     ) {
         $this->db = $db;
         $this->carbonCalculator = $carbonCalculator;
@@ -58,6 +64,8 @@ class CarbonTrackController
         $this->checkinService = $checkinService;
         $this->quotaService = $quotaService;
         $this->badgeService = $badgeService;
+        $this->turnstileService = $turnstileService;
+        $this->proofOfWorkService = $proofOfWorkService;
     }
 
     /**
@@ -73,6 +81,15 @@ class CarbonTrackController
 
             $data = $request->getParsedBody();
             if (!is_array($data)) { $data = []; }
+
+            $challenge = $this->verifyRecordChallenge($request, $data);
+            if (!$challenge['success']) {
+                return $this->json($response, [
+                    'success' => false,
+                    'message' => $challenge['message'],
+                    'code' => $challenge['code'],
+                ], 400);
+            }
 
             // 同义词兼容映射：将多种前端可能传入的键统一为内部标准键
             $synonyms = [
@@ -1673,6 +1690,103 @@ class CarbonTrackController
     {
         $response->getBody()->write(json_encode($data));
         return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
+    }
+
+    private function verifyRecordChallenge(Request $request, array $data): array
+    {
+        if ($this->shouldUseMobileProofOfWork($request, $data)) {
+            $verification = $this->proofOfWorkService?->verify(
+                $data['pow_challenge'] ?? null,
+                $data['pow_nonce'] ?? null,
+                'carbon.record.submit'
+            ) ?? ['success' => false, 'error' => 'pow-unavailable'];
+
+            if (!empty($verification['success'])) {
+                return ['success' => true];
+            }
+
+            $this->logChallengeFailure('pow_challenge_failed', $request, 'carbon.record.submit', $verification['error'] ?? null);
+            return [
+                'success' => false,
+                'message' => 'Proof-of-work verification failed',
+                'code' => 'POW_FAILED',
+            ];
+        }
+
+        if ($this->turnstileService === null && ($_ENV['APP_ENV'] ?? '') === 'testing') {
+            return ['success' => true];
+        }
+
+        $token = is_string($data['cf_turnstile_response'] ?? null) ? trim($data['cf_turnstile_response']) : '';
+        if ($token !== '' && $this->turnstileService !== null) {
+            try {
+                $verification = $this->turnstileService->verify($token, $this->getClientIpAddress($request));
+                if (is_array($verification) && !empty($verification['success'])) {
+                    return ['success' => true];
+                }
+            } catch (\Throwable $e) {
+                $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord Turnstile error');
+            }
+        }
+
+        $this->logChallengeFailure('turnstile_challenge_failed', $request, 'carbon.record.submit');
+        return [
+            'success' => false,
+            'message' => $token === '' ? 'Turnstile verification is required' : 'Turnstile verification failed',
+            'code' => $token === '' ? 'TURNSTILE_REQUIRED' : 'TURNSTILE_FAILED',
+        ];
+    }
+
+    private function shouldUseMobileProofOfWork(Request $request, array $data): bool
+    {
+        $bodyClientType = strtolower(trim((string)($data['client_type'] ?? '')));
+        $headerClientType = strtolower(trim($request->getHeaderLine('X-Client-Platform')));
+        return $bodyClientType === 'mobile'
+            && $headerClientType === 'mobile'
+            && trim($request->getHeaderLine('Origin')) === ''
+            && trim($request->getHeaderLine('Sec-Fetch-Site')) === '';
+    }
+
+    private function logChallengeFailure(string $action, Request $request, string $scope, ?string $reason = null): void
+    {
+        try {
+            $this->auditLog->log([
+                'action' => $action,
+                'operation_category' => 'security',
+                'actor_type' => 'user',
+                'status' => 'failed',
+                'data' => [
+                    'scope' => $scope,
+                    'reason' => $reason,
+                    'ip_address' => $this->getClientIpAddress($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                ],
+            ]);
+        } catch (\Throwable $auditError) {
+            $this->logControllerException($auditError, $request, 'CarbonTrackController::logChallengeFailure audit log error');
+        }
+    }
+
+    private function getClientIpAddress(Request $request): string
+    {
+        $candidates = [
+            $request->getHeaderLine('CF-Connecting-IP'),
+            $request->getHeaderLine('X-Forwarded-For'),
+            $request->getHeaderLine('X-Real-IP'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (!$candidate) {
+                continue;
+            }
+            $parts = explode(',', $candidate);
+            $ip = trim($parts[0]);
+            if ($ip !== '') {
+                return $ip;
+            }
+        }
+
+        return (string)($request->getServerParams()['REMOTE_ADDR'] ?? '0.0.0.0');
     }
 
     private function normalizeCheckinDate(string $raw): ?string

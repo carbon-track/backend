@@ -306,8 +306,9 @@ class ComprehensiveBusinessDataTest extends TestCase
         
         if (
             strtoupper($method) === 'POST'
-            && preg_match('#/auth/register$#i', $uri)
+            && preg_match('#/auth/(register|login|forgot-password|send-verification-code|verify-email)$#i', $uri)
             && !array_key_exists('cf_turnstile_response', $data)
+            && !array_key_exists('token', $data)
         ) {
             $data['cf_turnstile_response'] = 'test_turnstile_token';
         }
@@ -465,6 +466,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             'date' => date('Y-m-d'),
             'description' => '今天上班自带水杯，减少了塑料瓶的使用',
             'proof_images' => ['/uploads/proof/water_bottle_20241201.jpg'],
+            'cf_turnstile_response' => 'test_turnstile_token',
             'request_id' => 'test-' . uniqid()
         ];
         

@@ -27,7 +27,9 @@ class CarbonTrackControllerTest extends TestCase
         $r2Service = null,
         $checkinService = null,
         $quotaService = null,
-        $badgeService = null
+        $badgeService = null,
+        $turnstileService = null,
+        $proofOfWorkService = null
     ): CarbonTrackController {
         return new CarbonTrackController(
             $pdo,
@@ -40,7 +42,9 @@ class CarbonTrackControllerTest extends TestCase
             $r2Service,
             $checkinService,
             $quotaService,
-            $badgeService
+            $badgeService,
+            $turnstileService,
+            $proofOfWorkService
         );
     }
 
@@ -191,6 +195,45 @@ class CarbonTrackControllerTest extends TestCase
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(123, $json['calculation']['points_earned']);
+    }
+
+    public function testSubmitRecordRequiresTurnstileWhenServiceIsConfigured(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+
+        try {
+            $pdo = $this->createMock(\PDO::class);
+            $calc = $this->createMock(CarbonCalculatorService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+
+            $logger = new \Monolog\Logger('test');
+            $logger->pushHandler(new \Monolog\Handler\NullHandler());
+            $turnstile = new \CarbonTrack\Services\TurnstileService('test-secret', $logger);
+
+            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, $turnstile);
+            $request = makeRequest('POST', '/api/v1/carbon-track/record', [
+                'activity_id' => 'a1',
+                'amount' => 5,
+                'date' => '2025-08-01',
+            ]);
+            $response = new \Slim\Psr7\Response();
+
+            $resp = $controller->submitRecord($request, $response);
+            $json = json_decode((string)$resp->getBody(), true);
+
+            $this->assertSame(400, $resp->getStatusCode());
+            $this->assertSame('TURNSTILE_REQUIRED', $json['code']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+        }
     }
 
     public function testSubmitRecordMakeupAlreadyCheckedInReturnsConflict(): void

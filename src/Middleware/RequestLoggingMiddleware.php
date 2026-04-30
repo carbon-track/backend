@@ -18,6 +18,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
     private SystemLogService $systemLogService;
     private AuthService $authService;
     private Logger $logger;
+    private bool $cronEndpointSystemLogsEnabled;
 
     private const EXCLUDE_PATHS = [
         '/',
@@ -25,11 +26,17 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         '/api/v1/health',
     ];
 
-    public function __construct(SystemLogService $systemLogService, AuthService $authService, Logger $logger)
+    public function __construct(
+        SystemLogService $systemLogService,
+        AuthService $authService,
+        Logger $logger,
+        bool $cronEndpointSystemLogsEnabled = true
+    )
     {
         $this->systemLogService = $systemLogService;
         $this->authService = $authService;
         $this->logger = $logger;
+        $this->cronEndpointSystemLogsEnabled = $cronEndpointSystemLogsEnabled;
     }
 
     public function process(Request $request, RequestHandler $handler): Response
@@ -117,6 +124,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         foreach (self::EXCLUDE_PATHS as $skip) {
             if ($path === $skip) return true;
         }
+        if (!$this->cronEndpointSystemLogsEnabled && $path === '/api/v1/cron/run') return true;
         // skip system log endpoints themselves to prevent recursion once added
         if (strpos($path, '/api/v1/admin/system-logs') === 0) return true;
         return false;

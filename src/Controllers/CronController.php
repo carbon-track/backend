@@ -17,7 +17,8 @@ class CronController
         private CronSchedulerService $cronSchedulerService,
         private LoggerInterface $logger,
         private ErrorLogService $errorLogService,
-        private AuditLogService $auditLogService
+        private AuditLogService $auditLogService,
+        private bool $auditLogsEnabled = false
     ) {
     }
 
@@ -139,6 +140,10 @@ class CronController
 
     private function auditSafely(string $action, array $payload, Request $request): void
     {
+        if (!$this->auditLogsEnabled) {
+            return;
+        }
+
         try {
             $this->auditLogService->logSystemEvent($action, 'cron_scheduler', $payload);
         } catch (\Throwable $exception) {

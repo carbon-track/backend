@@ -11,6 +11,7 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -25,7 +26,8 @@ class SupportTicketController
         private ErrorLogService $errorLogService,
         private ?SupportRoutingEngineService $supportRoutingEngineService = null,
         private ?AuditLogService $auditLogService = null,
-        private ?CronSchedulerService $cronSchedulerService = null
+        private ?CronSchedulerService $cronSchedulerService = null,
+        private ?ProofOfWorkService $proofOfWorkService = null
     ) {
     }
 
@@ -136,9 +138,11 @@ class SupportTicketController
         }
 
         $payload = $this->body($request);
-        if (!$this->turnstilePassed($payload['cf_turnstile_response'] ?? null, $request)) {
-            return $this->json($response, ['success' => false, 'message' => 'Turnstile verification failed', 'code' => 'TURNSTILE_FAILED'], 403);
+        $challenge = $this->verifyClientChallenge($payload, $request, 'support.ticket.create');
+        if (!$challenge['success']) {
+            return $this->json($response, ['success' => false, 'message' => $challenge['message'], 'code' => $challenge['code']], 403);
         }
+        $payload = $this->stripChallengeFields($payload);
 
         try {
             return $this->json($response, ['success' => true, 'data' => $this->supportTicketService->createTicket($actor, $payload)], 201);
@@ -191,9 +195,11 @@ class SupportTicketController
         }
 
         $payload = $this->body($request);
-        if (!$this->turnstilePassed($payload['cf_turnstile_response'] ?? null, $request)) {
-            return $this->json($response, ['success' => false, 'message' => 'Turnstile verification failed', 'code' => 'TURNSTILE_FAILED'], 403);
+        $challenge = $this->verifyClientChallenge($payload, $request, 'support.ticket.reply');
+        if (!$challenge['success']) {
+            return $this->json($response, ['success' => false, 'message' => $challenge['message'], 'code' => $challenge['code']], 403);
         }
+        $payload = $this->stripChallengeFields($payload);
 
         try {
             return $this->json($response, ['success' => true, 'data' => $this->supportTicketService->addUserMessage($actor, $this->ticketId($args), $payload)], 201);
@@ -388,6 +394,49 @@ class SupportTicketController
     {
         $result = $this->turnstileService->verify(is_string($token) ? trim($token) : '', $this->clientIp($request));
         return (bool) ($result['success'] ?? false);
+    }
+
+    private function verifyClientChallenge(array $payload, Request $request, string $scope): array
+    {
+        if ($this->shouldUseMobileProofOfWork($payload, $request)) {
+            $verification = $this->proofOfWorkService?->verify(
+                $payload['pow_challenge'] ?? null,
+                $payload['pow_nonce'] ?? null,
+                $scope
+            ) ?? ['success' => false, 'error' => 'pow-unavailable'];
+
+            if (!empty($verification['success'])) {
+                return ['success' => true];
+            }
+
+            return [
+                'success' => false,
+                'message' => 'Proof-of-work verification failed',
+                'code' => 'POW_FAILED',
+            ];
+        }
+
+        if ($this->turnstilePassed($payload['cf_turnstile_response'] ?? null, $request)) {
+            return ['success' => true];
+        }
+
+        return [
+            'success' => false,
+            'message' => 'Turnstile verification failed',
+            'code' => 'TURNSTILE_FAILED',
+        ];
+    }
+
+    private function shouldUseMobileProofOfWork(array $payload, Request $request): bool
+    {
+        $clientType = strtolower(trim((string)($payload['client_type'] ?? $request->getHeaderLine('X-Client-Platform'))));
+        return $clientType === 'mobile' && trim($request->getHeaderLine('Origin')) === '';
+    }
+
+    private function stripChallengeFields(array $payload): array
+    {
+        unset($payload['cf_turnstile_response'], $payload['client_type'], $payload['pow_challenge'], $payload['pow_nonce']);
+        return $payload;
     }
 
     private function clientIp(Request $request): ?string
