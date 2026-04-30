@@ -224,10 +224,12 @@ class CarbonCalculatorService
 
     private function resolveActivity(string $activityId): ?array
     {
+        $resolveFailureLogged = false;
         try {
             $model = CarbonActivity::find($activityId);
         } catch (\Throwable $e) {
             $this->logFailure('carbon_activity_resolve_failed', $e, ['activity_id' => $activityId], '/internal/carbon-activities/resolve');
+            $resolveFailureLogged = true;
             if ($this->logger) {
                 $this->logger->warning('Failed to resolve carbon activity', [
                     'activity_id' => $activityId,
@@ -238,6 +240,17 @@ class CarbonCalculatorService
         }
 
         if (!$model) {
+            if (!$resolveFailureLogged) {
+                $e = new \RuntimeException('Activity not found');
+                $this->logFailure('carbon_activity_resolve_failed', $e, ['activity_id' => $activityId], '/internal/carbon-activities/resolve');
+                if ($this->logger) {
+                    $this->logger->warning('Failed to resolve carbon activity', [
+                        'activity_id' => $activityId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
             return null;
         }
 
@@ -447,4 +460,3 @@ class CarbonCalculatorService
         }
     }
 }
-
