@@ -1855,12 +1855,7 @@ class CarbonTrackController
             return $candidate->format('Y-m-d');
         }
 
-        try {
-            $fallback = new \DateTimeImmutable($raw);
-            return $fallback->format('Y-m-d');
-        } catch (\Throwable $e) {
-            return null;
-        }
+        return null;
     }
 
 

@@ -170,6 +170,31 @@ class CheckinControllerTest extends TestCase
         $this->assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM user_checkins WHERE record_id = 'rec-makeup-approved'")->fetchColumn());
     }
 
+    public function testMakeupCheckinRejectsInvalidCalendarDate(): void
+    {
+        $controller = $this->makeController();
+
+        $originalDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-10 days')->format('Y-m-d');
+        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
+        $insertRecord->execute(['rec-makeup-invalid-date', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
+
+        $request = makeRequest('POST', '/users/me/checkins/makeup', [
+            'date' => '2025-02-31',
+            'record_id' => 'rec-makeup-invalid-date',
+        ]);
+        $response = new Response();
+        $result = $controller->makeup($request, $response);
+
+        $payload = json_decode((string) $result->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame(400, $result->getStatusCode());
+        $this->assertSame('INVALID_DATE', $payload['code']);
+        $this->assertSame($originalDate, $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-invalid-date'")->fetchColumn());
+        $this->assertFalse(
+            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+        );
+    }
+
     public function testMakeupCheckinAlreadyCheckedInDoesNotConsumeQuota(): void
     {
         $controller = $this->makeController();

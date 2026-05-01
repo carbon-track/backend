@@ -284,6 +284,36 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertSame(409, $resp->getStatusCode());
     }
 
+    public function testSubmitRecordMakeupRejectsInvalidCalendarDate(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $checkin = $this->createMock(\CarbonTrack\Services\CheckinService::class);
+        $quota = $this->createMock(\CarbonTrack\Services\QuotaService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+        $checkin->expects($this->never())->method('hasCheckin');
+        $quota->expects($this->never())->method('checkAndConsumeOnConnection');
+
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => 'a1',
+            'amount' => 5,
+            'date' => '2025-08-01',
+            'checkin_date' => '2025-02-31',
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $this->assertSame('INVALID_CHECKIN_DATE', $payload['code']);
+    }
+
     public function testSubmitRecordMakeupUsesSelectedDateAndConsumesQuotaAfterSuccess(): void
     {
         [$pdo, $user] = $this->makeRealCheckinDatabase(2);

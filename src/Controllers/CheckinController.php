@@ -398,12 +398,7 @@ class CheckinController
             return $candidate->setTime(0, 0, 0);
         }
 
-        try {
-            $fallback = new DateTimeImmutable($raw, $this->timezone);
-            return $fallback->setTime(0, 0, 0);
-        } catch (\Throwable $e) {
-            return null;
-        }
+        return null;
     }
 
     private function json(Response $response, array $data, int $status = 200): Response
