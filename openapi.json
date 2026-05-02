@@ -10694,7 +10694,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录 (v1)",
-        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。",
+        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
         "security": [
           {
             "bearerAuth": []
@@ -10898,7 +10898,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录",
-        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
+        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
         "security": [
           {
             "bearerAuth": []
@@ -20565,7 +20565,7 @@
           "date": {
             "type": "string",
             "format": "date",
-            "description": "活动发生日期"
+            "description": "活动发生日期。若不是服务端当前日期，则提交成功时按补打卡业务处理并消耗一次补打卡额度；未来日期会返回 RECORD_DATE_IN_FUTURE。"
           },
           "checkin_date": {
             "type": [
@@ -20573,7 +20573,7 @@
               "null"
             ],
             "format": "date",
-            "description": "可选，补打卡日期。非今日会消耗补打卡额度，且活动日期会以该补打卡日期为准。"
+            "description": "可选，兼容旧客户端显式传入补打卡日期。若未提供，则使用 date 作为打卡日期；非今日会消耗补打卡额度，且活动日期会以该打卡日期为准。"
           },
           "description": {
             "type": [
@@ -20631,7 +20631,7 @@
             ]
           }
         ],
-        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。"
+        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
       },
       "SubmitRecordResponse": {
         "type": "object",

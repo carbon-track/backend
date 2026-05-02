@@ -149,57 +149,70 @@ class CarbonTrackController
                 }
             }
 
-            $checkinDate = null;
-            $isMakeup = false;
-            $userModel = null;
+            $recordDate = $this->normalizeCheckinDate((string) $data['date']);
+            if (!$recordDate) {
+                return $this->json($response, [
+                    'error' => 'Invalid activity date. Use YYYY-MM-DD and a real calendar date.',
+                    'code' => 'INVALID_RECORD_DATE'
+                ], 400);
+            }
+
+            $tzName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
+            if (!$tzName) {
+                $tzName = 'UTC';
+            }
+            $todayStr = (new \DateTimeImmutable('now', new \DateTimeZone($tzName)))->format('Y-m-d');
+            if ($recordDate > $todayStr) {
+                return $this->json($response, [
+                    'error' => 'Activity date cannot be in the future.',
+                    'code' => 'RECORD_DATE_IN_FUTURE'
+                ], 400);
+            }
+
+            $checkinDate = $recordDate;
             if (!empty($data['checkin_date'])) {
                 $checkinDate = $this->normalizeCheckinDate((string) $data['checkin_date']);
                 if (!$checkinDate) {
                     return $this->json($response, [
-                        'error' => 'Invalid checkin date',
+                        'error' => 'Invalid check-in date. Use YYYY-MM-DD and a real calendar date.',
                         'code' => 'INVALID_CHECKIN_DATE'
                     ], 400);
                 }
 
-                $tzName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
-                if (!$tzName) {
-                    $tzName = 'UTC';
-                }
-                $todayStr = (new \DateTimeImmutable('now', new \DateTimeZone($tzName)))->format('Y-m-d');
                 if ($checkinDate > $todayStr) {
                     return $this->json($response, [
-                        'error' => 'Cannot check in for future dates',
+                        'error' => 'Check-in date cannot be in the future.',
                         'code' => 'CHECKIN_DATE_IN_FUTURE'
                     ], 400);
                 }
+            }
 
-                $isMakeup = ($checkinDate !== $todayStr);
-                if ($isMakeup) {
-                    if (!$this->checkinService || !$this->quotaService) {
-                        return $this->json($response, [
-                            'error' => 'Checkin service unavailable',
-                            'code' => 'CHECKIN_UNAVAILABLE'
-                        ], 500);
-                    }
+            $isMakeup = ($checkinDate !== $todayStr);
+            $userModel = null;
+            if ($isMakeup) {
+                if (!$this->checkinService || !$this->quotaService) {
+                    return $this->json($response, [
+                        'error' => 'Submitting a record for a past date requires the makeup check-in service, but it is unavailable.',
+                        'code' => 'CHECKIN_UNAVAILABLE'
+                    ], 500);
+                }
 
-                    if ($this->checkinService->hasCheckin((int) $user['id'], $checkinDate)) {
-                        return $this->json($response, [
-                            'error' => 'Already checked in for this date',
-                            'code' => 'ALREADY_CHECKED_IN'
-                        ], 409);
-                    }
+                if ($this->checkinService->hasCheckin((int) $user['id'], $checkinDate)) {
+                    return $this->json($response, [
+                        'error' => 'A check-in already exists for this activity date.',
+                        'code' => 'ALREADY_CHECKED_IN'
+                    ], 409);
+                }
 
-                    $userModel = $this->authService->getCurrentUserModel($request);
-                    if (!$userModel) {
-                        return $this->json($response, [
-                            'error' => 'Unauthorized',
-                            'code' => 'UNAUTHORIZED'
-                        ], 401);
-                    }
-
-                    $data['date'] = $checkinDate;
+                $userModel = $this->authService->getCurrentUserModel($request);
+                if (!$userModel) {
+                    return $this->json($response, [
+                        'error' => 'Unauthorized',
+                        'code' => 'UNAUTHORIZED'
+                    ], 401);
                 }
             }
+            $data['date'] = $checkinDate;
 
             // 解析客户端直接传的 images（即便也有 multipart）以便统一校验
             $clientProvidedImages = [];
@@ -341,7 +354,7 @@ class CarbonTrackController
                         }
                         $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
                         return $this->json($response, [
-                            'error' => 'Already checked in for this date',
+                            'error' => 'A check-in already exists for this activity date.',
                             'code' => 'ALREADY_CHECKED_IN'
                         ], 409);
                     }
@@ -352,7 +365,7 @@ class CarbonTrackController
                         }
                         $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
                         return $this->json($response, [
-                            'error' => 'Makeup quota exceeded',
+                            'error' => 'No makeup check-in quota remaining for this month. Submit today\'s record or wait until the quota resets.',
                             'code' => 'QUOTA_EXCEEDED',
                             'translation_key' => 'error.quota.exceeded'
                         ], 429);
@@ -382,7 +395,7 @@ class CarbonTrackController
                                 }
                                 $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
                                 return $this->json($response, [
-                                    'error' => 'Already checked in for this date',
+                                    'error' => 'A check-in already exists for this activity date.',
                                     'code' => 'ALREADY_CHECKED_IN'
                                 ], 409);
                             }
