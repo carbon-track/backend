@@ -1868,6 +1868,14 @@ class CarbonTrackController
             return $candidate->format('Y-m-d');
         }
 
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})[T ][0-2]\d:[0-5]\d:[0-5]\d(?:[.,]\d+)?(?:Z|[+-][0-2]\d:?[0-5]\d)?$/', $raw, $matches) === 1) {
+            $datePart = $matches[1];
+            $candidate = \DateTimeImmutable::createFromFormat('Y-m-d', $datePart);
+            if ($candidate instanceof \DateTimeImmutable && $candidate->format('Y-m-d') === $datePart) {
+                return $datePart;
+            }
+        }
+
         return null;
     }
 

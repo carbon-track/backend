@@ -191,12 +191,6 @@ class AdminAiController
 
             @ini_set('zlib.output_compression', '0');
             @ini_set('implicit_flush', '1');
-            if (PHP_SAPI !== 'cli') {
-                while (ob_get_level() > 0) {
-                    @ob_end_flush();
-                }
-                ob_implicit_flush(true);
-            }
             @set_time_limit(300);
 
             $streamHeaders = [
@@ -209,117 +203,118 @@ class AdminAiController
             $streamResponse = new \Slim\Psr7\Response(
                 200,
                 new \Slim\Psr7\Headers($streamHeaders, []),
-                new \Slim\Psr7\NonBufferedBody()
-            );
-            if (PHP_SAPI !== 'cli' && !headers_sent()) {
-                // streamChat writes before Slim's emitter runs, so SSE headers must be sent first.
-                foreach ($streamResponse->getHeaders() as $name => $values) {
-                    header($name . ': ' . implode(', ', $values), true);
-                }
-            }
-            $body = $streamResponse->getBody();
+                $this->createCallbackStream(function () use ($request, $user, $conversationId, $message, $context, $decision, $source): void {
+                    if (PHP_SAPI !== 'cli') {
+                        while (ob_get_level() > 0) {
+                            @ob_end_flush();
+                        }
+                        ob_implicit_flush(true);
+                    }
 
-            $emit = static function (string $event, array $payload) use ($body): void {
-                if (connection_aborted() !== 0) {
-                    throw new \RuntimeException('STREAM_CLIENT_DISCONNECTED');
-                }
-                $body->write('event: ' . $event . "\n");
-                $body->write('data: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n");
-            };
+                    $emit = static function (string $event, array $payload): void {
+                        if (connection_aborted() !== 0) {
+                            throw new \RuntimeException('STREAM_CLIENT_DISCONNECTED');
+                        }
+                        echo 'event: ' . $event . "\n";
+                        echo 'data: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
+                        flush();
+                    };
 
-            try {
-                $result = $this->agentService->streamChat($conversationId, $message, $context, $decision, [
-                    'request_id' => $request->getAttribute('request_id'),
-                    'actor_type' => 'admin',
-                    'actor_id' => $user['id'] ?? null,
-                    'source' => $source ?? $request->getUri()->getPath(),
-                ], $emit);
-
-                $this->logAdminAudit('admin_ai_chat_stream_completed', $user, $request, [
-                    'conversation_id' => $result['conversation_id'] ?? null,
-                    'data' => [
-                        'run_id' => $result['run_id'] ?? null,
-                        'has_decision' => $decision !== null,
-                        'source' => $source ?? $request->getUri()->getPath(),
-                    ],
-                ]);
-            } catch (\InvalidArgumentException $exception) {
-                $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
-                    'conversation_id' => $conversationId,
-                    'data' => [
-                        'run_id' => null,
-                        'code' => 'INVALID_INPUT',
-                        'status' => 'validation_error',
-                        'error' => $exception->getMessage(),
-                        'has_decision' => $decision !== null,
-                        'source' => $source ?? $request->getUri()->getPath(),
-                    ],
-                ], 'failed');
-                $emit('run.error', [
-                    'success' => false,
-                    'code' => 'INVALID_INPUT',
-                    'status' => 'validation_error',
-                    'error' => $exception->getMessage(),
-                    'timestamp' => gmdate(DATE_ATOM),
-                ]);
-            } catch (\RuntimeException $runtimeException) {
-                if ($runtimeException->getMessage() === 'STREAM_CLIENT_DISCONNECTED') {
-                    $this->logAdminAudit('admin_ai_chat_stream_disconnected', $user, $request, [
-                        'conversation_id' => $conversationId,
-                        'data' => [
-                            'run_id' => null,
-                            'status' => 'client_disconnected',
-                            'has_decision' => $decision !== null,
+                    try {
+                        $result = $this->agentService->streamChat($conversationId, $message, $context, $decision, [
+                            'request_id' => $request->getAttribute('request_id'),
+                            'actor_type' => 'admin',
+                            'actor_id' => $user['id'] ?? null,
                             'source' => $source ?? $request->getUri()->getPath(),
-                        ],
-                    ], 'failed');
-                    return $streamResponse;
-                }
-                $error = $this->mapAdminAiRuntimeException(
-                    $runtimeException,
-                    'AI_AGENT_ERROR',
-                    'Failed to process the admin AI stream'
-                );
-                $this->logException($runtimeException, $request, 'AdminAI stream runtime error');
-                $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
-                    'conversation_id' => $conversationId,
-                    'data' => [
-                        'run_id' => null,
-                        'code' => $error['code'],
-                        'status' => $error['status'],
-                        'error' => $error['error'],
-                        'has_decision' => $decision !== null,
-                        'source' => $source ?? $request->getUri()->getPath(),
-                    ],
-                ], 'failed');
-                $emit('run.error', [
-                    'success' => false,
-                    'code' => $error['code'],
-                    'status' => $error['status'],
-                    'error' => $error['error'],
-                    'timestamp' => gmdate(DATE_ATOM),
-                ]);
-            } catch (\Throwable $throwable) {
-                $this->logException($throwable, $request, 'AdminAI stream unexpected error');
-                $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
-                    'conversation_id' => $conversationId,
-                    'data' => [
-                        'run_id' => null,
-                        'code' => 'AI_AGENT_SERVER_ERROR',
-                        'status' => 'failed',
-                        'error' => 'Unexpected server error',
-                        'has_decision' => $decision !== null,
-                        'source' => $source ?? $request->getUri()->getPath(),
-                    ],
-                ], 'failed');
-                $emit('run.error', [
-                    'success' => false,
-                    'code' => 'AI_AGENT_SERVER_ERROR',
-                    'status' => 'failed',
-                    'error' => 'Unexpected server error',
-                    'timestamp' => gmdate(DATE_ATOM),
-                ]);
-            }
+                        ], $emit);
+
+                        $this->logAdminAudit('admin_ai_chat_stream_completed', $user, $request, [
+                            'conversation_id' => $result['conversation_id'] ?? null,
+                            'data' => [
+                                'run_id' => $result['run_id'] ?? null,
+                                'has_decision' => $decision !== null,
+                                'source' => $source ?? $request->getUri()->getPath(),
+                            ],
+                        ]);
+                    } catch (\InvalidArgumentException $exception) {
+                        $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
+                            'conversation_id' => $conversationId,
+                            'data' => [
+                                'run_id' => null,
+                                'code' => 'INVALID_INPUT',
+                                'status' => 'validation_error',
+                                'error' => $exception->getMessage(),
+                                'has_decision' => $decision !== null,
+                                'source' => $source ?? $request->getUri()->getPath(),
+                            ],
+                        ], 'failed');
+                        $emit('run.error', [
+                            'success' => false,
+                            'code' => 'INVALID_INPUT',
+                            'status' => 'validation_error',
+                            'error' => $exception->getMessage(),
+                            'timestamp' => gmdate(DATE_ATOM),
+                        ]);
+                    } catch (\RuntimeException $runtimeException) {
+                        if ($runtimeException->getMessage() === 'STREAM_CLIENT_DISCONNECTED') {
+                            $this->logAdminAudit('admin_ai_chat_stream_disconnected', $user, $request, [
+                                'conversation_id' => $conversationId,
+                                'data' => [
+                                    'run_id' => null,
+                                    'status' => 'client_disconnected',
+                                    'has_decision' => $decision !== null,
+                                    'source' => $source ?? $request->getUri()->getPath(),
+                                ],
+                            ], 'failed');
+                            return;
+                        }
+                        $error = $this->mapAdminAiRuntimeException(
+                            $runtimeException,
+                            'AI_AGENT_ERROR',
+                            'Failed to process the admin AI stream'
+                        );
+                        $this->logException($runtimeException, $request, 'AdminAI stream runtime error');
+                        $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
+                            'conversation_id' => $conversationId,
+                            'data' => [
+                                'run_id' => null,
+                                'code' => $error['code'],
+                                'status' => $error['status'],
+                                'error' => $error['error'],
+                                'has_decision' => $decision !== null,
+                                'source' => $source ?? $request->getUri()->getPath(),
+                            ],
+                        ], 'failed');
+                        $emit('run.error', [
+                            'success' => false,
+                            'code' => $error['code'],
+                            'status' => $error['status'],
+                            'error' => $error['error'],
+                            'timestamp' => gmdate(DATE_ATOM),
+                        ]);
+                    } catch (\Throwable $throwable) {
+                        $this->logException($throwable, $request, 'AdminAI stream unexpected error');
+                        $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
+                            'conversation_id' => $conversationId,
+                            'data' => [
+                                'run_id' => null,
+                                'code' => 'AI_AGENT_SERVER_ERROR',
+                                'status' => 'failed',
+                                'error' => 'Unexpected server error',
+                                'has_decision' => $decision !== null,
+                                'source' => $source ?? $request->getUri()->getPath(),
+                            ],
+                        ], 'failed');
+                        $emit('run.error', [
+                            'success' => false,
+                            'code' => 'AI_AGENT_SERVER_ERROR',
+                            'status' => 'failed',
+                            'error' => 'Unexpected server error',
+                            'timestamp' => gmdate(DATE_ATOM),
+                        ]);
+                    }
+                })
+            );
 
             return $streamResponse;
         } catch (\InvalidArgumentException $exception) {
@@ -873,6 +868,105 @@ class AdminAiController
         return $response
             ->withHeader('Content-Type', 'application/json')
             ->withStatus($status);
+    }
+
+    private function createCallbackStream(callable $callback): \Psr\Http\Message\StreamInterface
+    {
+        return new class($callback) implements \Psr\Http\Message\StreamInterface {
+            private bool $started = false;
+
+            public function __construct(private $callback)
+            {
+            }
+
+            public function __toString(): string
+            {
+                ob_start();
+                try {
+                    $this->read(8192);
+                    return (string) ob_get_clean();
+                } catch (\Throwable $throwable) {
+                    ob_end_clean();
+                    throw $throwable;
+                }
+            }
+
+            public function close(): void
+            {
+            }
+
+            public function detach()
+            {
+                return null;
+            }
+
+            public function getSize(): ?int
+            {
+                return null;
+            }
+
+            public function tell(): int
+            {
+                return 0;
+            }
+
+            public function eof(): bool
+            {
+                return $this->started;
+            }
+
+            public function isSeekable(): bool
+            {
+                return false;
+            }
+
+            public function seek($offset, $whence = SEEK_SET): void
+            {
+                throw new \RuntimeException('Callback stream is not seekable.');
+            }
+
+            public function rewind(): void
+            {
+                throw new \RuntimeException('Callback stream is not rewindable.');
+            }
+
+            public function isWritable(): bool
+            {
+                return false;
+            }
+
+            public function write($string): int
+            {
+                throw new \RuntimeException('Callback stream is not writable.');
+            }
+
+            public function isReadable(): bool
+            {
+                return true;
+            }
+
+            public function read($length): string
+            {
+                if ($this->started) {
+                    return '';
+                }
+
+                $this->started = true;
+                ($this->callback)();
+
+                return '';
+            }
+
+            public function getContents(): string
+            {
+                return $this->__toString();
+            }
+
+            public function getMetadata($key = null): mixed
+            {
+                return null;
+            }
+        };
     }
 
     /**

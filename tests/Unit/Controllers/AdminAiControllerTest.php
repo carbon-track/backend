@@ -234,6 +234,10 @@ class AdminAiControllerTest extends TestCase
             $this->assertStringContainsString('Origin', $response->getHeaderLine('Vary'));
             $this->assertSame('active', $response->getHeaderLine('X-CORS-Middleware'));
             $this->assertSame('', $response->getHeaderLine('Authorization'));
+
+            ob_start();
+            $response->getBody()->read(8192);
+            ob_end_clean();
         } finally {
             if ($hadHttpAuthorization) {
                 $_SERVER['HTTP_AUTHORIZATION'] = $previousHttpAuthorization;

@@ -351,7 +351,7 @@ class CarbonTrackControllerTest extends TestCase
             'activity_id' => $activityId,
             'amount' => 5,
             'date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
-            'checkin_date' => $checkinDate,
+            'checkin_date' => $checkinDate . 'T09:30:00Z',
             'images' => [
                 ['url' => 'https://example.test/proof.jpg'],
             ],

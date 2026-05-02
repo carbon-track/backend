@@ -217,6 +217,16 @@ class CheckinController
                     'rid' => $recordId,
                     'uid' => (int) $user['id'],
                 ]);
+                if ($updateRecordStmt->rowCount() === 0) {
+                    if ($db->inTransaction()) {
+                        $db->rollBack();
+                    }
+                    return $this->json($response, [
+                        'success' => false,
+                        'message' => 'Record is already reviewed and cannot be moved',
+                        'code' => 'RECORD_NOT_MUTABLE',
+                    ], 409);
+                }
 
                 if (!$this->quotaService->checkAndConsumeOnConnection($db, $userModel, 'checkin_makeup', 1)) {
                     if ($db->inTransaction()) {
