@@ -208,7 +208,7 @@ class MessageService
 
         foreach (array_chunk($rows, 500) as $chunk) {
             try {
-                $this->persistSystemMessagesBulk($chunk);
+                Message::query()->insert($chunk);
                 foreach ($chunk as $row) {
                     $sentIds[(int) $row['receiver_id']] = (int) $row['receiver_id'];
                 }

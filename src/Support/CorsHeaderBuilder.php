@@ -98,7 +98,7 @@ final class CorsHeaderBuilder
             if (strpos($allowed, '*.') !== false) {
                 $wildcardPlaceholder = '__CORS_SUBDOMAIN_WILDCARD__';
                 $quotedAllowed = preg_quote(str_replace('*.', $wildcardPlaceholder, $allowed), '/');
-                $pattern = '/^' . str_replace(preg_quote($wildcardPlaceholder, '/'), '(?:[^.]+\\.)+', $quotedAllowed) . '$/i';
+                $pattern = '/^' . str_replace(preg_quote($wildcardPlaceholder, '/'), '(?:[^.]+\\.)*', $quotedAllowed) . '$/i';
                 if (preg_match($pattern, $origin)) {
                     return true;
                 }

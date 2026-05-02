@@ -132,6 +132,26 @@ class CorsMiddlewareTest extends TestCase
         $this->assertEquals('https://dev.admin.example.com', $resp->getHeaderLine('Access-Control-Allow-Origin'));
     }
 
+    public function testWildcardAllowedOriginMatchesRootDomain(): void
+    {
+        $_ENV['CORS_ALLOWED_ORIGINS'] = 'https://*.example.com';
+
+        $mw = new CorsMiddleware();
+        $request = makeRequest('GET', '/api/v1/ping', null, null, [
+            'Origin' => ['https://example.com']
+        ]);
+        $handler = new class implements \Psr\Http\Server\RequestHandlerInterface {
+            public function handle(\Psr\Http\Message\ServerRequestInterface $request): \Psr\Http\Message\ResponseInterface {
+                return new \Slim\Psr7\Response(204);
+            }
+        };
+
+        $resp = $mw->process($request, $handler);
+
+        $this->assertEquals(204, $resp->getStatusCode());
+        $this->assertEquals('https://example.com', $resp->getHeaderLine('Access-Control-Allow-Origin'));
+    }
+
     public function testWildcardOriginWithCredentialsDoesNotReflectArbitraryOrigin(): void
     {
         $_ENV['APP_ENV'] = 'production';
