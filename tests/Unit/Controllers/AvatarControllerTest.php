@@ -585,10 +585,10 @@ class AvatarControllerTest extends TestCase
             ]);
         $avatarModel->expects($this->never())->method('updateAvatar');
 
-        $messageService->expects($this->exactly(2))
-            ->method('sendSystemMessage')
+        $messageService->expects($this->once())
+            ->method('sendSystemMessagesBatch')
             ->with(
-                $this->logicalOr($this->equalTo(101), $this->equalTo(202)),
+                [101, 202],
                 $this->stringContains('Selected avatar unavailable'),
                 $this->stringContains('Default Seedling'),
                 \CarbonTrack\Models\Message::TYPE_NOTIFICATION,
@@ -596,7 +596,8 @@ class AvatarControllerTest extends TestCase
                 'avatar',
                 5,
                 true
-            );
+            )
+            ->willReturn(['sent_count' => 2, 'failed_user_ids' => []]);
 
         /** @var \CarbonTrack\Models\Avatar $avatarModel */
         /** @var \CarbonTrack\Services\AuthService $auth */

@@ -14,6 +14,8 @@ use Psr\Http\Message\ResponseInterface;
  */
 class OpenAiClientAdapter implements StreamCapableLlmClientInterface
 {
+    private const STREAM_READ_TIMEOUT_SECONDS = 15;
+
     public function __construct(
         private Client $client,
         private ?HttpClientInterface $httpClient = null,
@@ -78,6 +80,7 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
             'headers' => $this->buildHeaders('text/event-stream'),
             'json' => $streamPayload,
             'stream' => true,
+            'read_timeout' => self::STREAM_READ_TIMEOUT_SECONDS,
         ]);
 
         if ($response->getStatusCode() >= 400) {
@@ -110,12 +113,17 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
         $toolCalls = [];
         $buffer = '';
         $body = $response->getBody();
+        $lastChunkAt = microtime(true);
         while (!$body->eof()) {
             $chunk = $body->read(8192);
             if ($chunk === '') {
+                if ((microtime(true) - $lastChunkAt) > self::STREAM_READ_TIMEOUT_SECONDS) {
+                    throw new \RuntimeException('Timed out while waiting for streamed LLM response data.');
+                }
                 continue;
             }
 
+            $lastChunkAt = microtime(true);
             $buffer .= $chunk;
             while (preg_match("/\r?\n\r?\n/", $buffer, $separatorMatch, PREG_OFFSET_CAPTURE) === 1) {
                 $separator = $separatorMatch[0][1];

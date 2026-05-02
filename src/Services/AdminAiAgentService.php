@@ -1088,17 +1088,24 @@ class AdminAiAgentService
 
     private function truncateUtf8Bytes(string $value, int $maxBytes): string
     {
+        if ($maxBytes <= 0) {
+            return '';
+        }
+
+        if (strlen($value) <= $maxBytes) {
+            return $value;
+        }
+
         if (function_exists('mb_strcut')) {
             $truncated = mb_strcut($value, 0, $maxBytes, 'UTF-8');
             return is_string($truncated) ? $truncated : '';
         }
 
-        $truncated = substr($value, 0, $maxBytes);
-        while ($truncated !== '' && preg_match('//u', $truncated) !== 1) {
-            $truncated = substr($truncated, 0, -1);
+        while ($maxBytes > 0 && isset($value[$maxBytes]) && (ord($value[$maxBytes]) & 0xC0) === 0x80) {
+            $maxBytes--;
         }
 
-        return $truncated;
+        return substr($value, 0, $maxBytes);
     }
 
     private function toolOutcomeTruncationNotice(string $locale): string

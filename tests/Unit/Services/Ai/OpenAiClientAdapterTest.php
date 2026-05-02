@@ -8,6 +8,7 @@ use CarbonTrack\Services\Ai\OpenAiClientAdapter;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use OpenAI\Client;
 use OpenAI\Contracts\TransporterContract;
@@ -152,10 +153,13 @@ class OpenAiClientAdapterTest extends TestCase
             'data: [DONE]',
             '',
         ]);
-        $streamClient = new GuzzleClient([
-            'handler' => HandlerStack::create(new MockHandler([
+        $history = [];
+        $stack = HandlerStack::create(new MockHandler([
                 new Psr7Response(200, ['x-request-id' => 'req-crlf'], $body),
-            ])),
+        ]));
+        $stack->push(Middleware::history($history));
+        $streamClient = new GuzzleClient([
+            'handler' => $stack,
         ]);
         $adapter = new OpenAiClientAdapter(
             new Client($transporter),
@@ -180,5 +184,6 @@ class OpenAiClientAdapterTest extends TestCase
         $this->assertSame('req-crlf', $result['metadata']['request_id']);
         $this->assertSame('chatcmpl-crlf', $result['metadata']['completion_id']);
         $this->assertSame(['Hello', ' world'], array_column($events, 'content'));
+        $this->assertSame(15, $history[0]['options']['read_timeout'] ?? null);
     }
 }
