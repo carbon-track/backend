@@ -77,6 +77,28 @@ class ProofOfWorkServiceTest extends TestCase
         $this->assertSame(2, (int)$db->query('SELECT COUNT(*) FROM proof_of_work_challenges')->fetchColumn());
     }
 
+    public function testProductionRequiresConfiguredSecret(): void
+    {
+        $previous = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+
+        try {
+            $logger = new Logger('test');
+            $logger->pushHandler(new NullHandler());
+
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('POW_SECRET or JWT_SECRET must be configured in production.');
+
+            new ProofOfWorkService('', $logger);
+        } finally {
+            if ($previous === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previous;
+            }
+        }
+    }
+
     private function makeService(int $difficulty, ?PDO $db = null): ProofOfWorkService
     {
         $logger = new Logger('test');

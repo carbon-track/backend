@@ -40,7 +40,16 @@ class ProofOfWorkService
         int $ttlSeconds = 120,
         ?PDO $db = null
     ) {
-        $this->secret = $secret !== '' ? $secret : 'carbontrack-pow-development-secret';
+        $secret = trim($secret);
+        if ($secret === '') {
+            $environment = strtolower(trim((string) ($_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?: 'development')));
+            if ($environment === 'production') {
+                throw new \RuntimeException('POW_SECRET or JWT_SECRET must be configured in production.');
+            }
+            $secret = 'carbontrack-pow-development-secret';
+        }
+
+        $this->secret = $secret;
         $this->logger = $logger;
         $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;

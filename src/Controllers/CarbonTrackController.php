@@ -344,6 +344,7 @@ class CarbonTrackController
 
             $recordId = null;
             $submittedAt = new \DateTimeImmutable('now');
+            $recordCommitted = false;
 
             try {
                 if ($checkinDate && $isMakeup) {
@@ -384,6 +385,7 @@ class CarbonTrackController
                     'images' => $finalImages,
                     'status' => 'pending'
                 ]);
+                $recordCommitted = !$isMakeup;
 
                 if ($this->checkinService) {
                     try {
@@ -423,12 +425,15 @@ class CarbonTrackController
 
                 if ($isMakeup && $this->db->inTransaction()) {
                     $this->db->commit();
+                    $recordCommitted = true;
                 }
             } catch (\Throwable $e) {
                 if ($isMakeup && $this->db->inTransaction()) {
                     $this->db->rollBack();
                 }
-                $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
+                if (!$recordCommitted) {
+                    $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
+                }
                 throw $e;
             }
 
