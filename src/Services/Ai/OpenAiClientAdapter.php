@@ -121,6 +121,7 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
                 if ((microtime(true) - $lastChunkAt) > $this->streamReadTimeoutSeconds) {
                     throw new \RuntimeException('Timed out while waiting for streamed LLM response data.');
                 }
+                usleep(20000);
                 continue;
             }
 
