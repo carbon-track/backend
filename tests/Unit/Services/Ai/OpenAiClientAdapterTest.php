@@ -167,7 +167,8 @@ class OpenAiClientAdapterTest extends TestCase
             'https://example.test/v1',
             'secret-api-key',
             null,
-            $streamClient
+            $streamClient,
+            42
         );
 
         $events = [];
@@ -184,6 +185,6 @@ class OpenAiClientAdapterTest extends TestCase
         $this->assertSame('req-crlf', $result['metadata']['request_id']);
         $this->assertSame('chatcmpl-crlf', $result['metadata']['completion_id']);
         $this->assertSame(['Hello', ' world'], array_column($events, 'content'));
-        $this->assertSame(15, $history[0]['options']['read_timeout'] ?? null);
+        $this->assertSame(42, $history[0]['options']['read_timeout'] ?? null);
     }
 }

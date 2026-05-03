@@ -769,7 +769,7 @@ class AdminAiAgentService
                 if ($runStepSequence >= $maxToolExecutions) {
                     $lastOutcome = $blockingOutcomes !== []
                         ? $this->mergeBlockingToolOutcomes($blockingOutcomes, $assistantParts, $lastOutcome, $runId)
-                        : $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_tool_executions');
+                        : $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_tool_executions', [], $context);
                     $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
                     return $lastOutcome;
                 }
@@ -815,7 +815,7 @@ class AdminAiAgentService
             $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
         }
 
-        return $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_steps', $lastOutcome);
+        return $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_steps', $lastOutcome, $context);
     }
 
     private function usesOpenAiToolResultReplay(): bool
@@ -1186,12 +1186,20 @@ class AdminAiAgentService
         array $assistantParts,
         string $runId,
         string $stopReason,
-        array $baseOutcome = []
+        array $baseOutcome = [],
+        array $context = []
     ): array {
         $assistantText = implode("\n\n", array_values(array_unique(array_filter($assistantParts))));
-        $warning = $stopReason === 'max_tool_executions'
-            ? '已达到本次 agent 运行的最大工具执行数，请缩小请求范围后继续。'
-            : '已达到本次 agent 运行的最大步骤数，请缩小请求范围后继续。';
+        $locale = self::resolvePromptLocale($context);
+        if ($locale === 'zh') {
+            $warning = $stopReason === 'max_tool_executions'
+                ? '已达到本次 agent 运行的最大工具执行数，请缩小请求范围后继续。'
+                : '已达到本次 agent 运行的最大步骤数，请缩小请求范围后继续。';
+        } else {
+            $warning = $stopReason === 'max_tool_executions'
+                ? 'This agent run reached the maximum number of tool executions. Narrow the request and try again.'
+                : 'This agent run reached the maximum number of steps. Narrow the request and try again.';
+        }
         $baseOutcome['assistant_text'] = ($assistantText !== '' ? $assistantText . "\n\n" : '') . $warning;
         $baseOutcome['metadata'] = array_merge($baseOutcome['metadata'] ?? [], [
             'run_id' => $runId,

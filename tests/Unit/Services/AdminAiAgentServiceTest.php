@@ -1810,6 +1810,36 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame(2, substr_count($outcome['assistant_text'], 'same status'));
     }
 
+    public function testAgentLimitOutcomeUsesPromptLocale(): void
+    {
+        $service = new AdminAiAgentService(
+            $this->makePdo(),
+            new QueueLlmClient([]),
+            new NullLogger(),
+            ['model' => 'test-model'],
+            ['managementActions' => []]
+        );
+
+        $method = new \ReflectionMethod($service, 'buildAgentLimitOutcome');
+        $method->setAccessible(true);
+
+        $englishOutcome = $method->invoke($service, [], 'run-limit-en', 'max_steps', [], ['locale' => 'en']);
+        $this->assertStringContainsString(
+            'maximum number of steps',
+            (string) ($englishOutcome['assistant_text'] ?? '')
+        );
+        $this->assertStringNotContainsString(
+            '最大步骤数',
+            (string) ($englishOutcome['assistant_text'] ?? '')
+        );
+
+        $chineseOutcome = $method->invoke($service, [], 'run-limit-zh', 'max_tool_executions', [], ['locale' => 'zh']);
+        $this->assertStringContainsString(
+            '最大工具执行数',
+            (string) ($chineseOutcome['assistant_text'] ?? '')
+        );
+    }
+
     public function testStreamChatUsesUniqueStepIdsWhenProviderRepeatsToolCallIdsInSameRun(): void
     {
         $pdo = $this->makePdo();

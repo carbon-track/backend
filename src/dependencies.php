@@ -409,6 +409,7 @@ $__deps_initializer = function (Container $container) {
             $streamHttpClient = new GuzzleClient([
                 'timeout' => $timeout,
                 'connect_timeout' => $connectTimeout,
+                'read_timeout' => $timeout,
                 'handler' => $streamHandlerStack,
             ]);
 
@@ -436,7 +437,8 @@ $__deps_initializer = function (Container $container) {
             $baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1',
             $apiKey,
             $organization !== '' ? $organization : null,
-            $streamHttpClient
+            $streamHttpClient,
+            $timeout
         );
     });
 

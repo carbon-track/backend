@@ -14,7 +14,7 @@ use Psr\Http\Message\ResponseInterface;
  */
 class OpenAiClientAdapter implements StreamCapableLlmClientInterface
 {
-    private const STREAM_READ_TIMEOUT_SECONDS = 15;
+    private const DEFAULT_STREAM_READ_TIMEOUT_SECONDS = 90;
 
     public function __construct(
         private Client $client,
@@ -22,7 +22,8 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
         private string $baseUri = 'https://api.openai.com/v1',
         private ?string $apiKey = null,
         private ?string $organization = null,
-        private ?HttpClientInterface $streamHttpClient = null
+        private ?HttpClientInterface $streamHttpClient = null,
+        private int $streamReadTimeoutSeconds = self::DEFAULT_STREAM_READ_TIMEOUT_SECONDS
     ) {}
 
     /**
@@ -80,7 +81,7 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
             'headers' => $this->buildHeaders('text/event-stream'),
             'json' => $streamPayload,
             'stream' => true,
-            'read_timeout' => self::STREAM_READ_TIMEOUT_SECONDS,
+            'read_timeout' => $this->streamReadTimeoutSeconds,
         ]);
 
         if ($response->getStatusCode() >= 400) {
@@ -117,7 +118,7 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
         while (!$body->eof()) {
             $chunk = $body->read(8192);
             if ($chunk === '') {
-                if ((microtime(true) - $lastChunkAt) > self::STREAM_READ_TIMEOUT_SECONDS) {
+                if ((microtime(true) - $lastChunkAt) > $this->streamReadTimeoutSeconds) {
                     throw new \RuntimeException('Timed out while waiting for streamed LLM response data.');
                 }
                 continue;
