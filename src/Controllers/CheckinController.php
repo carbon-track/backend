@@ -161,7 +161,8 @@ class CheckinController
 
             try {
                 $recordSql = "SELECT id, status, date FROM carbon_records WHERE id = :rid AND user_id = :uid AND deleted_at IS NULL LIMIT 1";
-                if ((string) $db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+                $driverName = (string) $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                if (in_array($driverName, ['mysql', 'pgsql'], true)) {
                     $recordSql .= " FOR UPDATE";
                 }
                 $recordStmt = $db->prepare(

@@ -350,8 +350,15 @@ class CheckinService
             return true;
         }
 
+        if ($this->driver !== 'sqlite') {
+            return false;
+        }
+
+        if (in_array($driverCode, ['19', '2067'], true)) {
+            return true;
+        }
+
         return $sqlState === '23000'
-            && $this->driver === 'sqlite'
             && stripos($e->getMessage(), 'UNIQUE constraint failed') !== false;
     }
 
