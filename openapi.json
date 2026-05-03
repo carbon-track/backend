@@ -35,13 +35,33 @@
       ]
     },
     "turnstile": {
-      "description": "Cloudflare Turnstile机器人验证中间件，保护敏感操作",
+      "description": "Cloudflare Turnstile机器人验证，保护 Web 端敏感认证与用户提交操作。移动端使用 proof-of-work challenge 代替 Turnstile。",
       "required_routes": [
         "/auth/register",
         "/auth/login",
         "/auth/forgot-password",
         "/auth/send-verification-code",
         "/auth/verify-email",
+        "/carbon-records",
+        "/carbon-track/record",
+        "/users/me",
+        "/users/me/profile",
+        "/tickets",
+        "/tickets/{ticketId}/messages"
+      ]
+    },
+    "proof_of_work": {
+      "description": "移动端匿名认证防滥用机制。移动端先调用 /api/v1/security/pow/challenge 获取一次性 challenge，再在认证请求中提交 client_type=mobile、pow_challenge 和 pow_nonce；challenge 校验成功后立即消费，不能重放。",
+      "required_mobile_routes": [
+        "/auth/register",
+        "/auth/login",
+        "/auth/forgot-password",
+        "/auth/send-verification-code",
+        "/auth/verify-email",
+        "/carbon-records",
+        "/carbon-track/record",
+        "/users/me",
+        "/users/me/profile",
         "/tickets",
         "/tickets/{ticketId}/messages"
       ]
@@ -1925,8 +1945,28 @@
               }
             }
           },
+          "500": {
+            "description": "管理员 AI 会话处理失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "AI 服务暂时不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "AI 服务处理超时。",
             "content": {
               "application/json": {
                 "schema": {
@@ -1937,6 +1977,104 @@
           }
         },
         "operationId": "adminAiChat"
+      }
+    },
+    "/api/v1/admin/ai/chat/stream": {
+      "post": {
+        "tags": [
+          "Admin",
+          "AI"
+        ],
+        "summary": "管理员 AI 流式 Agent 会话入口",
+        "description": "以 Server-Sent Events 返回管理员 AI run 生命周期、模型增量、工具调用、审批请求和最终结果。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAiChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream. Events include run.started, assistant.delta, assistant.message, tool.started, tool.result, tool.error, approval.required, approval.resolved, rollback.available, run.finished, and run.error. assistant.message events may include message_i18n for frontend-side localization.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator privileges are required for this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求缺少必要字段或会话参数无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "流式会话启动失败或服务端运行异常。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI 服务未配置或暂时不可用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "AI 服务处理超时；已建立的 SSE 连接也可能以 run.error 事件返回 AI_PROVIDER_TIMEOUT。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "adminAiChatStream"
       }
     },
     "/api/v1/admin/ai/conversations": {
@@ -2298,6 +2436,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "operationId": "adminAvatarCreateAvatar"
@@ -2487,6 +2635,16 @@
           },
           "500": {
             "description": "更新头像失败。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
             "content": {
               "application/json": {
                 "schema": {
@@ -9531,29 +9689,14 @@
           "Auth"
         ],
         "summary": "Request Password Reset",
-        "description": "提交找回密码请求。必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；接口会按安全惯例返回统一提示，不暴露邮箱是否存在。",
+        "description": "提交找回密码请求。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段。接口会按安全惯例返回统一提示，不暴露邮箱是否存在。",
         "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "email",
-                  "cf_turnstile_response"
-                ],
-                "properties": {
-                  "email": {
-                    "type": "string",
-                    "format": "email",
-                    "description": "Registered email address"
-                  },
-                  "cf_turnstile_response": {
-                    "type": "string",
-                    "description": "Cloudflare Turnstile 验证令牌（必填）"
-                  }
-                }
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
               }
             }
           }
@@ -9580,7 +9723,7 @@
             }
           },
           "400": {
-            "description": "邮箱缺失、格式非法，或缺少 / 未通过 Turnstile 校验。",
+            "description": "邮箱缺失、格式非法，或缺少 / 未通过 Turnstile 或 PoW 校验。",
             "content": {
               "application/json": {
                 "schema": {
@@ -9601,6 +9744,58 @@
           }
         },
         "operationId": "authForgotPassword"
+      }
+    },
+    "/api/v1/security/pow/challenge": {
+      "post": {
+        "tags": [
+          "Security"
+        ],
+        "summary": "Create mobile proof-of-work challenge",
+        "description": "为移动端匿名认证请求创建短期、一次性 proof-of-work challenge。Web 端仍必须使用 Cloudflare Turnstile。",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProofOfWorkChallengeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Proof-of-work challenge created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProofOfWorkChallengeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Challenge creation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/login": {
@@ -9633,7 +9828,7 @@
             }
           },
           "400": {
-            "description": "缺少登录凭据，或 Turnstile 校验失败。",
+            "description": "缺少登录凭据，或 Turnstile / PoW 校验失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -9861,7 +10056,7 @@
           "Auth"
         ],
         "summary": "Register User",
-        "description": "注册新用户账号。支持通过 school_id 绑定既有学校，或通过 new_school_name 在注册流程中创建学校；必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验。注册成功后会返回登录令牌及邮箱验证状态信息。",
+        "description": "注册新用户账号。支持通过 school_id 绑定既有学校，或通过 new_school_name 在注册流程中创建学校；Web 端必须通过 Cloudflare Turnstile，移动端必须通过 proof-of-work。注册成功后会返回登录令牌及邮箱验证状态信息。",
         "security": [],
         "requestBody": {
           "required": true,
@@ -9885,7 +10080,7 @@
             }
           },
           "400": {
-            "description": "请求参数缺失、格式非法，或 Turnstile / 地区 / 学校校验未通过。",
+            "description": "请求参数缺失、格式非法，或 Turnstile / PoW / 地区 / 学校校验未通过。",
             "content": {
               "application/json": {
                 "schema": {
@@ -10008,29 +10203,14 @@
           "Auth"
         ],
         "summary": "Send Verification Code",
-        "description": "向指定邮箱发送验证码或验证邮件。必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；成功时会返回有效期、重发时间，已验证账号会返回 already_verified 标记。",
+        "description": "向指定邮箱发送验证码或验证邮件。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段。成功时会返回有效期、重发时间，已验证账号会返回 already_verified 标记。",
         "security": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "email",
-                  "cf_turnstile_response"
-                ],
-                "properties": {
-                  "email": {
-                    "type": "string",
-                    "format": "email",
-                    "description": "Email address that should receive the verification code"
-                  },
-                  "cf_turnstile_response": {
-                    "type": "string",
-                    "description": "Cloudflare Turnstile 验证令牌（必填）"
-                  }
-                }
+                "$ref": "#/components/schemas/SendVerificationCodeRequest"
               }
             }
           }
@@ -10075,7 +10255,7 @@
             }
           },
           "400": {
-            "description": "邮箱参数非法，或缺少 / 未通过 Turnstile 校验。",
+            "description": "邮箱参数非法，或缺少 / 未通过 Turnstile 或 PoW 校验。",
             "content": {
               "application/json": {
                 "schema": {
@@ -10114,45 +10294,13 @@
           "Auth"
         ],
         "summary": "Verify Email",
-        "description": "验证邮箱。支持使用邮件链接中的 token，或使用 email + code 组合进行验证；验证码模式下可要求携带 cf_turnstile_response。验证成功后会返回新的登录令牌与用户信息。",
+        "description": "验证邮箱。支持使用邮件链接中的 token，或使用 email + code 组合进行验证；验证码模式下 Web 端必须携带 cf_turnstile_response，移动端必须提交 proof-of-work 字段。验证成功后会返回新的登录令牌与用户信息。",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "token": {
-                    "type": "string",
-                    "description": "Verification token included in the email link"
-                  },
-                  "email": {
-                    "type": "string",
-                    "format": "email",
-                    "description": "Email address used during registration (required when verifying with a code)"
-                  },
-                  "code": {
-                    "type": "string",
-                    "description": "Verification code sent to the email address"
-                  },
-                  "cf_turnstile_response": {
-                    "type": "string",
-                    "description": "验证码验证模式下可要求提供的 Cloudflare Turnstile 令牌"
-                  }
-                },
-                "anyOf": [
-                  {
-                    "required": [
-                      "token"
-                    ]
-                  },
-                  {
-                    "required": [
-                      "email",
-                      "code"
-                    ]
-                  }
-                ]
+                "$ref": "#/components/schemas/VerifyEmailRequest"
               }
             }
           }
@@ -10191,7 +10339,7 @@
             }
           },
           "400": {
-            "description": "验证令牌 / 验证码无效、参数缺失，或 Turnstile 校验失败。",
+            "description": "验证令牌 / 验证码无效、参数缺失，或 Turnstile / PoW 校验失败。",
             "content": {
               "application/json": {
                 "schema": {
@@ -10566,7 +10714,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录 (v1)",
-        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。",
+        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
         "security": [
           {
             "bearerAuth": []
@@ -10607,7 +10755,7 @@
             }
           },
           "400": {
-            "description": "缺少必填字段、未提供图片凭证、日期非法，或请求体格式不正确。",
+            "description": "缺少必填字段、未提供图片凭证、日期非法、Turnstile/PoW 校验失败，或请求体格式不正确。",
             "content": {
               "application/json": {
                 "schema": {
@@ -10770,7 +10918,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录",
-        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
+        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
         "security": [
           {
             "bearerAuth": []
@@ -10811,7 +10959,7 @@
             }
           },
           "400": {
-            "description": "缺少必填字段、日期非法、图片过多，或请求体格式不正确。",
+            "description": "缺少必填字段、日期非法、图片过多、Turnstile/PoW 校验失败，或请求体格式不正确。",
             "content": {
               "application/json": {
                 "schema": {
@@ -14585,7 +14733,7 @@
           "Users"
         ],
         "summary": "Makeup Checkin",
-        "description": "为指定日期补打卡。",
+        "description": "为指定日期补打卡。成功后关联碳减排记录的活动日期会同步修正为补打卡日期，并且只在打卡写入成功后消耗补打卡额度。专用补卡接口只能移动仍处于 pending 的用户本人记录，已审核记录会返回 409 RECORD_NOT_MUTABLE。",
         "security": [
           {
             "bearerAuth": []
@@ -14643,7 +14791,7 @@
             }
           },
           "409": {
-            "description": "日期已打卡",
+            "description": "日期已打卡，或关联记录已审核不可再移动（ALREADY_CHECKED_IN / RECORD_NOT_MUTABLE）",
             "content": {
               "application/json": {
                 "schema": {
@@ -15309,7 +15457,7 @@
           "Users"
         ],
         "summary": "更新当前用户资料",
-        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，某些部署会要求提供 Turnstile 验证。",
+        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，Web 端必须提供 Turnstile，移动端必须提供 proof-of-work。",
         "security": [
           {
             "bearerAuth": []
@@ -15337,7 +15485,7 @@
             }
           },
           "400": {
-            "description": "参数非法、地区/学校/头像校验失败，或缺少所需的 Turnstile 验证。",
+            "description": "参数非法、地区/学校/头像校验失败，或缺少所需的 Turnstile / PoW 验证。",
             "content": {
               "application/json": {
                 "schema": {
@@ -15854,7 +16002,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateSupportTicketMessageRequest"
+                "$ref": "#/components/schemas/CreateMySupportTicketMessageRequest"
               }
             }
           }
@@ -18143,6 +18291,64 @@
           }
         }
       }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Refresh JWT Token",
+        "description": "Refresh the current Bearer JWT when it is still valid. Tokens that are invalid or already expired cannot be refreshed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token refresh succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenRefreshSuccessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication token is missing, invalid, or expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Token refresh failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "authRefresh"
+      }
     }
   },
   "components": {
@@ -19285,6 +19491,93 @@
         },
         "description": "统一错误响应结构；所有4xx/5xx响应都会包含 request_id。生产环境仅返回 code；开发/测试环境会附带 message。"
       },
+      "ProofOfWorkChallengeRequest": {
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "auth.login",
+              "auth.register",
+              "auth.send_verification_code",
+              "auth.verify_email",
+              "auth.forgot_password",
+              "carbon.record.submit",
+              "user.profile.school_change",
+              "support.ticket.create",
+              "support.ticket.reply"
+            ],
+            "description": "认证操作范围，challenge 只能用于同一 scope。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端客户端标识。"
+          }
+        }
+      },
+      "ProofOfWorkChallengeResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "challenge": {
+                "type": "string",
+                "description": "签名后的 challenge token。"
+              },
+              "difficulty": {
+                "type": "integer",
+                "description": "SHA-256 结果需要满足的前导零 bit 数。"
+              },
+              "algorithm": {
+                "type": "string",
+                "enum": [
+                  "sha256"
+                ]
+              },
+              "scope": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "MobileProofOfWorkFields": {
+        "type": "object",
+        "properties": {
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求必须设置为 mobile；带浏览器 Origin 的请求仍按 Web Turnstile 处理。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "从 /api/v1/security/pow/challenge 获取的一次性 challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "满足 SHA-256(challenge + ':' + nonce) 前导零 bit 难度的 nonce。"
+          }
+        }
+      },
       "RegisterRequest": {
         "type": "object",
         "required": [
@@ -19292,7 +19585,6 @@
           "email",
           "password",
           "confirm_password",
-          "cf_turnstile_response",
           "country_code",
           "state_code"
         ],
@@ -19332,7 +19624,22 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Cloudflare Turnstile验证令牌（必填）"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端 proof-of-work challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           },
           "country_code": {
             "type": "string",
@@ -19349,7 +19656,21 @@
             "description": "Uppercase subdivision code defined under the selected country in locales/states.json."
           }
         },
-        "description": "注册请求。必须提供 cf_turnstile_response 完成机器人校验；允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
+        "anyOf": [
+          {
+            "required": [
+              "cf_turnstile_response"
+            ]
+          },
+          {
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
+          }
+        ],
+        "description": "注册请求。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
       },
       "RegisterSuccessResponse": {
         "type": "object",
@@ -19492,7 +19813,22 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "可选的 Cloudflare Turnstile 验证令牌"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端 proof-of-work challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
         },
         "anyOf": [
@@ -19515,7 +19851,7 @@
             ]
           }
         ],
-        "description": "登录请求。支持使用 identifier、username 或 email 作为账号标识；cf_turnstile_response 是否要求提供取决于部署配置。"
+        "description": "登录请求。支持使用 identifier、username 或 email 作为账号标识。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。"
       },
       "LoginSuccessResponse": {
         "type": "object",
@@ -19584,8 +19920,7 @@
       "ForgotPasswordRequest": {
         "type": "object",
         "required": [
-          "email",
-          "cf_turnstile_response"
+          "email"
         ],
         "properties": {
           "email": {
@@ -19595,16 +19930,44 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Cloudflare Turnstile 验证令牌（必填）"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端 proof-of-work challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
         },
-        "description": "找回密码请求。必须提供 Turnstile 令牌。"
+        "anyOf": [
+          {
+            "required": [
+              "cf_turnstile_response"
+            ]
+          },
+          {
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
+          }
+        ],
+        "description": "找回密码请求。Web 端必须提供 Turnstile 令牌；移动端必须提供 PoW 字段。"
       },
       "SendVerificationCodeRequest": {
         "type": "object",
         "required": [
-          "email",
-          "cf_turnstile_response"
+          "email"
         ],
         "properties": {
           "email": {
@@ -19614,10 +19977,39 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Cloudflare Turnstile 验证令牌（必填）"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端 proof-of-work challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
         },
-        "description": "发送邮箱验证码请求。必须提供 Turnstile 令牌。"
+        "anyOf": [
+          {
+            "required": [
+              "cf_turnstile_response"
+            ]
+          },
+          {
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
+          }
+        ],
+        "description": "发送邮箱验证码请求。Web 端必须提供 Turnstile 令牌；移动端必须提供 PoW 字段。"
       },
       "ResetPasswordRequest": {
         "type": "object",
@@ -19662,7 +20054,22 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "验证码模式下必填的 Cloudflare Turnstile 验证令牌"
+            "description": "验证码模式下 Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端 proof-of-work challenge。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
         },
         "anyOf": [
@@ -19677,9 +20084,18 @@
               "code",
               "cf_turnstile_response"
             ]
+          },
+          {
+            "required": [
+              "email",
+              "code",
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
           }
         ],
-        "description": "邮箱验证请求。可使用 token，或使用 email + code + Turnstile 组合验证。"
+        "description": "邮箱验证请求。可使用 token，或使用 email + code + Turnstile(Web) / PoW(移动端) 组合验证。"
       },
       "UserResponse": {
         "type": "object",
@@ -20070,7 +20486,22 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Cloudflare Turnstile 验证令牌；修改学校信息时为防止机器人频繁提交需提供"
+            "description": "Web 端修改学校信息时必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端修改学校信息时使用的 proof-of-work challenge，scope 为 user.profile.school_change。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           },
           "country_code": {
             "type": "string",
@@ -20154,7 +20585,7 @@
           "date": {
             "type": "string",
             "format": "date",
-            "description": "活动发生日期"
+            "description": "活动发生日期。若不是服务端当前日期，则提交成功时按补打卡业务处理并消耗一次补打卡额度；未来日期会返回 RECORD_DATE_IN_FUTURE。"
           },
           "checkin_date": {
             "type": [
@@ -20162,7 +20593,7 @@
               "null"
             ],
             "format": "date",
-            "description": "可选，补打卡日期（不影响活动日期，非今日会消耗补打卡额度）"
+            "description": "可选，兼容旧客户端显式传入补打卡日期。若未提供，则使用 date 作为打卡日期；非今日会消耗补打卡额度，且活动日期会以该打卡日期为准。"
           },
           "description": {
             "type": [
@@ -20185,8 +20616,42 @@
             },
             "description": "与本次碳减排记录关联的佐证图片列表。",
             "default": []
+          },
+          "cf_turnstile_response": {
+            "type": "string",
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求必须设置为 mobile。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端提交碳记录时使用的一次性 proof-of-work challenge，scope 为 carbon.record.submit。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
-        }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "cf_turnstile_response"
+            ]
+          },
+          {
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
+          }
+        ],
+        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
       },
       "SubmitRecordResponse": {
         "type": "object",
@@ -21001,7 +21466,7 @@
           },
           "record_id": {
             "type": "string",
-            "description": "关联的碳减排记录ID (UUID)"
+            "description": "关联的碳减排记录ID (UUID)。补打卡成功后该记录的活动日期会同步修正为补打卡日期。"
           },
           "note": {
             "type": [
@@ -24427,8 +24892,54 @@
             "type": "string",
             "enum": [
               "confirm",
-              "reject"
+              "reject",
+              "rollback"
             ]
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/AdminAiRollbackDescriptor"
+          }
+        }
+      },
+      "AdminAiRollbackDescriptor": {
+        "type": "object",
+        "properties": {
+          "source_proposal_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action_name": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "requires_confirmation": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_i18n": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         }
       },
@@ -24438,6 +24949,10 @@
           "conversation_id": {
             "type": "string"
           },
+          "run_id": {
+            "type": "string",
+            "description": "Present for streamed agent runs."
+          },
           "message": {
             "type": "string"
           },
@@ -24446,7 +24961,17 @@
           },
           "context": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "properties": {
+              "autonomyMode": {
+                "type": "string",
+                "enum": [
+                  "read_only_auto",
+                  "low_risk_auto",
+                  "full_auto"
+                ]
+              }
+            }
           },
           "decision": {
             "$ref": "#/components/schemas/AdminAiDecision"
@@ -24861,8 +25386,32 @@
             "items": {
               "$ref": "#/components/schemas/AdminAiPendingAction"
             }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiRun"
+            }
           }
         }
+      },
+      "AdminAiI18nMessage": {
+        "type": "object",
+        "required": [
+          "key",
+          "values"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "admin.aiWorkspace.messages.rollbackConfirmationGenerated"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
       },
       "AdminAiChatResponse": {
         "type": "object",
@@ -24875,6 +25424,17 @@
           },
           "message": {
             "type": "string"
+          },
+          "message_i18n": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AdminAiI18nMessage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional i18n key/value payload. Frontend clients should translate this when present; the message field remains a compatibility string and may contain the same i18n key."
           },
           "metadata": {
             "type": "object",
@@ -27423,6 +27983,42 @@
           "requires_confirmation": {
             "type": "boolean"
           },
+          "approval_policy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "autonomy_min_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "read_only_auto",
+              "low_risk_auto",
+              "full_auto",
+              null
+            ]
+          },
+          "rollback_strategy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_window_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "side_effects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "context_hints": {
             "type": "array",
             "items": {
@@ -28122,8 +28718,7 @@
         "required": [
           "subject",
           "category",
-          "content",
-          "cf_turnstile_response"
+          "content"
         ],
         "properties": {
           "subject": {
@@ -28164,9 +28759,62 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Cloudflare Turnstile 验证令牌。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端创建工单时使用的 proof-of-work challenge，scope 为 support.ticket.create。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
-        }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "cf_turnstile_response"
+            ]
+          },
+          {
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
+            ]
+          }
+        ]
+      },
+      "CreateMySupportTicketMessageRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CreateSupportTicketMessageRequest"
+          },
+          {
+            "type": "object",
+            "anyOf": [
+              {
+                "required": [
+                  "cf_turnstile_response"
+                ]
+              },
+              {
+                "required": [
+                  "client_type",
+                  "pow_challenge",
+                  "pow_nonce"
+                ]
+              }
+            ]
+          }
+        ]
       },
       "CreateSupportTicketMessageRequest": {
         "type": "object",
@@ -28198,7 +28846,22 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "用户回复时必填；客服端回复不需要提供。"
+            "description": "Web 端用户回复时必填；客服端回复不需要提供。移动端用户回复改用 client_type + pow_challenge + pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端回复工单时使用的 proof-of-work challenge，scope 为 support.ticket.reply。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
           }
         }
       },
@@ -29069,19 +29732,19 @@
           "task_name": {
             "type": "string"
           },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "is_registered": {
-          "type": "boolean",
-          "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
-        },
-        "interval_minutes": {
-          "type": "integer"
-        },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_registered": {
+            "type": "boolean",
+            "description": "该任务键是否仍由当前调度器注册支持。未注册任务只允许在管理端被禁用。"
+          },
+          "interval_minutes": {
+            "type": "integer"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -29386,6 +30049,211 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "AdminAiRunStep": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approval_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "output": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminAiRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "admin_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "autonomy_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "read_only_auto",
+              "low_risk_auto",
+              "full_auto",
+              null
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAiRunStep"
+            }
+          }
+        }
+      },
+      "TokenRefreshSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Token refreshed successfully"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "Refreshed or still-valid JWT token"
+              },
+              "user": {
+                "$ref": "#/components/schemas/UserResponse"
+              },
+              "expires_in": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Seconds remaining before token expiration"
+              }
+            }
           }
         }
       }

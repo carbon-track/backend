@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Services\Ai;
 
 use CarbonTrack\Services\Ai\OpenAiClientAdapter;
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response as Psr7Response;
 use OpenAI\Client;
 use OpenAI\Contracts\TransporterContract;
@@ -122,5 +126,65 @@ class OpenAiClientAdapterTest extends TestCase
                 ['role' => 'user', 'content' => 'hello'],
             ],
         ]);
+    }
+
+    public function testStreamChatCompletionConsumesCrLfDelimitedFrames(): void
+    {
+        $transporter = new class implements TransporterContract {
+            public function requestObject(Payload $payload): TransporterResponse
+            {
+                throw new \LogicException('Not used in this test.');
+            }
+
+            public function requestContent(Payload $payload): string
+            {
+                throw new \LogicException('Not used in this test.');
+            }
+
+            public function requestStream(Payload $payload): ResponseInterface
+            {
+                throw new \LogicException('Not used in this test.');
+            }
+        };
+
+        $body = implode("\r\n\r\n", [
+            'data: {"id":"chatcmpl-crlf","model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"}}]}',
+            'data: {"choices":[{"index":0,"delta":{"content":" world"},"finish_reason":"stop"}],"usage":{"total_tokens":3}}',
+            'data: [DONE]',
+            '',
+        ]);
+        $history = [];
+        $stack = HandlerStack::create(new MockHandler([
+                new Psr7Response(200, ['x-request-id' => 'req-crlf'], $body),
+        ]));
+        $stack->push(Middleware::history($history));
+        $streamClient = new GuzzleClient([
+            'handler' => $stack,
+        ]);
+        $adapter = new OpenAiClientAdapter(
+            new Client($transporter),
+            null,
+            'https://example.test/v1',
+            'secret-api-key',
+            null,
+            $streamClient,
+            42
+        );
+
+        $events = [];
+        $result = $adapter->streamChatCompletion([
+            'model' => 'test-model',
+            'messages' => [['role' => 'user', 'content' => 'hello']],
+        ], static function (array $event) use (&$events): void {
+            $events[] = $event;
+        });
+
+        $this->assertSame('Hello world', $result['choices'][0]['message']['content']);
+        $this->assertSame('stop', $result['choices'][0]['finish_reason']);
+        $this->assertSame('chatcmpl-crlf', $result['id']);
+        $this->assertSame('req-crlf', $result['metadata']['request_id']);
+        $this->assertSame('chatcmpl-crlf', $result['metadata']['completion_id']);
+        $this->assertSame(['Hello', ' world'], array_column($events, 'content'));
+        $this->assertSame(42, $history[0]['options']['read_timeout'] ?? null);
     }
 }

@@ -1108,55 +1108,57 @@ class AvatarController
             $fallbackAvatarLabel
         );
 
-        $notifiedCount = 0;
-        $failedUserIds = [];
-
+        $recipientIds = [];
         foreach ($affectedUsers as $recipient) {
             $userId = (int) ($recipient['id'] ?? 0);
             if ($userId <= 0) {
                 continue;
             }
+            $recipientIds[$userId] = $userId;
+        }
 
-            try {
-                $this->messageService->sendSystemMessage(
-                    $userId,
-                    $title,
-                    $content,
-                    Message::TYPE_NOTIFICATION,
-                    Message::PRIORITY_NORMAL,
-                    'avatar',
-                    (int) ($avatar['id'] ?? 0),
-                    true
-                );
-                $notifiedCount++;
-            } catch (\Throwable $e) {
-                $failedUserIds[] = $userId;
-                if ($this->errorLogService !== null) {
-                    try {
-                        $this->errorLogService->logException($e, $request, [
-                            'action' => 'avatar_fallback_notification_failed',
-                            'avatar_id' => $avatar['id'] ?? null,
-                            'fallback_avatar_id' => $fallbackAvatar['id'] ?? null,
-                            'recipient_user_id' => $userId,
-                        ]);
-                    } catch (\Throwable $ignore) {
-                    }
-                }
+        try {
+            $summary = $this->messageService->sendSystemMessagesBatch(
+                array_values($recipientIds),
+                $title,
+                $content,
+                Message::TYPE_NOTIFICATION,
+                Message::PRIORITY_NORMAL,
+                'avatar',
+                (int) ($avatar['id'] ?? 0),
+                true
+            );
 
-                if ($this->logger !== null) {
-                    $this->logger->warning('Failed to notify user about avatar fallback', [
+            return [
+                'notified_count' => (int) ($summary['sent_count'] ?? 0),
+                'failed_user_ids' => array_values($summary['failed_user_ids'] ?? []),
+            ];
+        } catch (\Throwable $e) {
+            if ($this->errorLogService !== null) {
+                try {
+                    $this->errorLogService->logException($e, $request, [
+                        'action' => 'avatar_fallback_notification_failed',
                         'avatar_id' => $avatar['id'] ?? null,
                         'fallback_avatar_id' => $fallbackAvatar['id'] ?? null,
-                        'recipient_user_id' => $userId,
-                        'error' => $e->getMessage(),
+                        'recipient_count' => count($recipientIds),
                     ]);
+                } catch (\Throwable $ignore) {
                 }
+            }
+
+            if ($this->logger !== null) {
+                $this->logger->warning('Failed to notify users about avatar fallback', [
+                    'avatar_id' => $avatar['id'] ?? null,
+                    'fallback_avatar_id' => $fallbackAvatar['id'] ?? null,
+                    'recipient_count' => count($recipientIds),
+                    'error' => $e->getMessage(),
+                ]);
             }
         }
 
         return [
-            'notified_count' => $notifiedCount,
-            'failed_user_ids' => $failedUserIds,
+            'notified_count' => 0,
+            'failed_user_ids' => array_values($recipientIds),
         ];
     }
 }

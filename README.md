@@ -10,6 +10,7 @@
 
 - **生产环境 (`APP_ENV = 'production'`)**：
   - 严格依赖 `.env` 文件中的 `CORS_ALLOWED_ORIGINS` 配置，不会自动添加任何本地源，确保生产安全。
+  - 如果请求携带 Cookie 或 `Authorization` 头，必须配置具体前端 Origin；不要使用 `CORS_ALLOWED_ORIGINS=*` 搭配 `CORS_ALLOW_CREDENTIALS=true`。
 
 **调试步骤**
 

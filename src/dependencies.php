@@ -19,6 +19,7 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
@@ -56,6 +57,7 @@ use CarbonTrack\Services\AdminAiAgentService;
 use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\AdminAiReadModelService;
 use CarbonTrack\Services\AdminAiResultFormatterService;
+use CarbonTrack\Services\AdminAiRollbackService;
 use CarbonTrack\Services\AdminAiWriteActionService;
 use CarbonTrack\Services\AdminAnnouncementAiService;
 use CarbonTrack\Controllers\BadgeController;
@@ -93,6 +95,15 @@ use Psr\Http\Message\ResponseInterface;
 use OpenAI\Factory as OpenAiFactory;
 
 $__deps_initializer = function (Container $container) {
+    $envBool = static function (string $key, bool $default = false): bool {
+        $raw = $_ENV[$key] ?? $_SERVER[$key] ?? getenv($key);
+        if (!is_string($raw) && !is_numeric($raw) && !is_bool($raw)) {
+            return $default;
+        }
+
+        return filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $default;
+    };
+
     // Logger
     $container->set(Logger::class, function () {
         try {
@@ -353,10 +364,53 @@ $__deps_initializer = function (Container $container) {
                 return $response->withBody(Utils::streamFor($stream))->withoutHeader('Content-Length');
             }));
 
+            $timeout = isset($_ENV['LLM_TIMEOUT_SECONDS']) && is_numeric((string) $_ENV['LLM_TIMEOUT_SECONDS'])
+                ? max(10, (int) $_ENV['LLM_TIMEOUT_SECONDS'])
+                : 90;
+            $connectTimeout = isset($_ENV['LLM_CONNECT_TIMEOUT_SECONDS']) && is_numeric((string) $_ENV['LLM_CONNECT_TIMEOUT_SECONDS'])
+                ? max(1, (int) $_ENV['LLM_CONNECT_TIMEOUT_SECONDS'])
+                : 10;
+
             $httpClient = new GuzzleClient([
-                'timeout' => 15,
-                'connect_timeout' => 5,
+                'timeout' => $timeout,
+                'connect_timeout' => $connectTimeout,
                 'handler' => $handlerStack,
+            ]);
+            $streamHandlerStack = HandlerStack::create();
+            $streamHandlerStack->push(Middleware::mapResponse(function (ResponseInterface $response) {
+                $headers = array_filter(
+                    array_map(static fn (string $value): string => trim($value), $response->getHeader('x-request-id')),
+                    static fn (string $value): bool => $value !== ''
+                );
+                if ($headers !== []) {
+                    return $response;
+                }
+
+                $requestIdBytes = null;
+                try {
+                    $requestIdBytes = random_bytes(8);
+                } catch (\Throwable) {
+                    $requestIdBytes = null;
+                }
+                if ($requestIdBytes === null && function_exists('openssl_random_pseudo_bytes')) {
+                    try {
+                        $opensslBytes = openssl_random_pseudo_bytes(8);
+                        $requestIdBytes = is_string($opensslBytes) && $opensslBytes !== '' ? $opensslBytes : null;
+                    } catch (\Throwable) {
+                        $requestIdBytes = null;
+                    }
+                }
+                $requestId = $requestIdBytes !== null
+                    ? 'llm-stream-' . bin2hex($requestIdBytes)
+                    : 'llm-stream-' . str_replace('.', '', uniqid('', true));
+
+                return $response->withHeader('x-request-id', $requestId);
+            }));
+            $streamHttpClient = new GuzzleClient([
+                'timeout' => $timeout,
+                'connect_timeout' => $connectTimeout,
+                'read_timeout' => $timeout,
+                'handler' => $streamHandlerStack,
             ]);
 
             $factory = $factory->withHttpClient($httpClient);
@@ -382,7 +436,9 @@ $__deps_initializer = function (Container $container) {
             $httpClient,
             $baseUrl !== '' ? $baseUrl : 'https://api.openai.com/v1',
             $apiKey,
-            $organization !== '' ? $organization : null
+            $organization !== '' ? $organization : null,
+            $streamHttpClient,
+            $timeout
         );
     });
 
@@ -466,7 +522,8 @@ $__deps_initializer = function (Container $container) {
         return new AdminAiConversationStoreService(
             $c->get(PDO::class),
             $c->get(LoggerInterface::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class)
         );
     });
 
@@ -482,6 +539,10 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminAiResultFormatterService::class, function () {
         return new AdminAiResultFormatterService();
+    });
+
+    $container->set(AdminAiRollbackService::class, function () {
+        return new AdminAiRollbackService();
     });
 
     $container->set(UserAiService::class, function (ContainerInterface $c) {
@@ -605,7 +666,7 @@ $__deps_initializer = function (Container $container) {
         $config = [
             'model' => $_ENV['LLM_API_MODEL'] ?? null,
             'temperature' => $_ENV['LLM_API_TEMPERATURE'] ?? null,
-            'max_tokens' => $_ENV['LLM_API_MAX_TOKENS'] ?? null,
+            'max_tokens' => $_ENV['ADMIN_AI_MAX_TOKENS'] ?? ($_ENV['LLM_API_MAX_TOKENS'] ?? AdminAiAgentService::DEFAULT_MAX_TOKENS),
         ];
 
         return new AdminAiAgentService(
@@ -623,7 +684,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(AdminAiReadModelService::class),
             $c->get(AdminAiWriteActionService::class),
             $c->get(AdminAiConversationStoreService::class),
-            $c->get(AdminAiResultFormatterService::class)
+            $c->get(AdminAiResultFormatterService::class),
+            $c->get(AdminAiRollbackService::class)
         );
     });
 
@@ -671,7 +733,7 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
-    $container->set(CronSchedulerService::class, function (ContainerInterface $c) {
+    $container->set(CronSchedulerService::class, function (ContainerInterface $c) use ($envBool) {
         return new CronSchedulerService(
             $c->get(PDO::class),
             $c->get(LoggerInterface::class),
@@ -680,7 +742,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(SupportRoutingEngineService::class),
             $c->get(BadgeService::class),
             $c->get(LeaderboardService::class),
-            $c->get(StreakLeaderboardService::class)
+            $c->get(StreakLeaderboardService::class),
+            $envBool('CRON_ENDPOINT_AUDIT_LOGS_ENABLED', true),
+            $c->get(ProofOfWorkService::class)
         );
     });
 
@@ -800,6 +864,21 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(ProofOfWorkService::class, function (ContainerInterface $c) {
+        $difficulty = (int) ($_ENV['POW_DIFFICULTY'] ?? 16);
+        $ttlSeconds = (int) ($_ENV['POW_TTL_SECONDS'] ?? 120);
+
+        return new ProofOfWorkService(
+            $_ENV['POW_SECRET'] ?? ($_ENV['JWT_SECRET'] ?? ''),
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            $c->get(ErrorLogService::class),
+            $difficulty,
+            $ttlSeconds,
+            $c->get(DatabaseService::class)->getConnection()->getPdo()
+        );
+    });
+
     // Controllers
     $container->set(AvatarController::class, function (ContainerInterface $c) {
         return new AvatarController(
@@ -843,7 +922,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(LeaderboardService::class),
             $c->get(CheckinService::class),
             $c->get(StreakLeaderboardService::class),
-            $c->get(UserProfileViewService::class)
+            $c->get(UserProfileViewService::class),
+            $c->get(ProofOfWorkService::class)
         );
     });
 
@@ -861,7 +941,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(RegionService::class),
             $c->get(CheckinService::class),
-            $c->get(UserProfileViewService::class)
+            $c->get(UserProfileViewService::class),
+            $c->get(ProofOfWorkService::class)
         );
     });
 
@@ -878,7 +959,9 @@ $__deps_initializer = function (Container $container) {
             $c->get(CloudflareR2Service::class),
             $c->get(CheckinService::class),
             $c->get(QuotaService::class),
-            $c->get(BadgeService::class)
+            $c->get(BadgeService::class),
+            $c->get(TurnstileService::class),
+            $c->get(ProofOfWorkService::class)
         );
     });
 
@@ -1031,7 +1114,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $c->get(SupportRoutingEngineService::class),
             $c->get(AuditLogService::class),
-            $c->get(CronSchedulerService::class)
+            $c->get(CronSchedulerService::class),
+            $c->get(ProofOfWorkService::class)
         );
     });
 
@@ -1047,12 +1131,13 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
-    $container->set(CronController::class, function (ContainerInterface $c) {
+    $container->set(CronController::class, function (ContainerInterface $c) use ($envBool) {
         return new CronController(
             $c->get(CronSchedulerService::class),
             $c->get(LoggerInterface::class),
             $c->get(ErrorLogService::class),
-            $c->get(AuditLogService::class)
+            $c->get(AuditLogService::class),
+            $envBool('CRON_ENDPOINT_AUDIT_LOGS_ENABLED', true)
         );
     });
 
@@ -1089,11 +1174,12 @@ $__deps_initializer = function (Container $container) {
     });
 
     // Request Logging Middleware
-    $container->set(RequestLoggingMiddleware::class, function (ContainerInterface $c) {
+    $container->set(RequestLoggingMiddleware::class, function (ContainerInterface $c) use ($envBool) {
         return new RequestLoggingMiddleware(
             $c->get(SystemLogService::class),
             $c->get(AuthService::class),
-            $c->get(Logger::class)
+            $c->get(Logger::class),
+            $envBool('CRON_ENDPOINT_SYSTEM_LOGS_ENABLED', true)
         );
     });
 };

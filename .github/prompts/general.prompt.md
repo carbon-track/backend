@@ -6,3 +6,9 @@ Requirements:
 如果你在处理前端代码，确保组件的测试覆盖所有交互和状态，包括API调用的模拟和验证。一定要遵循openapi.json（如果存在的话），并确保测试用例与API文档保持一致。
 本地环境不是服务器的环境，代码更改需要手动同步，因此你在更新代码后使用url测试代码时要先提醒我同步代码。
 你应该对MCP服务器和其它工具加以利用，优化效率和代码质量。
+创建 PR 后，以及向已有 PR 推送任何新增 commit 后，必须等待 coding-agent review 意见后再视为可合并。
+可接受 Copilot code review 或仓库配置的等效 Codex/code-review agent。
+若自动 review 未触发，应通过可用的 GitHub 工具或 UI 手动请求 Copilot/code-agent review，并等待结果。
+对可执行的 review 意见应追加 commit 修复，并 resolve 对应 review thread。
+每次向 PR 推送新 commit 后，都应重复等待或请求 review。
+以仓库内已由 git 跟踪的 instruction Markdown 为准；custom-instructions/repo/.github/copilot-instructions.md 等生成或未跟踪副本若不存在或未纳入 git，则不作为维护目标。

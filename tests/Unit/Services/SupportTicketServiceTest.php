@@ -542,6 +542,99 @@ class SupportTicketServiceTest extends TestCase
         $this->assertNotNull($ticketRow->resolved_at);
     }
 
+    public function testSupportReplyCanCloseTicketWithFinalStatusNotification(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'notification_email_mask' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 54,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Reply and close',
+            'category' => 'account',
+            'status' => 'resolved',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'resolved',
+            'resolved_at' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $messages = $this->createMock(MessageService::class);
+        $messages->expects($this->once())
+            ->method('sendSystemMessage')
+            ->with(
+                (int) $requester->id,
+                'Support replied to your ticket',
+                $this->stringContains('Status: Closed'),
+                'message',
+                'normal',
+                'support_ticket',
+                54,
+                false
+            );
+
+        $email = $this->createMock(EmailService::class);
+        $email->expects($this->once())
+            ->method('sendSupportTicketNotification')
+            ->with(
+                'requester@example.com',
+                'requester',
+                'Support replied to ticket #54',
+                $this->callback(function (array $payload): bool {
+                    return ($payload['summary'] ?? null) === 'We posted a new reply and closed the ticket.'
+                        && ($payload['closing'] ?? null) === 'If anything is still unclear, open CarbonTrack to review the thread and follow up.'
+                        && in_array(['label' => 'Status', 'value' => 'Closed'], $payload['details'] ?? [], true)
+                        && ($payload['message']['body'] ?? null) === 'Closing this out';
+                }),
+                NotificationPreferenceService::CATEGORY_MESSAGE,
+                'normal'
+            )
+            ->willReturn(true);
+
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('log')->willReturn(true);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $audit,
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class),
+            $email,
+            $messages
+        );
+
+        $result = $service->addSupportMessage(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            54,
+            ['content' => 'Closing this out', 'status' => 'closed']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 54)->first();
+
+        $this->assertSame('closed', $result['status']);
+        $this->assertSame('closed', $ticketRow->status);
+        $this->assertSame('resolved', $ticketRow->sla_status);
+        $this->assertNotNull($ticketRow->closed_at);
+        $this->assertSame($now, $ticketRow->resolved_at);
+    }
+
     public function testUpdateTicketFromSupportSendsUserSupportNotification(): void
     {
         $now = date('Y-m-d H:i:s');
@@ -1986,6 +2079,120 @@ class SupportTicketServiceTest extends TestCase
         $this->assertSame('in_progress', $ticketRow->status);
         $this->assertSame('pending', $ticketRow->sla_status);
         $this->assertNull($ticketRow->resolved_at);
+        $this->assertNull($ticketRow->closed_at);
+    }
+
+    public function testUpdateTicketFromSupportPreservesTerminalTimestamps(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $resolvedAt = '2026-01-10 08:00:00';
+        $closedAt = '2026-01-12 09:30:00';
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 71,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Preserve closure trail',
+            'category' => 'account',
+            'status' => 'closed',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'resolved',
+            'resolved_at' => $resolvedAt,
+            'closed_at' => $closedAt,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $service->updateTicketFromSupport(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            71,
+            ['status' => 'closed', 'priority' => 'urgent']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 71)->first();
+
+        $this->assertSame('closed', $ticketRow->status);
+        $this->assertSame('urgent', $ticketRow->priority);
+        $this->assertSame($resolvedAt, $ticketRow->resolved_at);
+        $this->assertSame($closedAt, $ticketRow->closed_at);
+    }
+
+    public function testUpdateTicketFromSupportClearsClosedAtWhenResolvingClosedTicket(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $resolvedAt = '2026-01-10 08:00:00';
+        $closedAt = '2026-01-12 09:30:00';
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 72,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Resolve closed ticket',
+            'category' => 'account',
+            'status' => 'closed',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'resolved',
+            'resolved_at' => $resolvedAt,
+            'closed_at' => $closedAt,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $service->updateTicketFromSupport(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            72,
+            ['status' => 'resolved']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 72)->first();
+
+        $this->assertSame('resolved', $ticketRow->status);
+        $this->assertSame('resolved', $ticketRow->sla_status);
+        $this->assertSame($resolvedAt, $ticketRow->resolved_at);
         $this->assertNull($ticketRow->closed_at);
     }
 

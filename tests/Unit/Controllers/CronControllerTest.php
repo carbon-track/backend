@@ -22,7 +22,7 @@ class CronControllerTest extends TestCase
     public function testRunReturnsServiceUnavailableWhenCronKeyIsMissing(): void
     {
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+        $audit->expects($this->never())->method('logSystemEvent');
 
         $controller = new CronController(
             $this->createMock(CronSchedulerService::class),
@@ -48,7 +48,7 @@ class CronControllerTest extends TestCase
         $_ENV['CRON_RUN_KEY'] = 'expected-secret';
 
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+        $audit->expects($this->never())->method('logSystemEvent');
 
         $controller = new CronController(
             $this->createMock(CronSchedulerService::class),
@@ -83,7 +83,8 @@ class CronControllerTest extends TestCase
             $this->createMock(CronSchedulerService::class),
             $logger,
             $this->createMock(ErrorLogService::class),
-            $audit
+            $audit,
+            true
         );
 
         $response = $controller->run(
@@ -111,7 +112,7 @@ class CronControllerTest extends TestCase
             ]);
 
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+        $audit->expects($this->never())->method('logSystemEvent');
 
         $controller = new CronController(
             $scheduler,
@@ -144,7 +145,7 @@ class CronControllerTest extends TestCase
             ]);
 
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+        $audit->expects($this->never())->method('logSystemEvent');
 
         $controller = new CronController(
             $scheduler,
@@ -179,7 +180,7 @@ class CronControllerTest extends TestCase
             ]);
 
         $audit = $this->createMock(AuditLogService::class);
-        $audit->expects($this->once())->method('logSystemEvent')->willReturn(true);
+        $audit->expects($this->never())->method('logSystemEvent');
 
         $controller = new CronController(
             $scheduler,
@@ -229,7 +230,8 @@ class CronControllerTest extends TestCase
             $scheduler,
             $this->createMock(LoggerInterface::class),
             $this->createMock(ErrorLogService::class),
-            $audit
+            $audit,
+            true
         );
 
         $response = $controller->run(

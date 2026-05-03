@@ -6,12 +6,32 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
+use CarbonTrack\Models\User;
+use CarbonTrack\Models\UserGroup;
 use CarbonTrack\Services\CarbonCalculatorService;
+use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\QuotaService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Tests\Integration\TestSchemaBuilder;
+use Illuminate\Database\Capsule\Manager as Capsule;
 
 class CarbonTrackControllerTest extends TestCase
 {
+    private array $tempDbPaths = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->tempDbPaths as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+        $this->tempDbPaths = [];
+
+        parent::tearDown();
+    }
+
     private function makeUserProfileViewService(): UserProfileViewService
     {
         return new UserProfileViewService(new RegionService(null, null, null, null));
@@ -27,7 +47,9 @@ class CarbonTrackControllerTest extends TestCase
         $r2Service = null,
         $checkinService = null,
         $quotaService = null,
-        $badgeService = null
+        $badgeService = null,
+        $turnstileService = null,
+        $proofOfWorkService = null
     ): CarbonTrackController {
         return new CarbonTrackController(
             $pdo,
@@ -40,7 +62,9 @@ class CarbonTrackControllerTest extends TestCase
             $r2Service,
             $checkinService,
             $quotaService,
-            $badgeService
+            $badgeService,
+            $turnstileService,
+            $proofOfWorkService
         );
     }
 
@@ -184,13 +208,56 @@ class CarbonTrackControllerTest extends TestCase
         $pdo->method('prepare')->willReturnOnConsecutiveCalls($activityStmt, $insert, $admins);
 
         $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
-        $request = makeRequest('POST', '/carbon-track/record', ['activity_id'=>'a1','amount'=>5,'date'=>'2025-08-01']);
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => 'a1',
+            'amount' => 5,
+            'date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+        ]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->submitRecord($request, $response);
         $this->assertEquals(200, $resp->getStatusCode());
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(123, $json['calculation']['points_earned']);
+    }
+
+    public function testSubmitRecordRequiresTurnstileWhenServiceIsConfigured(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+
+        try {
+            $pdo = $this->createMock(\PDO::class);
+            $calc = $this->createMock(CarbonCalculatorService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+
+            $logger = new \Monolog\Logger('test');
+            $logger->pushHandler(new \Monolog\Handler\NullHandler());
+            $turnstile = new \CarbonTrack\Services\TurnstileService('test-secret', $logger);
+
+            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, $turnstile);
+            $request = makeRequest('POST', '/api/v1/carbon-track/record', [
+                'activity_id' => 'a1',
+                'amount' => 5,
+                'date' => '2025-08-01',
+            ]);
+            $response = new \Slim\Psr7\Response();
+
+            $resp = $controller->submitRecord($request, $response);
+            $json = json_decode((string)$resp->getBody(), true);
+
+            $this->assertSame(400, $resp->getStatusCode());
+            $this->assertSame('TURNSTILE_REQUIRED', $json['code']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+        }
     }
 
     public function testSubmitRecordMakeupAlreadyCheckedInReturnsConflict(): void
@@ -219,6 +286,316 @@ class CarbonTrackControllerTest extends TestCase
         $resp = $controller->submitRecord($request, $response);
 
         $this->assertSame(409, $resp->getStatusCode());
+    }
+
+    public function testSubmitRecordMakeupRejectsInvalidCalendarDate(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $checkin = $this->createMock(\CarbonTrack\Services\CheckinService::class);
+        $quota = $this->createMock(\CarbonTrack\Services\QuotaService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+        $checkin->expects($this->never())->method('hasCheckin');
+        $quota->expects($this->never())->method('checkAndConsumeOnConnection');
+
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => 'a1',
+            'amount' => 5,
+            'date' => '2025-08-01',
+            'checkin_date' => '2025-02-31',
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $this->assertSame('INVALID_CHECKIN_DATE', $payload['code']);
+    }
+
+    public function testSubmitRecordMakeupUsesSelectedDateAndConsumesQuotaAfterSuccess(): void
+    {
+        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        $checkinDate = (new \DateTimeImmutable('now'))->modify('-3 days')->format('Y-m-d');
+
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $calc->method('calculateCarbonSavings')->willReturn([
+            'carbon_savings' => 1.5,
+            'points_earned' => 15,
+        ]);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => $user->id, 'username' => $user->username]);
+        $auth->method('getCurrentUserModel')->willReturn($user);
+
+        $controller = $this->makeController(
+            $pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            null,
+            null,
+            new CheckinService($pdo, null, 'UTC'),
+            new QuotaService()
+        );
+
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => $activityId,
+            'amount' => 5,
+            'date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+            'checkin_date' => $checkinDate . 'T09:30:00Z',
+            'images' => [
+                ['url' => 'https://example.test/proof.jpg'],
+            ],
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode(), (string) $resp->getBody());
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $recordId = $payload['data']['record_id'] ?? null;
+        $this->assertNotEmpty($recordId);
+
+        $record = $pdo->query("SELECT id, date FROM carbon_records WHERE id = " . $pdo->quote((string) $recordId))->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame($checkinDate, $record['date']);
+
+        $checkin = $pdo->query("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id)->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame($checkinDate, $checkin['checkin_date']);
+        $this->assertSame('makeup', $checkin['source']);
+        $this->assertSame($recordId, $checkin['record_id']);
+
+        $usage = $pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn();
+        $this->assertSame(1.0, (float) $usage);
+    }
+
+    public function testSubmitRecordPastActivityDateUsesMakeupAndConsumesQuota(): void
+    {
+        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        $activityDate = (new \DateTimeImmutable('now'))->modify('-2 days')->format('Y-m-d');
+
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $calc->method('calculateCarbonSavings')->willReturn([
+            'carbon_savings' => 1.5,
+            'points_earned' => 15,
+        ]);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => $user->id, 'username' => $user->username]);
+        $auth->method('getCurrentUserModel')->willReturn($user);
+
+        $controller = $this->makeController(
+            $pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            null,
+            null,
+            new CheckinService($pdo, null, 'UTC'),
+            new QuotaService()
+        );
+
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => $activityId,
+            'amount' => 5,
+            'date' => $activityDate,
+            'images' => [
+                ['url' => 'https://example.test/proof.jpg'],
+            ],
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+
+        $this->assertSame(200, $resp->getStatusCode(), (string) $resp->getBody());
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $recordId = $payload['data']['record_id'] ?? null;
+        $this->assertNotEmpty($recordId);
+
+        $record = $pdo->query("SELECT id, date FROM carbon_records WHERE id = " . $pdo->quote((string) $recordId))->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame($activityDate, $record['date']);
+
+        $checkin = $pdo->query("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id)->fetch(\PDO::FETCH_ASSOC);
+        $this->assertSame($activityDate, $checkin['checkin_date']);
+        $this->assertSame('makeup', $checkin['source']);
+        $this->assertSame($recordId, $checkin['record_id']);
+
+        $usage = $pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn();
+        $this->assertSame(1.0, (float) $usage);
+    }
+
+    public function testSubmitRecordRejectsFutureActivityDateWithClearCode(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $checkin = $this->createMock(\CarbonTrack\Services\CheckinService::class);
+        $quota = $this->createMock(\CarbonTrack\Services\QuotaService::class);
+
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+        $checkin->expects($this->never())->method('hasCheckin');
+        $quota->expects($this->never())->method('checkAndConsumeOnConnection');
+
+        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => 'a1',
+            'amount' => 5,
+            'date' => (new \DateTimeImmutable('now'))->modify('+1 day')->format('Y-m-d'),
+            'images' => [
+                ['url' => 'https://example.test/proof.jpg'],
+            ],
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $this->assertSame('RECORD_DATE_IN_FUTURE', $payload['code']);
+        $this->assertStringContainsString('future', $payload['error']);
+    }
+
+    public function testSubmitRecordMakeupRollsBackQuotaWhenCheckinWriteFails(): void
+    {
+        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        $checkinDate = (new \DateTimeImmutable('now'))->modify('-4 days')->format('Y-m-d');
+
+        $calc = $this->createMock(CarbonCalculatorService::class);
+        $calc->method('calculateCarbonSavings')->willReturn([
+            'carbon_savings' => 1.5,
+            'points_earned' => 15,
+        ]);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => $user->id, 'username' => $user->username]);
+        $auth->method('getCurrentUserModel')->willReturn($user);
+
+        $failingCheckin = new class($pdo) extends CheckinService {
+            public function createMakeupCheckin(
+                int $userId,
+                string $date,
+                ?string $note = null,
+                ?string $recordId = null,
+                ?\DateTimeInterface $createdAt = null
+            ): bool {
+                throw new \RuntimeException('simulated checkin write failure');
+            }
+        };
+
+        $controller = $this->makeController(
+            $pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            null,
+            null,
+            $failingCheckin,
+            new QuotaService()
+        );
+
+        $request = makeRequest('POST', '/carbon-track/record', [
+            'activity_id' => $activityId,
+            'amount' => 5,
+            'date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+            'checkin_date' => $checkinDate,
+            'images' => [
+                ['url' => 'https://example.test/proof.jpg'],
+            ],
+        ]);
+        $response = new \Slim\Psr7\Response();
+        $resp = $controller->submitRecord($request, $response);
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)->fetchColumn());
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM user_checkins WHERE user_id = " . (int) $user->id)->fetchColumn());
+        $this->assertFalse($pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn());
+    }
+
+    public function testSubmitRecordMakeupDeletesUploadedImagesWhenQuotaFails(): void
+    {
+        [$pdo, $user] = $this->makeRealCheckinDatabase(0);
+        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        $checkinDate = (new \DateTimeImmutable('now'))->modify('-5 days')->format('Y-m-d');
+
+        $calc = $this->getMockBuilder(CarbonCalculatorService::class)->disableOriginalConstructor()->getMock();
+        $calc->method('calculateCarbonSavings')->willReturn(['carbon_savings' => 1.0]);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => (int) $user->id, 'username' => $user->username]);
+        $auth->method('getCurrentUserModel')->willReturn($user);
+
+        $r2 = $this->getMockBuilder(\CarbonTrack\Services\CloudflareR2Service::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['uploadMultipleFiles', 'deleteFile'])
+            ->getMock();
+        $r2->expects($this->once())
+            ->method('uploadMultipleFiles')
+            ->willReturn([
+                'results' => [[
+                    'success' => true,
+                    'file_path' => 'activities/' . (int) $user->id . '/quota-proof.jpg',
+                    'public_url' => 'https://cdn.example/quota-proof.jpg',
+                    'original_name' => 'quota-proof.jpg',
+                    'mime_type' => 'image/jpeg',
+                    'file_size' => 16,
+                ]],
+            ]);
+        $r2->expects($this->once())
+            ->method('deleteFile')
+            ->with('activities/' . (int) $user->id . '/quota-proof.jpg', (int) $user->id)
+            ->willReturn(true);
+
+        $controller = $this->makeController(
+            $pdo,
+            $calc,
+            $msg,
+            $audit,
+            $auth,
+            null,
+            $r2,
+            new CheckinService($pdo, null, 'UTC'),
+            new QuotaService()
+        );
+
+        $tmpFile = tempnam(sys_get_temp_dir(), 'quota-proof-');
+        file_put_contents($tmpFile, 'proof');
+
+        try {
+            $uploaded = new \Slim\Psr7\UploadedFile($tmpFile, 'quota-proof.jpg', 'image/jpeg', filesize($tmpFile), UPLOAD_ERR_OK);
+            $request = (new \Slim\Psr7\Factory\ServerRequestFactory())->createServerRequest('POST', '/carbon-track/record');
+            $request = $request->withUploadedFiles(['images' => [$uploaded]])->withParsedBody([
+                'activity_id' => $activityId,
+                'amount' => 1,
+                'date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+                'checkin_date' => $checkinDate,
+            ]);
+            $response = new \Slim\Psr7\Response();
+            $resp = $controller->submitRecord($request, $response);
+        } finally {
+            if (is_file($tmpFile)) {
+                @unlink($tmpFile);
+            }
+        }
+
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame(429, $resp->getStatusCode());
+        $this->assertSame('QUOTA_EXCEEDED', $payload['code'] ?? null);
+        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)->fetchColumn());
+        $this->assertFalse($pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn());
     }
 
     public function testReviewRecordRejectFlow(): void
@@ -708,6 +1085,57 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertSame('%green%', $countBound['search_name_en'][0] ?? null);
         $this->assertSame(20, $listBound['limit'][0] ?? null);
         $this->assertSame(0, $listBound['offset'][0] ?? null);
+    }
+
+    /**
+     * @return array{0:\PDO,1:User}
+     */
+    private function makeRealCheckinDatabase(int $monthlyLimit): array
+    {
+        $dbPath = tempnam(sys_get_temp_dir(), 'carbontrack_record_makeup_');
+        $this->tempDbPaths[] = $dbPath;
+        $pdo = new \PDO('sqlite:' . $dbPath);
+        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        TestSchemaBuilder::init($pdo);
+
+        $capsule = new Capsule();
+        $capsule->addConnection([
+            'driver' => 'sqlite',
+            'database' => $dbPath,
+            'prefix' => '',
+            'pdo' => $pdo,
+        ]);
+        $capsule->setAsGlobal();
+        $capsule->bootEloquent();
+
+        $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s');
+        $group = UserGroup::create([
+            'name' => 'Record Makeup Group',
+            'code' => 'record-makeup-' . uniqid(),
+            'config' => [
+                'checkin_makeup' => [
+                    'monthly_limit' => $monthlyLimit,
+                ],
+            ],
+            'is_default' => false,
+            'notes' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $user = User::create([
+            'username' => 'record_makeup_user_' . uniqid(),
+            'email' => 'record-makeup-' . uniqid() . '@example.com',
+            'status' => 'active',
+            'points' => 0,
+            'is_admin' => false,
+            'group_id' => $group->id,
+            'quota_override' => json_encode([]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        return [$pdo, $user];
     }
 }
 

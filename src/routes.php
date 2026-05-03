@@ -102,6 +102,7 @@ return function (App $app) {
         $group->group(PATH_AUTH, function (RouteCollectorProxy $auth) {
             $auth->post('/register', [AuthController::class, 'register']);
             $auth->post('/login', [AuthController::class, 'login']);
+            $auth->post('/refresh', [AuthController::class, 'refresh']);
             $auth->post('/passkey/login/options', [PasskeyController::class, 'beginAuthentication']);
             $auth->post('/passkey/login/verify', [PasskeyController::class, 'completeAuthentication']);
             $auth->post('/logout', [AuthController::class, 'logout']);
@@ -110,6 +111,12 @@ return function (App $app) {
             $auth->post('/reset-password', [AuthController::class, 'resetPassword']);
             $auth->post('/verify-email', [AuthController::class, 'verifyEmail']);
             $auth->post('/change-password', [AuthController::class, 'changePassword'])->add(AuthMiddleware::class);
+        });
+    };
+
+    $registerSecurityRoutes = function (RouteCollectorProxy $group) {
+        $group->group('/security', function (RouteCollectorProxy $security) {
+            $security->post('/pow/challenge', [AuthController::class, 'createProofOfWorkChallenge']);
         });
     };
 
@@ -251,6 +258,7 @@ return function (App $app) {
             $admin->get('/logs', [AdminController::class, 'getLogs']);
             $admin->get('/ai/workspace', [AdminAiController::class, 'workspace']);
             $admin->post('/ai/chat', [AdminAiController::class, 'chat']);
+            $admin->post('/ai/chat/stream', [AdminAiController::class, 'chatStream']);
             $admin->get('/ai/conversations', [AdminAiController::class, 'conversations']);
             $admin->get('/ai/conversations/{conversation_id}', [AdminAiController::class, 'conversationDetail']);
             $admin->post('/ai/intents', [AdminAiController::class, 'analyze']);
@@ -382,6 +390,7 @@ return function (App $app) {
     $app->group(API_V1_PREFIX, function (RouteCollectorProxy $group) use (
         $registerApiV1Root,
         $registerAuthRoutes,
+        $registerSecurityRoutes,
         $registerUserRoutes,
         $registerAvatarRoutes,
         $registerBadgeRoutes,
@@ -399,6 +408,7 @@ return function (App $app) {
     ) {
         $registerApiV1Root($group);
         $registerAuthRoutes($group);
+        $registerSecurityRoutes($group);
         $registerUserRoutes($group);
         $registerAvatarRoutes($group);
         $registerBadgeRoutes($group);

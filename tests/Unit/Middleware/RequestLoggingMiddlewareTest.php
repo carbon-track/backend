@@ -140,4 +140,58 @@ class RequestLoggingMiddlewareTest extends TestCase
         $this->assertSame($handler->header, $response->getHeaderLine('X-Request-ID'));
         $this->assertSame($handler->header, $_SERVER['HTTP_X_REQUEST_ID']);
     }
+
+    public function testWritesCronEndpointSystemLogByDefault(): void
+    {
+        $systemLog = $this->createMock(SystemLogService::class);
+        $systemLog->expects($this->once())
+            ->method('log')
+            ->with($this->callback(static function (array $context): bool {
+                return ($context['path'] ?? null) === '/api/v1/cron/run';
+            }));
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(null);
+
+        $middleware = new RequestLoggingMiddleware(
+            $systemLog,
+            $authService,
+            $this->createMock(Logger::class)
+        );
+
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): \Psr\Http\Message\ResponseInterface
+            {
+                return new Response(200);
+            }
+        };
+
+        $response = $middleware->process(makeRequest('POST', '/api/v1/cron/run'), $handler);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertNotEmpty($response->getHeaderLine('X-Request-ID'));
+    }
+
+    public function testCanDisableCronEndpointSystemLog(): void
+    {
+        $systemLog = $this->createMock(SystemLogService::class);
+        $systemLog->expects($this->never())->method('log');
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(null);
+
+        $middleware = new RequestLoggingMiddleware(
+            $systemLog,
+            $authService,
+            $this->createMock(Logger::class),
+            false
+        );
+
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): \Psr\Http\Message\ResponseInterface
+            {
+                return new Response(200);
+            }
+        };
+
+        $middleware->process(makeRequest('POST', '/api/v1/cron/run'), $handler);
+    }
 }

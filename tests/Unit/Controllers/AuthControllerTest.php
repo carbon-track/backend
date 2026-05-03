@@ -9,6 +9,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
@@ -51,6 +52,7 @@ class AuthControllerTest extends TestCase
     {
         $this->assertTrue(method_exists(AuthController::class, 'register'));
         $this->assertTrue(method_exists(AuthController::class, 'login'));
+        $this->assertTrue(method_exists(AuthController::class, 'refresh'));
         $this->assertTrue(method_exists(AuthController::class, 'logout'));
         $this->assertTrue(method_exists(AuthController::class, 'sendVerificationCode'));
         $this->assertTrue(method_exists(AuthController::class, 'verifyEmail'));
@@ -72,6 +74,9 @@ class AuthControllerTest extends TestCase
         
         $logoutMethod = $reflection->getMethod('logout');
         $this->assertTrue($logoutMethod->isPublic());
+
+        $refreshMethod = $reflection->getMethod('refresh');
+        $this->assertTrue($refreshMethod->isPublic());
         
         $meMethod = $reflection->getMethod('me');
         $this->assertTrue($meMethod->isPublic());
@@ -158,7 +163,7 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(12, $parameters);
+        $this->assertCount(13, $parameters);
 
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -172,9 +177,10 @@ class AuthControllerTest extends TestCase
             'CarbonTrack\Services\ErrorLogService',
             'CarbonTrack\Services\RegionService',
             'CarbonTrack\Services\CheckinService',
-            'CarbonTrack\Services\UserProfileViewService'
+            'CarbonTrack\Services\UserProfileViewService',
+            'CarbonTrack\Services\ProofOfWorkService'
         ];
-        $nullableIndexes = [5, 8, 10, 11];
+        $nullableIndexes = [5, 8, 10, 11, 12];
 
         foreach ($parameters as $index => $parameter) {
             $type = $parameter->getType();
@@ -229,6 +235,7 @@ class AuthControllerTest extends TestCase
         $mockPdo = $this->createMock(\PDO::class);
         $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt, $verificationStmt);
 
+        $mockTurnstileService->method('verify')->with('test-turnstile')->willReturn(['success' => true]);
         $mockAuthService->method('generateToken')->willReturn('fake.jwt.token');
         $mockAuditLogService->expects($this->atLeastOnce())->method('log');
         $mockAuditLogService->expects($this->any())->method('logAuthOperation');
@@ -247,7 +254,11 @@ class AuthControllerTest extends TestCase
             $mockRegion
         );
 
-        $request = makeRequest('POST', '/login', ['username' => 'john', 'password' => 'secret']);
+        $request = makeRequest('POST', '/login', [
+            'username' => 'john',
+            'password' => 'secret',
+            'cf_turnstile_response' => 'test-turnstile',
+        ]);
         $response = new \Slim\Psr7\Response();
 
         $resp = $controller->login($request, $response);
@@ -302,6 +313,7 @@ class AuthControllerTest extends TestCase
         $mockPdo = $this->createMock(\PDO::class);
         $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt);
 
+        $mockTurnstileService->method('verify')->with('test-turnstile')->willReturn(['success' => true]);
         $mockAuthService->method('generateToken')->willReturn('fake.jwt.token');
         $mockAuditLogService->expects($this->atLeastOnce())->method('log');
         $mockAuditLogService->expects($this->any())->method('logAuthOperation');
@@ -320,7 +332,11 @@ class AuthControllerTest extends TestCase
             $mockRegion
         );
 
-        $request = makeRequest('POST', '/login', ['identifier' => 'alice@example.com', 'password' => 'secret']);
+        $request = makeRequest('POST', '/login', [
+            'identifier' => 'alice@example.com',
+            'password' => 'secret',
+            'cf_turnstile_response' => 'test-turnstile',
+        ]);
         $response = new \Slim\Psr7\Response();
 
         $resp = $controller->login($request, $response);
@@ -536,5 +552,96 @@ class AuthControllerTest extends TestCase
         $json = json_decode((string) $resp->getBody(), true);
         $this->assertFalse($json['success']);
         $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
+
+    public function testLoginRequiresTurnstileForWebRequests(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+
+        $mockTurnstileService->expects($this->never())->method('verify');
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion
+        );
+
+        $request = makeRequest('POST', '/auth/login', [
+            'identifier' => 'john@example.com',
+            'password' => 'secret123',
+        ], null, ['Origin' => ['https://dev.carbontrackapp.com']]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->login($request, $response);
+        $this->assertSame(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('TURNSTILE_FAILED', $json['code']);
+    }
+
+    public function testLoginRequiresProofOfWorkForMobileRequests(): void
+    {
+        $mockAuthService = $this->createMock(AuthService::class);
+        $mockEmailService = $this->createMock(EmailService::class);
+        $mockTurnstileService = $this->createMock(TurnstileService::class);
+        $mockAuditLogService = $this->createMock(AuditLogService::class);
+        $mockMessageService = $this->createMock(MessageService::class);
+        $mockR2Service = $this->createMock(CloudflareR2Service::class);
+        $mockLogger = $this->createMock(\Monolog\Logger::class);
+        $mockPdo = $this->createMock(\PDO::class);
+        $mockRegion = $this->createMock(RegionService::class);
+        $mockPowService = $this->createMock(ProofOfWorkService::class);
+
+        $mockTurnstileService->expects($this->never())->method('verify');
+        $mockPowService->expects($this->once())
+            ->method('verify')
+            ->with(null, null, 'auth.login')
+            ->willReturn(['success' => false, 'error' => 'missing-proof']);
+
+        $controller = new AuthController(
+            $mockAuthService,
+            $mockEmailService,
+            $mockTurnstileService,
+            $mockAuditLogService,
+            $mockMessageService,
+            $mockR2Service,
+            $mockLogger,
+            $mockPdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $mockRegion,
+            null,
+            null,
+            $mockPowService
+        );
+
+        $request = makeRequest('POST', '/auth/login', [
+            'identifier' => 'john@example.com',
+            'password' => 'secret123',
+            'client_type' => 'mobile',
+        ], null, [
+            'X-Client-Platform' => ['mobile'],
+        ]);
+        $response = new \Slim\Psr7\Response();
+
+        $resp = $controller->login($request, $response);
+        $this->assertSame(400, $resp->getStatusCode());
+        $json = json_decode((string) $resp->getBody(), true);
+        $this->assertFalse($json['success']);
+        $this->assertSame('POW_FAILED', $json['code']);
     }
 }

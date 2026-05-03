@@ -806,6 +806,8 @@ class AdminAiWriteActionService
                 'status' => $after['status'] ?? null,
                 'stock' => isset($after['stock']) ? (int) $after['stock'] : 0,
             ],
+            'old_status' => $before['status'] ?? null,
+            'new_status' => $after['status'] ?? null,
         ];
     }
 

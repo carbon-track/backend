@@ -122,6 +122,55 @@ CREATE TABLE `admin_ai_messages` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `admin_ai_runs`
+--
+
+CREATE TABLE `admin_ai_runs` (
+  `id` int(11) NOT NULL,
+  `run_id` varchar(64) NOT NULL,
+  `conversation_id` varchar(64) NOT NULL,
+  `admin_id` int(11) DEFAULT NULL,
+  `autonomy_mode` varchar(32) NOT NULL DEFAULT 'read_only_auto',
+  `status` varchar(24) NOT NULL DEFAULT 'running',
+  `source` varchar(120) DEFAULT NULL,
+  `request_id` varchar(64) DEFAULT NULL,
+  `error_message` text DEFAULT NULL,
+  `meta_json` longtext DEFAULT NULL,
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `finished_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `admin_ai_steps`
+--
+
+CREATE TABLE `admin_ai_steps` (
+  `id` int(11) NOT NULL,
+  `run_id` varchar(64) NOT NULL,
+  `step_id` varchar(80) NOT NULL,
+  `sequence_no` int(11) NOT NULL DEFAULT 0,
+  `type` varchar(32) NOT NULL DEFAULT 'tool',
+  `tool_name` varchar(120) DEFAULT NULL,
+  `status` varchar(24) NOT NULL DEFAULT 'running',
+  `approval_state` varchar(24) DEFAULT NULL,
+  `rollback_state` varchar(24) DEFAULT NULL,
+  `input_json` longtext DEFAULT NULL,
+  `output_json` longtext DEFAULT NULL,
+  `error_message` text DEFAULT NULL,
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `finished_at` datetime DEFAULT NULL,
+  `duration_ms` decimal(10,2) DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `message_broadcasts`
 --
 
@@ -771,6 +820,24 @@ CREATE TABLE `login_attempts` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `proof_of_work_challenges`
+--
+
+CREATE TABLE `proof_of_work_challenges` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `challenge_id` char(32) NOT NULL,
+  `challenge_hash` char(64) NOT NULL,
+  `scope` varchar(80) NOT NULL,
+  `difficulty` tinyint(3) UNSIGNED NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `used_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `messages`
 --
 
@@ -1086,7 +1153,8 @@ INSERT INTO `cron_tasks` (`id`, `task_key`, `task_name`, `description`, `interva
 (1, 'support_sla_sweep', 'Support SLA Sweep', 'Inspect unresolved support tickets, update SLA status, and reroute escalated tickets.', 1, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
 (2, 'badge_auto_award', 'Badge Auto Award', 'Evaluate active users against badge auto-grant rules and award newly qualified badges.', 5, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
 (3, 'leaderboard_refresh', 'Leaderboard Refresh', 'Refresh the main points leaderboard cache for global, regional, and school rankings.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
-(4, 'streak_leaderboard_refresh', 'Streak Leaderboard Refresh', 'Refresh the streak leaderboard cache for current and longest check-in streak rankings.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}');
+(4, 'streak_leaderboard_refresh', 'Streak Leaderboard Refresh', 'Refresh the streak leaderboard cache for current and longest check-in streak rankings.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}'),
+(5, 'pow_challenge_cleanup', 'Proof-of-Work Challenge Cleanup', 'Delete expired or already consumed proof-of-work challenges outside anonymous request handling.', 10, 1, CURRENT_TIMESTAMP, 'idle', 0, '{}');
 
 -- --------------------------------------------------------
 
@@ -1206,6 +1274,28 @@ ALTER TABLE `admin_ai_messages`
   ADD KEY `idx_admin_ai_messages_conversation_kind_created` (`conversation_id`,`kind`,`created_at`);
 
 --
+-- 表的索引 `admin_ai_runs`
+--
+ALTER TABLE `admin_ai_runs`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_admin_ai_runs_run_id` (`run_id`),
+  ADD KEY `idx_admin_ai_runs_conversation_id` (`conversation_id`),
+  ADD KEY `idx_admin_ai_runs_status` (`status`),
+  ADD KEY `idx_admin_ai_runs_started_at` (`started_at`),
+  ADD KEY `idx_admin_ai_runs_request_id` (`request_id`);
+
+--
+-- 表的索引 `admin_ai_steps`
+--
+ALTER TABLE `admin_ai_steps`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_admin_ai_steps_run_step` (`run_id`,`step_id`),
+  ADD KEY `idx_admin_ai_steps_run_id` (`run_id`),
+  ADD KEY `idx_admin_ai_steps_run_sequence` (`run_id`,`sequence_no`),
+  ADD KEY `idx_admin_ai_steps_status` (`status`),
+  ADD KEY `idx_admin_ai_steps_tool_name` (`tool_name`);
+
+--
 -- 表的索引 `avatars`
 --
 ALTER TABLE `avatars`
@@ -1304,6 +1394,16 @@ ALTER TABLE `idempotency_records`
 --
 ALTER TABLE `login_attempts`
   ADD PRIMARY KEY (`id`);
+
+--
+-- 表的索引 `proof_of_work_challenges`
+--
+ALTER TABLE `proof_of_work_challenges`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_pow_challenges_challenge_id` (`challenge_id`),
+  ADD KEY `idx_pow_challenges_hash_scope` (`challenge_hash`,`scope`),
+  ADD KEY `idx_pow_challenges_expires_at` (`expires_at`),
+  ADD KEY `idx_pow_challenges_used_at` (`used_at`);
 
 --
 -- 表的索引 `messages`
@@ -1611,6 +1711,18 @@ ALTER TABLE `admin_ai_messages`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- 使用表AUTO_INCREMENT `admin_ai_runs`
+--
+ALTER TABLE `admin_ai_runs`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `admin_ai_steps`
+--
+ALTER TABLE `admin_ai_steps`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- 使用表AUTO_INCREMENT `avatars`
 --
 ALTER TABLE `avatars`
@@ -1645,6 +1757,12 @@ ALTER TABLE `idempotency_records`
 --
 ALTER TABLE `login_attempts`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `proof_of_work_challenges`
+--
+ALTER TABLE `proof_of_work_challenges`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `messages`

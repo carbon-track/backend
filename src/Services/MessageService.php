@@ -160,6 +160,101 @@ class MessageService
     }
 
     /**
+     * @param array<int,int> $receiverIds
+     * @return array{sent_count:int,failed_user_ids:array<int,int>}
+     */
+    public function sendSystemMessagesBatch(
+        array $receiverIds,
+        string $title,
+        string $content,
+        string $type = Message::TYPE_SYSTEM,
+        string $priority = Message::PRIORITY_NORMAL,
+        ?string $relatedEntityType = null,
+        ?int $relatedEntityId = null,
+        bool $sendEmail = true
+    ): array {
+        $validReceiverIds = [];
+        foreach ($receiverIds as $receiverId) {
+            $receiverId = (int) $receiverId;
+            if ($receiverId > 0) {
+                $validReceiverIds[$receiverId] = $receiverId;
+            }
+        }
+
+        if ($validReceiverIds === []) {
+            return ['sent_count' => 0, 'failed_user_ids' => []];
+        }
+
+        $priority = in_array($priority, Message::getValidPriorities(), true)
+            ? $priority
+            : Message::PRIORITY_NORMAL;
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+        $sentIds = [];
+        $failedIds = [];
+        $rows = [];
+
+        foreach ($validReceiverIds as $receiverId) {
+            $rows[] = [
+                'sender_id' => null,
+                'receiver_id' => $receiverId,
+                'title' => $title,
+                'content' => $content,
+                'is_read' => false,
+                'priority' => $priority,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        foreach (array_chunk($rows, 500) as $chunk) {
+            try {
+                Message::query()->insert($chunk);
+                foreach ($chunk as $row) {
+                    $sentIds[(int) $row['receiver_id']] = (int) $row['receiver_id'];
+                }
+            } catch (\Throwable $e) {
+                $this->logger->warning('Bulk system message insert failed, falling back to per-recipient create', [
+                    'recipient_count' => count($chunk),
+                    'error' => $e->getMessage(),
+                ]);
+
+                foreach ($chunk as $row) {
+                    $receiverId = (int) $row['receiver_id'];
+                    try {
+                        $createRow = $row;
+                        unset($createRow['created_at'], $createRow['updated_at']);
+                        Message::create($createRow);
+                        $sentIds[$receiverId] = $receiverId;
+                    } catch (\Throwable $inner) {
+                        $failedIds[$receiverId] = $receiverId;
+                        $this->logger->error('Failed to create system notification message', [
+                            'receiver_id' => $receiverId,
+                            'type' => $type,
+                            'error' => $inner->getMessage(),
+                        ]);
+                    }
+                }
+            }
+        }
+
+        if ($sendEmail && $sentIds !== []) {
+            $emailRecipients = [];
+            foreach ($sentIds as $receiverId) {
+                $recipient = $this->resolveEmailRecipient($receiverId);
+                if ($recipient !== null) {
+                    $emailRecipients[] = $recipient;
+                }
+            }
+            $this->sendBulkLinkedEmail($emailRecipients, $title, $content, $type, $priority);
+        }
+
+        return [
+            'sent_count' => count($sentIds),
+            'failed_user_ids' => array_values($failedIds),
+        ];
+    }
+
+    /**
      * Send carbon tracking submission notification
      */
     /**

@@ -204,12 +204,7 @@ class SupportTicketService
                 'last_reply_by_role' => 'user',
                 'updated_at' => $now,
             ];
-            $reopenedResolvedTicket = $nextStatus === self::STATUS_OPEN && (
-                (string) ($ticket['status'] ?? '') === self::STATUS_RESOLVED
-                || (string) ($ticket['sla_status'] ?? '') === 'resolved'
-                || !empty($ticket['resolved_at'])
-                || !empty($ticket['closed_at'])
-            );
+            $reopenedResolvedTicket = $nextStatus === self::STATUS_OPEN && $this->isTerminalTicketState($ticket);
             if ($reopenedResolvedTicket) {
                 $updates['resolved_at'] = null;
                 $updates['closed_at'] = null;
@@ -410,16 +405,17 @@ class SupportTicketService
                 'last_reply_by_role' => $senderRole,
                 'updated_at' => $now,
             ];
-            $reopenedTicket = in_array((string) ($ticket['status'] ?? ''), [self::STATUS_RESOLVED, self::STATUS_CLOSED], true)
-                || (string) ($ticket['sla_status'] ?? 'pending') === 'resolved'
-                || !empty($ticket['resolved_at'])
-                || !empty($ticket['closed_at']);
+            $reopenedTicket = $this->isTerminalTicketState($ticket);
             if ($targetStatus === self::STATUS_RESOLVED) {
-                $updates['resolved_at'] = $now;
+                if (empty($ticket['resolved_at'])) {
+                    $updates['resolved_at'] = $now;
+                }
                 $updates['closed_at'] = null;
                 $updates['sla_status'] = 'resolved';
             } elseif ($targetStatus === self::STATUS_CLOSED) {
-                $updates['closed_at'] = $now;
+                if (empty($ticket['closed_at'])) {
+                    $updates['closed_at'] = $now;
+                }
                 $updates['sla_status'] = 'resolved';
             } elseif ($reopenedTicket) {
                 $updates['resolved_at'] = null;
@@ -471,14 +467,19 @@ class SupportTicketService
             $status = $this->normalizeStatus($payload['status']);
             $updates['status'] = $status;
             if ($status === self::STATUS_RESOLVED) {
-                $updates['resolved_at'] = $now;
+                if (empty($ticket['resolved_at'])) {
+                    $updates['resolved_at'] = $now;
+                }
+                $updates['closed_at'] = null;
+                $updates['sla_status'] = 'resolved';
+            } elseif ($status === self::STATUS_CLOSED) {
+                if (empty($ticket['closed_at'])) {
+                    $updates['closed_at'] = $now;
+                }
                 $updates['sla_status'] = 'resolved';
             }
-            if ($status === self::STATUS_CLOSED) {
-                $updates['closed_at'] = $now;
-                $updates['sla_status'] = 'resolved';
-            }
-            if (in_array($status, [self::STATUS_OPEN, self::STATUS_IN_PROGRESS, self::STATUS_WAITING_USER], true) && ($ticket['sla_status'] ?? null) === 'resolved') {
+            $reopenedTicket = $this->isTerminalTicketState($ticket);
+            if (!in_array($status, [self::STATUS_RESOLVED, self::STATUS_CLOSED], true) && $reopenedTicket) {
                 $updates['sla_status'] = 'pending';
                 $updates['resolved_at'] = null;
                 $updates['closed_at'] = null;
@@ -1855,6 +1856,14 @@ class SupportTicketService
     private function ticketEmailPath(int $ticketId, bool $supportView): string
     {
         return ($supportView ? 'support/tickets/' : 'tickets/') . $ticketId;
+    }
+
+    private function isTerminalTicketState(array $ticket): bool
+    {
+        return in_array((string) ($ticket['status'] ?? ''), [self::STATUS_RESOLVED, self::STATUS_CLOSED], true)
+            || (string) ($ticket['sla_status'] ?? 'pending') === 'resolved'
+            || !empty($ticket['resolved_at'])
+            || !empty($ticket['closed_at']);
     }
 
     private function formatTicketStatusLabel(string $status): string

@@ -63,7 +63,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $body = [
             'activity_id' => 'act-1',
             'amount' => 2,
-            'date' => '2025-09-01',
+            'date' => (new DateTimeImmutable('now'))->format('Y-m-d'),
             'images' => ['https://a/img1.png','https://b/img2.png']
         ];
         $req = (new ServerRequestFactory())->createServerRequest('POST','/api/v1/carbon-records');
@@ -97,7 +97,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $req = $req->withUploadedFiles(['images' => [$uploaded]])->withParsedBody([
             'activity_id' => 'act-1',
             'amount' => 1,
-            'date' => '2025-09-01'
+            'date' => (new DateTimeImmutable('now'))->format('Y-m-d')
         ]);
     $resp = new Response();
     $out = $controller->submitRecord($req, $resp);
@@ -119,7 +119,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $req = $req->withParsedBody([
             'activity_id' => 'act-1',
             'amount' => 5,
-            'date' => '2025-09-02'
+            'date' => (new DateTimeImmutable('now'))->format('Y-m-d')
         ]);
         $resp = new Response();
         $out = $controller->submitRecord($req, $resp);

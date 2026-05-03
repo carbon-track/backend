@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Tests\Unit\Services;
 
 use CarbonTrack\Services\AdminAiWriteActionService;
+use CarbonTrack\Services\AdminAiRollbackService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
@@ -174,5 +175,34 @@ class AdminAiWriteActionServiceTest extends TestCase
 
         $auditCount = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'carbon_record_approve'")->fetchColumn();
         $this->assertSame(1, $auditCount);
+    }
+
+    public function testUpdateUserStatusResultEnablesRollbackDescriptor(): void
+    {
+        $pdo = $this->makePdo();
+        $auditLogService = new AuditLogService($pdo, new Logger('test'));
+        $service = new AdminAiWriteActionService($pdo, $auditLogService);
+
+        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, admin_notes) VALUES (410, 'rollback_status_user', 'rollback-status@example.com', 'active', 0, '550e8400-e29b-41d4-a716-446655440410', null)");
+
+        $payload = [
+            'user_id' => 410,
+            'status' => 'banned',
+            'admin_notes' => 'rollback coverage',
+        ];
+        $result = $service->execute('update_user_status', $payload, [
+            'request_id' => 'req-write-service-status-rollback-1',
+            'actor_id' => 1,
+            'source' => '/admin/ai/chat',
+        ]);
+
+        $this->assertSame('active', $result['old_status']);
+        $this->assertSame('banned', $result['new_status']);
+
+        $rollback = (new AdminAiRollbackService())->buildDescriptor(77, 'update_user_status', $payload, $result);
+        $this->assertIsArray($rollback);
+        $this->assertSame('update_user_status', $rollback['action_name']);
+        $this->assertSame('active', $rollback['payload']['status']);
+        $this->assertSame(410, $rollback['payload']['user_id']);
     }
 }

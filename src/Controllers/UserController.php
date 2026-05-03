@@ -19,6 +19,7 @@ use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\TurnstileService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
@@ -60,6 +61,7 @@ class UserController
     private PDO $db;
     private NotificationPreferenceService $notificationPreferenceService;
     private ?TurnstileService $turnstileService;
+    private ?ProofOfWorkService $proofOfWorkService;
     private RegionService $regionService;
     private ?LeaderboardService $leaderboardService;
     private ?CheckinService $checkinService;
@@ -81,7 +83,8 @@ class UserController
         ?LeaderboardService $leaderboardService = null,
         ?CheckinService $checkinService = null,
         ?StreakLeaderboardService $streakLeaderboardService = null,
-        ?UserProfileViewService $userProfileViewService = null
+        ?UserProfileViewService $userProfileViewService = null,
+        ?ProofOfWorkService $proofOfWorkService = null
     ) {
         if ($logger === null) {
             throw new \InvalidArgumentException('UserController requires a logger instance.');
@@ -100,6 +103,7 @@ class UserController
         $this->avatarModel = $avatarModel;
         $this->notificationPreferenceService = $notificationPreferenceService;
         $this->turnstileService = $turnstileService;
+        $this->proofOfWorkService = $proofOfWorkService;
         $this->logger = $logger;
         $this->db = $db;
         $this->errorLogService = $errorLogService;
@@ -723,31 +727,19 @@ class UserController
                 $schoolChangeRequested = true;
             }
 
-            if ($schoolChangeRequested && $this->shouldEnforceTurnstile()) {
-                $token = trim((string)($data['cf_turnstile_response'] ?? ''));
-                if ($token === '') {
+            if ($schoolChangeRequested) {
+                $challenge = $this->verifySchoolChangeChallenge($request, $data);
+                if (!$challenge['success']) {
                     return $this->jsonResponse($response, [
                         'success' => false,
-                        'message' => 'Turnstile verification is required',
-                        'code' => 'TURNSTILE_REQUIRED'
-                    ], 400);
-                }
-
-                $verification = $this->turnstileService
-                    ? $this->turnstileService->verify($token, $this->getClientIpAddress($request))
-                    : ['success' => false];
-
-                if (empty($verification['success'])) {
-                    return $this->jsonResponse($response, [
-                        'success' => false,
-                        'message' => $verification['message'] ?? 'Turnstile verification failed',
-                        'code' => 'TURNSTILE_FAILED',
-                        'error' => $verification['error'] ?? null
+                        'message' => $challenge['message'],
+                        'code' => $challenge['code'],
+                        'error' => $challenge['error'] ?? null
                     ], 400);
                 }
             }
 
-            unset($data['cf_turnstile_response']);
+            unset($data['cf_turnstile_response'], $data['client_type'], $data['pow_challenge'], $data['pow_nonce']);
 
             // 准备更新数据
             $updateData = [];
@@ -1966,12 +1958,64 @@ class UserController
 
     private function shouldEnforceTurnstile(): bool
     {
-        if (!$this->turnstileService || !$this->turnstileService->isConfigured()) {
-            return false;
-        }
-
         $environment = strtolower((string)($_ENV['APP_ENV'] ?? 'production'));
         return $environment !== 'testing';
+    }
+
+    private function verifySchoolChangeChallenge(Request $request, array $data): array
+    {
+        if ($this->shouldUseMobileProofOfWork($request, $data)) {
+            $verification = $this->proofOfWorkService?->verify(
+                $data['pow_challenge'] ?? null,
+                $data['pow_nonce'] ?? null,
+                'user.profile.school_change'
+            ) ?? ['success' => false, 'error' => 'pow-unavailable'];
+
+            if (!empty($verification['success'])) {
+                return ['success' => true];
+            }
+
+            return [
+                'success' => false,
+                'message' => 'Proof-of-work verification failed',
+                'code' => 'POW_FAILED',
+                'error' => $verification['error'] ?? null,
+            ];
+        }
+
+        if (!$this->shouldEnforceTurnstile()) {
+            return ['success' => true];
+        }
+
+        $token = trim((string)($data['cf_turnstile_response'] ?? ''));
+        if ($token === '') {
+            return [
+                'success' => false,
+                'message' => 'Turnstile verification is required',
+                'code' => 'TURNSTILE_REQUIRED',
+            ];
+        }
+
+        $verification = $this->turnstileService
+            ? $this->turnstileService->verify($token, $this->getClientIpAddress($request))
+            : ['success' => false, 'message' => 'Turnstile verification is not configured', 'error' => 'turnstile-unavailable'];
+
+        if (!empty($verification['success'])) {
+            return ['success' => true];
+        }
+
+        return [
+            'success' => false,
+            'message' => $verification['message'] ?? 'Turnstile verification failed',
+            'code' => 'TURNSTILE_FAILED',
+            'error' => $verification['error'] ?? null,
+        ];
+    }
+
+    private function shouldUseMobileProofOfWork(Request $request, array $data): bool
+    {
+        $clientType = strtolower(trim((string)($data['client_type'] ?? $request->getHeaderLine('X-Client-Platform'))));
+        return $clientType === 'mobile' && trim($request->getHeaderLine('Origin')) === '';
     }
 
     private function getClientIpAddress(Request $request): string
