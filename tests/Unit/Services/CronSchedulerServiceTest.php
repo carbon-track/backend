@@ -187,7 +187,10 @@ class CronSchedulerServiceTest extends TestCase
         );
 
         $proofOfWork = $this->createMock(ProofOfWorkService::class);
-        $proofOfWork->expects($this->once())->method('cleanupExpiredChallenges')->willReturn(['deleted' => 2]);
+        $proofOfWork->expects($this->once())->method('cleanupExpiredChallenges')->willReturn([
+            'deleted' => 2,
+            'attempts_deleted' => 3,
+        ]);
 
         $service = new CronSchedulerService(
             self::$capsule->getConnection()->getPdo(),
@@ -205,7 +208,7 @@ class CronSchedulerServiceTest extends TestCase
         $result = $service->runDueTasks('cron_endpoint', ['request_id' => 'req-pow-cleanup']);
 
         $this->assertCount(1, $result['executed']);
-        $this->assertSame(['deleted' => 2], $result['executed'][0]['result']);
+        $this->assertSame(['deleted' => 2, 'attempts_deleted' => 3], $result['executed'][0]['result']);
     }
 
     public function testFailedTaskIncrementsFailureCounterAndRunHistory(): void

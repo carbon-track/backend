@@ -348,6 +348,118 @@ class AuthServiceTest extends TestCase
         $this->assertTrue($service->isAccountLocked('locked-user', '127.0.0.1'));
     }
 
+    public function testValidateTokenRejectsStaleTokenVersionAfterIncrement(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $pdo->exec(
+            "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
+             VALUES ('550e8400-e29b-41d4-a716-44665544aa01', 'tv-user', 'tv@example.com', 'hash', 'active', 0, 0, 0, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
+        );
+
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        // Token minted while DB.token_version = 0
+        $token = $service->generateToken([
+            'id' => 1,
+            'uuid' => '550e8400-e29b-41d4-a716-44665544aa01',
+            'username' => 'tv-user',
+            'email' => 'tv@example.com',
+        ]);
+
+        $payload = $service->validateToken($token);
+        $this->assertSame('tv-user', $payload['user']['username']);
+
+        // Bumping token_version must invalidate the older token.
+        $service->incrementTokenVersion(1);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Token version mismatch');
+        $service->validateToken($token);
+    }
+
+    public function testValidateTokenTreatsMissingTokenVersionAsZero(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $pdo->exec(
+            "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
+             VALUES ('550e8400-e29b-41d4-a716-44665544aa04', 'legacy-tv', 'legacy-tv@example.com', 'hash', 'active', 0, 0, 1, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
+        );
+
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+        $now = time();
+        $legacyToken = JWT::encode([
+            'iss' => 'carbontrack',
+            'aud' => 'carbontrack-users',
+            'iat' => $now,
+            'exp' => $now + 3600,
+            'sub' => '550e8400-e29b-41d4-a716-44665544aa04',
+            'user' => [
+                'id' => 1,
+                'uuid' => '550e8400-e29b-41d4-a716-44665544aa04',
+                'username' => 'legacy-tv',
+                'email' => 'legacy-tv@example.com',
+            ],
+        ], $this->jwtSecret, 'HS256');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Token version mismatch');
+        $service->validateToken($legacyToken);
+    }
+
+    public function testGenerateTokenStampsCurrentTokenVersionFromDatabase(): void
+    {
+        $pdo = $this->makeSqliteUsersPdo();
+        $pdo->exec(
+            "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
+             VALUES ('550e8400-e29b-41d4-a716-44665544aa02', 'tv2', 'tv2@example.com', 'hash', 'active', 0, 0, 7, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
+        );
+
+        $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
+        $service->setDatabase($pdo);
+
+        $token = $service->generateToken([
+            'id' => 1,
+            'uuid' => '550e8400-e29b-41d4-a716-44665544aa02',
+            'username' => 'tv2',
+            'email' => 'tv2@example.com',
+        ]);
+
+        $decoded = $service->validateJwtToken($token);
+        $this->assertSame(7, (int) ($decoded['tv'] ?? -1));
+    }
+
+    public function testJwtLeewayIsCappedAtFiveMinutes(): void
+    {
+        $previous = $_ENV['JWT_LEEWAY'] ?? null;
+        $_ENV['JWT_LEEWAY'] = '99999';
+        try {
+            // Token whose exp is 5 minutes + 1 second in the past.
+            $expiredToken = JWT::encode([
+                'iss' => 'carbontrack',
+                'aud' => 'carbontrack-users',
+                'iat' => time() - 1000,
+                'exp' => time() - 301,
+                'sub' => '550e8400-e29b-41d4-a716-44665544aa03',
+                'user' => [
+                    'uuid' => '550e8400-e29b-41d4-a716-44665544aa03',
+                    'username' => 'leeway-user',
+                    'email' => 'leeway@example.com',
+                ],
+            ], $this->jwtSecret, 'HS256');
+
+            // Even with the env claiming 99999s leeway, the cap of 300s rejects it.
+            $this->assertNull($this->authService->verifyToken($expiredToken));
+        } finally {
+            if ($previous === null) {
+                unset($_ENV['JWT_LEEWAY']);
+            } else {
+                $_ENV['JWT_LEEWAY'] = $previous;
+            }
+        }
+    }
+
     private function makeSqliteUsersPdo(): PDO
     {
         $pdo = new PDO('sqlite::memory:');
@@ -364,6 +476,7 @@ class AuthServiceTest extends TestCase
                 status TEXT,
                 points INTEGER DEFAULT 0,
                 is_admin INTEGER DEFAULT 0,
+                token_version INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
                 created_at TEXT,
                 updated_at TEXT

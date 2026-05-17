@@ -44,9 +44,32 @@ class TurnstileService
     public function verify(string $token, ?string $remoteIp = null): array
     {
         $appEnv = strtolower((string)($_ENV['APP_ENV'] ?? ''));
-        $bypass = filter_var($_ENV['TURNSTILE_BYPASS'] ?? false, FILTER_VALIDATE_BOOLEAN);
-        if ($appEnv === 'testing' || $bypass) {
+        // Production never honours bypass flags. Non-production must opt in explicitly
+        // through ALLOW_TURNSTILE_BYPASS (B-104). The legacy TURNSTILE_BYPASS flag is
+        // kept as a synonym for backward compatibility with existing deployments.
+        $bypassRequested = filter_var($_ENV['ALLOW_TURNSTILE_BYPASS'] ?? $_ENV['TURNSTILE_BYPASS'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if ($appEnv !== 'production' && $bypassRequested) {
             return ['success' => true, 'bypassed' => true];
+        }
+
+        // In production, refuse to validate against an unconfigured / placeholder
+        // secret rather than silently failing-open or hammering Cloudflare.
+        if ($appEnv === 'production') {
+            $trimmedSecret = trim($this->secretKey);
+            if ($trimmedSecret === '' || $trimmedSecret === 'your-turnstile-secret-key') {
+                $this->logAudit('turnstile_secret_unconfigured', ['remote_ip' => $remoteIp], 'failed');
+                $this->logFailure(
+                    'turnstile_secret_unconfigured',
+                    new \RuntimeException('TURNSTILE_SECRET_KEY missing or set to placeholder'),
+                    ['remote_ip' => $remoteIp],
+                    '/internal/turnstile/verify'
+                );
+                return [
+                    'success' => false,
+                    'error' => 'secret_unconfigured',
+                    'message' => 'Turnstile secret key is not configured',
+                ];
+            }
         }
 
         if (empty($token)) {

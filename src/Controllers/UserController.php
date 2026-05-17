@@ -21,6 +21,7 @@ use CarbonTrack\Services\NotificationPreferenceService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
 use PDO;
@@ -2020,29 +2021,7 @@ class UserController
 
     private function getClientIpAddress(Request $request): string
     {
-        $candidates = [
-            $request->getHeaderLine('CF-Connecting-IP'),
-            $request->getHeaderLine('X-Forwarded-For'),
-            $request->getHeaderLine('X-Real-IP'),
-        ];
-
-        foreach ($candidates as $candidate) {
-            if (!$candidate) {
-                continue;
-            }
-            $parts = explode(',', $candidate);
-            $ip = trim($parts[0]);
-            if ($ip !== '') {
-                return $ip;
-            }
-        }
-
-        $server = $request->getServerParams();
-        if (!empty($server['REMOTE_ADDR'])) {
-            return (string)$server['REMOTE_ADDR'];
-        }
-
-        return '0.0.0.0';
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 
     private function resolveAvatar(?string $filePath): array

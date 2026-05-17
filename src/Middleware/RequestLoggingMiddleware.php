@@ -10,6 +10,7 @@ use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\AuthService;
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 
@@ -24,6 +25,26 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         '/',
         '/api/v1',
         '/api/v1/health',
+    ];
+
+    /**
+     * Routes whose bodies (request + response) must never reach `system_logs`,
+     * even after recursive sanitization, because they handle raw credentials,
+     * verification codes, password resets, or freshly minted JWTs. We still keep
+     * status / duration / metadata for observability, but drop the payload itself.
+     *
+     * @var string[]
+     */
+    private const SENSITIVE_BODY_PATH_PATTERNS = [
+        '#^/api(?:/v1)?/auth/login(/.*)?$#',
+        '#^/api(?:/v1)?/auth/register(/.*)?$#',
+        '#^/api(?:/v1)?/auth/refresh(/.*)?$#',
+        '#^/api(?:/v1)?/auth/change-password(/.*)?$#',
+        '#^/api(?:/v1)?/auth/reset-password(/.*)?$#',
+        '#^/api(?:/v1)?/auth/verify-email(/.*)?$#',
+        '#^/api(?:/v1)?/auth/send-verification-code(/.*)?$#',
+        '#^/api(?:/v1)?/auth/forgot-password(/.*)?$#',
+        '#^/api/v1/auth/passkey/login/verify(/.*)?$#',
     ];
 
     public function __construct(
@@ -89,6 +110,13 @@ class RequestLoggingMiddleware implements MiddlewareInterface
                 }
             } catch (\Throwable $e) { $respBody = null; }
 
+            // For credential / verification routes we deliberately drop the bodies
+            // to keep system_logs unable to leak passwords, codes, reset / verification
+            // tokens, or freshly minted JWTs even if downstream sanitization regresses.
+            $sensitive = $this->isSensitiveBodyPath($path);
+            $loggedRequestBody = $sensitive ? '[REDACTED]' : $parsedBody;
+            $loggedResponseBody = $sensitive ? '[REDACTED]' : $this->decodeIfJson($respBody);
+
             $this->systemLogService->log([
                 'request_id' => $requestId,
                 'method' => $method,
@@ -99,8 +127,8 @@ class RequestLoggingMiddleware implements MiddlewareInterface
                 'ip_address' => $ipAddress,
                 'user_agent' => $request->getHeaderLine('User-Agent'),
                 'duration_ms' => round($duration, 2),
-                'request_body' => $parsedBody,
-                'response_body' => $this->decodeIfJson($respBody),
+                'request_body' => $loggedRequestBody,
+                'response_body' => $loggedResponseBody,
                 'server_params' => $serverParams,
             ]);
         }
@@ -127,6 +155,16 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         if (!$this->cronEndpointSystemLogsEnabled && $path === '/api/v1/cron/run') return true;
         // skip system log endpoints themselves to prevent recursion once added
         if (strpos($path, '/api/v1/admin/system-logs') === 0) return true;
+        return false;
+    }
+
+    private function isSensitiveBodyPath(string $path): bool
+    {
+        foreach (self::SENSITIVE_BODY_PATH_PATTERNS as $pattern) {
+            if (preg_match($pattern, $path) === 1) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -160,33 +198,6 @@ class RequestLoggingMiddleware implements MiddlewareInterface
      */
     private function resolveClientIp(array $serverParams): ?string
     {
-        $candidates = [
-            $serverParams['HTTP_CF_CONNNECTING_IP'] ?? null, // handle potential typo key
-            $serverParams['HTTP_CF_CONNECTING_IP'] ?? null,
-            $serverParams['CF_CONNECTING_IP'] ?? null,
-            $_SERVER['HTTP_CF_CONNNECTING_IP'] ?? null,
-            $_SERVER['HTTP_CF_CONNECTING_IP'] ?? null,
-            $_SERVER['CF_CONNECTING_IP'] ?? null,
-            $serverParams['REMOTE_ADDR'] ?? null,
-            $_SERVER['REMOTE_ADDR'] ?? null,
-        ];
-
-        foreach ($candidates as $raw) {
-            if (!is_string($raw)) {
-                continue;
-            }
-            $value = trim($raw);
-            if ($value === '') {
-                continue;
-            }
-            $first = trim(explode(',', $value)[0]);
-            if ($first === '') {
-                continue;
-            }
-            if (filter_var($first, FILTER_VALIDATE_IP)) {
-                return $first;
-            }
-        }
-        return null;
+        return ClientIpResolver::fromServerParams($serverParams);
     }
 }

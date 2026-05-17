@@ -654,6 +654,7 @@ class CronSchedulerService
             ],
             self::TASK_POW_CHALLENGE_CLEANUP => [
                 'deleted' => (int) ($rawResult['deleted'] ?? 0),
+                'attempts_deleted' => (int) ($rawResult['attempts_deleted'] ?? 0),
             ],
             default => $rawResult,
         };

@@ -790,6 +790,7 @@ CREATE TABLE `multipart_uploads` (
 CREATE TABLE `idempotency_records` (
   `id` int(11) NOT NULL,
   `idempotency_key` varchar(36) NOT NULL,
+  `composite_key` char(64) DEFAULT NULL,
   `user_id` int(11) DEFAULT NULL,
   `request_method` varchar(10) NOT NULL,
   `request_uri` varchar(512) NOT NULL,
@@ -834,6 +835,19 @@ CREATE TABLE `proof_of_work_challenges` (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- --------------------------------------------------------
+
+--
+-- 表的结构 `pow_attempts`
+--
+
+CREATE TABLE `pow_attempts` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `ip_address` varchar(45) NOT NULL,
+  `scope` varchar(64) NOT NULL,
+  `attempted_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
 
@@ -1185,6 +1199,7 @@ CREATE TABLE `users` (
   `reset_token` varchar(192) DEFAULT NULL,
   `reset_token_expires_at` datetime DEFAULT NULL,
   `email_verified_at` datetime DEFAULT NULL,
+  `token_version` int(11) NOT NULL DEFAULT '0',
   `verification_code` varchar(32) DEFAULT NULL,
   `verification_token` varchar(128) DEFAULT NULL,
   `verification_code_expires_at` datetime DEFAULT NULL,
@@ -1384,7 +1399,8 @@ ALTER TABLE `multipart_uploads`
 --
 ALTER TABLE `idempotency_records`
   ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `idx_idempotency_key` (`idempotency_key`),
+  ADD KEY `idx_idempotency_key_user` (`idempotency_key`,`user_id`),
+  ADD UNIQUE KEY `uniq_idempotency_key_composite_user` (`idempotency_key`,`composite_key`,`user_id`),
   ADD KEY `idx_user_id` (`user_id`),
   ADD KEY `idx_created_at` (`created_at`),
   ADD KEY `idx_request_uri` (`request_uri`(191));
@@ -1404,6 +1420,14 @@ ALTER TABLE `proof_of_work_challenges`
   ADD KEY `idx_pow_challenges_hash_scope` (`challenge_hash`,`scope`),
   ADD KEY `idx_pow_challenges_expires_at` (`expires_at`),
   ADD KEY `idx_pow_challenges_used_at` (`used_at`);
+
+--
+-- 表的索引 `pow_attempts`
+--
+ALTER TABLE `pow_attempts`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `idx_pow_attempts_ip_attempted_at` (`ip_address`,`attempted_at`),
+  ADD KEY `idx_pow_attempts_attempted_at` (`attempted_at`);
 
 --
 -- 表的索引 `messages`
@@ -1762,6 +1786,12 @@ ALTER TABLE `login_attempts`
 -- 使用表AUTO_INCREMENT `proof_of_work_challenges`
 --
 ALTER TABLE `proof_of_work_challenges`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `pow_attempts`
+--
+ALTER TABLE `pow_attempts`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --

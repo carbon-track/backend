@@ -22,6 +22,10 @@ class ProofOfWorkService
         'support.ticket.reply',
     ];
 
+    public const ISSUANCE_RATE_LIMIT_PER_MINUTE = 10;
+    public const RATE_LIMIT_WINDOW_SECONDS = 60;
+    public const ATTEMPT_RETENTION_SECONDS = 86400;
+
     private string $secret;
     private Logger $logger;
     private ?AuditLogService $auditLogService;
@@ -59,8 +63,20 @@ class ProofOfWorkService
         $this->clockTimezone = new \DateTimeZone('UTC');
     }
 
-    public function createChallenge(string $scope): array
+    public function createChallenge(string $scope, ?string $clientIp = null): array
     {
+        // IP rate-limit: cap how many challenges a single source IP can mint per minute
+        // so brute-force runners cannot recycle short-lived challenges into a bypass
+        // for password / verification stuffing (B-105).
+        if ($clientIp !== null && $clientIp !== '' && $this->isIssuanceRateLimited($clientIp)) {
+            $this->logAudit('pow_challenge_rate_limited', [
+                'scope' => $scope,
+                'ip_address' => $clientIp,
+                'limit_per_minute' => self::ISSUANCE_RATE_LIMIT_PER_MINUTE,
+            ], 'failed');
+            throw new \RuntimeException('Proof-of-work challenge rate limit exceeded');
+        }
+
         $expiresAt = $this->now()->modify('+' . $this->ttlSeconds . ' seconds');
         $payload = [
             'id' => bin2hex(random_bytes(16)),
@@ -78,11 +94,15 @@ class ProofOfWorkService
         $signature = hash_hmac('sha256', $payloadPart, $this->secret, true);
         $challenge = $payloadPart . '.' . $this->base64UrlEncode($signature);
         $this->persistChallenge($payload, $challenge);
+        if ($clientIp !== null && $clientIp !== '') {
+            $this->recordIssuance($clientIp, $scope);
+        }
 
         $this->logAudit('pow_challenge_created', [
             'scope' => $scope,
             'difficulty' => $this->difficulty,
             'expires_at' => $this->formatAtom($expiresAt),
+            'ip_address' => $clientIp,
         ]);
 
         return [
@@ -239,6 +259,56 @@ class ProofOfWorkService
         }
     }
 
+    private function isIssuanceRateLimited(string $clientIp): bool
+    {
+        if ($this->db === null) {
+            return false;
+        }
+
+        try {
+            $threshold = $this->formatSql($this->now()->modify('-' . self::RATE_LIMIT_WINDOW_SECONDS . ' seconds'));
+            $stmt = $this->db->prepare(
+                'SELECT COUNT(*) FROM pow_attempts WHERE ip_address = ? AND attempted_at >= ?'
+            );
+            $stmt->execute([$clientIp, $threshold]);
+            $count = (int) $stmt->fetchColumn();
+            return $count >= self::ISSUANCE_RATE_LIMIT_PER_MINUTE;
+        } catch (\Throwable $e) {
+            // Fail-open on infra issues so a flaky DB does not lock all clients out
+            // of the auth screens; the audit log captures the failure.
+            $this->logFailure('pow_rate_limit_check_failed', $e, ['ip_address' => $clientIp]);
+            return false;
+        }
+    }
+
+    private function recordIssuance(string $clientIp, string $scope): void
+    {
+        if ($this->db === null) {
+            return;
+        }
+
+        try {
+            $stmt = $this->db->prepare(
+                'INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)'
+            );
+            $stmt->execute([$clientIp, $scope, $this->formatSql($this->now())]);
+        } catch (\Throwable $e) {
+            $this->logFailure('pow_attempt_record_failed', $e, ['ip_address' => $clientIp]);
+        }
+    }
+
+    private function cleanupStaleIssuanceAttempts(): int
+    {
+        if ($this->db === null) {
+            return 0;
+        }
+
+        $threshold = $this->formatSql($this->now()->modify('-' . self::ATTEMPT_RETENTION_SECONDS . ' seconds'));
+        $stmt = $this->db->prepare('DELETE FROM pow_attempts WHERE attempted_at < ?');
+        $stmt->execute([$threshold]);
+        return $stmt->rowCount();
+    }
+
     public function cleanupExpiredChallenges(): array
     {
         if ($this->db === null) {
@@ -261,7 +331,8 @@ class ProofOfWorkService
                     OR (used_at IS NOT NULL AND used_at < ?)'
             );
             $stmt->execute([$threshold, $threshold]);
-            return ['deleted' => $deleted];
+            $attemptsDeleted = $this->cleanupStaleIssuanceAttempts();
+            return ['deleted' => $deleted, 'attempts_deleted' => $attemptsDeleted];
         } catch (\Throwable $e) {
             $this->logFailure('pow_challenge_cleanup_failed', $e);
             throw $e;

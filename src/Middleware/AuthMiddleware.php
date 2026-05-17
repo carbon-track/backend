@@ -10,6 +10,7 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Support\ClientIpResolver;
 use Slim\Psr7\Response;
 
 class AuthMiddleware implements MiddlewareInterface
@@ -25,7 +26,11 @@ class AuthMiddleware implements MiddlewareInterface
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        $isTesting = strtolower((string)($_ENV['APP_ENV'] ?? '')) === 'testing';
+        // Test fallback now requires BOTH APP_ENV=testing AND an explicit
+        // ALLOW_TEST_AUTH_FALLBACK opt-in. Production ignores both, so a misconfigured
+        // env that accidentally sets APP_ENV=testing no longer hands out admin access.
+        $isTesting = strtolower((string)($_ENV['APP_ENV'] ?? '')) === 'testing'
+            && filter_var($_ENV['ALLOW_TEST_AUTH_FALLBACK'] ?? 'false', FILTER_VALIDATE_BOOLEAN);
         $authHeader = $request->getHeaderLine('Authorization');
         
         if (empty($authHeader) || !str_starts_with($authHeader, 'Bearer ')) {
@@ -35,7 +40,13 @@ class AuthMiddleware implements MiddlewareInterface
         $token = substr($authHeader, 7); // Remove 'Bearer ' prefix
         
         try {
-            $payload = $this->authService->validateToken($token);
+            $payload = $request->getAttribute('token_payload');
+            if (
+                $request->getAttribute('idempotency_validated_token') !== true
+                || !is_array($payload)
+            ) {
+                $payload = $this->authService->validateToken($token);
+            }
             
             // Add user info to request attributes
             $request = $request
@@ -64,8 +75,9 @@ class AuthMiddleware implements MiddlewareInterface
             return $handler->handle($request);
             
         } catch (\Exception $e) {
+            $isVersionMismatch = $e->getMessage() === 'Token version mismatch';
             $this->auditLogService->log([
-                'action' => 'auth_failure',
+                'action' => $isVersionMismatch ? 'auth_token_version_mismatch' : 'auth_failure',
                 'operation_category' => 'authentication',
                 'actor_type' => 'system',
                 'status' => 'failed',
@@ -75,6 +87,10 @@ class AuthMiddleware implements MiddlewareInterface
                     'message' => 'Token authentication failed: ' . $e->getMessage(),
                 ],
             ]);
+
+            if ($isVersionMismatch) {
+                return $this->unauthorizedResponse('Token has been revoked. Please sign in again.', 'TOKEN_VERSION_MISMATCH');
+            }
 
             if ($isTesting) {
                 $fallback = [
@@ -106,15 +122,15 @@ class AuthMiddleware implements MiddlewareInterface
         }
     }
 
-    private function unauthorizedResponse(string $message): ResponseInterface
+    private function unauthorizedResponse(string $message, string $code = 'UNAUTHORIZED'): ResponseInterface
     {
         $response = new Response();
         $response->getBody()->write(json_encode([
             'success' => false,
             'message' => $message,
-            'code' => 'UNAUTHORIZED'
+            'code' => $code,
         ]));
-        
+
         return $response
             ->withStatus(401)
             ->withHeader('Content-Type', 'application/json');
@@ -122,31 +138,6 @@ class AuthMiddleware implements MiddlewareInterface
 
     private function getClientIp(ServerRequestInterface $request): string
     {
-        $serverParams = $request->getServerParams();
-        
-        // Check for IP from various headers (for load balancers, proxies)
-        $headers = [
-            'HTTP_CF_CONNECTING_IP',     // Cloudflare
-            'HTTP_X_FORWARDED_FOR',      // Load balancers
-            'HTTP_X_REAL_IP',            // Nginx proxy
-            'HTTP_CLIENT_IP',            // Proxy
-            'REMOTE_ADDR'                // Standard
-        ];
-        
-        foreach ($headers as $header) {
-            if (!empty($serverParams[$header])) {
-                $ip = $serverParams[$header];
-                // Handle comma-separated IPs (X-Forwarded-For)
-                if (strpos($ip, ',') !== false) {
-                    $ip = trim(explode(',', $ip)[0]);
-                }
-                if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-                    return $ip;
-                }
-            }
-        }
-        
-        return $serverParams['REMOTE_ADDR'] ?? 'unknown';
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 }
-

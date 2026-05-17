@@ -12,6 +12,7 @@ class IdempotencyRecord extends Model
     
     protected $fillable = [
         'idempotency_key',
+        'composite_key',
         'user_id',
         'request_method',
         'request_uri',

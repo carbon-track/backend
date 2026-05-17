@@ -17,6 +17,7 @@ use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 use PDO;
@@ -93,10 +94,23 @@ class AuthController
                 ], 400);
             }
 
+            try {
+                $challenge = $this->proofOfWorkService->createChallenge($scope, $this->getClientIP($request));
+            } catch (\RuntimeException $rateLimitError) {
+                if (strpos($rateLimitError->getMessage(), 'rate limit') !== false) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Too many proof-of-work challenges from this client',
+                        'code' => 'POW_RATE_LIMITED',
+                    ], 429);
+                }
+                throw $rateLimitError;
+            }
+
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Proof-of-work challenge created',
-                'data' => $this->proofOfWorkService->createChallenge($scope),
+                'data' => $challenge,
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Proof-of-work challenge creation failed', ['error' => $e->getMessage()]);
@@ -289,14 +303,45 @@ class AuthController
     {
         try {
             $data = $request->getParsedBody();
+            $data = is_array($data) ? $data : [];
             // 兼容 identifier / username / email 三种输入
-            $identifier = $data['identifier'] ?? ($data['username'] ?? ($data['email'] ?? null));
-            if (empty($identifier) || empty($data['password'])) {
+            $rawIdentifier = $data['identifier'] ?? ($data['username'] ?? ($data['email'] ?? null));
+            $rawPassword = $data['password'] ?? null;
+            if (!is_string($rawIdentifier) || trim($rawIdentifier) === '' || !is_string($rawPassword) || $rawPassword === '') {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Identifier and password are required',
                     'code' => 'MISSING_CREDENTIALS'
                 ], 400);
+            }
+            $identifier = trim($rawIdentifier);
+            $clientIp = $this->getClientIP($request);
+            // Account/IP lockout precedes any credential check so brute-force traffic
+            // cannot probe whether a user exists or burn through Turnstile capacity.
+            try {
+                if ($this->authService->isAccountLocked((string) $identifier, (string) $clientIp)) {
+                    $this->auditLogService->log([
+                        'action' => 'auth_login_locked',
+                        'operation_category' => 'authentication',
+                        'actor_type' => 'system',
+                        'status' => 'failed',
+                        'data' => [
+                            'identifier' => $identifier,
+                            'ip_address' => $clientIp,
+                            'user_agent' => $request->getHeaderLine('User-Agent'),
+                        ],
+                    ]);
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Account temporarily locked. Try again later.',
+                        'code' => 'ACCOUNT_LOCKED',
+                    ], 429);
+                }
+            } catch (\Throwable $lockCheckError) {
+                // Infrastructure failures in the lockout check should not block all logins.
+                $this->logger->warning('Login lockout check failed', [
+                    'error' => $lockCheckError->getMessage(),
+                ]);
             }
             $challenge = $this->verifyClientChallenge($request, $data, 'auth.login');
             if (!$challenge['success']) {
@@ -320,9 +365,16 @@ class AuthController
                 }
             }
             if (!$user || !$passwordField || !password_verify((string)$data['password'], (string)$user[$passwordField])) {
+                try {
+                    $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, false);
+                } catch (\Throwable $recordError) {
+                    $this->logger->warning('Login attempt record failed (failed branch)', [
+                        'error' => $recordError->getMessage(),
+                    ]);
+                }
                 $this->auditLogService->logAuthOperation('login', null, false, [
                     'identifier' => $identifier,
-                    'ip_address' => $this->getClientIP($request),
+                    'ip_address' => $clientIp,
                     'user_agent' => $request->getHeaderLine('User-Agent')
                 ]);
                 return $this->jsonResponse($response, [
@@ -330,6 +382,13 @@ class AuthController
                     'message' => 'Invalid credentials',
                     'code' => 'INVALID_CREDENTIALS'
                 ], 401);
+            }
+            try {
+                $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, true);
+            } catch (\Throwable $recordError) {
+                $this->logger->warning('Login attempt record failed (success branch)', [
+                    'error' => $recordError->getMessage(),
+                ]);
             }
             try {
                 $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
@@ -878,6 +937,17 @@ class AuthController
                     $upd->execute([$hashed, $user['id']]);
                 }
             }
+            // W-201: invalidate every previously issued JWT for this account
+            // immediately after the password is rotated, so leaked / shared
+            // tokens can no longer impersonate the user.
+            try {
+                $this->authService->incrementTokenVersion((int) $user['id']);
+            } catch (\Throwable $bumpError) {
+                $this->logger->warning('Failed to bump token_version after password reset', [
+                    'user_id' => $user['id'] ?? null,
+                    'error' => $bumpError->getMessage(),
+                ]);
+            }
             $this->auditLogService->logAuthOperation('password_reset', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
                 'user_agent' => $request->getHeaderLine('User-Agent')
@@ -955,6 +1025,14 @@ class AuthController
                     $upd = $this->db->prepare('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?');
                     $upd->execute([$hashed, $user['id']]);
                 }
+            }
+            try {
+                $this->authService->incrementTokenVersion((int) $user['id']);
+            } catch (\Throwable $bumpError) {
+                $this->logger->warning('Failed to bump token_version after password change', [
+                    'user_id' => $user['id'] ?? null,
+                    'error' => $bumpError->getMessage(),
+                ]);
             }
             $this->auditLogService->logAuthOperation('password_change', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
@@ -1400,8 +1478,28 @@ class AuthController
         }
 
         // Browser-originated requests must stay on Turnstile even if a caller spoofs mobile markers.
-        return trim($request->getHeaderLine('Origin')) === ''
-            && trim($request->getHeaderLine('Sec-Fetch-Site')) === '';
+        $browserAttempt = trim($request->getHeaderLine('Origin')) !== ''
+            || trim($request->getHeaderLine('Sec-Fetch-Site')) !== '';
+        if ($browserAttempt) {
+            return false;
+        }
+
+        // Require a mobile distribution token as a coarse PoW path gate. This is not
+        // treated as app attestation; the security boundary remains PoW, Turnstile,
+        // and rate limiting.
+        // If the env value is unset we *disable* the bypass entirely so misconfigured deploys
+        // can never let an arbitrary HTTP client onto the cheaper PoW path (B-105).
+        $expected = trim((string) ($_ENV['MOBILE_CLIENT_TOKEN'] ?? ''));
+        if ($expected === '') {
+            return false;
+        }
+
+        $supplied = trim($request->getHeaderLine('X-Mobile-Client-Token'));
+        if ($supplied === '') {
+            return false;
+        }
+
+        return hash_equals($expected, $supplied);
     }
 
     private function logChallengeFailure(string $action, Request $request, string $scope, ?string $reason = null): void
@@ -1558,17 +1656,7 @@ class AuthController
 
     private function getClientIP(Request $request): string
     {
-        $server = $request->getServerParams();
-        $xff = $request->getHeaderLine('X-Forwarded-For');
-        if ($xff) {
-            $parts = explode(',', $xff);
-            return trim($parts[0]);
-        }
-        $cf = $request->getHeaderLine('CF-Connecting-IP');
-        if ($cf) {
-            return $cf;
-        }
-        return $server['REMOTE_ADDR'] ?? '0.0.0.0';
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 
 }

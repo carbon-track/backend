@@ -9785,6 +9785,26 @@
               }
             }
           },
+          "429": {
+            "description": "Too many proof-of-work challenges issued from this client recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "summary": "Per-IP issuance rate limited",
+                    "value": {
+                      "success": false,
+                      "message": "Too many proof-of-work challenges from this client",
+                      "code": "POW_RATE_LIMITED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Challenge creation failed.",
             "content": {
@@ -9843,6 +9863,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidCredentials": {
+                    "summary": "Invalid credentials",
+                    "value": {
+                      "success": false,
+                      "message": "Invalid credentials",
+                      "code": "INVALID_CREDENTIALS"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "登录尝试过于频繁，账号或来源 IP 临时锁定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "accountLocked": {
+                    "summary": "Account locked",
+                    "value": {
+                      "success": false,
+                      "message": "Account temporarily locked. Try again later.",
+                      "code": "ACCOUNT_LOCKED"
+                    }
+                  }
                 }
               }
             }
@@ -10714,7 +10764,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录 (v1)",
-        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
+        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
         "security": [
           {
             "bearerAuth": []
@@ -10731,6 +10781,28 @@
               "example": "b7e9a0f1c2d34e56"
             },
             "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)"
+          },
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ],
+              "example": "mobile"
+            },
+            "description": "移动端使用 PoW 通道时必须设置为 mobile；Web 端不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；当服务端配置 MOBILE_CLIENT_TOKEN 时，值必须匹配，否则请求不会进入移动端 PoW 校验路径。"
           }
         ],
         "requestBody": {
@@ -10918,7 +10990,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录",
-        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
+        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
         "security": [
           {
             "bearerAuth": []
@@ -10935,6 +11007,28 @@
               "example": "a3f1c09e7b5d4c1a"
             },
             "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)，24小时内有效。旧客户端若仍发送UUID将被拒绝或忽略幂等语义。"
+          },
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ],
+              "example": "mobile"
+            },
+            "description": "移动端使用 PoW 通道时必须设置为 mobile；Web 端不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；当服务端配置 MOBILE_CLIENT_TOKEN 时，值必须匹配，否则请求不会进入移动端 PoW 校验路径。"
           }
         ],
         "requestBody": {
@@ -19624,7 +19718,7 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 X-Client-Platform + X-Mobile-Client-Token header 与 client_type + pow_challenge + pow_nonce body 字段。"
           },
           "client_type": {
             "type": "string",
@@ -20626,11 +20720,11 @@
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求必须设置为 mobile。"
+            "description": "移动端请求体必须设置为 mobile；请求头还必须包含 X-Client-Platform: mobile。"
           },
           "pow_challenge": {
             "type": "string",
-            "description": "移动端提交碳记录时使用的一次性 proof-of-work challenge，scope 为 carbon.record.submit。"
+            "description": "移动端提交碳记录时使用的一次性 proof-of-work challenge，scope 为 carbon.record.submit；请求头必须同时包含 X-Mobile-Client-Token。"
           },
           "pow_nonce": {
             "type": "string",
@@ -20651,7 +20745,7 @@
             ]
           }
         ],
-        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
+        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
       },
       "SubmitRecordResponse": {
         "type": "object",

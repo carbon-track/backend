@@ -54,6 +54,11 @@ class AuthService
             throw new \RuntimeException('Unable to generate token without a stable subject');
         }
 
+        // Stamp the current users.token_version into the JWT so a later
+        // change-password / reset-password / "logout all devices" can revoke
+        // every previously-issued token by simply incrementing the column (W-201).
+        $tokenVersion = $this->resolveTokenVersionForToken($normalizedUser, $user);
+
         $now = time();
         $payload = [
             'iss' => 'carbontrack',
@@ -61,6 +66,7 @@ class AuthService
             'iat' => $now,
             'exp' => $now + $this->jwtExpiration,
             'sub' => $subject,
+            'tv' => $tokenVersion,
             'user' => [
                 'id' => $normalizedUser['id'] ?? null,
                 'uuid' => $normalizedUser['uuid'] ?? null,
@@ -77,14 +83,87 @@ class AuthService
     }
 
     /**
+     * Atomically bump the user's token_version, invalidating every previously
+     * issued JWT for that account (W-201). Safe no-op if the column is missing
+     * (older test databases) or the connection is not available.
+     */
+    public function incrementTokenVersion(int $userId): void
+    {
+        if ($this->db === null || $userId <= 0) {
+            return;
+        }
+
+        try {
+            $stmt = $this->db->prepare('UPDATE users SET token_version = COALESCE(token_version, 0) + 1, updated_at = :updated_at WHERE id = :id');
+            if (!$stmt) {
+                return;
+            }
+            $stmt->execute([
+                'updated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
+                'id' => $userId,
+            ]);
+        } catch (\Throwable $e) {
+            // Most commonly hit on an older test schema that has not yet had the
+            // 20260504 migration applied; surface to audit but never throw so the
+            // password-change / reset flow stays user-visible-successful.
+            $this->logAudit('auth_token_version_bump_failed', [
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ], 'failed');
+        }
+    }
+
+    private function resolveTokenVersionForToken(array $normalizedUser, array $originalUser): int
+    {
+        $explicit = $normalizedUser['token_version'] ?? $originalUser['token_version'] ?? null;
+        if (is_int($explicit)) {
+            return max(0, $explicit);
+        }
+        if (is_string($explicit) && ctype_digit($explicit)) {
+            return (int) $explicit;
+        }
+
+        $userId = $this->normalizeUserId($normalizedUser['id'] ?? $originalUser['id'] ?? null);
+        if ($userId === null || $this->db === null) {
+            return 0;
+        }
+        return $this->fetchTokenVersionForUserId($userId);
+    }
+
+    private function fetchTokenVersionForUserId(int $userId): int
+    {
+        if ($this->db === null) {
+            return 0;
+        }
+        try {
+            $stmt = $this->db->prepare('SELECT token_version FROM users WHERE id = :id LIMIT 1');
+            if (!$stmt) {
+                return 0;
+            }
+            $stmt->execute(['id' => $userId]);
+            $value = $stmt->fetchColumn();
+            if ($value === false || $value === null) {
+                return 0;
+            }
+            return is_numeric($value) ? (int) $value : 0;
+        } catch (\Throwable $e) {
+            // Schema may not yet have the column on legacy environments; treat as 0.
+            return 0;
+        }
+    }
+
+    /**
      * 验证JWT令牌
      */
     public function verifyToken(string $token): ?array
     {
         try {
-            // 允许少量时钟偏移，默认 60 秒，可通过环境变量 JWT_LEEWAY 配置
+            // Clock-skew tolerance defaults to 60s and is hard-capped at 300s so a
+            // misconfigured JWT_LEEWAY env value can never make expired tokens valid
+            // forever (B-302 / W-201).
             if (class_exists(\Firebase\JWT\JWT::class)) {
-                $leeway = isset($_ENV['JWT_LEEWAY']) ? (int)$_ENV['JWT_LEEWAY'] : 60;
+                $configured = isset($_ENV['JWT_LEEWAY']) ? (int)$_ENV['JWT_LEEWAY'] : 60;
+                $leeway = max(0, min($configured, 300));
                 if ($leeway > 0) {
                     \Firebase\JWT\JWT::$leeway = $leeway;
                 }
@@ -124,6 +203,21 @@ class AuthService
         }
 
         $normalizedUser = $this->normalizeAuthenticatedUser($user, $subject);
+
+        // W-201: enforce token_version. Tokens minted before a password change /
+        // reset / explicit revocation must be rejected. Skip enforcement when the
+        // local DB does not (yet) carry the column; the migration applies on
+        // production deployments.
+        $tokenTv = $decoded['tv'] ?? 0;
+        $userId = $this->normalizeUserId($normalizedUser['id'] ?? null);
+        if ($userId !== null) {
+            $current = $this->fetchTokenVersionForUserId($userId);
+            $tokenVersion = is_numeric($tokenTv) ? (int) $tokenTv : 0;
+            if ($tokenVersion !== $current) {
+                throw new \RuntimeException('Token version mismatch');
+            }
+        }
+
         return [
             'user_id' => $normalizedUser['id'] ?? null,
             'uuid' => $normalizedUser['uuid'] ?? null,

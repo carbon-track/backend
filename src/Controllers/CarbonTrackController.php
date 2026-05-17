@@ -16,6 +16,7 @@ use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -1813,10 +1814,23 @@ class CarbonTrackController
     {
         $bodyClientType = strtolower(trim((string)($data['client_type'] ?? '')));
         $headerClientType = strtolower(trim($request->getHeaderLine('X-Client-Platform')));
-        return $bodyClientType === 'mobile'
-            && $headerClientType === 'mobile'
-            && trim($request->getHeaderLine('Origin')) === ''
-            && trim($request->getHeaderLine('Sec-Fetch-Site')) === '';
+        if ($bodyClientType !== 'mobile' || $headerClientType !== 'mobile') {
+            return false;
+        }
+
+        if (trim($request->getHeaderLine('Origin')) !== ''
+            || trim($request->getHeaderLine('Sec-Fetch-Site')) !== '') {
+            return false;
+        }
+
+        // This token only gates access to the mobile PoW path; it is not app attestation.
+        $expected = trim((string)($_ENV['MOBILE_CLIENT_TOKEN'] ?? ''));
+        if ($expected === '') {
+            return false;
+        }
+
+        $supplied = trim($request->getHeaderLine('X-Mobile-Client-Token'));
+        return $supplied !== '' && hash_equals($expected, $supplied);
     }
 
     private function logChallengeFailure(string $action, Request $request, string $scope, ?string $reason = null): void
@@ -1841,24 +1855,7 @@ class CarbonTrackController
 
     private function getClientIpAddress(Request $request): string
     {
-        $candidates = [
-            $request->getHeaderLine('CF-Connecting-IP'),
-            $request->getHeaderLine('X-Forwarded-For'),
-            $request->getHeaderLine('X-Real-IP'),
-        ];
-
-        foreach ($candidates as $candidate) {
-            if (!$candidate) {
-                continue;
-            }
-            $parts = explode(',', $candidate);
-            $ip = trim($parts[0]);
-            if ($ip !== '') {
-                return $ip;
-            }
-        }
-
-        return (string)($request->getServerParams()['REMOTE_ADDR'] ?? '0.0.0.0');
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 
     private function normalizeCheckinDate(string $raw): ?string
