@@ -12156,7 +12156,7 @@
           "Files"
         ],
         "summary": "Confirm direct upload",
-        "description": "确认直传并落库文件元数据。若 sha256 已被其他 file record 占用，本次确认仍会创建当前用户自己的文件记录，但不会复用该 sha256 去重。",
+        "description": "确认直传并落库文件元数据。确认前会读取对象首字节并验证声明 MIME、扩展名与图片魔数；验证失败时拒绝确认，并在能确认对象归属且尚未落库时尽力删除该对象。若 sha256 已被其他 file record 占用，本次确认仍会创建当前用户自己的文件记录，但不会复用该 sha256 去重。",
         "security": [
           {
             "bearerAuth": []
@@ -12215,7 +12215,7 @@
             }
           },
           "400": {
-            "description": "Invalid request.",
+            "description": "Invalid request, invalid sha256, or uploaded object content does not match the declared file type.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12679,7 +12679,7 @@
           "Files"
         ],
         "summary": "R2 诊断信息",
-        "description": "返回当前 R2 存储配置与连通性诊断信息，便于排查文件上传问题。",
+        "description": "仅管理员可访问。返回脱敏后的 R2 存储连通性诊断信息，便于排查文件上传问题。",
         "security": [
           {
             "bearerAuth": []
@@ -12698,6 +12698,16 @@
           },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -26937,23 +26947,28 @@
           "data": {
             "type": "object",
             "properties": {
-              "bucket": {
-                "type": "string"
-              },
-              "endpoint": {
-                "type": "string"
-              },
-              "public_base": {
-                "type": [
-                  "string",
-                  "null"
+              "storage_configured": {
+                "type": "object",
+                "description": "Boolean-only configuration presence flags. Raw bucket names, endpoint URLs, and public bases are intentionally redacted.",
+                "properties": {
+                  "bucket": {
+                    "type": "boolean"
+                  },
+                  "endpoint": {
+                    "type": "boolean"
+                  },
+                  "public_base": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bucket",
+                  "endpoint",
+                  "public_base"
                 ]
               },
               "endpoint_has_bucket_path": {
                 "type": "boolean"
-              },
-              "recommended_endpoint": {
-                "type": "string"
               },
               "tls_verify": {
                 "type": "boolean"
@@ -26979,9 +26994,6 @@
                       "null"
                     ],
                     "properties": {
-                      "file_path": {
-                        "type": "string"
-                      },
                       "url_length": {
                         "type": "integer"
                       }
@@ -27003,10 +27015,8 @@
               }
             },
             "required": [
-              "bucket",
-              "endpoint",
+              "storage_configured",
               "endpoint_has_bucket_path",
-              "recommended_endpoint",
               "tls_verify",
               "checks",
               "errors",

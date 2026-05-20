@@ -155,16 +155,7 @@ class CloudflareR2Service
     public function generateDirectUploadKey(string $originalName, string $directory = 'uploads'): array
     {
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-        // 复用内部的文件名生成逻辑（复制一份以避免修改私有方法签名）
-        $uuid = sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
-        $fileName = $uuid . '.' . $extension;
+        $fileName = $this->generateRandomFileStem() . '.' . $extension;
         $date = date('Y/m/d');
         $filePath = trim($directory, '/') . '/' . $date . '/' . $fileName;
         return [
@@ -498,6 +489,48 @@ class CloudflareR2Service
     }
 
     /**
+     * Validate an object uploaded through a presigned URL before it is confirmed.
+     */
+    public function validateDirectUploadObject(string $filePath, string $originalName, array $fileInfo): void
+    {
+        $size = (int) ($fileInfo['size'] ?? 0);
+        if ($size <= 0) {
+            throw new \InvalidArgumentException('Uploaded file is empty');
+        }
+        if ($size > self::MAX_FILE_SIZE) {
+            throw new \InvalidArgumentException('File size exceeds maximum allowed size of ' . (self::MAX_FILE_SIZE / 1024 / 1024) . 'MB');
+        }
+
+        $mimeType = $this->normalizeImageMimeType((string) ($fileInfo['mime_type'] ?? 'application/octet-stream'));
+        if (!in_array($mimeType, self::ALLOWED_MIME_TYPES, true)) {
+            throw new \InvalidArgumentException('File type not allowed. Allowed types: ' . implode(', ', self::ALLOWED_MIME_TYPES));
+        }
+
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, self::ALLOWED_EXTENSIONS, true)) {
+            throw new \InvalidArgumentException('File extension not allowed. Allowed extensions: ' . implode(', ', self::ALLOWED_EXTENSIONS));
+        }
+
+        try {
+            $result = $this->s3Client->getObject([
+                'Bucket' => $this->bucketName,
+                'Key' => $filePath,
+                'Range' => 'bytes=0-511',
+            ]);
+            $content = (string) ($result['Body'] ?? '');
+        } catch (AwsException $e) {
+            $this->logFailure('r2_direct_upload_content_read_failed', $e, [
+                'file_path' => $filePath,
+            ], '/internal/r2/direct-upload-content');
+            throw new \RuntimeException('Failed to verify uploaded file content', 0, $e);
+        }
+
+        if (!$this->isValidImageContent($content, $mimeType)) {
+            throw new \InvalidArgumentException('File content does not match the declared MIME type');
+        }
+    }
+
+    /**
      * 批量上传文件
      */
     public function uploadMultipleFiles(
@@ -676,8 +709,8 @@ class CloudflareR2Service
         }
 
         // 检查MIME类型
-        $mimeType = $file->getClientMediaType();
-        if (!in_array($mimeType, self::ALLOWED_MIME_TYPES)) {
+        $mimeType = $this->normalizeImageMimeType((string) $file->getClientMediaType());
+        if (!in_array($mimeType, self::ALLOWED_MIME_TYPES, true)) {
             throw new \InvalidArgumentException('File type not allowed. Allowed types: ' . implode(', ', self::ALLOWED_MIME_TYPES));
         }
 
@@ -702,30 +735,27 @@ class CloudflareR2Service
      */
     private function isValidImageContent(string $content, string $mimeType): bool
     {
-        // 检查文件魔数
-        $magicNumbers = [
-            'image/jpeg' => ["\xFF\xD8\xFF"],
-            'image/png' => ["\x89\x50\x4E\x47\x0D\x0A\x1A\x0A"],
-            'image/gif' => ["GIF87a", "GIF89a"],
-            'image/webp' => ["RIFF"]
-        ];
-
-        if (!isset($magicNumbers[$mimeType])) {
-            return false;
+        $mimeType = $this->normalizeImageMimeType($mimeType);
+        if ($mimeType === 'image/jpeg') {
+            return str_starts_with($content, "\xFF\xD8\xFF");
         }
-
-        foreach ($magicNumbers[$mimeType] as $magic) {
-            if (strpos($content, $magic) === 0) {
-                return true;
-            }
+        if ($mimeType === 'image/png') {
+            return str_starts_with($content, "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A");
         }
-
-        // 对于WebP，需要额外检查
+        if ($mimeType === 'image/gif') {
+            return str_starts_with($content, 'GIF87a') || str_starts_with($content, 'GIF89a');
+        }
         if ($mimeType === 'image/webp') {
-            return strpos($content, 'RIFF') === 0 && strpos($content, 'WEBP') === 8;
+            return strlen($content) >= 12 && str_starts_with($content, 'RIFF') && substr($content, 8, 4) === 'WEBP';
         }
 
         return false;
+    }
+
+    private function normalizeImageMimeType(string $mimeType): string
+    {
+        $normalized = strtolower(trim($mimeType));
+        return $normalized === 'image/jpg' ? 'image/jpeg' : $normalized;
     }
 
     /**
@@ -735,18 +765,13 @@ class CloudflareR2Service
     {
         $originalName = $file->getClientFilename();
         $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-        
-        // 生成UUID作为文件名
-        $uuid = sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
 
-        return $uuid . '.' . $extension;
+        return $this->generateRandomFileStem() . '.' . $extension;
+    }
+
+    private function generateRandomFileStem(): string
+    {
+        return bin2hex(random_bytes(16));
     }
 
     /**
@@ -1110,7 +1135,7 @@ class CloudflareR2Service
             'tls_verify' => empty($_ENV['R2_DISABLE_TLS_VERIFY']),
             'checks' => $checks,
             'errors' => $errors,
-            'timestamp' => date('c')
+            'timestamp' => gmdate('c')
         ];
     }
 

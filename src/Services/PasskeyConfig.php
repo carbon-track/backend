@@ -31,7 +31,9 @@ class PasskeyConfig
         if ($value !== '') {
             $rpId = strtolower($value);
 
-            if ($frontendHost !== null) {
+            if (!$this->isValidRpIdHostname($rpId)) {
+                $rpId = '';
+            } elseif ($frontendHost !== null) {
                 if ($this->isRpIdCompatibleWithHost($rpId, $frontendHost)) {
                     return $rpId;
                 }
@@ -77,6 +79,11 @@ class PasskeyConfig
 
         if ($frontendOrigin !== null) {
             $origins[] = $frontendOrigin;
+        }
+
+        $rpIdOrigin = $this->resolveOriginFromRpId($origins);
+        if ($rpIdOrigin !== null) {
+            $origins[] = $rpIdOrigin;
         }
 
         $origins = array_values(array_unique($origins));
@@ -247,6 +254,32 @@ class PasskeyConfig
         return $host === $rpId || str_ends_with($host, '.' . $rpId);
     }
 
+    private function isValidRpIdHostname(string $rpId): bool
+    {
+        $rpId = strtolower(trim($rpId));
+        if ($rpId === '' || str_contains($rpId, '://') || str_contains($rpId, '/') || str_contains($rpId, ':')) {
+            return false;
+        }
+
+        if (preg_match('/\s/', $rpId) === 1 || str_starts_with($rpId, '.') || str_ends_with($rpId, '.')) {
+            return false;
+        }
+
+        foreach (explode('.', $rpId) as $label) {
+            if (
+                $label === ''
+                || strlen($label) > 63
+                || str_starts_with($label, '-')
+                || str_ends_with($label, '-')
+                || preg_match('/^[a-z0-9-]+$/', $label) !== 1
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private function resolveOriginFromUrl(string $url): ?string
     {
         $url = trim($url);
@@ -287,5 +320,51 @@ class PasskeyConfig
         }
 
         return strtolower($host);
+    }
+
+    /**
+     * @param string[] $candidateOrigins
+     */
+    private function resolveOriginFromRpId(array $candidateOrigins): ?string
+    {
+        $rpId = trim((string) ($this->env['PASSKEYS_RP_ID'] ?? ''));
+        if ($rpId === '') {
+            return null;
+        }
+
+        $rpId = strtolower($rpId);
+        if ($rpId === 'localhost' || !$this->isValidRpIdHostname($rpId)) {
+            return null;
+        }
+
+        $frontendHost = $this->resolveHostFromUrl((string) ($this->env['FRONTEND_URL'] ?? ''));
+        if ($frontendHost !== null && !$this->isRpIdCompatibleWithHost($rpId, $frontendHost)) {
+            return null;
+        }
+
+        if ($frontendHost === null && !$this->isRpIdCompatibleWithCandidateOrigins($rpId, $candidateOrigins)) {
+            return null;
+        }
+
+        return 'https://' . $rpId;
+    }
+
+    /**
+     * @param string[] $candidateOrigins
+     */
+    private function isRpIdCompatibleWithCandidateOrigins(string $rpId, array $candidateOrigins): bool
+    {
+        if ($candidateOrigins === []) {
+            return true;
+        }
+
+        foreach ($candidateOrigins as $origin) {
+            $host = $this->resolveHostFromUrl($origin);
+            if ($host !== null && $this->isRpIdCompatibleWithHost($rpId, $host)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

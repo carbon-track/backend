@@ -236,6 +236,58 @@ class PasskeyServiceTest extends TestCase
         $this->assertNotEmpty($stored['last_used_at']);
     }
 
+    public function testCompleteAuthenticationAllowsConfiguredRpIdOriginForMobileAssociatedDomain(): void
+    {
+        $this->config = new PasskeyConfig([
+            'PASSKEYS_ENABLED' => 'true',
+            'PASSKEYS_RP_ID' => 'app.example.test',
+            'PASSKEYS_RP_NAME' => 'CarbonTrack Test',
+            'PASSKEYS_ORIGINS' => 'https://dev.app.example.test',
+            'FRONTEND_URL' => 'https://dev.app.example.test',
+            'PASSKEYS_CHALLENGE_TTL_SECONDS' => '300',
+            'PASSKEYS_REGISTRATION_TIMEOUT_MS' => '180000',
+            'PASSKEYS_AUTHENTICATION_TIMEOUT_MS' => '120000',
+        ]);
+        $service = $this->createService(new NativeWebauthnProvider());
+
+        $registration = $service->beginRegistration($this->userFixture(), [
+            'label' => 'Phone',
+        ]);
+        $keyPair = $this->generateEcKeyPair();
+        $credentialIdBytes = 'credential-mobile-associated-domain';
+        $credentialId = $this->base64UrlEncode($credentialIdBytes);
+
+        $service->completeRegistration($this->userFixture(), [
+            'challenge_id' => $registration['challenge_id'],
+            'credential' => $this->buildRegistrationCredential(
+                $registration['public_key']['challenge'],
+                'https://dev.app.example.test',
+                $keyPair['x'],
+                $keyPair['y'],
+                $credentialIdBytes
+            ),
+        ]);
+
+        $authentication = $service->beginAuthentication([
+            'identifier' => 'admin@testdomain.com',
+        ]);
+
+        $result = $service->completeAuthentication([
+            'challenge_id' => $authentication['challenge_id'],
+            'credential' => $this->buildAuthenticationCredential(
+                $authentication['public_key']['challenge'],
+                'https://app.example.test',
+                $credentialId,
+                $keyPair['private_key'],
+                'NTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMGFh',
+                2
+            ),
+        ]);
+
+        $this->assertSame('admin_user', $result['user']['username']);
+        $this->assertSame($credentialId, $result['passkey']['credential_id']);
+    }
+
     public function testBeginRegistrationRequiresPersistedUserUuid(): void
     {
         try {

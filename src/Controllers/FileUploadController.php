@@ -176,6 +176,7 @@ class FileUploadController
             }
             $body = $request->getParsedBody() ?: [];
             $filePath = trim($body['file_path'] ?? '');
+            $storagePath = $filePath;
             $originalName = trim($body['original_name'] ?? '');
             $entityType = $body['entity_type'] ?? null;
             $entityId = isset($body['entity_id']) ? (int)$body['entity_id'] : null;
@@ -208,6 +209,8 @@ class FileUploadController
                     ]);
                     // 改用实际信息，但返回时仍提示
                     $info = $altInfo;
+                    $storagePath = $altPath;
+                    $info['file_path'] = $storagePath;
                 }
             }
             if (!$info) {
@@ -218,9 +221,65 @@ class FileUploadController
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'File not found in storage'], 404);
             }
 
+            try {
+                $this->r2Service->validateDirectUploadObject($storagePath, $originalName, $info);
+            } catch (\InvalidArgumentException $e) {
+                $canDeleteFailedObject = $this->canDeleteFailedDirectUploadObject(
+                    $filePath,
+                    $storagePath,
+                    (int) $user['id'],
+                    $info
+                );
+                if ($canDeleteFailedObject) {
+                    try {
+                        $this->r2Service->deleteFile($storagePath, (int) $user['id']);
+                    } catch (\Throwable $cleanupError) {
+                        $this->logger->error('Failed to delete invalid direct upload object during cleanup', [
+                            'file_path' => $filePath,
+                            'storage_path' => $storagePath,
+                            'user_id' => $user['id'],
+                            'error' => $cleanupError->getMessage(),
+                        ]);
+                        try {
+                            $this->errorLogService->logException($cleanupError, $request, [
+                                'context' => 'direct_upload_invalid_object_cleanup_failed',
+                                'file_path' => $filePath,
+                                'storage_path' => $storagePath,
+                            ]);
+                        } catch (\Throwable $ignore) {
+                            $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                        }
+                    }
+                } else {
+                    $this->logger->warning('Skipped failed direct upload cleanup for unverified object ownership', [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'user_id' => $user['id'],
+                    ]);
+                }
+                $this->auditLogService->log([
+                    'user_id' => (int) $user['id'],
+                    'action' => 'direct_upload_confirmed',
+                    'operation_category' => 'file_management',
+                    'affected_table' => 'files',
+                    'status' => 'failed',
+                    'data' => [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'error' => $e->getMessage(),
+                        'error_code' => 'INVALID_FILE_CONTENT',
+                    ],
+                ]);
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                    'code' => 'INVALID_FILE_CONTENT'
+                ], 400);
+            }
+
             // 持久化元数据（如果 sha256 提供，则去重引用计数）
             ['file' => $fileRecord, 'duplicate' => $duplicated] = $this->persistDirectUploadOwnership(
-                $filePath,
+                $storagePath,
                 (int) $user['id'],
                 $originalName,
                 $info,
@@ -1050,6 +1109,35 @@ class FileUploadController
         return $userId > 0 && $existingOwnerId > 0 && $existingOwnerId === $userId;
     }
 
+    private function canDeleteFailedDirectUploadObject(string $filePath, string $storagePath, int $userId, array $fileInfo): bool
+    {
+        if ($userId <= 0) {
+            return false;
+        }
+
+        $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
+        if (!$fileRecord && $storagePath !== $filePath) {
+            $fileRecord = $this->fileMetadataService->findByFilePath($storagePath);
+        }
+
+        if ($fileRecord) {
+            return false;
+        }
+
+        return $this->objectMetadataBelongsToUser($fileInfo, $userId);
+    }
+
+    private function objectMetadataBelongsToUser(array $fileInfo, int $userId): bool
+    {
+        $metadata = $fileInfo['metadata'] ?? [];
+        if (!is_array($metadata)) {
+            return false;
+        }
+
+        $uploadedBy = $metadata['uploaded_by'] ?? null;
+        return $uploadedBy !== null && trim((string) $uploadedBy) === (string) $userId;
+    }
+
     private function persistDirectUploadOwnership(string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): array
     {
         $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
@@ -1060,7 +1148,6 @@ class FileUploadController
 
         $duplicated = false;
         $persistedSha256 = $sha256;
-        $digestClearedForConflict = false;
         if ($sha256) {
             $existing = $this->fileMetadataService->findBySha256($sha256);
             if ($existing && $existing->file_path === $filePath && $this->isOwnedFileRecord($existing, $userId)) {
@@ -1071,8 +1158,7 @@ class FileUploadController
             }
 
             if ($existing) {
-                $persistedSha256 = null;
-                $digestClearedForConflict = true;
+                $persistedSha256 = $this->resolveConflictSafeFileRecordSha256($filePath, $fileInfo, $originalName);
             }
         }
 
@@ -1082,8 +1168,7 @@ class FileUploadController
                 $userId,
                 $originalName,
                 $fileInfo,
-                $persistedSha256,
-                !$digestClearedForConflict
+                $persistedSha256
             )
         );
 
@@ -1149,11 +1234,10 @@ class FileUploadController
         }
 
         $persistedSha256 = $sha256;
-        $digestClearedForConflict = false;
         $existing = $this->fileMetadataService->findBySha256($sha256);
         if ($existing) {
-            $persistedSha256 = null;
-            $digestClearedForConflict = true;
+            $originalName = (string) ($fileInfo['metadata']['original_name'] ?? basename($filePath));
+            $persistedSha256 = $this->resolveConflictSafeFileRecordSha256($filePath, $fileInfo ?? [], $originalName);
         }
 
         $this->fileMetadataService->createRecord(
@@ -1161,8 +1245,7 @@ class FileUploadController
                 $filePath,
                 $userId,
                 $fileInfo,
-                $persistedSha256,
-                !$digestClearedForConflict
+                $persistedSha256
             )
         );
 
@@ -1214,6 +1297,11 @@ class FileUploadController
         ];
 
         return $recordData;
+    }
+
+    private function resolveConflictSafeFileRecordSha256(string $filePath, array $fileInfo, string $originalName): string
+    {
+        return $this->resolveFileRecordSha256(null, $filePath, $fileInfo, $originalName, false);
     }
 
     private function resolveFileRecordSha256(
@@ -1296,11 +1384,130 @@ class FileUploadController
             if (!$user) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Unauthorized'], 401);
             }
-            $data = $this->r2Service->diagnostics();
+            $data = $this->redactR2Diagnostics($this->r2Service->diagnostics());
             return $this->jsonResponse($response, ['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, ['success' => false, 'message' => 'Diagnostics failed: ' . $e->getMessage()], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logger->error('R2 diagnostics failed', ['error' => $e->getMessage()]);
+            return $this->jsonResponse($response, ['success' => false, 'message' => 'Diagnostics failed'], 500);
         }
+    }
+
+    private function redactR2Diagnostics(array $diagnostics): array
+    {
+        $redactionValues = $this->diagnosticRedactionValues($diagnostics);
+        $checks = $diagnostics['checks'] ?? [];
+        if (isset($checks['presign_sample']) && is_array($checks['presign_sample'])) {
+            unset($checks['presign_sample']['file_path']);
+        }
+        $checks = $this->redactDiagnosticValue($checks, $redactionValues);
+
+        $errors = array_map(
+            fn ($error) => $this->redactDiagnosticText((string) $error, $redactionValues),
+            array_values($diagnostics['errors'] ?? [])
+        );
+
+        return [
+            'storage_configured' => [
+                'bucket' => !empty($diagnostics['bucket']),
+                'endpoint' => !empty($diagnostics['endpoint']),
+                'public_base' => !empty($diagnostics['public_base']),
+            ],
+            'endpoint_has_bucket_path' => (bool) ($diagnostics['endpoint_has_bucket_path'] ?? false),
+            'tls_verify' => (bool) ($diagnostics['tls_verify'] ?? true),
+            'checks' => $checks,
+            'errors' => $errors,
+            'timestamp' => $diagnostics['timestamp'] ?? gmdate('c'),
+        ];
+    }
+
+    private function diagnosticRedactionValues(array $diagnostics): array
+    {
+        $values = [];
+        foreach (['bucket', 'endpoint', 'public_base', 'recommended_endpoint'] as $field) {
+            if (!isset($diagnostics[$field]) || !is_string($diagnostics[$field])) {
+                continue;
+            }
+
+            $raw = trim($diagnostics[$field]);
+            if ($raw === '') {
+                continue;
+            }
+
+            $values[] = $raw;
+            $parts = parse_url($raw);
+            if (!is_array($parts)) {
+                continue;
+            }
+
+            $host = trim((string) ($parts['host'] ?? ''));
+            if ($host !== '') {
+                $values[] = $host;
+                if (preg_match('/^pub-([a-z0-9-]+)\.r2\.dev$/i', $host, $matches)) {
+                    $values[] = $matches[1];
+                } elseif (preg_match('/^([a-z0-9-]+)\.r2\.cloudflarestorage\.com$/i', $host, $matches)) {
+                    $values[] = $matches[1];
+                }
+            }
+
+            $path = trim((string) ($parts['path'] ?? ''), '/');
+            if ($path !== '') {
+                foreach (explode('/', $path) as $segment) {
+                    if ($segment !== '') {
+                        $values[] = $segment;
+                    }
+                }
+            }
+        }
+
+        $values = array_values(array_unique(array_filter(
+            $values,
+            fn ($value) => is_string($value) && $this->shouldRedactDiagnosticIdentifier($value)
+        )));
+        usort($values, fn ($a, $b) => strlen($b) <=> strlen($a));
+
+        return $values;
+    }
+
+    private function shouldRedactDiagnosticIdentifier(string $value): bool
+    {
+        $value = trim($value);
+        if (preg_match('/^[A-Z][A-Za-z0-9_]*(?:Exception|Error)$/', $value) === 1) {
+            return false;
+        }
+
+        if (strlen($value) >= 12) {
+            return true;
+        }
+
+        return strlen($value) >= 6 && preg_match('/[.\-\d]/', $value) === 1;
+    }
+
+    private function redactDiagnosticValue($value, array $redactionValues)
+    {
+        if (is_array($value)) {
+            return array_map(
+                fn ($item) => $this->redactDiagnosticValue($item, $redactionValues),
+                $value
+            );
+        }
+
+        if (is_string($value)) {
+            return $this->redactDiagnosticText($value, $redactionValues);
+        }
+
+        return $value;
+    }
+
+    private function redactDiagnosticText(string $value, array $redactionValues = []): string
+    {
+        $value = preg_replace('#https?://[^\s,)\]]+#i', '[redacted-url]', $value) ?? $value;
+        $value = preg_replace('/\b[a-f0-9]{16,}\b/i', '[redacted-id]', $value) ?? $value;
+        foreach ($redactionValues as $identifier) {
+            $value = str_ireplace($identifier, '[redacted-storage]', $value);
+        }
+
+        return $value;
     }
 }
 

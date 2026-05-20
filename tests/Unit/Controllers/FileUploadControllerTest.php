@@ -523,6 +523,58 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(1, $payload['data']['reference_count']);
     }
 
+    public function testConfirmPersistsResolvedBucketPrefixedStoragePath(): void
+    {
+        $requestedPath = 'uploads/prefix-fallback.jpg';
+        $actualPath = 'carbontrack-bucket/' . $requestedPath;
+
+        $created = new File();
+        $created->reference_count = 1;
+        $created->sha256 = str_repeat('a', 64);
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with($actualPath)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data) use ($actualPath): bool {
+                return ($data['file_path'] ?? null) === $actualPath
+                    && ($data['user_id'] ?? null) === 41
+                    && is_string($data['sha256'] ?? null);
+            }))
+            ->willReturn($created);
+
+        $c = $this->controller(['id'=>41], function($r2) use ($requestedPath, $actualPath) {
+            $r2->method('getBucketName')->willReturn('carbontrack-bucket');
+            $r2->method('getFileInfo')->willReturnCallback(function($path) use ($actualPath) {
+                if ($path !== $actualPath) {
+                    return null;
+                }
+
+                return [
+                    'file_path' => $actualPath,
+                    'size' => 10,
+                    'mime_type' => self::MIME_JPEG,
+                    'metadata' => ['uploaded_by' => '41'],
+                ];
+            });
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with($actualPath, 'prefix-fallback.jpg', $this->isType('array'));
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => $requestedPath,
+            'original_name' => 'prefix-fallback.jpg',
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame($actualPath, $payload['data']['file_path']);
+    }
+
     public function testConfirmNotFound(): void
     {
         $c = $this->controller(['id'=>12], function($r2){
@@ -567,6 +619,275 @@ class FileUploadControllerTest extends TestCase
             'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.jpg'
         ]), new \Slim\Psr7\Response());
         $this->assertSame(200,$resp->getStatusCode());
+    }
+
+    public function testConfirmDeletesObjectAndRejectsWhenContentValidationFails(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::EXISTING_OK_PATH, 33)
+                ->willReturn(true);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmStillReturnsInvalidContentWhenFailedCleanupThrows(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::EXISTING_OK_PATH, 33)
+                ->willThrowException(new \RuntimeException('cleanup unavailable'));
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmDoesNotDeleteUnownedObjectWhenContentValidationFails(): void
+    {
+        $foreign = new File();
+        $foreign->user_id = 44;
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::EXISTING_OK_PATH)
+            ->willReturn($foreign);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'44'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmDoesNotDeleteAlreadyPersistedOwnedObjectWhenContentValidationFails(): void
+    {
+        $owned = new File();
+        $owned->user_id = 33;
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::EXISTING_OK_PATH)
+            ->willReturn($owned);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'bad-name.txt', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File extension not allowed. Allowed extensions: jpg, jpeg, png, gif, webp'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'bad-name.txt'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testR2DiagnosticsResponseRedactsStorageIdentifiers(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => true,
+                'recommended_endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com',
+                'tls_verify' => true,
+                'checks' => [
+                    'list_objects' => true,
+                    'presign_put' => true,
+                    'presign_sample' => [
+                        'file_path' => 'diagnostics/_probe_secret.txt',
+                        'url_length' => 512,
+                    ],
+                ],
+                'errors' => [
+                    'ListObjects failed for https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                    'Plain host accountid1234567890.r2.cloudflarestorage.com and bucket private-bucket leaked by SDK',
+                ],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $data = $payload['data'];
+        $this->assertArrayNotHasKey('bucket', $data);
+        $this->assertArrayNotHasKey('endpoint', $data);
+        $this->assertArrayNotHasKey('public_base', $data);
+        $this->assertArrayNotHasKey('recommended_endpoint', $data);
+        $this->assertSame(['bucket' => true, 'endpoint' => true, 'public_base' => true], $data['storage_configured']);
+        $this->assertArrayNotHasKey('file_path', $data['checks']['presign_sample']);
+        $this->assertStringNotContainsString('accountid1234567890', $data['errors'][0]);
+        $this->assertStringNotContainsString('private-bucket', $data['errors'][0]);
+        $this->assertStringNotContainsString('accountid1234567890', $data['errors'][1]);
+        $this->assertStringNotContainsString('private-bucket', $data['errors'][1]);
+    }
+
+    public function testR2DiagnosticsRedactionKeepsLongNonHexWordsReadable(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['confirmDirectUpload failed with request abcdef1234567890'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $error = $payload['data']['errors'][0];
+        $this->assertStringContainsString('confirmDirectUpload', $error);
+        $this->assertStringNotContainsString('abcdef1234567890', $error);
+        $this->assertStringContainsString('[redacted-id]', $error);
+    }
+
+    public function testR2DiagnosticsRedactionKeepsExceptionClassNamesReadable(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/ResourceNotFoundException',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['ResourceNotFoundException while reading private-bucket'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $error = $payload['data']['errors'][0];
+        $this->assertStringContainsString('ResourceNotFoundException', $error);
+        $this->assertStringNotContainsString('private-bucket', $error);
+    }
+
+    public function testR2DiagnosticsRedactionDoesNotMaskCommonLowEntropyTerms(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'dev',
+                'endpoint' => 'https://api.r2.dev/dev',
+                'public_base' => 'https://api.r2.dev/dev',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['dev api prod labels should remain readable'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('dev api prod labels should remain readable', $payload['data']['errors'][0]);
+    }
+
+    public function testR2DiagnosticsFailureDoesNotExposeExceptionDetails(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willThrowException(new \RuntimeException('private-bucket accountid1234567890'));
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('Diagnostics failed', $payload['message']);
+        $this->assertStringNotContainsString('private-bucket', (string)$resp->getBody());
+        $this->assertStringNotContainsString('accountid1234567890', (string)$resp->getBody());
+    }
+
+    public function testR2DiagnosticsRouteRequiresAdminMiddleware(): void
+    {
+        $routes = file_get_contents(__DIR__ . '/../../../src/routes.php');
+
+        $this->assertMatchesRegularExpression(
+            "#/r2/diagnostics'.*FileUploadController::class, 'r2Diagnostics'.*->add\\(AdminMiddleware::class\\)#s",
+            $routes
+        );
     }
 
     public function testConfirmWithoutSha256BackfillsExistingOwnerlessRecord(): void
