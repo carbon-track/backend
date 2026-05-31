@@ -17,6 +17,7 @@ class CloudflareR2Service
     private string $bucketName;
     private string $publicUrl;
     private string $endpoint;
+    private bool $tlsVerify = true;
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
 
@@ -52,12 +53,13 @@ class CloudflareR2Service
         $this->auditLogService = $auditLogService;
         $this->errorLogService = $errorLogService;
         $this->endpoint = rtrim($endpoint, "/");
-
-    // 是否禁用 TLS 校验（仅用于开发/诊断）
-    $disableVerify = !empty($_ENV['R2_DISABLE_TLS_VERIFY']);
+        $disableVerify = $this->shouldDisableTlsVerification();
+        if ($disableVerify) {
+            $this->tlsVerify = false;
+        }
 
         // 初始化S3客户端（兼容Cloudflare R2）
-        $this->s3Client = new S3Client([
+        $clientConfig = [
             'version' => 'latest',
             'region' => 'auto', // R2使用auto region
             'endpoint' => $endpoint,
@@ -70,35 +72,13 @@ class CloudflareR2Service
                 'timeout' => 30,
                 'connect_timeout' => 10,
             ]
-        ]);
+        ];
 
-        // 直接在底层 guzzle 客户端上设置 verify (S3Client 支持透传 'verify' 配置)
         if ($disableVerify) {
-            try {
-                $this->s3Client = new S3Client([
-                    'version' => 'latest',
-                    'region' => 'auto',
-                    'endpoint' => $endpoint,
-                    'credentials' => [
-                        'key' => $accessKeyId,
-                        'secret' => $secretAccessKey,
-                    ],
-                    'use_path_style_endpoint' => true,
-                    'http' => [
-                        'timeout' => 30,
-                        'connect_timeout' => 10,
-                    ],
-                    'verify' => false
-                ]);
-                $this->logger->warning('R2 TLS certificate verification DISABLED (R2_DISABLE_TLS_VERIFY=1). Do not use in production.');
-            } catch (\Throwable $e) {
-                $this->logFailure('r2_client_recreate_failed', $e, [
-                    'endpoint' => $endpoint,
-                    'bucket_name' => $bucketName,
-                ], '/internal/r2/client');
-                $this->logger->error('Failed to recreate S3Client with verify=false', ['error' => $e->getMessage()]);
-            }
+            $clientConfig['http']['verify'] = false;
+            $this->logger->warning('R2 TLS certificate verification DISABLED for a non-production environment via R2_DISABLE_TLS_VERIFY.');
         }
+        $this->s3Client = new S3Client($clientConfig);
 
         // 计算公共访问基地址
         $derivedBase = $this->derivePublicBase($endpoint, $bucketName);
@@ -959,17 +939,24 @@ class CloudflareR2Service
 
     /**
      * 初始化分片上传
+     * @param array<string,mixed> $metadata
      * @return array{upload_id:string,file_path:string}
      */
-    public function initMultipartUpload(string $originalName, string $directory, string $contentType): array
+    public function initMultipartUpload(string $originalName, string $directory, string $contentType, array $metadata = []): array
     {
         $keyInfo = $this->generateDirectUploadKey($originalName, $directory);
         try {
-            $result = $this->s3Client->createMultipartUpload([
+            $normalizedMetadata = $this->normalizeObjectMetadata($metadata);
+            $params = [
                 'Bucket' => $this->bucketName,
                 'Key' => $keyInfo['file_path'],
                 'ContentType' => $contentType
-            ]);
+            ];
+            if ($normalizedMetadata !== []) {
+                $params['Metadata'] = $normalizedMetadata;
+            }
+
+            $result = $this->s3Client->createMultipartUpload($params);
             return [
                 'upload_id' => $result['UploadId'],
                 'file_path' => $keyInfo['file_path'],
@@ -1132,11 +1119,30 @@ class CloudflareR2Service
             'public_base' => $this->publicUrl,
             'endpoint_has_bucket_path' => $endpointHasBucketInPath,
             'recommended_endpoint' => $recommendedEndpoint,
-            'tls_verify' => empty($_ENV['R2_DISABLE_TLS_VERIFY']),
+            'tls_verify' => $this->tlsVerify,
             'checks' => $checks,
             'errors' => $errors,
             'timestamp' => gmdate('c')
         ];
+    }
+
+    private function shouldDisableTlsVerification(): bool
+    {
+        $requested = filter_var(
+            $_ENV['R2_DISABLE_TLS_VERIFY'] ?? $_SERVER['R2_DISABLE_TLS_VERIFY'] ?? getenv('R2_DISABLE_TLS_VERIFY') ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        );
+        if (!$requested) {
+            return false;
+        }
+
+        $environment = strtolower(trim((string) ($_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?? 'production')));
+        if ($environment === 'production') {
+            $this->logger->warning('Ignoring R2_DISABLE_TLS_VERIFY in production.');
+            return false;
+        }
+
+        return true;
     }
 
     private function logFailure(string $action, \Throwable $e, array $context, string $path): void

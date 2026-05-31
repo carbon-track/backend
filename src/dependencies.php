@@ -29,6 +29,7 @@ use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportRoutingTriageService;
 use CarbonTrack\Services\SupportTicketService;
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
 use CarbonTrack\Services\FileMetadataService;
@@ -96,7 +97,7 @@ use OpenAI\Factory as OpenAiFactory;
 
 $__deps_initializer = function (Container $container) {
     $envBool = static function (string $key, bool $default = false): bool {
-        $raw = $_ENV[$key] ?? $_SERVER[$key] ?? getenv($key);
+        $raw = Environment::get($key);
         if (!is_string($raw) && !is_numeric($raw) && !is_bool($raw)) {
             return $default;
         }
@@ -865,11 +866,12 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(ProofOfWorkService::class, function (ContainerInterface $c) {
-        $difficulty = (int) ($_ENV['POW_DIFFICULTY'] ?? 16);
-        $ttlSeconds = (int) ($_ENV['POW_TTL_SECONDS'] ?? 120);
+        $difficulty = Environment::int('POW_DIFFICULTY', 16);
+        $ttlSeconds = Environment::int('POW_TTL_SECONDS', 120);
+        $secret = Environment::string('POW_SECRET', Environment::string('JWT_SECRET'));
 
         return new ProofOfWorkService(
-            $_ENV['POW_SECRET'] ?? ($_ENV['JWT_SECRET'] ?? ''),
+            $secret,
             $c->get(Logger::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),

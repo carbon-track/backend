@@ -389,6 +389,27 @@ class AdminAiAgentServiceTest extends TestCase
 
         $executedCount = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'")->fetchColumn();
         $this->assertSame(1, $executedCount);
+
+        try {
+            $service->chat(
+                $proposalResult['conversation_id'],
+                null,
+                [],
+                ['proposal_id' => $proposalId, 'outcome' => 'confirm'],
+                [
+                    'request_id' => 'req-write-replay',
+                    'actor_type' => 'admin',
+                    'actor_id' => 1,
+                    'source' => '/admin/ai/chat',
+                ]
+            );
+            $this->fail('Expected a replayed confirmation to be rejected.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('PROPOSAL_ALREADY_DECIDED', $exception->getMessage());
+        }
+
+        $executedCountAfterReplay = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'")->fetchColumn();
+        $this->assertSame(1, $executedCountAfterReplay);
     }
 
     public function testRollbackDecisionCreatesInlineConfirmationProposal(): void

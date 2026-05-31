@@ -22,6 +22,7 @@ use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
 use PDO;
@@ -2015,8 +2016,25 @@ class UserController
 
     private function shouldUseMobileProofOfWork(Request $request, array $data): bool
     {
-        $clientType = strtolower(trim((string)($data['client_type'] ?? $request->getHeaderLine('X-Client-Platform'))));
-        return $clientType === 'mobile' && trim($request->getHeaderLine('Origin')) === '';
+        $bodyClientType = strtolower(trim((string)($data['client_type'] ?? '')));
+        $headerClientType = strtolower(trim($request->getHeaderLine('X-Client-Platform')));
+        if ($bodyClientType !== 'mobile' || $headerClientType !== 'mobile') {
+            return false;
+        }
+
+        if (trim($request->getHeaderLine('Origin')) !== ''
+            || trim($request->getHeaderLine('Sec-Fetch-Site')) !== '') {
+            return false;
+        }
+
+        // This token only gates access to the mobile PoW path; it is not app attestation.
+        $expected = trim(Environment::string('MOBILE_CLIENT_TOKEN'));
+        if ($expected === '') {
+            return false;
+        }
+
+        $supplied = trim($request->getHeaderLine('X-Mobile-Client-Token'));
+        return $supplied !== '' && hash_equals($expected, $supplied);
     }
 
     private function getClientIpAddress(Request $request): string

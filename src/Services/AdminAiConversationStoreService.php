@@ -284,7 +284,7 @@ class AdminAiConversationStoreService
     /**
      * @param array<string,mixed> $meta
      */
-    public function updateProposalStatus(int $proposalId, string $status, array $meta = []): void
+    public function updateProposalStatus(int $proposalId, string $status, array $meta = [], ?string $expectedStatus = null): bool
     {
         try {
             $stmt = $this->db->prepare("SELECT meta_json FROM admin_ai_messages WHERE id = :id");
@@ -295,14 +295,25 @@ class AdminAiConversationStoreService
                 $existing['data'] = isset($existing['data']) && is_array($existing['data']) ? $existing['data'] : [];
                 $existing['data']['decision_meta'] = $meta;
 
-                $update = $this->db->prepare("UPDATE admin_ai_messages
-                    SET status = :status, meta_json = :meta_json, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :id");
-                $update->execute([
+                $sql = $expectedStatus !== null
+                    ? "UPDATE admin_ai_messages
+                        SET status = :status, meta_json = :meta_json, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND status = :expected_status"
+                    : "UPDATE admin_ai_messages
+                        SET status = :status, meta_json = :meta_json, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id";
+                $update = $this->db->prepare($sql);
+                $params = [
                     ':status' => $status,
                     ':meta_json' => json_encode($existing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                     ':id' => $proposalId,
-                ]);
+                ];
+                if ($expectedStatus !== null) {
+                    $params[':expected_status'] = $expectedStatus;
+                }
+
+                $update->execute($params);
+                return $update->rowCount() === 1;
             }
         } catch (\Throwable $exception) {
             $this->logger->warning('Failed to update admin AI proposal in dedicated store.', [
@@ -310,6 +321,8 @@ class AdminAiConversationStoreService
                 'error' => $exception->getMessage(),
             ]);
         }
+
+        return false;
     }
 
     /**

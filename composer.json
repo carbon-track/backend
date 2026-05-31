@@ -42,6 +42,7 @@
     },
     "scripts": {
         "start": "php -S localhost:8080 -t public",
+        "openapi:check": "php enhanced_openapi_check.php",
         "test": "php vendor/bin/phpunit --configuration phpunit.xml"
     },
     "config": {

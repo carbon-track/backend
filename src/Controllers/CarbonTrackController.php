@@ -17,6 +17,7 @@ use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Models\CarbonActivity;
 use PDO;
 
@@ -1824,7 +1825,7 @@ class CarbonTrackController
         }
 
         // This token only gates access to the mobile PoW path; it is not app attestation.
-        $expected = trim((string)($_ENV['MOBILE_CLIENT_TOKEN'] ?? ''));
+        $expected = trim(Environment::string('MOBILE_CLIENT_TOKEN'));
         if ($expected === '') {
             return false;
         }

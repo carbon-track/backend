@@ -18,6 +18,7 @@ use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 use PDO;
@@ -61,12 +62,12 @@ class AuthController
         $this->emailService = $emailService;
         $this->turnstileService = $turnstileService;
         $this->proofOfWorkService = $proofOfWorkService ?? new ProofOfWorkService(
-            $_ENV['POW_SECRET'] ?? ($_ENV['JWT_SECRET'] ?? ''),
+            Environment::string('POW_SECRET', Environment::string('JWT_SECRET')),
             $logger,
             $auditLogService,
             $errorLogService,
-            (int)($_ENV['POW_DIFFICULTY'] ?? 16),
-            (int)($_ENV['POW_TTL_SECONDS'] ?? 120),
+            Environment::int('POW_DIFFICULTY', 16),
+            Environment::int('POW_TTL_SECONDS', 120),
             $db
         );
         $this->auditLogService = $auditLogService;
@@ -1489,7 +1490,7 @@ class AuthController
         // and rate limiting.
         // If the env value is unset we *disable* the bypass entirely so misconfigured deploys
         // can never let an arbitrary HTTP client onto the cheaper PoW path (B-105).
-        $expected = trim((string) ($_ENV['MOBILE_CLIENT_TOKEN'] ?? ''));
+        $expected = trim(Environment::string('MOBILE_CLIENT_TOKEN'));
         if ($expected === '') {
             return false;
         }

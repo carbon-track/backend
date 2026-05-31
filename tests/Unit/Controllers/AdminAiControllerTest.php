@@ -142,6 +142,47 @@ class AdminAiControllerTest extends TestCase
         $this->assertSame('admin-ai-12345678', $payload['conversation_id']);
     }
 
+    public function testChatMapsAlreadyDecidedProposalToConflict(): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $agentService = $this->createMock(AdminAiAgentService::class);
+        $agentService->method('isEnabled')->willReturn(true);
+        $agentService->expects($this->once())
+            ->method('chat')
+            ->willThrowException(new \RuntimeException('PROPOSAL_ALREADY_DECIDED'));
+
+        $auditLogService = $this->createMock(AuditLogService::class);
+        $auditLogService->expects($this->once())->method('logAdminOperation')->willReturn(true);
+
+        $controller = new AdminAiController(
+            $authService,
+            $this->createMock(AdminAiIntentService::class),
+            $this->createMock(AdminAnnouncementAiService::class),
+            $this->createMock(AdminAiCommandRepository::class),
+            $auditLogService,
+            $this->createMock(ErrorLogService::class),
+            new NullLogger(),
+            $agentService
+        );
+
+        $request = makeRequest('POST', self::CHAT_ROUTE, [
+            'conversation_id' => 'admin-ai-12345678',
+            'decision' => [
+                'proposal_id' => 42,
+                'outcome' => 'confirm',
+            ],
+        ]);
+        $response = $controller->chat($request, new Response());
+
+        $this->assertSame(409, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($payload['success']);
+        $this->assertSame('PROPOSAL_ALREADY_DECIDED', $payload['code']);
+    }
+
     public function testChatStreamReturnsSseResponseWithoutSlimHeaderTypeError(): void
     {
         $hadHttpAuthorization = array_key_exists('HTTP_AUTHORIZATION', $_SERVER);

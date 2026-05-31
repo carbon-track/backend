@@ -9,6 +9,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
@@ -21,6 +22,14 @@ class SupportTicketControllerTest extends TestCase
     {
         parent::setUp();
         unset($_ENV['SUPPORT_SLA_SWEEP_KEY']);
+        unset($_ENV['MOBILE_CLIENT_TOKEN']);
+    }
+
+    protected function tearDown(): void
+    {
+        unset($_ENV['SUPPORT_SLA_SWEEP_KEY']);
+        unset($_ENV['MOBILE_CLIENT_TOKEN']);
+        parent::tearDown();
     }
 
     private function makeController(
@@ -29,7 +38,8 @@ class SupportTicketControllerTest extends TestCase
         ?TurnstileService $turnstileService = null,
         ?SupportRoutingEngineService $supportRoutingEngineService = null,
         ?AuditLogService $auditLogService = null,
-        ?CronSchedulerService $cronSchedulerService = null
+        ?CronSchedulerService $cronSchedulerService = null,
+        ?ProofOfWorkService $proofOfWorkService = null
     ): SupportTicketController {
         return new SupportTicketController(
             $supportTicketService ?? $this->createMock(SupportTicketService::class),
@@ -39,7 +49,8 @@ class SupportTicketControllerTest extends TestCase
             $this->createMock(ErrorLogService::class),
             $supportRoutingEngineService,
             $auditLogService,
-            $cronSchedulerService
+            $cronSchedulerService,
+            $proofOfWorkService
         );
     }
 
@@ -80,6 +91,149 @@ class SupportTicketControllerTest extends TestCase
         );
 
         $this->assertSame(403, $response->getStatusCode());
+    }
+
+    public function testCreateTicketMobileMarkersWithoutClientTokenUseTurnstile(): void
+    {
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        $auth = $this->createMock(AuthService::class);
+        $actor = ['id' => 9, 'username' => 'user', 'email' => 'user@example.com'];
+        $auth->method('getCurrentUser')->willReturn($actor);
+
+        $turnstile = $this->createMock(TurnstileService::class);
+        $turnstile->expects($this->once())
+            ->method('verify')
+            ->with('turnstile-token', null)
+            ->willReturn(['success' => true]);
+
+        $pow = $this->createMock(ProofOfWorkService::class);
+        $pow->expects($this->never())->method('verify');
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('createTicket')
+            ->with($actor, $this->callback(static function (array $payload): bool {
+                return ($payload['subject'] ?? null) === 'Broken page'
+                    && !isset($payload['client_type'], $payload['cf_turnstile_response'], $payload['pow_challenge'], $payload['pow_nonce']);
+            }))
+            ->willReturn(['id' => 123]);
+
+        $controller = $this->makeController(
+            supportTicketService: $service,
+            authService: $auth,
+            turnstileService: $turnstile,
+            proofOfWorkService: $pow
+        );
+        $response = $controller->createTicket(
+            makeRequest('POST', '/api/v1/tickets', [
+                'subject' => 'Broken page',
+                'content' => 'Details',
+                'category' => 'website_bug',
+                'client_type' => 'mobile',
+                'cf_turnstile_response' => 'turnstile-token',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ], null, [
+                'X-Client-Platform' => 'mobile',
+            ]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(201, $response->getStatusCode());
+    }
+
+    public function testCreateTicketUsesMobileProofOfWorkWithClientToken(): void
+    {
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        $auth = $this->createMock(AuthService::class);
+        $actor = ['id' => 9, 'username' => 'user', 'email' => 'user@example.com'];
+        $auth->method('getCurrentUser')->willReturn($actor);
+
+        $turnstile = $this->createMock(TurnstileService::class);
+        $turnstile->expects($this->never())->method('verify');
+
+        $pow = $this->createMock(ProofOfWorkService::class);
+        $pow->expects($this->once())
+            ->method('verify')
+            ->with('challenge', 'nonce', 'support.ticket.create')
+            ->willReturn(['success' => true]);
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('createTicket')
+            ->willReturn(['id' => 124]);
+
+        $controller = $this->makeController(
+            supportTicketService: $service,
+            authService: $auth,
+            turnstileService: $turnstile,
+            proofOfWorkService: $pow
+        );
+        $response = $controller->createTicket(
+            makeRequest('POST', '/api/v1/tickets', [
+                'subject' => 'Broken page',
+                'content' => 'Details',
+                'category' => 'website_bug',
+                'client_type' => 'mobile',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ], null, [
+                'X-Client-Platform' => 'mobile',
+                'X-Mobile-Client-Token' => 'mobile-secret',
+            ]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(201, $response->getStatusCode());
+    }
+
+    public function testCreateTicketNonMobileDoesNotUseProofOfWork(): void
+    {
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        $auth = $this->createMock(AuthService::class);
+        $actor = ['id' => 9, 'username' => 'user', 'email' => 'user@example.com'];
+        $auth->method('getCurrentUser')->willReturn($actor);
+
+        $turnstile = $this->createMock(TurnstileService::class);
+        $turnstile->expects($this->once())
+            ->method('verify')
+            ->with('turnstile-token', null)
+            ->willReturn(['success' => true]);
+
+        $pow = $this->createMock(ProofOfWorkService::class);
+        $pow->expects($this->never())->method('verify');
+
+        $service = $this->createMock(SupportTicketService::class);
+        $service->expects($this->once())
+            ->method('createTicket')
+            ->willReturn(['id' => 125]);
+
+        $controller = $this->makeController(
+            supportTicketService: $service,
+            authService: $auth,
+            turnstileService: $turnstile,
+            proofOfWorkService: $pow
+        );
+        $response = $controller->createTicket(
+            makeRequest('POST', '/api/v1/tickets', [
+                'subject' => 'Broken page',
+                'content' => 'Details',
+                'category' => 'website_bug',
+                'client_type' => 'web',
+                'cf_turnstile_response' => 'turnstile-token',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ], null, [
+                'X-Client-Platform' => 'web',
+                'X-Mobile-Client-Token' => 'mobile-secret',
+            ]),
+            new \Slim\Psr7\Response()
+        );
+
+        $this->assertSame(201, $response->getStatusCode());
     }
 
     public function testGetMyTicketReturnsValidationErrorForInvalidTicketId(): void
