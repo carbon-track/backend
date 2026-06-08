@@ -10108,7 +10108,7 @@
           "Auth"
         ],
         "summary": "Logout",
-        "description": "注销当前登录会话。需要携带有效的 Bearer Token。",
+        "description": "注销当前登录会话。Bearer Token 用于审计当前用户；移动端可同时提交 refresh_token 以撤销当前设备会话。",
         "security": [],
         "responses": {
           "200": {
@@ -10142,7 +10142,24 @@
             }
           }
         },
-        "operationId": "authLogout"
+        "operationId": "authLogout",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "refresh_token": {
+                    "type": "string",
+                    "description": "Mobile refresh token to revoke for this device."
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/passkey/login/options": {
@@ -19006,11 +19023,12 @@
           "Auth"
         ],
         "summary": "Refresh JWT Token",
-        "description": "Refresh the current Bearer JWT when it is still valid. Tokens that are invalid or already expired cannot be refreshed.",
+        "description": "Refresh an access token using either a still-valid Bearer JWT or a mobile refresh_token. Mobile refresh tokens are rotated on every successful refresh; expired, revoked, or reused refresh tokens are rejected.",
         "security": [
           {
             "bearerAuth": []
-          }
+          },
+          {}
         ],
         "requestBody": {
           "required": false,
@@ -19018,7 +19036,25 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": false
+                "additionalProperties": false,
+                "properties": {
+                  "refresh_token": {
+                    "type": "string",
+                    "description": "Mobile device-session refresh token."
+                  },
+                  "device_name": {
+                    "type": "string",
+                    "maxLength": 191
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "ios",
+                      "android",
+                      "web"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -19035,7 +19071,7 @@
             }
           },
           "401": {
-            "description": "Authentication token is missing, invalid, or expired.",
+            "description": "Authentication token or refresh token is missing, invalid, expired, revoked, or reused.",
             "content": {
               "application/json": {
                 "schema": {
@@ -20339,7 +20375,7 @@
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -20362,6 +20398,25 @@
             "maxLength": 6,
             "pattern": "^[A-Z0-9]{1,6}$",
             "description": "Uppercase subdivision code defined under the selected country in locales/states.json."
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -20490,6 +20545,24 @@
                   "null"
                 ],
                 "format": "date-time"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
           }
@@ -20528,7 +20601,7 @@
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -20537,6 +20610,25 @@
           "pow_nonce": {
             "type": "string",
             "description": "移动端 proof-of-work nonce。"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -20620,6 +20712,24 @@
                   "null"
                 ],
                 "description": "是否因频率限制而未发送新的验证邮件"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
           }
@@ -20769,7 +20879,7 @@
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -20778,6 +20888,25 @@
           "pow_nonce": {
             "type": "string",
             "description": "移动端 proof-of-work nonce。"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -30971,8 +31100,60 @@
                   "null"
                 ],
                 "description": "Seconds remaining before token expiration"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
+          }
+        }
+      },
+      "MobileDeviceSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 42
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "ios-device-1"
+          },
+          "device_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "iOS device"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "ios"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

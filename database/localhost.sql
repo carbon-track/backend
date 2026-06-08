@@ -821,6 +821,30 @@ CREATE TABLE `login_attempts` (
 -- --------------------------------------------------------
 
 --
+-- 表的结构 `mobile_device_sessions`
+--
+
+CREATE TABLE `mobile_device_sessions` (
+  `id` bigint(20) UNSIGNED NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `refresh_token_hash` char(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `previous_refresh_token_hash` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `device_id` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `device_name` varchar(191) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `platform` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `user_agent` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ip_address` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `expires_at` datetime NOT NULL,
+  `last_used_at` datetime DEFAULT NULL,
+  `revoked_at` datetime DEFAULT NULL,
+  `revoked_reason` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
 -- 表的结构 `proof_of_work_challenges`
 --
 
@@ -1412,6 +1436,25 @@ ALTER TABLE `login_attempts`
   ADD PRIMARY KEY (`id`);
 
 --
+-- 表的索引 `mobile_device_sessions`
+--
+ALTER TABLE `mobile_device_sessions`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_mobile_device_sessions_refresh_hash` (`refresh_token_hash`),
+  ADD KEY `idx_mobile_device_sessions_user_id` (`user_id`),
+  ADD KEY `idx_mobile_device_sessions_device_id` (`device_id`),
+  ADD KEY `idx_mobile_device_sessions_previous_hash` (`previous_refresh_token_hash`),
+  ADD KEY `idx_mobile_device_sessions_active` (`user_id`,`revoked_at`,`expires_at`);
+
+--
+-- 表的约束 `mobile_device_sessions`
+--
+ALTER TABLE `mobile_device_sessions`
+  ADD CONSTRAINT `fk_mobile_device_sessions_user`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE;
+
+--
 -- 表的索引 `proof_of_work_challenges`
 --
 ALTER TABLE `proof_of_work_challenges`
@@ -1781,6 +1824,12 @@ ALTER TABLE `idempotency_records`
 --
 ALTER TABLE `login_attempts`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- 使用表AUTO_INCREMENT `mobile_device_sessions`
+--
+ALTER TABLE `mobile_device_sessions`
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- 使用表AUTO_INCREMENT `proof_of_work_challenges`

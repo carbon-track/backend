@@ -163,7 +163,7 @@ class AuthControllerTest extends TestCase
         $constructor = $reflection->getConstructor();
         $parameters = $constructor->getParameters();
 
-        $this->assertCount(13, $parameters);
+        $this->assertCount(14, $parameters);
 
         $expectedTypes = [
             'CarbonTrack\Services\AuthService',
@@ -178,9 +178,10 @@ class AuthControllerTest extends TestCase
             'CarbonTrack\Services\RegionService',
             'CarbonTrack\Services\CheckinService',
             'CarbonTrack\Services\UserProfileViewService',
-            'CarbonTrack\Services\ProofOfWorkService'
+            'CarbonTrack\Services\ProofOfWorkService',
+            'CarbonTrack\Services\MobileDeviceSessionService'
         ];
-        $nullableIndexes = [5, 8, 10, 11, 12];
+        $nullableIndexes = [5, 8, 10, 11, 12, 13];
 
         foreach ($parameters as $index => $parameter) {
             $type = $parameter->getType();

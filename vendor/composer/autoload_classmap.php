@@ -1334,6 +1334,7 @@ return array(
     'CarbonTrack\\Services\\LeaderboardService' => $baseDir . '/src/Services/LeaderboardService.php',
     'CarbonTrack\\Services\\LlmLogService' => $baseDir . '/src/Services/LlmLogService.php',
     'CarbonTrack\\Services\\MessageService' => $baseDir . '/src/Services/MessageService.php',
+    'CarbonTrack\\Services\\MobileDeviceSessionService' => $baseDir . '/src/Services/MobileDeviceSessionService.php',
     'CarbonTrack\\Services\\MultipartUploadService' => $baseDir . '/src/Services/MultipartUploadService.php',
     'CarbonTrack\\Services\\NativeWebauthnProvider' => $baseDir . '/src/Services/NativeWebauthnProvider.php',
     'CarbonTrack\\Services\\NotificationPreferenceService' => $baseDir . '/src/Services/NotificationPreferenceService.php',

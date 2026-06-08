@@ -1742,6 +1742,7 @@ class ComposerStaticInit320ac13bd40e011dea434dc3088743ff
         'CarbonTrack\\Services\\LeaderboardService' => __DIR__ . '/../..' . '/src/Services/LeaderboardService.php',
         'CarbonTrack\\Services\\LlmLogService' => __DIR__ . '/../..' . '/src/Services/LlmLogService.php',
         'CarbonTrack\\Services\\MessageService' => __DIR__ . '/../..' . '/src/Services/MessageService.php',
+        'CarbonTrack\\Services\\MobileDeviceSessionService' => __DIR__ . '/../..' . '/src/Services/MobileDeviceSessionService.php',
         'CarbonTrack\\Services\\MultipartUploadService' => __DIR__ . '/../..' . '/src/Services/MultipartUploadService.php',
         'CarbonTrack\\Services\\NativeWebauthnProvider' => __DIR__ . '/../..' . '/src/Services/NativeWebauthnProvider.php',
         'CarbonTrack\\Services\\NotificationPreferenceService' => __DIR__ . '/../..' . '/src/Services/NotificationPreferenceService.php',

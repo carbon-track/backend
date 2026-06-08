@@ -20,6 +20,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
+use CarbonTrack\Services\MobileDeviceSessionService;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\LlmLogService;
 use CarbonTrack\Services\NotificationPreferenceService;
@@ -881,6 +882,16 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(MobileDeviceSessionService::class, function (ContainerInterface $c) {
+        return new MobileDeviceSessionService(
+            $c->get(PDO::class),
+            $c->get(Logger::class),
+            $c->get(AuditLogService::class),
+            Environment::int('MOBILE_REFRESH_TOKEN_TTL_SECONDS', 60 * 60 * 24 * 30),
+            Environment::string('MOBILE_REFRESH_TOKEN_SECRET', Environment::string('JWT_SECRET'))
+        );
+    });
+
     // Controllers
     $container->set(AvatarController::class, function (ContainerInterface $c) {
         return new AvatarController(
@@ -944,7 +955,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(RegionService::class),
             $c->get(CheckinService::class),
             $c->get(UserProfileViewService::class),
-            $c->get(ProofOfWorkService::class)
+            $c->get(ProofOfWorkService::class),
+            $c->get(MobileDeviceSessionService::class)
         );
     });
 
