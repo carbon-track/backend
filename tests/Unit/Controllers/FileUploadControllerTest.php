@@ -960,7 +960,7 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
     }
 
-    public function testConfirmDeletesObjectWhenContentVerificationFailsUnexpectedly(): void
+    public function testConfirmDoesNotDeleteObjectWhenContentVerificationFailsUnexpectedly(): void
     {
         $fileMeta = $this->createMock(FileMetadataService::class);
         $fileMeta->expects($this->never())->method('createRecord');
@@ -976,10 +976,7 @@ class FileUploadControllerTest extends TestCase
                 ->method('validateDirectUploadObject')
                 ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
                 ->willThrowException(new \RuntimeException('R2 validation unavailable'));
-            $r2->expects($this->once())
-                ->method('deleteFile')
-                ->with(self::EXISTING_OK_PATH, 33)
-                ->willReturn(true);
+            $r2->expects($this->never())->method('deleteFile');
         }, $fileMeta);
 
         $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
@@ -1626,10 +1623,7 @@ class FileUploadControllerTest extends TestCase
                 ->method('validateDirectUploadObject')
                 ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->isType('array'))
                 ->willThrowException(new \RuntimeException('Failed to verify uploaded file content'));
-            $r2->expects($this->once())
-                ->method('deleteFile')
-                ->with(self::MULTIPART_FILE_PATH, 42)
-                ->willReturn(true);
+            $r2->expects($this->never())->method('deleteFile');
         }, $fileMeta, $multipart);
 
         $resp = $c->completeMultipartUpload(makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [

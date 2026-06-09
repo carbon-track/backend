@@ -767,6 +767,137 @@ class IdempotencyMiddlewareTest extends TestCase
         $this->assertStringContainsString('"count":2', (string) $resp2->getBody());
     }
 
+    public function testUploadedFileHashRestoresStreamPositionWhenReadFails(): void
+    {
+        $db = $this->getMockBuilder(DatabaseService::class)->disableOriginalConstructor()->getMock();
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $mw = new IdempotencyMiddleware($db, $logger);
+
+        $stream = new class implements \Psr\Http\Message\StreamInterface {
+            public int $position = 7;
+            public ?int $lastSeek = null;
+
+            public function __toString(): string
+            {
+                return '';
+            }
+
+            public function close(): void
+            {
+            }
+
+            public function detach()
+            {
+                return null;
+            }
+
+            public function getSize(): ?int
+            {
+                return 32;
+            }
+
+            public function tell(): int
+            {
+                return $this->position;
+            }
+
+            public function eof(): bool
+            {
+                return false;
+            }
+
+            public function isSeekable(): bool
+            {
+                return true;
+            }
+
+            public function seek($offset, $whence = SEEK_SET): void
+            {
+                $this->lastSeek = (int) $offset;
+                $this->position = (int) $offset;
+            }
+
+            public function rewind(): void
+            {
+                $this->position = 0;
+            }
+
+            public function isWritable(): bool
+            {
+                return false;
+            }
+
+            public function write($string): int
+            {
+                throw new \RuntimeException('not writable');
+            }
+
+            public function isReadable(): bool
+            {
+                return true;
+            }
+
+            public function read($length): string
+            {
+                $this->position = 3;
+                throw new \RuntimeException('stream read failed');
+            }
+
+            public function getContents(): string
+            {
+                throw new \RuntimeException('stream read failed');
+            }
+
+            public function getMetadata($key = null)
+            {
+                return $key === null ? [] : null;
+            }
+        };
+
+        $file = new class($stream) implements \Psr\Http\Message\UploadedFileInterface {
+            public function __construct(private \Psr\Http\Message\StreamInterface $stream)
+            {
+            }
+
+            public function getStream(): \Psr\Http\Message\StreamInterface
+            {
+                return $this->stream;
+            }
+
+            public function moveTo($targetPath): void
+            {
+                throw new \RuntimeException('not needed');
+            }
+
+            public function getSize(): ?int
+            {
+                return 32;
+            }
+
+            public function getError(): int
+            {
+                return UPLOAD_ERR_OK;
+            }
+
+            public function getClientFilename(): ?string
+            {
+                return 'broken.png';
+            }
+
+            public function getClientMediaType(): ?string
+            {
+                return 'image/png';
+            }
+        };
+
+        $method = new \ReflectionMethod(IdempotencyMiddleware::class, 'hashUploadedFilePrefix');
+        $method->setAccessible(true);
+
+        $this->assertNull($method->invoke($mw, $file));
+        $this->assertSame(7, $stream->lastSeek);
+        $this->assertSame(7, $stream->position);
+    }
+
     private function makeUploadedFile(string $clientFilename, string $contents): \Psr\Http\Message\UploadedFileInterface
     {
         return new class($clientFilename, $contents) implements \Psr\Http\Message\UploadedFileInterface {

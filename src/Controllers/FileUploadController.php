@@ -284,40 +284,6 @@ class FileUploadController
                     'code' => 'INVALID_FILE_CONTENT'
                 ], 400);
             } catch (\Throwable $e) {
-                $canDeleteFailedObject = $this->canDeleteFailedDirectUploadObject(
-                    $filePath,
-                    $storagePath,
-                    (int) $user['id'],
-                    $info
-                );
-                if ($canDeleteFailedObject) {
-                    try {
-                        $this->r2Service->deleteFile($storagePath, (int) $user['id']);
-                    } catch (\Throwable $cleanupError) {
-                        $this->logger->error('Failed to delete direct upload object after validation error', [
-                            'file_path' => $filePath,
-                            'storage_path' => $storagePath,
-                            'user_id' => $user['id'],
-                            'error' => $cleanupError->getMessage(),
-                        ]);
-                        try {
-                            $this->errorLogService->logException($cleanupError, $request, [
-                                'context' => 'direct_upload_validation_cleanup_failed',
-                                'file_path' => $filePath,
-                                'storage_path' => $storagePath,
-                            ]);
-                        } catch (\Throwable $ignore) {
-                            $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
-                        }
-                    }
-                } else {
-                    $this->logger->warning('Skipped direct upload validation cleanup for unverified object ownership', [
-                        'file_path' => $filePath,
-                        'storage_path' => $storagePath,
-                        'user_id' => $user['id'],
-                    ]);
-                }
-
                 try {
                     $this->auditLogService->log([
                         'user_id' => (int) $user['id'],
@@ -1080,26 +1046,24 @@ class FileUploadController
                 ], 400);
             } catch (\Throwable $e) {
                 try {
-                    $this->r2Service->deleteFile($filePath, (int) $user['id']);
-                } catch (\Throwable $cleanupError) {
-                    $this->logger->error('Failed to delete multipart upload object after validation error', [
+                    $this->multipartUploadService->clearUpload($uploadId);
+                    $multipartTrackingCleared = true;
+                } catch (\Throwable $trackingError) {
+                    $this->logger->error('Failed to clear multipart tracking after validation error', [
                         'file_path' => $filePath,
                         'upload_id' => $uploadId,
                         'user_id' => $user['id'],
-                        'error' => $cleanupError->getMessage(),
+                        'error' => $trackingError->getMessage(),
                     ]);
                     try {
-                        $this->errorLogService->logException($cleanupError, $request, [
-                            'context' => 'multipart_upload_validation_cleanup_failed',
+                        $this->errorLogService->logException($trackingError, $request, [
+                            'context' => 'multipart_upload_validation_tracking_cleanup_failed',
                             'file_path' => $filePath,
                             'upload_id' => $uploadId,
                         ]);
                     } catch (\Throwable $ignore) {
                         $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
                     }
-                } finally {
-                    $this->multipartUploadService->clearUpload($uploadId);
-                    $multipartTrackingCleared = true;
                 }
 
                 try {

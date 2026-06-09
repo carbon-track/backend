@@ -363,23 +363,29 @@ class IdempotencyMiddleware implements MiddlewareInterface
             }
 
             $position = $stream->tell();
-            $stream->rewind();
+            try {
+                $stream->rewind();
 
-            $context = hash_init('sha256');
-            $bytesRead = 0;
-            while (!$stream->eof() && $bytesRead < self::STREAM_HASH_MAX_BYTES) {
-                $remaining = self::STREAM_HASH_MAX_BYTES - $bytesRead;
-                $chunk = $stream->read(min(self::STREAM_HASH_CHUNK_BYTES, $remaining));
-                if ($chunk === '') {
-                    break;
+                $context = hash_init('sha256');
+                $bytesRead = 0;
+                while (!$stream->eof() && $bytesRead < self::STREAM_HASH_MAX_BYTES) {
+                    $remaining = self::STREAM_HASH_MAX_BYTES - $bytesRead;
+                    $chunk = $stream->read(min(self::STREAM_HASH_CHUNK_BYTES, $remaining));
+                    if ($chunk === '') {
+                        break;
+                    }
+                    $bytesRead += strlen($chunk);
+                    hash_update($context, $chunk);
                 }
-                $bytesRead += strlen($chunk);
-                hash_update($context, $chunk);
+
+                return hash_final($context);
+            } finally {
+                try {
+                    $stream->seek($position);
+                } catch (\Throwable $seekError) {
+                    // Best-effort restoration; hashing failure already falls back to null.
+                }
             }
-
-            $stream->seek($position);
-
-            return hash_final($context);
         } catch (\Throwable $e) {
             return null;
         }
