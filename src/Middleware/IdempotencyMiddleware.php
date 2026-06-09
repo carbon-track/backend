@@ -416,7 +416,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
     {
         try {
             $statusCode = $response->getStatusCode();
-            if ($statusCode < 200 || $statusCode >= 500 || $this->isTransientClientError($statusCode)) {
+            if (!$this->isCacheableResponseStatus($statusCode)) {
                 return;
             }
 
@@ -448,9 +448,10 @@ class IdempotencyMiddleware implements MiddlewareInterface
         }
     }
 
-    private function isTransientClientError(int $statusCode): bool
+    private function isCacheableResponseStatus(int $statusCode): bool
     {
-        return in_array($statusCode, [409, 423, 425, 429], true);
+        return ($statusCode >= 200 && $statusCode < 300)
+            || in_array($statusCode, [400, 422], true);
     }
 
     private function badRequestResponse(string $message): ResponseInterface

@@ -1339,7 +1339,14 @@ class FileUploadController
             return '';
         }
 
-        $segments = explode('/', $normalized);
+        $segments = array_values(array_filter(
+            explode('/', $normalized),
+            static fn(string $segment): bool => $segment !== ''
+        ));
+        if (empty($segments)) {
+            return '';
+        }
+
         $firstSegment = strtolower((string) ($segments[0] ?? ''));
         if (in_array($firstSegment, self::ADMIN_ONLY_UPLOAD_ROOTS, true)) {
             return $firstSegment;
