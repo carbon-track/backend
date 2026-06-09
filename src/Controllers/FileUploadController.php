@@ -283,6 +283,78 @@ class FileUploadController
                     'message' => $e->getMessage(),
                     'code' => 'INVALID_FILE_CONTENT'
                 ], 400);
+            } catch (\Throwable $e) {
+                $canDeleteFailedObject = $this->canDeleteFailedDirectUploadObject(
+                    $filePath,
+                    $storagePath,
+                    (int) $user['id'],
+                    $info
+                );
+                if ($canDeleteFailedObject) {
+                    try {
+                        $this->r2Service->deleteFile($storagePath, (int) $user['id']);
+                    } catch (\Throwable $cleanupError) {
+                        $this->logger->error('Failed to delete direct upload object after validation error', [
+                            'file_path' => $filePath,
+                            'storage_path' => $storagePath,
+                            'user_id' => $user['id'],
+                            'error' => $cleanupError->getMessage(),
+                        ]);
+                        try {
+                            $this->errorLogService->logException($cleanupError, $request, [
+                                'context' => 'direct_upload_validation_cleanup_failed',
+                                'file_path' => $filePath,
+                                'storage_path' => $storagePath,
+                            ]);
+                        } catch (\Throwable $ignore) {
+                            $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                        }
+                    }
+                } else {
+                    $this->logger->warning('Skipped direct upload validation cleanup for unverified object ownership', [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'user_id' => $user['id'],
+                    ]);
+                }
+
+                try {
+                    $this->auditLogService->log([
+                        'user_id' => (int) $user['id'],
+                        'action' => 'direct_upload_confirmed',
+                        'operation_category' => 'file_management',
+                        'affected_table' => 'files',
+                        'status' => 'failed',
+                        'data' => [
+                            'file_path' => $filePath,
+                            'storage_path' => $storagePath,
+                            'error' => $e->getMessage(),
+                            'error_code' => 'FILE_CONTENT_VALIDATION_ERROR',
+                        ],
+                    ]);
+                } catch (\Throwable $auditError) {
+                    $this->logger->error('AuditLogService failed for direct upload validation error', [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'error' => $auditError->getMessage(),
+                    ]);
+                }
+
+                try {
+                    $this->errorLogService->logException($e, $request, [
+                        'context' => 'direct_upload_content_validation_failed',
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                    ]);
+                } catch (\Throwable $ignore) {
+                    $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                }
+
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Failed to verify uploaded file content',
+                    'code' => 'FILE_CONTENT_VALIDATION_ERROR'
+                ], 500);
             }
 
             // 持久化元数据（如果 sha256 提供，则去重引用计数）

@@ -960,6 +960,37 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
     }
 
+    public function testConfirmDeletesObjectWhenContentVerificationFailsUnexpectedly(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \RuntimeException('R2 validation unavailable'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::EXISTING_OK_PATH, 33)
+                ->willReturn(true);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('FILE_CONTENT_VALIDATION_ERROR', $payload['code']);
+    }
+
     public function testConfirmDoesNotDeleteUnownedObjectWhenContentValidationFails(): void
     {
         $foreign = new File();
