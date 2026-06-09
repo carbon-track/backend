@@ -44,7 +44,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         '#^/api(?:/v1)?/auth/verify-email(/.*)?$#',
         '#^/api(?:/v1)?/auth/send-verification-code(/.*)?$#',
         '#^/api(?:/v1)?/auth/forgot-password(/.*)?$#',
-        '#^/api/v1/auth/passkey/login/verify(/.*)?$#',
+        '#^/api(?:/v1)?/auth/passkey/login/verify(/.*)?$#',
     ];
 
     public function __construct(
