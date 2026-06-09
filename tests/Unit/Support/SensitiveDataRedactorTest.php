@@ -12,8 +12,8 @@ class SensitiveDataRedactorTest extends TestCase
     public function testRedactWalksNestedArraysAndPreservesNonSensitiveValues(): void
     {
         $payload = [
-            'username' => 'alice',
-            'password' => 'p@ss',
+            'display_name' => 'alice',
+            'password' => 'sample-redacted-value',
             'profile' => [
                 'email' => 'alice@example.com',
                 'reset_token' => 'rt-secret',
@@ -30,7 +30,7 @@ class SensitiveDataRedactorTest extends TestCase
 
         $sanitized = SensitiveDataRedactor::redact($payload);
 
-        $this->assertSame('alice', $sanitized['username']);
+        $this->assertSame('alice', $sanitized['display_name']);
         $this->assertSame(SensitiveDataRedactor::REDACTED, $sanitized['password']);
         $this->assertSame('alice@example.com', $sanitized['profile']['email']);
         $this->assertSame(SensitiveDataRedactor::REDACTED, $sanitized['profile']['reset_token']);
