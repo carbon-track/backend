@@ -266,11 +266,10 @@ class ProofOfWorkService
         }
 
         try {
-            $threshold = $this->formatSql($this->now()->modify('-' . self::RATE_LIMIT_WINDOW_SECONDS . ' seconds'));
             $stmt = $this->db->prepare(
-                'SELECT COUNT(*) FROM pow_attempts WHERE ip_address = ? AND attempted_at >= ?'
+                'SELECT COUNT(*) FROM pow_attempts WHERE ip_address = ? AND attempted_at >= ' . $this->sqlNowMinusSeconds(self::RATE_LIMIT_WINDOW_SECONDS)
             );
-            $stmt->execute([$clientIp, $threshold]);
+            $stmt->execute([$clientIp]);
             $count = (int) $stmt->fetchColumn();
             return $count >= self::ISSUANCE_RATE_LIMIT_PER_MINUTE;
         } catch (\Throwable $e) {
@@ -303,10 +302,20 @@ class ProofOfWorkService
             return 0;
         }
 
-        $threshold = $this->formatSql($this->now()->modify('-' . self::ATTEMPT_RETENTION_SECONDS . ' seconds'));
-        $stmt = $this->db->prepare('DELETE FROM pow_attempts WHERE attempted_at < ?');
-        $stmt->execute([$threshold]);
+        $stmt = $this->db->prepare(
+            'DELETE FROM pow_attempts WHERE attempted_at < ' . $this->sqlNowMinusSeconds(self::ATTEMPT_RETENTION_SECONDS)
+        );
+        $stmt->execute();
         return $stmt->rowCount();
+    }
+
+    private function sqlNowMinusSeconds(int $seconds): string
+    {
+        if ($this->db?->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+            return sprintf("datetime('now', '-%d seconds')", $seconds);
+        }
+
+        return sprintf('NOW() - INTERVAL %d SECOND', $seconds);
     }
 
     public function cleanupExpiredChallenges(): array

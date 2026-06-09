@@ -77,7 +77,7 @@ class IdempotencyMiddleware implements MiddlewareInterface
                 $query = IdempotencyRecord::where('idempotency_key', $idempotencyKey)
                     ->where('composite_key', $compositeKey)
                     ->where('user_id', $userIdentity)
-                    ->where('created_at', '>', gmdate('Y-m-d H:i:s', strtotime('-24 hours'))); // Only check last 24 hours
+                    ->where('created_at', '>', date('Y-m-d H:i:s', strtotime('-24 hours'))); // Only check last 24 hours
 
                 $existingRecord = $query->first();
 
