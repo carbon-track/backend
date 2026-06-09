@@ -11,6 +11,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use Slim\Psr7\Response;
 
 class TurnstileMiddleware implements MiddlewareInterface
@@ -43,8 +44,11 @@ class TurnstileMiddleware implements MiddlewareInterface
         // Skip verification only when explicitly opted-in for non-production environments.
         // Production ignores the flag entirely so a misconfigured deploy cannot disable
         // Turnstile end-to-end (B-104).
-        $appEnv = strtolower((string)($_ENV['APP_ENV'] ?? 'production'));
-        $bypassRequested = filter_var($_ENV['ALLOW_TURNSTILE_BYPASS'] ?? $_ENV['TURNSTILE_BYPASS'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $appEnv = strtolower(Environment::string('APP_ENV', 'production'));
+        $bypassRequested = filter_var(
+            Environment::get('ALLOW_TURNSTILE_BYPASS', Environment::get('TURNSTILE_BYPASS', false)),
+            FILTER_VALIDATE_BOOLEAN
+        );
         if ($appEnv !== 'production' && $bypassRequested) {
             return $handler->handle($request);
         }

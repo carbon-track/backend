@@ -9,6 +9,7 @@ use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
+use CarbonTrack\Services\MobileDeviceSessionService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\TurnstileService;
@@ -227,6 +228,52 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $revokedAt = $this->pdo->query('SELECT revoked_at FROM mobile_device_sessions')->fetchColumn();
         $this->assertNotEmpty($revokedAt);
+    }
+
+    public function testPasswordChangeRevokesMobileRefreshSessions(): void
+    {
+        $this->seedUser();
+        $loginPayload = $this->loginMobile();
+
+        $response = $this->makeController()->changePassword(makeRequest('POST', '/api/v1/auth/change-password', [
+            'current_password' => 'Password123!',
+            'new_password' => 'NewPassword123!',
+            'confirm_password' => 'NewPassword123!',
+        ], null, [
+            'Authorization' => ['Bearer ' . $loginPayload['data']['token']],
+        ]), new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $session = $this->pdo->query('SELECT revoked_at, revoked_reason FROM mobile_device_sessions')->fetch();
+        $this->assertNotEmpty($session['revoked_at']);
+        $this->assertSame('password_change', $session['revoked_reason']);
+
+        $refreshResponse = $this->makeController()->refresh(makeRequest('POST', '/api/v1/auth/refresh', [
+            'refresh_token' => $loginPayload['data']['refresh_token'],
+        ]), new Response());
+
+        $this->assertSame(401, $refreshResponse->getStatusCode());
+        $refreshPayload = json_decode((string) $refreshResponse->getBody(), true);
+        $this->assertSame('INVALID_REFRESH_TOKEN', $refreshPayload['code']);
+    }
+
+    public function testRevokeAllForUserOnlyRevokesActiveSessionsForTargetUser(): void
+    {
+        $this->seedUser();
+        $service = new MobileDeviceSessionService(
+            $this->pdo,
+            new Logger('mobile-device-session-test'),
+            null,
+            3600,
+            'test-device-session-secret-with-enough-length'
+        );
+
+        $first = $service->createSession(1, ['device_id' => 'target']);
+        $second = $service->createSession(2, ['device_id' => 'other']);
+
+        $this->assertSame(1, $service->revokeAllForUser(1, 'credential_rotated'));
+        $this->assertNull($service->rotateRefreshToken($first['refresh_token']));
+        $this->assertNotNull($service->rotateRefreshToken($second['refresh_token']));
     }
 
     private function loginMobile(): array

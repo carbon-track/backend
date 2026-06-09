@@ -11,6 +11,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use Slim\Psr7\Response;
 
 class AuthMiddleware implements MiddlewareInterface
@@ -29,8 +30,8 @@ class AuthMiddleware implements MiddlewareInterface
         // Test fallback now requires BOTH APP_ENV=testing AND an explicit
         // ALLOW_TEST_AUTH_FALLBACK opt-in. Production ignores both, so a misconfigured
         // env that accidentally sets APP_ENV=testing no longer hands out admin access.
-        $isTesting = strtolower((string)($_ENV['APP_ENV'] ?? '')) === 'testing'
-            && filter_var($_ENV['ALLOW_TEST_AUTH_FALLBACK'] ?? 'false', FILTER_VALIDATE_BOOLEAN);
+        $isTesting = strtolower(Environment::string('APP_ENV')) === 'testing'
+            && filter_var(Environment::get('ALLOW_TEST_AUTH_FALLBACK', 'false'), FILTER_VALIDATE_BOOLEAN);
         $authHeader = $request->getHeaderLine('Authorization');
         
         if (empty($authHeader) || !str_starts_with($authHeader, 'Bearer ')) {

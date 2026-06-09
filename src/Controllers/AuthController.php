@@ -1009,8 +1009,9 @@ class AuthController
             // tokens can no longer impersonate the user.
             try {
                 $this->authService->incrementTokenVersion((int) $user['id']);
+                $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_reset');
             } catch (\Throwable $bumpError) {
-                $this->logger->warning('Failed to bump token_version after password reset', [
+                $this->logger->warning('Failed to revoke credentials after password reset', [
                     'user_id' => $user['id'] ?? null,
                     'error' => $bumpError->getMessage(),
                 ]);
@@ -1095,8 +1096,9 @@ class AuthController
             }
             try {
                 $this->authService->incrementTokenVersion((int) $user['id']);
+                $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_change');
             } catch (\Throwable $bumpError) {
-                $this->logger->warning('Failed to bump token_version after password change', [
+                $this->logger->warning('Failed to revoke credentials after password change', [
                     'user_id' => $user['id'] ?? null,
                     'error' => $bumpError->getMessage(),
                 ]);

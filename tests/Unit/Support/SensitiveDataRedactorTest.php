@@ -48,6 +48,7 @@ class SensitiveDataRedactorTest extends TestCase
             'current_password' => 'old',
             'new_password' => 'new',
             'confirm_password' => 'new',
+            'auth_token' => 'jwt',
             'verification_token' => 'vt',
             'cf_turnstile_response' => 'tk',
             'pow_nonce' => '123',

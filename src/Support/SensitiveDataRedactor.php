@@ -32,6 +32,7 @@ final class SensitiveDataRedactor
         'new_password',
         'confirm_password',
         'token',
+        'auth_token',
         'authorization',
         'auth',
         'secret',

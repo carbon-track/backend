@@ -266,7 +266,7 @@ final class OpenApiContractChecker
             'TURNSTILE_SECRET_KEY' => 'test_turnstile',
         ], function (): App {
             $container = new Container();
-            require_once $this->backendRoot . '/src/dependencies.php';
+            require $this->backendRoot . '/src/dependencies.php';
 
             $app = AppFactory::createFromContainer($container);
             $app->addRoutingMiddleware();
@@ -292,7 +292,16 @@ final class OpenApiContractChecker
             return false;
         }
 
+        $allowedPaths = [];
         foreach ([$databasePath, $databasePath . '-journal', $databasePath . '-wal', $databasePath . '-shm'] as $path) {
+            $allowedPaths[$path] = true;
+        }
+
+        foreach (array_keys($allowedPaths) as $path) {
+            if (!isset($allowedPaths[$path])) {
+                continue;
+            }
+
             $realPath = realpath($path);
             if ($realPath === false || !is_file($realPath)) {
                 continue;
@@ -300,10 +309,11 @@ final class OpenApiContractChecker
 
             $isTempChild = str_starts_with($realPath, $tempRoot . DIRECTORY_SEPARATOR);
             $isContractFile = str_starts_with(basename($realPath), 'carbontrack_openapi_contract_');
-            if (!$isTempChild || !$isContractFile) {
+            if (!$isTempChild || !$isContractFile || $realPath !== $path) {
                 continue;
             }
 
+            // nosemgrep: php.lang.security.unlink-use.unlink-use
             @unlink($realPath);
         }
 

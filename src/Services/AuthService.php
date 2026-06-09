@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Support\Uuid;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Firebase\JWT\JWT;
@@ -162,7 +163,7 @@ class AuthService
             // misconfigured JWT_LEEWAY env value can never make expired tokens valid
             // forever (B-302 / W-201).
             if (class_exists(\Firebase\JWT\JWT::class)) {
-                $configured = isset($_ENV['JWT_LEEWAY']) ? (int)$_ENV['JWT_LEEWAY'] : 60;
+                $configured = Environment::int('JWT_LEEWAY', 60);
                 $leeway = max(0, min($configured, 300));
                 if ($leeway > 0) {
                     \Firebase\JWT\JWT::$leeway = $leeway;

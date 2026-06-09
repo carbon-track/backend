@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Support\SyntheticRequestFactory;
+use CarbonTrack\Support\Environment;
 use Monolog\Logger;
 
 class TurnstileService
@@ -43,11 +44,14 @@ class TurnstileService
      */
     public function verify(string $token, ?string $remoteIp = null): array
     {
-        $appEnv = strtolower((string)($_ENV['APP_ENV'] ?? ''));
+        $appEnv = strtolower(Environment::string('APP_ENV'));
         // Production never honours bypass flags. Non-production must opt in explicitly
         // through ALLOW_TURNSTILE_BYPASS (B-104). The legacy TURNSTILE_BYPASS flag is
         // kept as a synonym for backward compatibility with existing deployments.
-        $bypassRequested = filter_var($_ENV['ALLOW_TURNSTILE_BYPASS'] ?? $_ENV['TURNSTILE_BYPASS'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $bypassRequested = filter_var(
+            Environment::get('ALLOW_TURNSTILE_BYPASS', Environment::get('TURNSTILE_BYPASS', false)),
+            FILTER_VALIDATE_BOOLEAN
+        );
         if ($appEnv !== 'production' && $bypassRequested) {
             return ['success' => true, 'bypassed' => true];
         }

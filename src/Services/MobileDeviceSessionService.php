@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\Environment;
 use Monolog\Logger;
 use PDO;
 
@@ -23,7 +24,7 @@ class MobileDeviceSessionService
             $this->refreshTtlSeconds = self::DEFAULT_REFRESH_TTL_SECONDS;
         }
         if ($this->hashSecret === '') {
-            $this->hashSecret = $_ENV['JWT_SECRET'] ?? '';
+            $this->hashSecret = Environment::string('JWT_SECRET');
         }
         if ($this->hashSecret === '') {
             throw new \InvalidArgumentException('Mobile refresh token secret must be configured');
@@ -122,6 +123,42 @@ class MobileDeviceSessionService
         ]);
 
         return $stmt->rowCount() > 0;
+    }
+
+    public function revokeAllForUser(int $userId, string $reason = 'credential_rotated'): int
+    {
+        if ($userId <= 0) {
+            return 0;
+        }
+
+        $stmt = $this->db->prepare(
+            'UPDATE mobile_device_sessions
+             SET revoked_at = :revoked_at, revoked_reason = :revoked_reason, updated_at = :updated_at
+             WHERE user_id = :user_id AND revoked_at IS NULL'
+        );
+        $now = $this->now();
+        $stmt->execute([
+            'revoked_at' => $now,
+            'revoked_reason' => $reason,
+            'updated_at' => $now,
+            'user_id' => $userId,
+        ]);
+
+        $revoked = $stmt->rowCount();
+        if ($revoked > 0) {
+            try {
+                $this->auditLogService?->logAuthOperation('mobile_device_sessions_revoked', $userId, true, [
+                    'data' => [
+                        'reason' => $reason,
+                        'revoked_count' => $revoked,
+                    ],
+                ]);
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to audit mobile device session revocation', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return $revoked;
     }
 
     private function findActiveSessionByHash(string $hash, string $now): ?array

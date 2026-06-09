@@ -102,7 +102,7 @@ final class ClientIpResolver
 
     private static function isTrustedProxyAddress(string $remoteAddr): bool
     {
-        $trustedCidrs = trim((string)($_ENV['TRUSTED_PROXY_CIDRS'] ?? getenv('TRUSTED_PROXY_CIDRS') ?: ''));
+        $trustedCidrs = trim(Environment::string('TRUSTED_PROXY_CIDRS'));
         if ($trustedCidrs === '' || $remoteAddr === '0.0.0.0') {
             return false;
         }
