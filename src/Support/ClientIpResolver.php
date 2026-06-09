@@ -10,7 +10,7 @@ final class ClientIpResolver
 {
     public static function fromRequest(ServerRequestInterface $request, ?string $default = '0.0.0.0'): ?string
     {
-        $serverParams = array_replace($_SERVER ?? [], $request->getServerParams());
+        $serverParams = $request->getServerParams() ?: ($_SERVER ?? []);
         $headerMap = [
             'HTTP_CF_CONNECTING_IP' => $request->getHeaderLine('CF-Connecting-IP'),
             'HTTP_X_FORWARDED_FOR' => $request->getHeaderLine('X-Forwarded-For'),
@@ -30,7 +30,7 @@ final class ClientIpResolver
 
     public static function fromServerParams(array $serverParams, ?string $default = null): ?string
     {
-        $serverParams = array_replace($_SERVER ?? [], $serverParams);
+        $serverParams = $serverParams ?: ($_SERVER ?? []);
         $fallback = self::firstValidIp([
             $serverParams['REMOTE_ADDR'] ?? null,
         ]) ?? $default;

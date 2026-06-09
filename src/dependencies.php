@@ -884,7 +884,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(MobileDeviceSessionService::class, function (ContainerInterface $c) {
         return new MobileDeviceSessionService(
-            $c->get(PDO::class),
+            $c->get(DatabaseService::class)->getConnection()->getPdo(),
             $c->get(Logger::class),
             $c->get(AuditLogService::class),
             Environment::int('MOBILE_REFRESH_TOKEN_TTL_SECONDS', 60 * 60 * 24 * 30),

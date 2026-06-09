@@ -244,6 +244,8 @@ final class MobileDeviceSessionTest extends TestCase
         ]), new Response());
 
         $this->assertSame(200, $response->getStatusCode());
+        $payload = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($payload['data']['reauth_required']);
         $session = $this->pdo->query('SELECT revoked_at, revoked_reason FROM mobile_device_sessions')->fetch();
         $this->assertNotEmpty($session['revoked_at']);
         $this->assertSame('password_change', $session['revoked_reason']);

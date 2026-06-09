@@ -151,7 +151,33 @@
         },
         "responses": {
           "200": {
-            "description": "Password changed."
+            "description": "Password changed. The current access token and mobile refresh sessions are revoked; clients must clear local auth state and sign in again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Password changed successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "reauth_required": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request.",
@@ -9787,6 +9813,16 @@
                     "message": {
                       "type": "string",
                       "example": "Password changed successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "The password change invalidates the current access token and mobile refresh sessions; clients must clear local auth state and sign in again.",
+                      "properties": {
+                        "reauth_required": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
                     }
                   }
                 }

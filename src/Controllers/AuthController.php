@@ -1109,7 +1109,10 @@ class AuthController
             ]);
             return $this->jsonResponse($response, [
                 'success' => true,
-                'message' => 'Password changed successfully'
+                'message' => 'Password changed successfully',
+                'data' => [
+                    'reauth_required' => true,
+                ],
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Change password failed', ['error' => $e->getMessage()]);
