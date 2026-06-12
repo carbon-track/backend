@@ -58,4 +58,52 @@ class CloudflareR2ServiceResolveTest extends TestCase
         $key = $service->resolveKeyFromUrl('https://pub-example.r2.dev/media/badges/icon.png?signature=123');
         $this->assertSame('badges/icon.png', $key);
     }
+
+    public function testProductionIgnoresDisableTlsVerifyFlag(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousDisable = $_ENV['R2_DISABLE_TLS_VERIFY'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['R2_DISABLE_TLS_VERIFY'] = 'true';
+
+        try {
+            $service = $this->makeService('https://example.r2.cloudflarestorage.com', 'media');
+            $property = new \ReflectionProperty(CloudflareR2Service::class, 'tlsVerify');
+            $property->setAccessible(true);
+
+            $this->assertTrue($property->getValue($service));
+        } finally {
+            $this->restoreEnvValue('APP_ENV', $previousEnv);
+            $this->restoreEnvValue('R2_DISABLE_TLS_VERIFY', $previousDisable);
+        }
+    }
+
+    public function testNonProductionCanDisableTlsVerifyForDiagnostics(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousDisable = $_ENV['R2_DISABLE_TLS_VERIFY'] ?? null;
+        $_ENV['APP_ENV'] = 'development';
+        $_ENV['R2_DISABLE_TLS_VERIFY'] = 'true';
+
+        try {
+            $service = $this->makeService('https://example.r2.cloudflarestorage.com', 'media');
+            $property = new \ReflectionProperty(CloudflareR2Service::class, 'tlsVerify');
+            $property->setAccessible(true);
+
+            $this->assertFalse($property->getValue($service));
+        } finally {
+            $this->restoreEnvValue('APP_ENV', $previousEnv);
+            $this->restoreEnvValue('R2_DISABLE_TLS_VERIFY', $previousDisable);
+        }
+    }
+
+    private function restoreEnvValue(string $key, mixed $value): void
+    {
+        if ($value === null) {
+            unset($_ENV[$key]);
+            return;
+        }
+
+        $_ENV[$key] = $value;
+    }
 }

@@ -1223,6 +1223,12 @@ class AdminAiController
                 'error' => 'Proposal not found for this conversation.',
                 'http_status' => 404,
             ],
+            'PROPOSAL_ALREADY_DECIDED' => [
+                'code' => 'PROPOSAL_ALREADY_DECIDED',
+                'status' => 'conflict',
+                'error' => 'Proposal has already been decided.',
+                'http_status' => 409,
+            ],
             default => [
                 'code' => $defaultCode,
                 'status' => 'failed',

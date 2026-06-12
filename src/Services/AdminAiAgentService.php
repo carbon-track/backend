@@ -1551,7 +1551,9 @@ class AdminAiAgentService
         $payload = is_array($proposal['payload'] ?? null) ? $proposal['payload'] : [];
 
         if ($outcome === 'reject') {
-            $this->conversationStoreService->updateProposalStatus($proposalId, 'failed', ['decision' => 'rejected']);
+            if (!$this->conversationStoreService->updateProposalStatus($proposalId, 'failed', ['decision' => 'rejected'], 'pending')) {
+                throw new \RuntimeException('PROPOSAL_ALREADY_DECIDED');
+            }
             $this->conversationStoreService->logConversationEvent('admin_ai_action_rejected', $logContext, [
                 'conversation_id' => $conversationId,
                 'proposal_id' => $proposalId,
@@ -1576,7 +1578,14 @@ class AdminAiAgentService
             ];
         }
 
-            $this->conversationStoreService->logConversationEvent('admin_ai_action_confirmed', $logContext, [
+        if (!$this->conversationStoreService->updateProposalStatus($proposalId, 'executing', [
+            'decision' => 'confirmed',
+            'started_at' => gmdate(DATE_ATOM),
+        ], 'pending')) {
+            throw new \RuntimeException('PROPOSAL_ALREADY_DECIDED');
+        }
+
+        $this->conversationStoreService->logConversationEvent('admin_ai_action_confirmed', $logContext, [
             'conversation_id' => $conversationId,
             'proposal_id' => $proposalId,
             'action_name' => $actionName,
@@ -1669,8 +1678,12 @@ class AdminAiAgentService
         if ($proposalId <= 0 || !in_array($outcome, ['confirm', 'reject'], true)) {
             throw new \InvalidArgumentException('Invalid decision payload.');
         }
-        if ($this->conversationStoreService->findProposal($conversationId, $proposalId) === null) {
+        $proposal = $this->conversationStoreService->findProposal($conversationId, $proposalId);
+        if ($proposal === null) {
             throw new \RuntimeException('PROPOSAL_NOT_FOUND');
+        }
+        if (($proposal['status'] ?? null) !== 'pending') {
+            throw new \RuntimeException('PROPOSAL_ALREADY_DECIDED');
         }
     }
 

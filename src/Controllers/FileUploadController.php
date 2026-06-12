@@ -18,6 +18,8 @@ use CarbonTrack\Models\File;
 
 class FileUploadController
 {
+    private const ADMIN_ONLY_UPLOAD_ROOTS = ['products', 'badges'];
+
     private CloudflareR2Service $r2Service;
     private AuthService $authService;
     private AuditLogService $auditLogService;
@@ -81,6 +83,9 @@ class FileUploadController
                     'success' => false,
                     'message' => 'Invalid directory name'
                 ], 400);
+            }
+            if (!$this->canWriteToUploadDirectory($user, $directory)) {
+                return $this->adminOnlyUploadDirectoryError($response);
             }
 
             // 校验 MIME & 扩展
@@ -176,6 +181,7 @@ class FileUploadController
             }
             $body = $request->getParsedBody() ?: [];
             $filePath = trim($body['file_path'] ?? '');
+            $storagePath = $filePath;
             $originalName = trim($body['original_name'] ?? '');
             $entityType = $body['entity_type'] ?? null;
             $entityId = isset($body['entity_id']) ? (int)$body['entity_id'] : null;
@@ -187,6 +193,9 @@ class FileUploadController
 
             if ($filePath === '' || $originalName === '') {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'file_path and original_name are required'], 400);
+            }
+            if (!$this->canWriteToUploadDirectory($user, $filePath)) {
+                return $this->adminOnlyUploadDirectoryError($response);
             }
 
             // 初次获取对象信息
@@ -208,6 +217,8 @@ class FileUploadController
                     ]);
                     // 改用实际信息，但返回时仍提示
                     $info = $altInfo;
+                    $storagePath = $altPath;
+                    $info['file_path'] = $storagePath;
                 }
             }
             if (!$info) {
@@ -218,9 +229,103 @@ class FileUploadController
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'File not found in storage'], 404);
             }
 
+            try {
+                $this->r2Service->validateDirectUploadObject($storagePath, $originalName, $info);
+            } catch (\InvalidArgumentException $e) {
+                $canDeleteFailedObject = $this->canDeleteFailedDirectUploadObject(
+                    $filePath,
+                    $storagePath,
+                    (int) $user['id'],
+                    $info
+                );
+                if ($canDeleteFailedObject) {
+                    try {
+                        $this->r2Service->deleteFile($storagePath, (int) $user['id']);
+                    } catch (\Throwable $cleanupError) {
+                        $this->logger->error('Failed to delete invalid direct upload object during cleanup', [
+                            'file_path' => $filePath,
+                            'storage_path' => $storagePath,
+                            'user_id' => $user['id'],
+                            'error' => $cleanupError->getMessage(),
+                        ]);
+                        try {
+                            $this->errorLogService->logException($cleanupError, $request, [
+                                'context' => 'direct_upload_invalid_object_cleanup_failed',
+                                'file_path' => $filePath,
+                                'storage_path' => $storagePath,
+                            ]);
+                        } catch (\Throwable $ignore) {
+                            $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                        }
+                    }
+                } else {
+                    $this->logger->warning('Skipped failed direct upload cleanup for unverified object ownership', [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'user_id' => $user['id'],
+                    ]);
+                }
+                $this->auditLogService->log([
+                    'user_id' => (int) $user['id'],
+                    'action' => 'direct_upload_confirmed',
+                    'operation_category' => 'file_management',
+                    'affected_table' => 'files',
+                    'status' => 'failed',
+                    'data' => [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'error' => $e->getMessage(),
+                        'error_code' => 'INVALID_FILE_CONTENT',
+                    ],
+                ]);
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                    'code' => 'INVALID_FILE_CONTENT'
+                ], 400);
+            } catch (\Throwable $e) {
+                try {
+                    $this->auditLogService->log([
+                        'user_id' => (int) $user['id'],
+                        'action' => 'direct_upload_confirmed',
+                        'operation_category' => 'file_management',
+                        'affected_table' => 'files',
+                        'status' => 'failed',
+                        'data' => [
+                            'file_path' => $filePath,
+                            'storage_path' => $storagePath,
+                            'error' => $e->getMessage(),
+                            'error_code' => 'FILE_CONTENT_VALIDATION_ERROR',
+                        ],
+                    ]);
+                } catch (\Throwable $auditError) {
+                    $this->logger->error('AuditLogService failed for direct upload validation error', [
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                        'error' => $auditError->getMessage(),
+                    ]);
+                }
+
+                try {
+                    $this->errorLogService->logException($e, $request, [
+                        'context' => 'direct_upload_content_validation_failed',
+                        'file_path' => $filePath,
+                        'storage_path' => $storagePath,
+                    ]);
+                } catch (\Throwable $ignore) {
+                    $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                }
+
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Failed to verify uploaded file content',
+                    'code' => 'FILE_CONTENT_VALIDATION_ERROR'
+                ], 500);
+            }
+
             // 持久化元数据（如果 sha256 提供，则去重引用计数）
             ['file' => $fileRecord, 'duplicate' => $duplicated] = $this->persistDirectUploadOwnership(
-                $filePath,
+                $storagePath,
                 (int) $user['id'],
                 $originalName,
                 $info,
@@ -306,6 +411,9 @@ class FileUploadController
                     'message' => 'Invalid directory name'
                 ], 400);
             }
+            if (!$this->canWriteToUploadDirectory($user, $directory)) {
+                return $this->adminOnlyUploadDirectoryError($response);
+            }
 
             // 上传文件
             $result = $this->r2Service->uploadFile(
@@ -387,6 +495,9 @@ class FileUploadController
                     'success' => false,
                     'message' => 'Invalid directory name'
                 ], 400);
+            }
+            if (!$this->canWriteToUploadDirectory($user, $directory)) {
+                return $this->adminOnlyUploadDirectoryError($response);
             }
 
             // 限制文件数量
@@ -772,13 +883,24 @@ class FileUploadController
             if ($originalName === '' || !$this->isValidDirectory($directory)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid params'], 400);
             }
+            if (!$this->canWriteToUploadDirectory($user, $directory)) {
+                return $this->adminOnlyUploadDirectoryError($response);
+            }
             if (!$sha256 || !preg_match('/^[a-f0-9]{64}$/', $sha256)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Invalid sha256'], 400);
+            }
+            $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+            if (!in_array($extension, $this->r2Service->getAllowedExtensions(), true)) {
+                return $this->jsonResponse($response, ['success' => false, 'message' => 'File extension not allowed'], 400);
             }
             if (!in_array($mimeType, $this->r2Service->getAllowedMimeTypes(), true)) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'MIME type not allowed'], 400);
             }
-            $init = $this->r2Service->initMultipartUpload($originalName, $directory, $mimeType);
+            $init = $this->r2Service->initMultipartUpload($originalName, $directory, $mimeType, [
+                'uploaded_by' => (string) ((int) $user['id']),
+                'original_name' => $originalName,
+                'sha256' => $sha256,
+            ]);
             $this->multipartUploadService->registerUpload(
                 $init['upload_id'],
                 $init['file_path'],
@@ -828,6 +950,10 @@ class FileUploadController
     {
         $user = null;
         $body = [];
+        $filePath = '';
+        $uploadId = '';
+        $completedMultipartObject = false;
+        $multipartTrackingCleared = false;
         try {
             $user = $this->authService->getCurrentUser($request);
             if (!$user) {
@@ -854,12 +980,145 @@ class FileUploadController
                 $effectiveSha256 = null;
             }
             $result = $this->r2Service->completeMultipartUpload($filePath, $uploadId, $parts);
+            $completedMultipartObject = true;
             $fileInfo = $this->r2Service->getFileInfo($filePath);
+            $fileInfoData = is_array($fileInfo) ? $fileInfo : [];
+            try {
+                $metadata = isset($fileInfoData['metadata']) && is_array($fileInfoData['metadata'])
+                    ? $fileInfoData['metadata']
+                    : [];
+                $originalName = $this->resolveMultipartOriginalName($metadata, $body);
+                if ($originalName === '') {
+                    throw new \InvalidArgumentException('Missing original upload metadata');
+                }
+                $fileInfoData['metadata'] = array_replace($metadata, ['original_name' => $originalName]);
+                $this->r2Service->validateDirectUploadObject($filePath, $originalName, $fileInfoData);
+            } catch (\InvalidArgumentException $e) {
+                try {
+                    $this->r2Service->deleteFile($filePath, (int) $user['id']);
+                } catch (\Throwable $cleanupError) {
+                    $this->logger->error('Failed to delete invalid multipart upload object during cleanup', [
+                        'file_path' => $filePath,
+                        'upload_id' => $uploadId,
+                        'user_id' => $user['id'],
+                        'error' => $cleanupError->getMessage(),
+                    ]);
+                    try {
+                        $this->errorLogService->logException($cleanupError, $request, [
+                            'context' => 'multipart_upload_invalid_object_cleanup_failed',
+                            'file_path' => $filePath,
+                            'upload_id' => $uploadId,
+                        ]);
+                    } catch (\Throwable $ignore) {
+                        $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                    }
+                } finally {
+                    $this->multipartUploadService->clearUpload($uploadId);
+                    $multipartTrackingCleared = true;
+                }
+
+                try {
+                    $this->auditLogService->log([
+                        'user_id' => (int) $user['id'],
+                        'action' => 'multipart_upload_completed',
+                        'operation_category' => 'file_management',
+                        'affected_table' => 'files',
+                        'status' => 'failed',
+                        'data' => [
+                            'file_path' => $filePath,
+                            'upload_id' => $uploadId,
+                            'error' => $e->getMessage(),
+                            'error_code' => 'INVALID_FILE_CONTENT',
+                        ],
+                    ]);
+                } catch (\Throwable $auditError) {
+                    $this->logger->error('AuditLogService failed for invalid multipart upload object', [
+                        'file_path' => $filePath,
+                        'upload_id' => $uploadId,
+                        'error' => $auditError->getMessage(),
+                    ]);
+                }
+
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => $e->getMessage(),
+                    'code' => 'INVALID_FILE_CONTENT'
+                ], 400);
+            } catch (\Throwable $e) {
+                try {
+                    $this->multipartUploadService->clearUpload($uploadId);
+                    $multipartTrackingCleared = true;
+                } catch (\Throwable $trackingError) {
+                    $this->logger->error('Failed to clear multipart tracking after validation error', [
+                        'file_path' => $filePath,
+                        'upload_id' => $uploadId,
+                        'user_id' => $user['id'],
+                        'error' => $trackingError->getMessage(),
+                    ]);
+                    try {
+                        $this->errorLogService->logException($trackingError, $request, [
+                            'context' => 'multipart_upload_validation_tracking_cleanup_failed',
+                            'file_path' => $filePath,
+                            'upload_id' => $uploadId,
+                        ]);
+                    } catch (\Throwable $ignore) {
+                        $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                    }
+                }
+
+                try {
+                    $this->auditLogService->log([
+                        'user_id' => (int) $user['id'],
+                        'action' => 'multipart_upload_completed',
+                        'operation_category' => 'file_management',
+                        'affected_table' => 'files',
+                        'status' => 'failed',
+                        'data' => [
+                            'file_path' => $filePath,
+                            'upload_id' => $uploadId,
+                            'error' => $e->getMessage(),
+                            'error_code' => 'FILE_CONTENT_VALIDATION_ERROR',
+                        ],
+                    ]);
+                } catch (\Throwable $auditError) {
+                    $this->logger->error('AuditLogService failed for multipart upload validation error', [
+                        'file_path' => $filePath,
+                        'upload_id' => $uploadId,
+                        'error' => $auditError->getMessage(),
+                    ]);
+                }
+
+                try {
+                    $this->errorLogService->logException($e, $request, [
+                        'context' => 'multipart_upload_content_validation_failed',
+                        'file_path' => $filePath,
+                        'upload_id' => $uploadId,
+                    ]);
+                } catch (\Throwable $ignore) {
+                    $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                }
+
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Failed to complete multipart',
+                    'code' => 'FILE_CONTENT_VALIDATION_ERROR'
+                ], 500);
+            }
             $ownershipPersisted = false;
             try {
-                $ownershipPersisted = $this->persistMultipartOwnership($filePath, (int) $user['id'], $fileInfo, $effectiveSha256);
+                $trustedMultipartUpload = $upload !== null
+                    && (int) $upload->user_id === (int) $user['id']
+                    && (string) $upload->file_path === $filePath;
+                $ownershipPersisted = $this->persistMultipartOwnership(
+                    $filePath,
+                    (int) $user['id'],
+                    $fileInfoData,
+                    $effectiveSha256,
+                    $trustedMultipartUpload
+                );
             } finally {
                 $this->multipartUploadService->clearUpload($uploadId);
+                $multipartTrackingCleared = true;
             }
 
             $this->auditLogService->log([
@@ -879,6 +1138,11 @@ class FileUploadController
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $result]);
         } catch (FileOwnershipConflictException $e) {
+            $multipartTrackingCleared = $this->clearCompletedMultipartTrackingIfNeeded(
+                $completedMultipartObject,
+                $multipartTrackingCleared,
+                $uploadId
+            );
             $userId = isset($user['id']) ? (int) $user['id'] : null;
             $this->auditLogService->log([
                 'user_id' => $userId,
@@ -887,8 +1151,8 @@ class FileUploadController
                 'affected_table' => 'files',
                 'status' => 'failed',
                 'data' => [
-                    'file_path' => $body['file_path'] ?? null,
-                    'upload_id' => $body['upload_id'] ?? null,
+                    'file_path' => $filePath !== '' ? $filePath : null,
+                    'upload_id' => $uploadId !== '' ? $uploadId : null,
                     'error' => $e->getMessage(),
                     'error_code' => 'FILE_OWNERSHIP_CONFLICT',
                 ],
@@ -899,6 +1163,11 @@ class FileUploadController
                 'code' => 'FILE_OWNERSHIP_CONFLICT'
             ], 409);
         } catch (\Exception $e) {
+            $multipartTrackingCleared = $this->clearCompletedMultipartTrackingIfNeeded(
+                $completedMultipartObject,
+                $multipartTrackingCleared,
+                $uploadId
+            );
             $userId = isset($user['id']) ? (int) $user['id'] : null;
             $this->auditLogService->log([
                 'user_id' => $userId,
@@ -907,14 +1176,54 @@ class FileUploadController
                 'affected_table' => 'files',
                 'status' => 'failed',
                 'data' => [
-                    'file_path' => $body['file_path'] ?? null,
-                    'upload_id' => $body['upload_id'] ?? null,
+                    'file_path' => $filePath !== '' ? $filePath : null,
+                    'upload_id' => $uploadId !== '' ? $uploadId : null,
                     'error' => $e->getMessage(),
                 ],
             ]);
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
             return $this->jsonResponse($response, ['success' => false, 'message' => 'Failed to complete multipart'], 500);
         }
+    }
+
+    private function clearCompletedMultipartTrackingIfNeeded(
+        bool $completedMultipartObject,
+        bool $multipartTrackingCleared,
+        string $uploadId
+    ): bool {
+        if ($completedMultipartObject && !$multipartTrackingCleared && $uploadId !== '') {
+            try {
+                $this->multipartUploadService->clearUpload($uploadId);
+                return true;
+            } catch (\Throwable $cleanupError) {
+                $this->logger->error('Failed to clear multipart upload tracking after completion', [
+                    'upload_id' => $uploadId,
+                    'error' => $cleanupError->getMessage(),
+                ]);
+            }
+        }
+
+        return $multipartTrackingCleared;
+    }
+
+    private function resolveMultipartOriginalName(array $metadata, array $body): string
+    {
+        $originalName = trim((string) ($metadata['original_name'] ?? ''));
+        if ($originalName !== '') {
+            return $originalName;
+        }
+
+        $bodyOriginalName = trim((string) ($body['original_name'] ?? ''));
+        if ($bodyOriginalName === '') {
+            return '';
+        }
+
+        $extension = strtolower(pathinfo($bodyOriginalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, $this->r2Service->getAllowedExtensions(), true)) {
+            return '';
+        }
+
+        return $bodyOriginalName;
     }
 
     /**
@@ -1033,6 +1342,70 @@ class FileUploadController
         return !empty($user['is_admin']);
     }
 
+    private function canWriteToUploadDirectory(array $user, string $directoryOrPath): bool
+    {
+        if ($this->hasUnsafePathSegments($directoryOrPath)) {
+            return false;
+        }
+
+        if (!$this->isAdminOnlyUploadRoot($directoryOrPath)) {
+            return true;
+        }
+
+        return $this->isAdminUser($user);
+    }
+
+    private function hasUnsafePathSegments(string $directoryOrPath): bool
+    {
+        $segments = explode('/', trim(str_replace('\\', '/', $directoryOrPath)));
+
+        return in_array('.', $segments, true) || in_array('..', $segments, true);
+    }
+
+    private function isAdminOnlyUploadRoot(string $directoryOrPath): bool
+    {
+        return in_array($this->storageRoot($directoryOrPath), self::ADMIN_ONLY_UPLOAD_ROOTS, true);
+    }
+
+    private function storageRoot(string $directoryOrPath): string
+    {
+        $normalized = trim(str_replace('\\', '/', $directoryOrPath));
+        $normalized = trim($normalized, " /\t\n\r\0\x0B");
+        if ($normalized === '') {
+            return '';
+        }
+
+        $segments = array_values(array_filter(
+            explode('/', $normalized),
+            static fn(string $segment): bool => $segment !== ''
+        ));
+        if (empty($segments)) {
+            return '';
+        }
+
+        $firstSegment = strtolower((string) ($segments[0] ?? ''));
+        if (in_array($firstSegment, self::ADMIN_ONLY_UPLOAD_ROOTS, true)) {
+            return $firstSegment;
+        }
+
+        $bucketPrefix = trim($this->r2Service->getBucketName(), " /\t\n\r\0\x0B");
+        // Strip an accidental bucket prefix only when at least one upload root segment remains.
+        if ($bucketPrefix !== '' && strcasecmp((string) ($segments[0] ?? ''), $bucketPrefix) === 0 && count($segments) > 1) {
+            array_shift($segments);
+        }
+
+        return strtolower($segments[0] ?? '');
+    }
+
+    private function adminOnlyUploadDirectoryError(Response $response): Response
+    {
+        return $this->jsonResponse($response, [
+            'success' => false,
+            'message' => 'Admin access required for this upload directory',
+            'code' => 'ADMIN_UPLOAD_DIRECTORY_REQUIRED',
+        ], 403);
+    }
+
     private function buildDirectUploadMetadata(array $user, ?string $entityType, ?int $entityId): array
     {
         return [
@@ -1050,17 +1423,67 @@ class FileUploadController
         return $userId > 0 && $existingOwnerId > 0 && $existingOwnerId === $userId;
     }
 
+    private function canDeleteFailedDirectUploadObject(string $filePath, string $storagePath, int $userId, array $fileInfo): bool
+    {
+        if ($userId <= 0) {
+            return false;
+        }
+
+        $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
+        if (!$fileRecord && $storagePath !== $filePath) {
+            $fileRecord = $this->fileMetadataService->findByFilePath($storagePath);
+        }
+
+        if ($fileRecord) {
+            return false;
+        }
+
+        return $this->objectMetadataBelongsToUser($fileInfo, $userId);
+    }
+
+    private function objectMetadataBelongsToUser(array $fileInfo, int $userId): bool
+    {
+        $metadata = $fileInfo['metadata'] ?? [];
+        if (!is_array($metadata)) {
+            return false;
+        }
+
+        $uploadedBy = $metadata['uploaded_by'] ?? null;
+        return $uploadedBy !== null && trim((string) $uploadedBy) === (string) $userId;
+    }
+
+    private function objectMetadataHasUploadedBy(array $fileInfo): bool
+    {
+        $metadata = $fileInfo['metadata'] ?? [];
+        if (!is_array($metadata)) {
+            return false;
+        }
+
+        return isset($metadata['uploaded_by']) && trim((string) $metadata['uploaded_by']) !== '';
+    }
+
     private function persistDirectUploadOwnership(string $filePath, int $userId, string $originalName, array $fileInfo, ?string $sha256 = null): array
     {
         $fileRecord = $this->fileMetadataService->findByFilePath($filePath);
         if ($fileRecord) {
+            if (!$this->isOwnedFileRecord($fileRecord, $userId)) {
+                if (!$this->objectMetadataBelongsToUser($fileInfo, $userId)) {
+                    throw new FileOwnershipConflictException('File ownership conflict detected for direct upload');
+                }
+            } elseif ($this->objectMetadataHasUploadedBy($fileInfo) && !$this->objectMetadataBelongsToUser($fileInfo, $userId)) {
+                throw new FileOwnershipConflictException('File ownership conflict detected for direct upload');
+            }
+
             $updated = $this->syncDirectUploadFileRecord($fileRecord, $filePath, $userId, $originalName, $fileInfo, $sha256);
             return ['file' => $updated, 'duplicate' => false];
         }
 
+        if (!$this->objectMetadataBelongsToUser($fileInfo, $userId)) {
+            throw new FileOwnershipConflictException('File ownership conflict detected for direct upload');
+        }
+
         $duplicated = false;
         $persistedSha256 = $sha256;
-        $digestClearedForConflict = false;
         if ($sha256) {
             $existing = $this->fileMetadataService->findBySha256($sha256);
             if ($existing && $existing->file_path === $filePath && $this->isOwnedFileRecord($existing, $userId)) {
@@ -1071,8 +1494,7 @@ class FileUploadController
             }
 
             if ($existing) {
-                $persistedSha256 = null;
-                $digestClearedForConflict = true;
+                $persistedSha256 = $this->resolveConflictSafeFileRecordSha256($filePath, $fileInfo, $originalName);
             }
         }
 
@@ -1082,8 +1504,7 @@ class FileUploadController
                 $userId,
                 $originalName,
                 $fileInfo,
-                $persistedSha256,
-                !$digestClearedForConflict
+                $persistedSha256
             )
         );
 
@@ -1133,7 +1554,13 @@ class FileUploadController
         return $recordData;
     }
 
-    private function persistMultipartOwnership(string $filePath, int $userId, ?array $fileInfo = null, ?string $sha256 = null): bool
+    private function persistMultipartOwnership(
+        string $filePath,
+        int $userId,
+        ?array $fileInfo = null,
+        ?string $sha256 = null,
+        bool $trustedMultipartUpload = false
+    ): bool
     {
         if ($userId <= 0) {
             return false;
@@ -1148,12 +1575,15 @@ class FileUploadController
             throw new \InvalidArgumentException('Missing sha256 for multipart upload ownership persistence');
         }
 
+        if (!$trustedMultipartUpload && !$this->objectMetadataBelongsToUser($fileInfo ?? [], $userId)) {
+            throw new FileOwnershipConflictException('File ownership conflict detected for multipart upload');
+        }
+
         $persistedSha256 = $sha256;
-        $digestClearedForConflict = false;
         $existing = $this->fileMetadataService->findBySha256($sha256);
         if ($existing) {
-            $persistedSha256 = null;
-            $digestClearedForConflict = true;
+            $originalName = (string) ($fileInfo['metadata']['original_name'] ?? basename($filePath));
+            $persistedSha256 = $this->resolveConflictSafeFileRecordSha256($filePath, $fileInfo ?? [], $originalName);
         }
 
         $this->fileMetadataService->createRecord(
@@ -1161,8 +1591,7 @@ class FileUploadController
                 $filePath,
                 $userId,
                 $fileInfo,
-                $persistedSha256,
-                !$digestClearedForConflict
+                $persistedSha256
             )
         );
 
@@ -1214,6 +1643,11 @@ class FileUploadController
         ];
 
         return $recordData;
+    }
+
+    private function resolveConflictSafeFileRecordSha256(string $filePath, array $fileInfo, string $originalName): string
+    {
+        return $this->resolveFileRecordSha256(null, $filePath, $fileInfo, $originalName, false);
     }
 
     private function resolveFileRecordSha256(
@@ -1296,11 +1730,130 @@ class FileUploadController
             if (!$user) {
                 return $this->jsonResponse($response, ['success' => false, 'message' => 'Unauthorized'], 401);
             }
-            $data = $this->r2Service->diagnostics();
+            $data = $this->redactR2Diagnostics($this->r2Service->diagnostics());
             return $this->jsonResponse($response, ['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {
-            return $this->jsonResponse($response, ['success' => false, 'message' => 'Diagnostics failed: ' . $e->getMessage()], 500);
+            try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
+            $this->logger->error('R2 diagnostics failed', ['error' => $e->getMessage()]);
+            return $this->jsonResponse($response, ['success' => false, 'message' => 'Diagnostics failed'], 500);
         }
+    }
+
+    private function redactR2Diagnostics(array $diagnostics): array
+    {
+        $redactionValues = $this->diagnosticRedactionValues($diagnostics);
+        $checks = $diagnostics['checks'] ?? [];
+        if (isset($checks['presign_sample']) && is_array($checks['presign_sample'])) {
+            unset($checks['presign_sample']['file_path']);
+        }
+        $checks = $this->redactDiagnosticValue($checks, $redactionValues);
+
+        $errors = array_map(
+            fn ($error) => $this->redactDiagnosticText((string) $error, $redactionValues),
+            array_values($diagnostics['errors'] ?? [])
+        );
+
+        return [
+            'storage_configured' => [
+                'bucket' => !empty($diagnostics['bucket']),
+                'endpoint' => !empty($diagnostics['endpoint']),
+                'public_base' => !empty($diagnostics['public_base']),
+            ],
+            'endpoint_has_bucket_path' => (bool) ($diagnostics['endpoint_has_bucket_path'] ?? false),
+            'tls_verify' => (bool) ($diagnostics['tls_verify'] ?? true),
+            'checks' => $checks,
+            'errors' => $errors,
+            'timestamp' => $diagnostics['timestamp'] ?? gmdate('c'),
+        ];
+    }
+
+    private function diagnosticRedactionValues(array $diagnostics): array
+    {
+        $values = [];
+        foreach (['bucket', 'endpoint', 'public_base', 'recommended_endpoint'] as $field) {
+            if (!isset($diagnostics[$field]) || !is_string($diagnostics[$field])) {
+                continue;
+            }
+
+            $raw = trim($diagnostics[$field]);
+            if ($raw === '') {
+                continue;
+            }
+
+            $values[] = $raw;
+            $parts = parse_url($raw);
+            if (!is_array($parts)) {
+                continue;
+            }
+
+            $host = trim((string) ($parts['host'] ?? ''));
+            if ($host !== '') {
+                $values[] = $host;
+                if (preg_match('/^pub-([a-z0-9-]+)\.r2\.dev$/i', $host, $matches)) {
+                    $values[] = $matches[1];
+                } elseif (preg_match('/^([a-z0-9-]+)\.r2\.cloudflarestorage\.com$/i', $host, $matches)) {
+                    $values[] = $matches[1];
+                }
+            }
+
+            $path = trim((string) ($parts['path'] ?? ''), '/');
+            if ($path !== '') {
+                foreach (explode('/', $path) as $segment) {
+                    if ($segment !== '') {
+                        $values[] = $segment;
+                    }
+                }
+            }
+        }
+
+        $values = array_values(array_unique(array_filter(
+            $values,
+            fn ($value) => is_string($value) && $this->shouldRedactDiagnosticIdentifier($value)
+        )));
+        usort($values, fn ($a, $b) => strlen($b) <=> strlen($a));
+
+        return $values;
+    }
+
+    private function shouldRedactDiagnosticIdentifier(string $value): bool
+    {
+        $value = trim($value);
+        if (preg_match('/^[A-Z][A-Za-z0-9_]*(?:Exception|Error)$/', $value) === 1) {
+            return false;
+        }
+
+        if (strlen($value) >= 12) {
+            return true;
+        }
+
+        return strlen($value) >= 6 && preg_match('/[.\-\d]/', $value) === 1;
+    }
+
+    private function redactDiagnosticValue($value, array $redactionValues)
+    {
+        if (is_array($value)) {
+            return array_map(
+                fn ($item) => $this->redactDiagnosticValue($item, $redactionValues),
+                $value
+            );
+        }
+
+        if (is_string($value)) {
+            return $this->redactDiagnosticText($value, $redactionValues);
+        }
+
+        return $value;
+    }
+
+    private function redactDiagnosticText(string $value, array $redactionValues = []): string
+    {
+        $value = preg_replace('#https?://[^\s,)\]]+#i', '[redacted-url]', $value) ?? $value;
+        $value = preg_replace('/\b[a-f0-9]{16,}\b/i', '[redacted-id]', $value) ?? $value;
+        foreach ($redactionValues as $identifier) {
+            $value = str_ireplace($identifier, '[redacted-storage]', $value);
+        }
+
+        return $value;
     }
 }
 

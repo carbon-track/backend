@@ -19,6 +19,7 @@ use Slim\ResponseEmitter;
 use CarbonTrack\Middleware\CorsMiddleware;
 use CarbonTrack\Middleware\LoggingMiddleware;
 use CarbonTrack\Middleware\IdempotencyMiddleware;
+use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\DatabaseService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\ErrorResponseBuilder;
@@ -35,8 +36,10 @@ try {
     // If .env file doesn't exist, Dotenv will throw; fall back to defaults below.
 }
 
-$resolvedAppEnv = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?? 'development';
-$resolvedAppEnv = is_string($resolvedAppEnv) ? strtolower($resolvedAppEnv) : 'development';
+// Default-deny: when APP_ENV is not configured, treat the deploy as production so
+// missing config never lands in the lax development branch (B-103/B-304).
+$resolvedAppEnv = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?? 'production';
+$resolvedAppEnv = is_string($resolvedAppEnv) ? strtolower($resolvedAppEnv) : 'production';
 $_ENV['APP_ENV'] = $resolvedAppEnv;
 $_SERVER['APP_ENV'] = $resolvedAppEnv;
 putenv('APP_ENV=' . $resolvedAppEnv);
@@ -68,20 +71,23 @@ $errorMiddleware = $app->addErrorMiddleware(
 // 2. Routing Middleware - This must run before the app's routes are processed.
 $app->addRoutingMiddleware();
 
-// 3. Body Parsing Middleware
-$app->addBodyParsingMiddleware();
-
-// 4. Application-specific middleware
+// 3. Application-specific middleware
 try {
     $logger = $container->get(\Monolog\Logger::class);
-    $app->add(new LoggingMiddleware($logger));
     $app->add(new IdempotencyMiddleware(
         $container->get(DatabaseService::class),
-        $logger
+        $logger,
+        $container->get(AuthService::class)
     ));
+    $app->add(new LoggingMiddleware($logger));
 } catch (\Exception $e) {
     error_log('Failed to create application middleware: ' . $e->getMessage());
 }
+
+// 4. Body Parsing Middleware - Added after application middleware so, under
+// Slim's LIFO execution order, parsed bodies are available before idempotency
+// fingerprints are computed.
+$app->addBodyParsingMiddleware();
 
 // 5. CORS Middleware - Added last, so it executes first.
 // This allows it to intercept preflight OPTIONS requests before the router even runs.

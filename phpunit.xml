@@ -41,6 +41,10 @@
         <env name="DB_PASS" value=""/>
         <env name="JWT_SECRET" value="test-jwt-secret-key"/>
         <env name="JWT_EXPIRES_IN" value="3600"/>
+        <!-- B-103/B-104: previously implicit when APP_ENV=testing, now explicit. -->
+        <!-- Production never honours these flags; only test runs do. -->
+        <env name="ALLOW_TEST_AUTH_FALLBACK" value="true"/>
+        <env name="ALLOW_TURNSTILE_BYPASS" value="true"/>
     </php>
 </phpunit>
 

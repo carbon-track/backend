@@ -16,6 +16,7 @@ class SystemLogServiceTest extends TestCase
     private mixed $previousDisableSystemWritesServer = null;
     private mixed $previousAppEnv = null;
     private mixed $previousAppEnvServer = null;
+    private mixed $previousTrustedProxyCidrs = null;
 
     protected function setUp(): void
     {
@@ -25,7 +26,9 @@ class SystemLogServiceTest extends TestCase
         $this->previousDisableSystemWritesServer = $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] ?? null;
         $this->previousAppEnv = $_ENV['APP_ENV'] ?? null;
         $this->previousAppEnvServer = $_SERVER['APP_ENV'] ?? null;
+        $this->previousTrustedProxyCidrs = $_ENV['TRUSTED_PROXY_CIDRS'] ?? null;
         unset($_ENV['DISABLE_SYSTEM_LOG_WRITES']);
+        unset($_ENV['TRUSTED_PROXY_CIDRS']);
         unset($_SERVER['DISABLE_SYSTEM_LOG_WRITES']);
         $_ENV['APP_ENV'] = 'development';
         $_SERVER['APP_ENV'] = 'development';
@@ -54,6 +57,11 @@ class SystemLogServiceTest extends TestCase
         } else {
             $_SERVER['APP_ENV'] = $this->previousAppEnvServer;
         }
+        if ($this->previousTrustedProxyCidrs === null) {
+            unset($_ENV['TRUSTED_PROXY_CIDRS']);
+        } else {
+            $_ENV['TRUSTED_PROXY_CIDRS'] = $this->previousTrustedProxyCidrs;
+        }
         parent::tearDown();
     }
 
@@ -79,8 +87,10 @@ class SystemLogServiceTest extends TestCase
     public function testSummaryFallsBackToServerGlobalsWithCloudflareIpPreference(): void
     {
         $service = $this->makeService();
+        $_ENV['TRUSTED_PROXY_CIDRS'] = '198.51.100.0/24';
         $_SERVER = [
             'HTTP_CF_CONNNECTING_IP' => '203.0.113.9',
+            'REMOTE_ADDR' => '198.51.100.11',
             'REQUEST_METHOD' => 'DELETE',
             'REQUEST_URI' => '/from-global',
         ];

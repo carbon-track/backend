@@ -260,6 +260,107 @@ class CarbonTrackControllerTest extends TestCase
         }
     }
 
+    public function testSubmitRecordMobileProofOfWorkRequiresMatchingClientToken(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'expected-secret';
+
+        try {
+            $pdo = $this->createMock(\PDO::class);
+            $calc = $this->createMock(CarbonCalculatorService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+            $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
+            $pow->expects($this->never())->method('verify');
+
+            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
+            $request = makeRequest('POST', '/api/v1/carbon-records', [
+                'activity_id' => 'a1',
+                'amount' => 5,
+                'date' => '2026-05-01',
+                'client_type' => 'mobile',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => '12345',
+            ], null, [
+                'X-Client-Platform' => ['mobile'],
+                'X-Mobile-Client-Token' => ['wrong-secret'],
+            ]);
+
+            $resp = $controller->submitRecord($request, new \Slim\Psr7\Response());
+            $json = json_decode((string)$resp->getBody(), true);
+
+            $this->assertSame(400, $resp->getStatusCode());
+            $this->assertSame('TURNSTILE_REQUIRED', $json['code']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+            if ($previousToken === null) {
+                unset($_ENV['MOBILE_CLIENT_TOKEN']);
+            } else {
+                $_ENV['MOBILE_CLIENT_TOKEN'] = $previousToken;
+            }
+        }
+    }
+
+    public function testSubmitRecordMobileProofOfWorkRunsWhenClientTokenMatches(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'expected-secret';
+
+        try {
+            $pdo = $this->createMock(\PDO::class);
+            $calc = $this->createMock(CarbonCalculatorService::class);
+            $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+            $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+            $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+            $auth->method('getCurrentUser')->willReturn(['id' => 1, 'username' => 'user']);
+            $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
+            $pow->expects($this->once())
+                ->method('verify')
+                ->with('challenge', '12345', 'carbon.record.submit')
+                ->willReturn(['success' => false, 'error' => 'expected-test-stop']);
+
+            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
+            $request = makeRequest('POST', '/api/v1/carbon-records', [
+                'activity_id' => 'a1',
+                'amount' => 5,
+                'date' => '2026-05-01',
+                'client_type' => 'mobile',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => '12345',
+            ], null, [
+                'X-Client-Platform' => ['mobile'],
+                'X-Mobile-Client-Token' => ['expected-secret'],
+            ]);
+
+            $resp = $controller->submitRecord($request, new \Slim\Psr7\Response());
+            $json = json_decode((string)$resp->getBody(), true);
+
+            $this->assertSame(400, $resp->getStatusCode());
+            $this->assertSame('POW_FAILED', $json['code']);
+        } finally {
+            if ($previousEnv === null) {
+                unset($_ENV['APP_ENV']);
+            } else {
+                $_ENV['APP_ENV'] = $previousEnv;
+            }
+            if ($previousToken === null) {
+                unset($_ENV['MOBILE_CLIENT_TOKEN']);
+            } else {
+                $_ENV['MOBILE_CLIENT_TOKEN'] = $previousToken;
+            }
+        }
+    }
+
     public function testSubmitRecordMakeupAlreadyCheckedInReturnsConflict(): void
     {
         $pdo = $this->createMock(\PDO::class);

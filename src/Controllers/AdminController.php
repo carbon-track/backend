@@ -628,6 +628,7 @@ $sql = "
             $payload = $request->getParsedBody() ?? [];
             $sets = [];
             $params = ['id' => $userId];
+            $shouldInvalidateTokens = false;
 
             if (array_key_exists('role', $payload)) {
                 $role = strtolower(trim((string) $payload['role']));
@@ -638,6 +639,7 @@ $sql = "
                 $params['role'] = $role;
                 $sets[] = 'is_admin = :is_admin';
                 $params['is_admin'] = $role === 'admin' ? 1 : 0;
+                $shouldInvalidateTokens = true;
             } elseif (array_key_exists('is_admin', $payload)) {
                 $sets[] = 'is_admin = :is_admin';
                 $params['is_admin'] = (int)!!$payload['is_admin'];
@@ -645,10 +647,12 @@ $sql = "
                 $params['role'] = !empty($payload['is_admin'])
                     ? 'admin'
                     : (strtolower((string) ($userRow['role'] ?? 'user')) === 'support' ? 'support' : 'user');
+                $shouldInvalidateTokens = true;
             }
             if (array_key_exists('status', $payload)) {
                 $sets[] = 'status = :status';
                 $params['status'] = trim((string)$payload['status']);
+                $shouldInvalidateTokens = true;
             }
             if (array_key_exists('group_id', $payload)) {
                 $sets[] = 'group_id = :group_id';
@@ -726,6 +730,10 @@ $sql = "
             $sql = 'UPDATE users SET ' . implode(', ', $sets) . ' WHERE id = :id';
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
+
+            if ($shouldInvalidateTokens) {
+                $this->authService->incrementTokenVersion((int) $userId);
+            }
 
             $this->auditLog->logDataChange(
                 'admin',

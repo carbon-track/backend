@@ -10,6 +10,7 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Psr\Log\LoggerInterface;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\ClientIpResolver;
 
 class LoggingMiddleware implements MiddlewareInterface
 {
@@ -81,21 +82,7 @@ class LoggingMiddleware implements MiddlewareInterface
 
     private function getClientIp(Request $request): string
     {
-        $serverParams = $request->getServerParams();
-
-        if (!empty($serverParams['HTTP_CF_CONNECTING_IP'])) {
-            return $serverParams['HTTP_CF_CONNECTING_IP'];
-        }
-
-        if (!empty($serverParams['HTTP_X_FORWARDED_FOR'])) {
-            return explode(',', $serverParams['HTTP_X_FORWARDED_FOR'])[0];
-        }
-        
-        if (!empty($serverParams['HTTP_X_REAL_IP'])) {
-            return $serverParams['HTTP_X_REAL_IP'];
-        }
-        
-        return $serverParams['REMOTE_ADDR'] ?? 'unknown';
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 
 

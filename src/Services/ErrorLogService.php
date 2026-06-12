@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Support\RequestIdNormalizer;
+use CarbonTrack\Support\SensitiveDataRedactor;
 use PDO;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -37,11 +38,11 @@ class ErrorLogService
             'error_line' => $e->getLine(),
             'error_time' => date(self::DATE_FMT),
             'script_name' => $this->getScriptName($request),
-            'client_get' => $this->safeJson($request->getQueryParams()),
-            'client_post' => $this->safeJson($this->normalizeBody($request->getParsedBody())),
+            'client_get' => $this->safeJson(SensitiveDataRedactor::redact($request->getQueryParams())),
+            'client_post' => $this->safeJson(SensitiveDataRedactor::redact($this->normalizeBody($request->getParsedBody()))),
             'client_files' => $this->safeJson($this->normalizeFiles($request)),
-            'client_cookie' => $this->safeJson($request->getCookieParams()),
-            'client_session' => $this->safeJson($_SESSION ?? []),
+            'client_cookie' => $this->safeJson(SensitiveDataRedactor::redact($request->getCookieParams())),
+            'client_session' => $this->safeJson(SensitiveDataRedactor::redact($_SESSION ?? [])),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $extra)),
             'request_id' => $this->resolveRequestId($request, $extra),
         ]);
@@ -63,11 +64,11 @@ class ErrorLogService
             'error_line' => isset($context['line']) ? (int)$context['line'] : null,
             'error_time' => date(self::DATE_FMT),
             'script_name' => $this->getScriptName($request),
-            'client_get' => $this->safeJson($request->getQueryParams()),
-            'client_post' => $this->safeJson($this->normalizeBody($request->getParsedBody())),
+            'client_get' => $this->safeJson(SensitiveDataRedactor::redact($request->getQueryParams())),
+            'client_post' => $this->safeJson(SensitiveDataRedactor::redact($this->normalizeBody($request->getParsedBody()))),
             'client_files' => $this->safeJson($this->normalizeFiles($request)),
-            'client_cookie' => $this->safeJson($request->getCookieParams()),
-            'client_session' => $this->safeJson($_SESSION ?? []),
+            'client_cookie' => $this->safeJson(SensitiveDataRedactor::redact($request->getCookieParams())),
+            'client_session' => $this->safeJson(SensitiveDataRedactor::redact($_SESSION ?? [])),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $context)),
             'request_id' => $this->resolveRequestId($request, $context),
         ]);
@@ -217,13 +218,10 @@ class ErrorLogService
 
     private function filterServer(array $server, array $extra = []): array
     {
-        // Avoid logging sensitive data
-        $hidden = ['PHP_AUTH_PW'];
-        foreach ($hidden as $key) {
-            if (isset($server[$key])) {
-                $server[$key] = '***';
-            }
-        }
+        // Strip every sensitive header (Authorization, Turnstile, Cron / SLA-sweep keys,
+        // any HTTP_X_DEBUG_*) before persisting the snapshot. Centralised so it
+        // stays in sync with SystemLogService / AuditLogService.
+        $server = SensitiveDataRedactor::redactServer($server);
         // Add a few request-line highlights
         $server['_summary'] = [
             'method' => $server['REQUEST_METHOD'] ?? null,

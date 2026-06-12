@@ -146,6 +146,115 @@ class UserControllerTest extends TestCase
         }
     }
 
+    public function testSchoolChangeMobileMarkersWithoutClientTokenRequireTurnstile(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousMobileToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        try {
+            $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+            $turnstile->expects($this->never())->method('verify');
+
+            $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
+            $pow->expects($this->never())->method('verify');
+
+            $controller = $this->makeUserControllerForSchoolChallenge($turnstile, $pow);
+            $request = makeRequest('PUT', '/users/me/profile', null, null, [
+                'X-Client-Platform' => 'mobile',
+            ]);
+
+            $result = $this->invokeSchoolChangeChallenge($controller, $request, [
+                'school_id' => 9,
+                'client_type' => 'mobile',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ]);
+
+            $this->assertFalse($result['success']);
+            $this->assertSame('TURNSTILE_REQUIRED', $result['code']);
+        } finally {
+            $this->restoreEnvValue('APP_ENV', $previousEnv);
+            $this->restoreEnvValue('MOBILE_CLIENT_TOKEN', $previousMobileToken);
+        }
+    }
+
+    public function testSchoolChangeUsesMobileProofOfWorkWithClientToken(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousMobileToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        try {
+            $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+            $turnstile->expects($this->never())->method('verify');
+
+            $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
+            $pow->expects($this->once())
+                ->method('verify')
+                ->with('challenge', 'nonce', 'user.profile.school_change')
+                ->willReturn(['success' => true]);
+
+            $controller = $this->makeUserControllerForSchoolChallenge($turnstile, $pow);
+            $request = makeRequest('PUT', '/users/me/profile', null, null, [
+                'X-Client-Platform' => 'mobile',
+                'X-Mobile-Client-Token' => 'mobile-secret',
+            ]);
+
+            $result = $this->invokeSchoolChangeChallenge($controller, $request, [
+                'school_id' => 9,
+                'client_type' => 'mobile',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ]);
+
+            $this->assertTrue($result['success']);
+        } finally {
+            $this->restoreEnvValue('APP_ENV', $previousEnv);
+            $this->restoreEnvValue('MOBILE_CLIENT_TOKEN', $previousMobileToken);
+        }
+    }
+
+    public function testSchoolChangeNonMobileDoesNotUseProofOfWork(): void
+    {
+        $previousEnv = $_ENV['APP_ENV'] ?? null;
+        $previousMobileToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
+        $_ENV['APP_ENV'] = 'production';
+        $_ENV['MOBILE_CLIENT_TOKEN'] = 'mobile-secret';
+
+        try {
+            $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
+            $turnstile->expects($this->once())
+                ->method('verify')
+                ->with('turnstile-token', $this->anything())
+                ->willReturn(['success' => true]);
+
+            $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
+            $pow->expects($this->never())->method('verify');
+
+            $controller = $this->makeUserControllerForSchoolChallenge($turnstile, $pow);
+            $request = makeRequest('PUT', '/users/me/profile', null, null, [
+                'X-Client-Platform' => 'web',
+                'X-Mobile-Client-Token' => 'mobile-secret',
+            ]);
+
+            $result = $this->invokeSchoolChangeChallenge($controller, $request, [
+                'school_id' => 9,
+                'client_type' => 'web',
+                'cf_turnstile_response' => 'turnstile-token',
+                'pow_challenge' => 'challenge',
+                'pow_nonce' => 'nonce',
+            ]);
+
+            $this->assertTrue($result['success']);
+        } finally {
+            $this->restoreEnvValue('APP_ENV', $previousEnv);
+            $this->restoreEnvValue('MOBILE_CLIENT_TOKEN', $previousMobileToken);
+        }
+    }
+
     public function testUpdateProfileCreatesNewSchoolWithTurnstileVerification(): void
     {
         $previousEnv = $_ENV['APP_ENV'] ?? null;
@@ -1513,6 +1622,58 @@ class UserControllerTest extends TestCase
         $mock->method('isConfigured')->willReturn($configured);
         $mock->method('verify')->willReturn(['success' => true]);
         return $mock;
+    }
+
+    private function makeUserControllerForSchoolChallenge(
+        ?\CarbonTrack\Services\TurnstileService $turnstile = null,
+        ?\CarbonTrack\Services\ProofOfWorkService $proofOfWork = null
+    ): UserController {
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
+        $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
+        $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $pdo = $this->createMock(\PDO::class);
+        $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
+
+        $pdo->method('prepare')->willReturn($this->createMock(\PDOStatement::class));
+
+        return new UserController(
+            $auth,
+            $audit,
+            $msg,
+            $avatar,
+            $prefs,
+            $turnstile ?? $this->mockTurnstile(true),
+            null,
+            $logger,
+            $pdo,
+            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            null,
+            $region,
+            null,
+            null,
+            null,
+            null,
+            $proofOfWork
+        );
+    }
+
+    private function invokeSchoolChangeChallenge(UserController $controller, \Slim\Psr7\Request $request, array $data): array
+    {
+        $method = new \ReflectionMethod($controller, 'verifySchoolChangeChallenge');
+        $method->setAccessible(true);
+        return $method->invoke($controller, $request, $data);
+    }
+
+    private function restoreEnvValue(string $key, mixed $value): void
+    {
+        if ($value === null) {
+            unset($_ENV[$key]);
+            return;
+        }
+        $_ENV[$key] = $value;
     }
 }
 

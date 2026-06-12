@@ -10,6 +10,7 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\Environment;
 
 class AdminMiddleware implements MiddlewareInterface
 {
@@ -24,7 +25,11 @@ class AdminMiddleware implements MiddlewareInterface
 
     public function process(Request $request, RequestHandler $handler): Response
     {
-        $isTesting = strtolower((string)($_ENV['APP_ENV'] ?? '')) === 'testing';
+        // Match AuthMiddleware: only honour the testing fallback when both APP_ENV=testing
+        // and ALLOW_TEST_AUTH_FALLBACK=true are explicitly set, so prod misconfigurations
+        // can never silently grant admin privileges.
+        $isTesting = strtolower(Environment::string('APP_ENV')) === 'testing'
+            && filter_var(Environment::get('ALLOW_TEST_AUTH_FALLBACK', 'false'), FILTER_VALIDATE_BOOLEAN);
         try {
             // 获取当前用户
             $user = null;

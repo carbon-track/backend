@@ -29,6 +29,19 @@ class FileUploadControllerTest extends TestCase
     private const MULTIPART_EXISTING_FILE_PATH = 'uploads/2026/03/existing-big.jpg';
     private const MULTIPART_SHA256 = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
     private const EXISTING_OK_PATH = 'uploads/ok.jpg';
+    /** @var list<string> */
+    private array $temporaryFiles = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->temporaryFiles as $file) {
+            if (is_file($file)) {
+                @unlink($file);
+            }
+        }
+        $this->temporaryFiles = [];
+        parent::tearDown();
+    }
 
     private function controller(?array $user, ?callable $cfg = null, ?FileMetadataService $fileMeta = null, ?MultipartUploadService $multipart = null): FileUploadController
     {
@@ -64,6 +77,36 @@ class FileUploadControllerTest extends TestCase
         $c = $this->controller(['id'=>2]);
         $resp = $c->uploadMultipleFiles(makeRequest('POST','/files/upload-multiple',[]), new \Slim\Psr7\Response());
         $this->assertSame(400, $resp->getStatusCode());
+    }
+
+    public function testUploadFileRejectsAdminOnlyDirectoryForNonAdmin(): void
+    {
+        $c = $this->controller(['id' => 5, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('uploadFile');
+        });
+        $request = makeRequest('POST', '/files/upload', ['directory' => 'products'])
+            ->withUploadedFiles(['file' => $this->makeUploadedFile('item.jpg')]);
+
+        $resp = $c->uploadFile($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testUploadMultipleRejectsAdminOnlyDirectoryForNonAdmin(): void
+    {
+        $c = $this->controller(['id' => 6, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('uploadMultipleFiles');
+        });
+        $request = makeRequest('POST', '/files/upload-multiple', ['directory' => 'badges'])
+            ->withUploadedFiles(['files' => [$this->makeUploadedFile('badge.jpg')]]);
+
+        $resp = $c->uploadMultipleFiles($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
     }
 
     public function testDeleteFileNotFound(): void
@@ -347,6 +390,60 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(200, $resp->getStatusCode());
     }
 
+    public function testPresignRejectsAdminOnlyDirectoryForNonAdmin(): void
+    {
+        $c = $this->controller(['id' => 25, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('generateDirectUploadKey');
+            $r2->expects($this->never())->method('generateUploadPresignedUrl');
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST', self::ROUTE_PRESIGN, [
+            'original_name' => 'item.jpg',
+            'mime_type' => self::MIME_JPEG,
+            'file_size' => 1024,
+            'directory' => 'products',
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testPresignAllowsAdminOnlyDirectoryForAdmin(): void
+    {
+        $c = $this->controller(['id' => 26, 'is_admin' => 1], function($r2) {
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getMaxFileSize')->willReturn(5 * 1024 * 1024);
+            $r2->expects($this->once())
+                ->method('generateDirectUploadKey')
+                ->with('item.jpg', 'products')
+                ->willReturn([
+                    'file_name' => 'uuid.jpg',
+                    'file_path' => 'products/2026/05/uuid.jpg',
+                    'public_url' => 'https://cdn/uuid.jpg',
+                ]);
+            $r2->expects($this->once())
+                ->method('generateUploadPresignedUrl')
+                ->willReturn([
+                    'url' => 'https://r2/presigned',
+                    'method' => 'PUT',
+                    'headers' => ['Content-Type' => self::MIME_JPEG],
+                    'expires_in' => 600,
+                    'expires_at' => '2026-05-23 00:00:00',
+                ]);
+        });
+
+        $resp = $c->getDirectUploadPresign(makeRequest('POST', self::ROUTE_PRESIGN, [
+            'original_name' => 'item.jpg',
+            'mime_type' => self::MIME_JPEG,
+            'file_size' => 1024,
+            'directory' => 'products',
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
     public function testPresignUnicodeFileNameDoesNotLeakIntoSignedHeaders(): void
     {
         $c = $this->controller(['id' => 23], function($r2) {
@@ -421,7 +518,8 @@ class FileUploadControllerTest extends TestCase
 
         $c = $this->controller(['id'=>30], function($r2){
             $r2->method('getFileInfo')->willReturn([
-                'file_path'=>self::NEW_UPLOAD_PATH,'size'=>10,'mime_type'=>'image/jpeg'
+                'file_path'=>self::NEW_UPLOAD_PATH,'size'=>10,'mime_type'=>'image/jpeg',
+                'metadata'=>['uploaded_by'=>'30']
             ]);
         }, $fileMeta);
 
@@ -431,6 +529,182 @@ class FileUploadControllerTest extends TestCase
         $this->assertSame(200,$resp->getStatusCode());
         $payload = json_decode((string)$resp->getBody(), true);
         $this->assertEquals(1,$payload['data']['reference_count']);
+    }
+
+    public function testConfirmRejectsNewObjectWithoutMatchingUploadedByMetadata(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::NEW_UPLOAD_PATH)
+            ->willReturn(null);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path' => self::NEW_UPLOAD_PATH,
+                'size' => 10,
+                'mime_type' => 'image/jpeg',
+                'metadata' => [],
+            ]);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => self::NEW_UPLOAD_PATH,
+            'original_name' => 'new.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(409, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('FILE_OWNERSHIP_CONFLICT', $payload['code']);
+    }
+
+    public function testConfirmRejectsAdminOnlyPathForNonAdminBeforeReadingStorage(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('getFileInfo');
+            $r2->expects($this->never())->method('validateDirectUploadObject');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => 'products/2026/05/item.jpg',
+            'original_name' => 'item.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testConfirmRejectsBucketPrefixedAdminOnlyPathForNonAdmin(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30, 'is_admin' => 0], function($r2) {
+            $r2->method('getBucketName')->willReturn('CarbonTrack-Images');
+            $r2->expects($this->never())->method('getFileInfo');
+            $r2->expects($this->never())->method('validateDirectUploadObject');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => 'carbontrack-images/products/2026/05/item.jpg',
+            'original_name' => 'item.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testConfirmRejectsBucketPrefixedAdminOnlyPathWithEmptySegmentsForNonAdmin(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30, 'is_admin' => 0], function($r2) {
+            $r2->method('getBucketName')->willReturn('CarbonTrack-Images');
+            $r2->expects($this->never())->method('getFileInfo');
+            $r2->expects($this->never())->method('validateDirectUploadObject');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => 'carbontrack-images//products/2026/05/item.jpg',
+            'original_name' => 'item.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testConfirmRejectsBucketPrefixedAdminOnlyRootForNonAdmin(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30, 'is_admin' => 0], function($r2) {
+            $r2->method('getBucketName')->willReturn('CarbonTrack-Images');
+            $r2->expects($this->never())->method('getFileInfo');
+            $r2->expects($this->never())->method('validateDirectUploadObject');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => 'carbontrack-images/products',
+            'original_name' => 'item.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testConfirmRejectsTraversalBeforeAdminRootForNonAdmin(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id' => 30, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('getFileInfo');
+            $r2->expects($this->never())->method('validateDirectUploadObject');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => 'shared/../products/item.jpg',
+            'original_name' => 'item.jpg',
+            'sha256' => str_repeat('b', 64),
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testConfirmAllowsOwnedExistingRecordWhenObjectMetadataIsMissing(): void
+    {
+        $existing = $this->getMockBuilder(File::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['save'])
+            ->getMock();
+        $existing->file_path = self::OWNERLESS_UPLOAD_PATH;
+        $existing->user_id = 14;
+        $existing->mime_type = null;
+        $existing->size = 0;
+        $existing->original_name = null;
+        $existing->reference_count = 1;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::OWNERLESS_UPLOAD_PATH)
+            ->willReturn($existing);
+
+        $existing->expects($this->once())
+            ->method('save');
+
+        $c = $this->controller(['id'=>14], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::OWNERLESS_UPLOAD_PATH,
+                'size'=>2048,
+                'mime_type'=>self::MIME_JPEG,
+                'metadata'=>[]
+            ]);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::OWNERLESS_UPLOAD_PATH,'original_name'=>'ownerless.jpg'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200,$resp->getStatusCode());
+        $this->assertSame(14, $existing->user_id);
     }
 
     public function testConfirmDuplicateIncrements(): void
@@ -449,7 +723,8 @@ class FileUploadControllerTest extends TestCase
 
         $c = $this->controller(['id'=>31], function($r2){
             $r2->method('getFileInfo')->willReturn([
-                'file_path'=>self::EXISTING_OK_PATH,'size'=>10,'mime_type'=>self::MIME_JPEG
+                'file_path'=>self::EXISTING_OK_PATH,'size'=>10,'mime_type'=>self::MIME_JPEG,
+                'metadata'=>['uploaded_by'=>'31']
             ]);
         }, $fileMeta);
 
@@ -505,6 +780,7 @@ class FileUploadControllerTest extends TestCase
                 'size' => 10,
                 'mime_type' => self::MIME_JPEG,
                 'metadata' => [
+                    'uploaded_by' => '32',
                     'sha256' => str_repeat('e', 64),
                 ],
             ]);
@@ -521,6 +797,58 @@ class FileUploadControllerTest extends TestCase
         $this->assertFalse($payload['data']['duplicate']);
         $this->assertSame($created->sha256, $payload['data']['sha256']);
         $this->assertSame(1, $payload['data']['reference_count']);
+    }
+
+    public function testConfirmPersistsResolvedBucketPrefixedStoragePath(): void
+    {
+        $requestedPath = 'uploads/prefix-fallback.jpg';
+        $actualPath = 'carbontrack-bucket/' . $requestedPath;
+
+        $created = new File();
+        $created->reference_count = 1;
+        $created->sha256 = str_repeat('a', 64);
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with($actualPath)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data) use ($actualPath): bool {
+                return ($data['file_path'] ?? null) === $actualPath
+                    && ($data['user_id'] ?? null) === 41
+                    && is_string($data['sha256'] ?? null);
+            }))
+            ->willReturn($created);
+
+        $c = $this->controller(['id'=>41], function($r2) use ($requestedPath, $actualPath) {
+            $r2->method('getBucketName')->willReturn('carbontrack-bucket');
+            $r2->method('getFileInfo')->willReturnCallback(function($path) use ($actualPath) {
+                if ($path !== $actualPath) {
+                    return null;
+                }
+
+                return [
+                    'file_path' => $actualPath,
+                    'size' => 10,
+                    'mime_type' => self::MIME_JPEG,
+                    'metadata' => ['uploaded_by' => '41'],
+                ];
+            });
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with($actualPath, 'prefix-fallback.jpg', $this->isType('array'));
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM, [
+            'file_path' => $requestedPath,
+            'original_name' => 'prefix-fallback.jpg',
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame($actualPath, $payload['data']['file_path']);
     }
 
     public function testConfirmNotFound(): void
@@ -559,7 +887,8 @@ class FileUploadControllerTest extends TestCase
 
         $c = $this->controller(['id'=>13], function($r2){
             $r2->method('getFileInfo')->willReturn([
-                'file_path'=>self::EXISTING_OK_PATH,'size'=>1,'mime_type'=>self::MIME_JPEG
+                'file_path'=>self::EXISTING_OK_PATH,'size'=>1,'mime_type'=>self::MIME_JPEG,
+                'metadata'=>['uploaded_by'=>'13']
             ]);
             // logDirectUploadAudit is void; no return value expectation needed
         }, $fileMeta);
@@ -567,6 +896,303 @@ class FileUploadControllerTest extends TestCase
             'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.jpg'
         ]), new \Slim\Psr7\Response());
         $this->assertSame(200,$resp->getStatusCode());
+    }
+
+    public function testConfirmDeletesObjectAndRejectsWhenContentValidationFails(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::EXISTING_OK_PATH, 33)
+                ->willReturn(true);
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmStillReturnsInvalidContentWhenFailedCleanupThrows(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::EXISTING_OK_PATH, 33)
+                ->willThrowException(new \RuntimeException('cleanup unavailable'));
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmDoesNotDeleteObjectWhenContentVerificationFailsUnexpectedly(): void
+    {
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \RuntimeException('R2 validation unavailable'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('FILE_CONTENT_VALIDATION_ERROR', $payload['code']);
+    }
+
+    public function testConfirmDoesNotDeleteUnownedObjectWhenContentValidationFails(): void
+    {
+        $foreign = new File();
+        $foreign->user_id = 44;
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::EXISTING_OK_PATH)
+            ->willReturn($foreign);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'44'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'ok.png', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'ok.png'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testConfirmDoesNotDeleteAlreadyPersistedOwnedObjectWhenContentValidationFails(): void
+    {
+        $owned = new File();
+        $owned->user_id = 33;
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::EXISTING_OK_PATH)
+            ->willReturn($owned);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $c = $this->controller(['id'=>33], function($r2){
+            $r2->method('getFileInfo')->willReturn([
+                'file_path'=>self::EXISTING_OK_PATH,
+                'size'=>256,
+                'mime_type'=>self::MIME_PNG,
+                'metadata'=>['uploaded_by'=>'33'],
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::EXISTING_OK_PATH, 'bad-name.txt', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File extension not allowed. Allowed extensions: jpg, jpeg, png, gif, webp'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta);
+
+        $resp = $c->confirmDirectUpload(makeRequest('POST', self::ROUTE_CONFIRM,[
+            'file_path'=>self::EXISTING_OK_PATH,'original_name'=>'bad-name.txt'
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testR2DiagnosticsResponseRedactsStorageIdentifiers(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => true,
+                'recommended_endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com',
+                'tls_verify' => true,
+                'checks' => [
+                    'list_objects' => true,
+                    'presign_put' => true,
+                    'presign_sample' => [
+                        'file_path' => 'diagnostics/_probe_secret.txt',
+                        'url_length' => 512,
+                    ],
+                ],
+                'errors' => [
+                    'ListObjects failed for https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                    'Plain host accountid1234567890.r2.cloudflarestorage.com and bucket private-bucket leaked by SDK',
+                ],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $data = $payload['data'];
+        $this->assertArrayNotHasKey('bucket', $data);
+        $this->assertArrayNotHasKey('endpoint', $data);
+        $this->assertArrayNotHasKey('public_base', $data);
+        $this->assertArrayNotHasKey('recommended_endpoint', $data);
+        $this->assertSame(['bucket' => true, 'endpoint' => true, 'public_base' => true], $data['storage_configured']);
+        $this->assertArrayNotHasKey('file_path', $data['checks']['presign_sample']);
+        $this->assertStringNotContainsString('accountid1234567890', $data['errors'][0]);
+        $this->assertStringNotContainsString('private-bucket', $data['errors'][0]);
+        $this->assertStringNotContainsString('accountid1234567890', $data['errors'][1]);
+        $this->assertStringNotContainsString('private-bucket', $data['errors'][1]);
+    }
+
+    public function testR2DiagnosticsRedactionKeepsLongNonHexWordsReadable(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/private-bucket',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['confirmDirectUpload failed with request abcdef1234567890'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $error = $payload['data']['errors'][0];
+        $this->assertStringContainsString('confirmDirectUpload', $error);
+        $this->assertStringNotContainsString('abcdef1234567890', $error);
+        $this->assertStringContainsString('[redacted-id]', $error);
+    }
+
+    public function testR2DiagnosticsRedactionKeepsExceptionClassNamesReadable(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'private-bucket',
+                'endpoint' => 'https://accountid1234567890.r2.cloudflarestorage.com/ResourceNotFoundException',
+                'public_base' => 'https://pub-accountid1234567890.r2.dev/private-bucket',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['ResourceNotFoundException while reading private-bucket'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $error = $payload['data']['errors'][0];
+        $this->assertStringContainsString('ResourceNotFoundException', $error);
+        $this->assertStringNotContainsString('private-bucket', $error);
+    }
+
+    public function testR2DiagnosticsRedactionDoesNotMaskCommonLowEntropyTerms(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willReturn([
+                'bucket' => 'dev',
+                'endpoint' => 'https://api.r2.dev/dev',
+                'public_base' => 'https://api.r2.dev/dev',
+                'endpoint_has_bucket_path' => false,
+                'tls_verify' => true,
+                'checks' => [],
+                'errors' => ['dev api prod labels should remain readable'],
+                'timestamp' => '2026-05-18T00:00:00+00:00',
+            ]);
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('dev api prod labels should remain readable', $payload['data']['errors'][0]);
+    }
+
+    public function testR2DiagnosticsFailureDoesNotExposeExceptionDetails(): void
+    {
+        $c = $this->controller(['id'=>1, 'is_admin'=>1], function($r2){
+            $r2->method('diagnostics')->willThrowException(new \RuntimeException('private-bucket accountid1234567890'));
+        });
+
+        $resp = $c->r2Diagnostics(makeRequest('GET', '/files/r2/diagnostics'), new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $payload = json_decode((string)$resp->getBody(), true);
+        $this->assertSame('Diagnostics failed', $payload['message']);
+        $this->assertStringNotContainsString('private-bucket', (string)$resp->getBody());
+        $this->assertStringNotContainsString('accountid1234567890', (string)$resp->getBody());
+    }
+
+    public function testR2DiagnosticsRouteRequiresAdminMiddleware(): void
+    {
+        $routes = file_get_contents(__DIR__ . '/../../../src/routes.php');
+
+        $this->assertMatchesRegularExpression(
+            "#/r2/diagnostics'.*FileUploadController::class, 'r2Diagnostics'.*->add\\(AdminMiddleware::class\\)#s",
+            $routes
+        );
     }
 
     public function testConfirmWithoutSha256BackfillsExistingOwnerlessRecord(): void
@@ -596,7 +1222,7 @@ class FileUploadControllerTest extends TestCase
                 'file_path'=>self::OWNERLESS_UPLOAD_PATH,
                 'size'=>2048,
                 'mime_type'=>self::MIME_JPEG,
-                'metadata'=>[]
+                'metadata'=>['uploaded_by'=>'14']
             ]);
         }, $fileMeta);
 
@@ -635,7 +1261,7 @@ class FileUploadControllerTest extends TestCase
                 'file_path'=>self::OWNERLESS_UPLOAD_PATH,
                 'size'=>2048,
                 'mime_type'=>self::MIME_JPEG,
-                'metadata'=>[]
+                'metadata'=>['uploaded_by'=>'14']
             ]);
         }, $fileMeta);
 
@@ -657,16 +1283,112 @@ class FileUploadControllerTest extends TestCase
 
         $c = $this->controller(['id' => 42], function($r2) {
             $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
-            $r2->method('initMultipartUpload')->willReturn([
-                'upload_id' => 'up-1',
-                'file_path' => self::MULTIPART_FILE_PATH,
-                'public_url' => 'https://cdn/big.jpg'
-            ]);
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->expects($this->once())
+                ->method('initMultipartUpload')
+                ->with(
+                    'big.jpg',
+                    'uploads',
+                    self::MIME_JPEG,
+                    $this->callback(function(array $metadata): bool {
+                        return ($metadata['uploaded_by'] ?? null) === '42'
+                            && ($metadata['original_name'] ?? null) === 'big.jpg'
+                            && ($metadata['sha256'] ?? null) === self::MULTIPART_SHA256;
+                    })
+                )
+                ->willReturn([
+                    'upload_id' => 'up-1',
+                    'file_path' => self::MULTIPART_FILE_PATH,
+                    'public_url' => 'https://cdn/big.jpg'
+                ]);
         }, null, $multipart);
 
         $resp = $c->initMultipartUpload(makeRequest('POST', '/files/multipart/init', [
             'original_name' => 'big.jpg',
             'directory' => 'uploads',
+            'mime_type' => self::MIME_JPEG,
+            'sha256' => self::MULTIPART_SHA256
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testInitMultipartRejectsInvalidExtension(): void
+    {
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->expects($this->never())->method('registerUpload');
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->expects($this->never())->method('initMultipartUpload');
+        }, null, $multipart);
+
+        $resp = $c->initMultipartUpload(makeRequest('POST', '/files/multipart/init', [
+            'original_name' => 'big.txt',
+            'directory' => 'uploads',
+            'mime_type' => self::MIME_JPEG,
+            'sha256' => self::MULTIPART_SHA256
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('File extension not allowed', $payload['message']);
+    }
+
+    public function testInitMultipartRejectsAdminOnlyDirectoryForNonAdmin(): void
+    {
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->expects($this->never())->method('registerUpload');
+
+        $c = $this->controller(['id' => 42, 'is_admin' => 0], function($r2) {
+            $r2->expects($this->never())->method('initMultipartUpload');
+        }, null, $multipart);
+
+        $resp = $c->initMultipartUpload(makeRequest('POST', '/files/multipart/init', [
+            'original_name' => 'badge.jpg',
+            'directory' => 'badges',
+            'mime_type' => self::MIME_JPEG,
+            'sha256' => self::MULTIPART_SHA256
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(403, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('ADMIN_UPLOAD_DIRECTORY_REQUIRED', $payload['code']);
+    }
+
+    public function testInitMultipartAllowsAdminOnlyDirectoryForAdmin(): void
+    {
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->expects($this->once())
+            ->method('registerUpload')
+            ->with('up-admin', 'badges/2026/05/badge.jpg', 42, self::MULTIPART_SHA256);
+
+        $c = $this->controller(['id' => 42, 'is_admin' => 1], function($r2) {
+            $r2->method('getAllowedExtensions')->willReturn(['jpg']);
+            $r2->method('getAllowedMimeTypes')->willReturn([self::MIME_JPEG]);
+            $r2->expects($this->once())
+                ->method('initMultipartUpload')
+                ->with(
+                    'badge.jpg',
+                    'badges',
+                    self::MIME_JPEG,
+                    $this->callback(function(array $metadata): bool {
+                        return ($metadata['uploaded_by'] ?? null) === '42'
+                            && ($metadata['original_name'] ?? null) === 'badge.jpg'
+                            && ($metadata['sha256'] ?? null) === self::MULTIPART_SHA256;
+                    })
+                )
+                ->willReturn([
+                    'upload_id' => 'up-admin',
+                    'file_path' => 'badges/2026/05/badge.jpg',
+                    'public_url' => 'https://cdn/badge.jpg'
+                ]);
+        }, null, $multipart);
+
+        $resp = $c->initMultipartUpload(makeRequest('POST', '/files/multipart/init', [
+            'original_name' => 'badge.jpg',
+            'directory' => 'badges',
             'mime_type' => self::MIME_JPEG,
             'sha256' => self::MULTIPART_SHA256
         ]), new \Slim\Psr7\Response());
@@ -728,6 +1450,12 @@ class FileUploadControllerTest extends TestCase
         $multipart->expects($this->once())->method('clearUpload')->with('up-3');
 
         $c = $this->controller(['id' => 42], function($r2) {
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->callback(function(array $fileInfo): bool {
+                    return ($fileInfo['metadata']['uploaded_by'] ?? null) === '42'
+                        && ($fileInfo['metadata']['original_name'] ?? null) === 'big.jpg';
+                }));
             $r2->method('completeMultipartUpload')->willReturn([
                 'success' => true,
                 'file_path' => self::MULTIPART_FILE_PATH
@@ -736,7 +1464,10 @@ class FileUploadControllerTest extends TestCase
                 'file_path' => self::MULTIPART_FILE_PATH,
                 'size' => 98765,
                 'mime_type' => self::MIME_JPEG,
-                'metadata' => ['original_name' => 'big.jpg']
+                'metadata' => [
+                    'uploaded_by' => '42',
+                    'original_name' => 'big.jpg'
+                ]
             ]);
         }, $fileMeta, $multipart);
 
@@ -748,6 +1479,162 @@ class FileUploadControllerTest extends TestCase
         ]), new \Slim\Psr7\Response());
 
         $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testCompleteMultipartUsesRequestOriginalNameWhenLegacyMetadataIsMissing(): void
+    {
+        $upload = new MultipartUpload();
+        $upload->upload_id = 'up-legacy';
+        $upload->file_path = self::MULTIPART_FILE_PATH;
+        $upload->sha256 = self::MULTIPART_SHA256;
+        $upload->user_id = 42;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->once())
+            ->method('findByFilePath')
+            ->with(self::MULTIPART_FILE_PATH)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('findBySha256')
+            ->with(self::MULTIPART_SHA256)
+            ->willReturn(null);
+        $fileMeta->expects($this->once())
+            ->method('createRecord')
+            ->with($this->callback(function(array $data): bool {
+                return ($data['file_path'] ?? null) === self::MULTIPART_FILE_PATH
+                    && ($data['original_name'] ?? null) === 'legacy.jpg'
+                    && ($data['sha256'] ?? null) === self::MULTIPART_SHA256;
+            }))
+            ->willReturn(new File());
+
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->method('findActiveUpload')->with('up-legacy')->willReturn($upload);
+        $multipart->expects($this->once())->method('clearUpload')->with('up-legacy');
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('getAllowedExtensions')->willReturn(['jpg', 'jpeg', 'png', 'webp']);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'legacy.jpg', $this->callback(function(array $fileInfo): bool {
+                    return ($fileInfo['metadata']['original_name'] ?? null) === 'legacy.jpg';
+                }));
+            $r2->method('completeMultipartUpload')->willReturn([
+                'success' => true,
+                'file_path' => self::MULTIPART_FILE_PATH
+            ]);
+            $r2->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willReturn([
+                'file_path' => self::MULTIPART_FILE_PATH,
+                'size' => 98765,
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => []
+            ]);
+        }, $fileMeta, $multipart);
+
+        $resp = $c->completeMultipartUpload(makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [
+            'file_path' => self::MULTIPART_FILE_PATH,
+            'upload_id' => 'up-legacy',
+            'original_name' => 'legacy.jpg',
+            'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    public function testCompleteMultipartDeletesObjectAndClearsTrackingWhenContentValidationFails(): void
+    {
+        $upload = new MultipartUpload();
+        $upload->upload_id = 'up-invalid';
+        $upload->file_path = self::MULTIPART_FILE_PATH;
+        $upload->sha256 = self::MULTIPART_SHA256;
+        $upload->user_id = 42;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->method('findActiveUpload')->with('up-invalid')->willReturn($upload);
+        $multipart->expects($this->once())->method('clearUpload')->with('up-invalid');
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('completeMultipartUpload')->willReturn([
+                'success' => true,
+                'file_path' => self::MULTIPART_FILE_PATH
+            ]);
+            $r2->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willReturn([
+                'file_path' => self::MULTIPART_FILE_PATH,
+                'size' => 98765,
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => [
+                    'uploaded_by' => '42',
+                    'original_name' => 'big.jpg'
+                ]
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->isType('array'))
+                ->willThrowException(new \InvalidArgumentException('File content does not match the declared MIME type'));
+            $r2->expects($this->once())
+                ->method('deleteFile')
+                ->with(self::MULTIPART_FILE_PATH, 42)
+                ->willReturn(true);
+        }, $fileMeta, $multipart);
+
+        $resp = $c->completeMultipartUpload(makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [
+            'file_path' => self::MULTIPART_FILE_PATH,
+            'upload_id' => 'up-invalid',
+            'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(400, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('INVALID_FILE_CONTENT', $payload['code']);
+    }
+
+    public function testCompleteMultipartClearsTrackingWhenContentVerificationFailsUnexpectedly(): void
+    {
+        $upload = new MultipartUpload();
+        $upload->upload_id = 'up-verify-error';
+        $upload->file_path = self::MULTIPART_FILE_PATH;
+        $upload->sha256 = self::MULTIPART_SHA256;
+        $upload->user_id = 42;
+
+        $fileMeta = $this->createMock(FileMetadataService::class);
+        $fileMeta->expects($this->never())->method('createRecord');
+
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->method('findActiveUpload')->with('up-verify-error')->willReturn($upload);
+        $multipart->expects($this->once())->method('clearUpload')->with('up-verify-error');
+
+        $c = $this->controller(['id' => 42], function($r2) {
+            $r2->method('completeMultipartUpload')->willReturn([
+                'success' => true,
+                'file_path' => self::MULTIPART_FILE_PATH
+            ]);
+            $r2->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willReturn([
+                'file_path' => self::MULTIPART_FILE_PATH,
+                'size' => 98765,
+                'mime_type' => self::MIME_JPEG,
+                'metadata' => [
+                    'uploaded_by' => '42',
+                    'original_name' => 'big.jpg'
+                ]
+            ]);
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->isType('array'))
+                ->willThrowException(new \RuntimeException('Failed to verify uploaded file content'));
+            $r2->expects($this->never())->method('deleteFile');
+        }, $fileMeta, $multipart);
+
+        $resp = $c->completeMultipartUpload(makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [
+            'file_path' => self::MULTIPART_FILE_PATH,
+            'upload_id' => 'up-verify-error',
+            'parts' => [['part_number' => 1, 'etag' => 'etag-1']]
+        ]), new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true);
+        $this->assertSame('FILE_CONTENT_VALIDATION_ERROR', $payload['code']);
     }
 
     public function testCompleteMultipartCrossOwnerSha256CreatesRecordWithoutPersistingHash(): void
@@ -787,6 +1674,13 @@ class FileUploadControllerTest extends TestCase
         $multipart->expects($this->once())->method('clearUpload')->with('up-7');
 
         $c = $this->controller(['id' => 42], function($r2) {
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->callback(function(array $fileInfo): bool {
+                    return ($fileInfo['metadata']['uploaded_by'] ?? null) === '42'
+                        && ($fileInfo['metadata']['original_name'] ?? null) === 'big.jpg'
+                        && ($fileInfo['metadata']['sha256'] ?? null) === self::MULTIPART_SHA256;
+                }));
             $r2->method('completeMultipartUpload')->willReturn([
                 'success' => true,
                 'file_path' => self::MULTIPART_FILE_PATH
@@ -796,6 +1690,7 @@ class FileUploadControllerTest extends TestCase
                 'size' => 98765,
                 'mime_type' => self::MIME_JPEG,
                 'metadata' => [
+                    'uploaded_by' => '42',
                     'original_name' => 'big.jpg',
                     'sha256' => self::MULTIPART_SHA256,
                 ]
@@ -869,6 +1764,12 @@ class FileUploadControllerTest extends TestCase
         $multipart->expects($this->once())->method('clearUpload')->with('up-5');
 
         $c = $this->controller(['id' => 42], function($r2) {
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->callback(function(array $fileInfo): bool {
+                    return ($fileInfo['metadata']['uploaded_by'] ?? null) === '42'
+                        && ($fileInfo['metadata']['original_name'] ?? null) === 'big.jpg';
+                }));
             $r2->method('completeMultipartUpload')->willReturn([
                 'success' => true,
                 'file_path' => self::MULTIPART_FILE_PATH
@@ -877,7 +1778,10 @@ class FileUploadControllerTest extends TestCase
                 'file_path' => self::MULTIPART_FILE_PATH,
                 'size' => 98765,
                 'mime_type' => self::MIME_JPEG,
-                'metadata' => ['original_name' => 'big.jpg']
+                'metadata' => [
+                    'uploaded_by' => '42',
+                    'original_name' => 'big.jpg'
+                ]
             ]);
         }, $fileMeta, $multipart);
 
@@ -914,6 +1818,12 @@ class FileUploadControllerTest extends TestCase
         $multipart->expects($this->once())->method('clearUpload')->with('up-6');
 
         $c = $this->controller(['id' => 42], function($r2) {
+            $r2->expects($this->once())
+                ->method('validateDirectUploadObject')
+                ->with(self::MULTIPART_FILE_PATH, 'big.jpg', $this->callback(function(array $fileInfo): bool {
+                    return ($fileInfo['metadata']['uploaded_by'] ?? null) === '42'
+                        && ($fileInfo['metadata']['original_name'] ?? null) === 'big.jpg';
+                }));
             $r2->method('completeMultipartUpload')->willReturn([
                 'success' => true,
                 'file_path' => self::MULTIPART_FILE_PATH
@@ -922,7 +1832,10 @@ class FileUploadControllerTest extends TestCase
                 'file_path' => self::MULTIPART_FILE_PATH,
                 'size' => 98765,
                 'mime_type' => self::MIME_JPEG,
-                'metadata' => ['original_name' => 'big.jpg']
+                'metadata' => [
+                    'uploaded_by' => '42',
+                    'original_name' => 'big.jpg'
+                ]
             ]);
         }, $fileMeta, $multipart);
 
@@ -975,6 +1888,19 @@ class FileUploadControllerTest extends TestCase
 
         $resp = $c->deleteFile(makeRequest('DELETE', '/files/uploads/delete'), new \Slim\Psr7\Response(), ['path' => self::PRIVATE_UPLOAD_ENCODED_PATH]);
         $this->assertSame(200, $resp->getStatusCode());
+    }
+
+    private function makeUploadedFile(string $clientFilename, string $content = 'image-bytes'): \Slim\Psr7\UploadedFile
+    {
+        $stream = (new \Slim\Psr7\Factory\StreamFactory())->createStream($content);
+
+        return new \Slim\Psr7\UploadedFile(
+            $stream,
+            $clientFilename,
+            self::MIME_JPEG,
+            strlen($content),
+            UPLOAD_ERR_OK
+        );
     }
 }
 

@@ -12,6 +12,8 @@ use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
+use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -429,8 +431,25 @@ class SupportTicketController
 
     private function shouldUseMobileProofOfWork(array $payload, Request $request): bool
     {
-        $clientType = strtolower(trim((string)($payload['client_type'] ?? $request->getHeaderLine('X-Client-Platform'))));
-        return $clientType === 'mobile' && trim($request->getHeaderLine('Origin')) === '';
+        $bodyClientType = strtolower(trim((string)($payload['client_type'] ?? '')));
+        $headerClientType = strtolower(trim($request->getHeaderLine('X-Client-Platform')));
+        if ($bodyClientType !== 'mobile' || $headerClientType !== 'mobile') {
+            return false;
+        }
+
+        if (trim($request->getHeaderLine('Origin')) !== ''
+            || trim($request->getHeaderLine('Sec-Fetch-Site')) !== '') {
+            return false;
+        }
+
+        // This token only gates access to the mobile PoW path; it is not app attestation.
+        $expected = trim(Environment::string('MOBILE_CLIENT_TOKEN'));
+        if ($expected === '') {
+            return false;
+        }
+
+        $supplied = trim($request->getHeaderLine('X-Mobile-Client-Token'));
+        return $supplied !== '' && hash_equals($expected, $supplied);
     }
 
     private function stripChallengeFields(array $payload): array
@@ -441,15 +460,7 @@ class SupportTicketController
 
     private function clientIp(Request $request): ?string
     {
-        $serverParams = $request->getServerParams();
-        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'] as $key) {
-            $value = $serverParams[$key] ?? null;
-            if (!is_string($value) || trim($value) === '') {
-                continue;
-            }
-            return str_contains($value, ',') ? trim(explode(',', $value)[0]) : trim($value);
-        }
-        return null;
+        return ClientIpResolver::fromRequest($request, null);
     }
 
     private function error(Request $request, Response $response, \Throwable $e, string $message): Response

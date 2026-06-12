@@ -99,6 +99,51 @@ class ProofOfWorkServiceTest extends TestCase
         }
     }
 
+    public function testCreateChallengeRateLimitsPerIpAtConfiguredThreshold(): void
+    {
+        $db = $this->makeChallengeDatabase();
+        $service = $this->makeService(8, $db);
+
+        for ($i = 0; $i < ProofOfWorkService::ISSUANCE_RATE_LIMIT_PER_MINUTE; $i++) {
+            $service->createChallenge('auth.login', '203.0.113.7');
+        }
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('rate limit');
+        $service->createChallenge('auth.login', '203.0.113.7');
+    }
+
+    public function testCreateChallengeRateLimitDoesNotApplyAcrossIps(): void
+    {
+        $db = $this->makeChallengeDatabase();
+        $service = $this->makeService(8, $db);
+
+        for ($i = 0; $i < ProofOfWorkService::ISSUANCE_RATE_LIMIT_PER_MINUTE; $i++) {
+            $service->createChallenge('auth.login', '203.0.113.7');
+        }
+
+        // Different IP must still be allowed even when the first IP is exhausted.
+        $other = $service->createChallenge('auth.login', '203.0.113.8');
+        $this->assertNotEmpty($other['challenge']);
+    }
+
+    public function testCleanupExpiredChallengesCleansStaleIssuanceAttempts(): void
+    {
+        $db = $this->makeChallengeDatabase();
+        $old = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+            ->modify('-2 days')
+            ->format('Y-m-d H:i:s');
+        $insert = $db->prepare('INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)');
+        $insert->execute(['203.0.113.7', 'auth.login', $old]);
+
+        $service = $this->makeService(8, $db);
+        $result = $service->cleanupExpiredChallenges();
+
+        $this->assertSame(1, $result['attempts_deleted']);
+        $this->assertSame(0, (int)$db->query('SELECT COUNT(*) FROM pow_attempts')->fetchColumn());
+        $this->assertSame(0, (int)$db->query("SELECT COUNT(*) FROM pow_attempts WHERE attempted_at = '$old'")->fetchColumn());
+    }
+
     private function makeService(int $difficulty, ?PDO $db = null): ProofOfWorkService
     {
         $logger = new Logger('test');
@@ -122,6 +167,14 @@ class ProofOfWorkServiceTest extends TestCase
                 used_at TEXT DEFAULT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )'
+        );
+        $db->exec(
+            'CREATE TABLE pow_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                attempted_at TEXT NOT NULL
             )'
         );
 

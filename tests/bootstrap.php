@@ -56,6 +56,12 @@ $_ENV['APP_ENV'] = $_ENV['APP_ENV'] ?? 'testing';
 $_ENV['DB_DATABASE'] = $_ENV['DB_DATABASE'] ?? 'carbontrack_test';
 $_ENV['JWT_SECRET'] = $_ENV['JWT_SECRET'] ?? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 $_ENV['JWT_EXPIRES_IN'] = $_ENV['JWT_EXPIRES_IN'] ?? '3600';
+// B-103/B-104: Previously, APP_ENV=testing implicitly enabled the AuthMiddleware /
+// AdminMiddleware fallback and the Turnstile bypass. Both are now opt-in via explicit
+// env flags so prod misconfigurations can no longer accidentally weaken auth.
+// Default these to true ONLY for the test suite so existing assertions keep working.
+$_ENV['ALLOW_TEST_AUTH_FALLBACK'] = $_ENV['ALLOW_TEST_AUTH_FALLBACK'] ?? 'true';
+$_ENV['ALLOW_TURNSTILE_BYPASS'] = $_ENV['ALLOW_TURNSTILE_BYPASS'] ?? 'true';
 
 // Disable error reporting for cleaner test output
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);

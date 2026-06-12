@@ -563,8 +563,7 @@
       "label": "Generate admin report",
       "description": "Build a concise admin report that summarizes key stats, pending items, and AI usage.",
       "api": {
-        "method": "GET",
-        "path": "/api/v1/admin/ai/chat",
+        "target": "internal",
         "payloadTemplate": {
           "days": 30
         }
@@ -584,7 +583,8 @@
       "autonomy_min_mode": "read_only_auto",
       "rollback_strategy": "none",
       "side_effects": [],
-      "rollback_window_minutes": 0
+      "rollback_window_minutes": 0,
+      "execution": "internal"
     },
     {
       "name": "approve_carbon_records",
@@ -789,8 +789,7 @@
       "label": "Create user",
       "description": "Create a new user account with login credentials and optional admin metadata.",
       "api": {
-        "method": "POST",
-        "path": "/api/v1/admin/users",
+        "target": "internal",
         "payloadTemplate": {
           "username": null,
           "email": null,
@@ -826,7 +825,8 @@
       "side_effects": [
         "database_write",
         "notification_possible"
-      ]
+      ],
+      "execution": "internal"
     },
     {
       "name": "update_user_status",

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\SensitiveDataRedactor;
 use PDO;
 use Monolog\Logger;
 use JsonException;
@@ -25,10 +26,13 @@ class AuditLogService
     private int $maxDataLength = 10000; // JSON 字段截断长度
     /** @var array<int, string|null> */
     private array $userUuidCache = [];
-    private array $sensitiveFields = [
-        'password','pass','token','authorization','auth','secret',
-        'api_key','access_token','refresh_token','session_id','credit_card'
-    ];
+    /**
+     * Sensitive field set delegated to {@see SensitiveDataRedactor::SENSITIVE_KEYS}
+     * so audit / system / error logs share the same superset (B-102 / B-205).
+     *
+     * @var string[]
+     */
+    private array $sensitiveFields = SensitiveDataRedactor::SENSITIVE_KEYS;
     /** @var string[] */
     private array $nullableIntegerFields = [
         'user_id',
@@ -407,8 +411,8 @@ class AuditLogService
     {
         $sanitized = [];
         foreach ($data as $key => $value) {
-            if (in_array(strtolower($key), $this->sensitiveFields, true)) {
-                $sanitized[$key] = '[REDACTED]';
+            if (SensitiveDataRedactor::isSensitiveKey((string) $key)) {
+                $sanitized[$key] = SensitiveDataRedactor::REDACTED;
                 continue;
             }
             if ($value === null) {
@@ -421,7 +425,8 @@ class AuditLogService
             }
             if (is_array($value) || is_object($value)) {
                 try {
-                    $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+                    $redacted = SensitiveDataRedactor::redact($value);
+                    $json = json_encode($redacted, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
                     $sanitized[$key] = $this->truncateData($json);
                 } catch (JsonException $e) {
                     $sanitized[$key] = '[JSON_ERROR]';
@@ -468,24 +473,9 @@ class AuditLogService
 
     private function sanitizeData(array $data): ?string
     {
-        $sanitized = [];
-        foreach ($data as $key => $value) {
-            if (in_array(strtolower($key), $this->sensitiveFields, true)) {
-                $sanitized[$key] = '[REDACTED]';
-                continue;
-            }
-            if (is_array($value) || is_object($value)) {
-                try {
-                    $sanitized[$key] = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-                } catch (JsonException $e) {
-                    $sanitized[$key] = '[JSON_ERROR]';
-                }
-            } else {
-                $sanitized[$key] = $value;
-            }
-        }
+        $redacted = SensitiveDataRedactor::redact($data);
         try {
-            $json = json_encode($sanitized, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            $json = json_encode($redacted, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
             return $this->truncateData($json);
         } catch (JsonException $e) {
             return null;

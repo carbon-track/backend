@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
+use CarbonTrack\Services\MobileDeviceSessionService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\MessageService;
@@ -17,6 +18,8 @@ use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\CheckinService;
 use CarbonTrack\Services\UserProfileViewService;
+use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\Environment;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 use PDO;
@@ -36,6 +39,7 @@ class AuthController
    private RegionService $regionService;
     private ?CheckinService $checkinService;
     private UserProfileViewService $userProfileViewService;
+    private MobileDeviceSessionService $mobileDeviceSessionService;
 
     private const VERIFICATION_RESEND_LIMIT = 3;
     private const VERIFICATION_CODE_TTL_MINUTES = 30;
@@ -54,18 +58,19 @@ class AuthController
         RegionService $regionService,
         ?CheckinService $checkinService = null,
         ?UserProfileViewService $userProfileViewService = null,
-        ?ProofOfWorkService $proofOfWorkService = null
+        ?ProofOfWorkService $proofOfWorkService = null,
+        ?MobileDeviceSessionService $mobileDeviceSessionService = null
     ) {
         $this->authService = $authService;
         $this->emailService = $emailService;
         $this->turnstileService = $turnstileService;
         $this->proofOfWorkService = $proofOfWorkService ?? new ProofOfWorkService(
-            $_ENV['POW_SECRET'] ?? ($_ENV['JWT_SECRET'] ?? ''),
+            Environment::string('POW_SECRET', Environment::string('JWT_SECRET')),
             $logger,
             $auditLogService,
             $errorLogService,
-            (int)($_ENV['POW_DIFFICULTY'] ?? 16),
-            (int)($_ENV['POW_TTL_SECONDS'] ?? 120),
+            Environment::int('POW_DIFFICULTY', 16),
+            Environment::int('POW_TTL_SECONDS', 120),
             $db
         );
         $this->auditLogService = $auditLogService;
@@ -77,6 +82,13 @@ class AuthController
         $this->regionService = $regionService;
         $this->checkinService = $checkinService;
         $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
+        $this->mobileDeviceSessionService = $mobileDeviceSessionService ?? new MobileDeviceSessionService(
+            $db,
+            $logger,
+            $auditLogService,
+            Environment::int('MOBILE_REFRESH_TOKEN_TTL_SECONDS', 60 * 60 * 24 * 30),
+            Environment::string('MOBILE_REFRESH_TOKEN_SECRET', Environment::string('JWT_SECRET'))
+        );
     }
 
     public function createProofOfWorkChallenge(Request $request, Response $response): Response
@@ -93,10 +105,23 @@ class AuthController
                 ], 400);
             }
 
+            try {
+                $challenge = $this->proofOfWorkService->createChallenge($scope, $this->getClientIP($request));
+            } catch (\RuntimeException $rateLimitError) {
+                if (strpos($rateLimitError->getMessage(), 'rate limit') !== false) {
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Too many proof-of-work challenges from this client',
+                        'code' => 'POW_RATE_LIMITED',
+                    ], 429);
+                }
+                throw $rateLimitError;
+            }
+
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Proof-of-work challenge created',
-                'data' => $this->proofOfWorkService->createChallenge($scope),
+                'data' => $challenge,
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Proof-of-work challenge creation failed', ['error' => $e->getMessage()]);
@@ -248,31 +273,45 @@ class AuthController
                 'is_admin' => false,
                 'uuid' => $userUuid
             ]);
+            $responsePayload = [
+                'user' => [
+                    'id' => $userId,
+                    'uuid' => $userUuid,
+                    'username' => $data['username'],
+                    'email' => $data['email'],
+                    'points' => 0,
+                    'role' => 'user',
+                    'is_admin' => false,
+                    'is_support' => false,
+                    'email_verified_at' => null,
+                    'region_code' => $regionCode,
+                    'region_label' => $this->regionService->getRegionLabel($regionCode),
+                    'country_code' => $countryCode,
+                    'state_code' => $stateCode,
+                ],
+                'token' => $token,
+                'email_verification_required' => true,
+                'email_verification_sent' => (bool)($verificationMeta['dispatched'] ?? false),
+                'verification_expires_at' => $verificationMeta['expires_at'] ?? null,
+                'verification_resend_available_at' => $verificationMeta['resend_available_at'] ?? null
+            ];
+            if ($this->isMobileClientRequest($request, $data)) {
+                $responsePayload = array_merge($responsePayload, $this->mobileDeviceSessionService->createSession(
+                    $userId,
+                    $this->mobileDeviceMetadata($request, $data)
+                ));
+                $this->auditLogService->logAuthOperation('mobile_device_session_created', $userId, true, [
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                    'device_id' => $responsePayload['device_session']['device_id'] ?? null,
+                    'platform' => $responsePayload['device_session']['platform'] ?? null,
+                    'source' => 'register',
+                ]);
+            }
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'User registered successfully',
-                'data' => [
-                        'user' => [
-                            'id' => $userId,
-                            'uuid' => $userUuid,
-                            'username' => $data['username'],
-                            'email' => $data['email'],
-                            'points' => 0,
-                            'role' => 'user',
-                            'is_admin' => false,
-                            'is_support' => false,
-                            'email_verified_at' => null,
-                            'region_code' => $regionCode,
-                            'region_label' => $this->regionService->getRegionLabel($regionCode),
-                            'country_code' => $countryCode,
-                        'state_code' => $stateCode,
-                    ],
-                    'token' => $token,
-                    'email_verification_required' => true,
-                    'email_verification_sent' => (bool)($verificationMeta['dispatched'] ?? false),
-                    'verification_expires_at' => $verificationMeta['expires_at'] ?? null,
-                    'verification_resend_available_at' => $verificationMeta['resend_available_at'] ?? null
-                ]
+                'data' => $responsePayload
             ], 201);
         } catch (\Throwable $e) {
             $this->logger->error('User registration failed', ['error' => $e->getMessage()]);
@@ -289,14 +328,45 @@ class AuthController
     {
         try {
             $data = $request->getParsedBody();
+            $data = is_array($data) ? $data : [];
             // 兼容 identifier / username / email 三种输入
-            $identifier = $data['identifier'] ?? ($data['username'] ?? ($data['email'] ?? null));
-            if (empty($identifier) || empty($data['password'])) {
+            $rawIdentifier = $data['identifier'] ?? ($data['username'] ?? ($data['email'] ?? null));
+            $rawPassword = $data['password'] ?? null;
+            if (!is_string($rawIdentifier) || trim($rawIdentifier) === '' || !is_string($rawPassword) || $rawPassword === '') {
                 return $this->jsonResponse($response, [
                     'success' => false,
                     'message' => 'Identifier and password are required',
                     'code' => 'MISSING_CREDENTIALS'
                 ], 400);
+            }
+            $identifier = trim($rawIdentifier);
+            $clientIp = $this->getClientIP($request);
+            // Account/IP lockout precedes any credential check so brute-force traffic
+            // cannot probe whether a user exists or burn through Turnstile capacity.
+            try {
+                if ($this->authService->isAccountLocked((string) $identifier, (string) $clientIp)) {
+                    $this->auditLogService->log([
+                        'action' => 'auth_login_locked',
+                        'operation_category' => 'authentication',
+                        'actor_type' => 'system',
+                        'status' => 'failed',
+                        'data' => [
+                            'identifier' => $identifier,
+                            'ip_address' => $clientIp,
+                            'user_agent' => $request->getHeaderLine('User-Agent'),
+                        ],
+                    ]);
+                    return $this->jsonResponse($response, [
+                        'success' => false,
+                        'message' => 'Account temporarily locked. Try again later.',
+                        'code' => 'ACCOUNT_LOCKED',
+                    ], 429);
+                }
+            } catch (\Throwable $lockCheckError) {
+                // Infrastructure failures in the lockout check should not block all logins.
+                $this->logger->warning('Login lockout check failed', [
+                    'error' => $lockCheckError->getMessage(),
+                ]);
             }
             $challenge = $this->verifyClientChallenge($request, $data, 'auth.login');
             if (!$challenge['success']) {
@@ -320,9 +390,16 @@ class AuthController
                 }
             }
             if (!$user || !$passwordField || !password_verify((string)$data['password'], (string)$user[$passwordField])) {
+                try {
+                    $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, false);
+                } catch (\Throwable $recordError) {
+                    $this->logger->warning('Login attempt record failed (failed branch)', [
+                        'error' => $recordError->getMessage(),
+                    ]);
+                }
                 $this->auditLogService->logAuthOperation('login', null, false, [
                     'identifier' => $identifier,
-                    'ip_address' => $this->getClientIP($request),
+                    'ip_address' => $clientIp,
                     'user_agent' => $request->getHeaderLine('User-Agent')
                 ]);
                 return $this->jsonResponse($response, [
@@ -330,6 +407,13 @@ class AuthController
                     'message' => 'Invalid credentials',
                     'code' => 'INVALID_CREDENTIALS'
                 ], 401);
+            }
+            try {
+                $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, true);
+            } catch (\Throwable $recordError) {
+                $this->logger->warning('Login attempt record failed (success branch)', [
+                    'error' => $recordError->getMessage(),
+                ]);
             }
             try {
                 $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
@@ -376,6 +460,19 @@ class AuthController
                 'user' => $userInfo
             ];
 
+            if ($this->isMobileClientRequest($request, $data)) {
+                $responsePayload = array_merge($responsePayload, $this->mobileDeviceSessionService->createSession(
+                    (int) $user['id'],
+                    $this->mobileDeviceMetadata($request, $data)
+                ));
+                $this->auditLogService->logAuthOperation('mobile_device_session_created', (int) $user['id'], true, [
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                    'device_id' => $responsePayload['device_session']['device_id'] ?? null,
+                    'platform' => $responsePayload['device_session']['platform'] ?? null,
+                ]);
+            }
+
             if ($verificationMeta !== null) {
                 $responsePayload['email_verification_required'] = $verificationMeta['required'];
                 $responsePayload['email_verification_sent'] = $verificationMeta['sent'];
@@ -405,11 +502,19 @@ class AuthController
     public function logout(Request $request, Response $response): Response
     {
         try {
+            $data = $request->getParsedBody();
+            $data = is_array($data) ? $data : [];
+            $rawRefreshToken = $data['refresh_token'] ?? null;
             $user = $this->authService->getCurrentUser($request);
+            $revokedDeviceSession = false;
+            if (is_string($rawRefreshToken) && trim($rawRefreshToken) !== '') {
+                $revokedDeviceSession = $this->mobileDeviceSessionService->revokeByRefreshToken(trim($rawRefreshToken), 'logout');
+            }
             if ($user) {
                 $this->auditLogService->logAuthOperation('logout', $user['id'], true, [
                     'ip_address' => $this->getClientIP($request),
-                    'user_agent' => $request->getHeaderLine('User-Agent')
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                    'mobile_device_session_revoked' => $revokedDeviceSession,
                 ]);
             }
             return $this->jsonResponse($response, [
@@ -429,6 +534,13 @@ class AuthController
     public function refresh(Request $request, Response $response): Response
     {
         try {
+            $data = $request->getParsedBody();
+            $data = is_array($data) ? $data : [];
+            $rawRefreshToken = $data['refresh_token'] ?? null;
+            if (is_string($rawRefreshToken) && trim($rawRefreshToken) !== '') {
+                return $this->refreshMobileDeviceSession($request, $response, trim($rawRefreshToken), $data);
+            }
+
             $token = $this->extractBearerToken($request);
             if ($token === null) {
                 $this->logTokenRefreshFailure($request, null, 'AUTH_REQUIRED');
@@ -723,14 +835,28 @@ class AuthController
 
             $token = $this->authService->generateToken($userDetail);
             $formattedUser = $this->formatUserPayload($userDetail);
+            $responsePayload = [
+                'token' => $token,
+                'user' => $formattedUser
+            ];
+            if ($this->isMobileClientRequest($request, $data)) {
+                $responsePayload = array_merge($responsePayload, $this->mobileDeviceSessionService->createSession(
+                    (int) $userDetail['id'],
+                    $this->mobileDeviceMetadata($request, $data)
+                ));
+                $this->auditLogService->logAuthOperation('mobile_device_session_created', (int) $userDetail['id'], true, [
+                    'ip_address' => $this->getClientIP($request),
+                    'user_agent' => $request->getHeaderLine('User-Agent'),
+                    'device_id' => $responsePayload['device_session']['device_id'] ?? null,
+                    'platform' => $responsePayload['device_session']['platform'] ?? null,
+                    'source' => 'email_verification',
+                ]);
+            }
 
             return $this->jsonResponse($response, [
                 'success' => true,
                 'message' => 'Email verified successfully',
-                'data' => [
-                    'token' => $token,
-                    'user' => $formattedUser
-                ]
+                'data' => $responsePayload
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Verify email failed', ['error' => $e->getMessage()]);
@@ -878,6 +1004,18 @@ class AuthController
                     $upd->execute([$hashed, $user['id']]);
                 }
             }
+            // W-201: invalidate every previously issued JWT for this account
+            // immediately after the password is rotated, so leaked / shared
+            // tokens can no longer impersonate the user.
+            try {
+                $this->authService->incrementTokenVersion((int) $user['id']);
+                $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_reset');
+            } catch (\Throwable $bumpError) {
+                $this->logger->warning('Failed to revoke credentials after password reset', [
+                    'user_id' => $user['id'] ?? null,
+                    'error' => $bumpError->getMessage(),
+                ]);
+            }
             $this->auditLogService->logAuthOperation('password_reset', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
                 'user_agent' => $request->getHeaderLine('User-Agent')
@@ -956,13 +1094,25 @@ class AuthController
                     $upd->execute([$hashed, $user['id']]);
                 }
             }
+            try {
+                $this->authService->incrementTokenVersion((int) $user['id']);
+                $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_change');
+            } catch (\Throwable $bumpError) {
+                $this->logger->warning('Failed to revoke credentials after password change', [
+                    'user_id' => $user['id'] ?? null,
+                    'error' => $bumpError->getMessage(),
+                ]);
+            }
             $this->auditLogService->logAuthOperation('password_change', $user['id'], true, [
                 'ip_address' => $this->getClientIP($request),
                 'user_agent' => $request->getHeaderLine('User-Agent')
             ]);
             return $this->jsonResponse($response, [
                 'success' => true,
-                'message' => 'Password changed successfully'
+                'message' => 'Password changed successfully',
+                'data' => [
+                    'reauth_required' => true,
+                ],
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Change password failed', ['error' => $e->getMessage()]);
@@ -1400,8 +1550,44 @@ class AuthController
         }
 
         // Browser-originated requests must stay on Turnstile even if a caller spoofs mobile markers.
-        return trim($request->getHeaderLine('Origin')) === ''
-            && trim($request->getHeaderLine('Sec-Fetch-Site')) === '';
+        $browserAttempt = trim($request->getHeaderLine('Origin')) !== ''
+            || trim($request->getHeaderLine('Sec-Fetch-Site')) !== '';
+        if ($browserAttempt) {
+            return false;
+        }
+
+        // Require a mobile distribution token as a coarse PoW path gate. This is not
+        // treated as app attestation; the security boundary remains PoW, Turnstile,
+        // and rate limiting.
+        // If the env value is unset we *disable* the bypass entirely so misconfigured deploys
+        // can never let an arbitrary HTTP client onto the cheaper PoW path (B-105).
+        $expected = trim(Environment::string('MOBILE_CLIENT_TOKEN'));
+        if ($expected === '') {
+            return false;
+        }
+
+        $supplied = trim($request->getHeaderLine('X-Mobile-Client-Token'));
+        if ($supplied === '') {
+            return false;
+        }
+
+        return hash_equals($expected, $supplied);
+    }
+
+    private function isMobileClientRequest(Request $request, array $data): bool
+    {
+        return $this->shouldUseMobileProofOfWork($request, $data);
+    }
+
+    private function mobileDeviceMetadata(Request $request, array $data): array
+    {
+        return [
+            'device_id' => $data['device_id'] ?? $request->getHeaderLine('X-Device-ID'),
+            'device_name' => $data['device_name'] ?? $request->getHeaderLine('X-Device-Name'),
+            'platform' => $data['platform'] ?? null,
+            'user_agent' => $request->getHeaderLine('User-Agent'),
+            'ip_address' => $this->getClientIP($request),
+        ];
     }
 
     private function logChallengeFailure(string $action, Request $request, string $scope, ?string $reason = null): void
@@ -1471,6 +1657,56 @@ class AuthController
         }
 
         return $row;
+    }
+
+    private function refreshMobileDeviceSession(Request $request, Response $response, string $refreshToken, array $data): Response
+    {
+        $rotation = $this->mobileDeviceSessionService->rotateRefreshToken(
+            $refreshToken,
+            $this->mobileDeviceMetadata($request, $data)
+        );
+
+        if ($rotation === null) {
+            $this->logTokenRefreshFailure($request, null, 'INVALID_REFRESH_TOKEN');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Refresh token is invalid, expired, or revoked',
+                'code' => 'INVALID_REFRESH_TOKEN',
+            ], 401);
+        }
+
+        $userId = (int) ($rotation['session']['user_id'] ?? 0);
+        $userDetail = $userId > 0 ? $this->findUserDetailed($userId) : null;
+        if ($userDetail === null) {
+            $this->logTokenRefreshFailure($request, $userId > 0 ? $userId : null, 'USER_NOT_FOUND');
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'User not found',
+                'code' => 'USER_NOT_FOUND',
+            ], 401);
+        }
+
+        $token = $this->authService->generateToken($userDetail);
+        $this->auditLogService->logAuthOperation('mobile_device_session_refresh', $userId, true, [
+            'ip_address' => $this->getClientIP($request),
+            'user_agent' => $request->getHeaderLine('User-Agent'),
+            'device_session_id' => $rotation['session']['id'] ?? null,
+            'device_id' => $rotation['session']['device_id'] ?? null,
+        ]);
+
+        return $this->jsonResponse($response, [
+            'success' => true,
+            'message' => 'Token refreshed successfully',
+            'data' => [
+                'token' => $token,
+                'user' => $this->formatUserPayload($userDetail),
+                'expires_in' => $this->authService->getTokenRemainingTime($token),
+                'refresh_token' => $rotation['refresh_token'],
+                'refresh_token_type' => $rotation['refresh_token_type'],
+                'refresh_expires_in' => $rotation['refresh_expires_in'],
+                'device_session' => $rotation['session'],
+            ],
+        ]);
     }
 
     private function formatUserPayload(array $row): array
@@ -1558,17 +1794,7 @@ class AuthController
 
     private function getClientIP(Request $request): string
     {
-        $server = $request->getServerParams();
-        $xff = $request->getHeaderLine('X-Forwarded-For');
-        if ($xff) {
-            $parts = explode(',', $xff);
-            return trim($parts[0]);
-        }
-        $cf = $request->getHeaderLine('CF-Connecting-IP');
-        if ($cf) {
-            return $cf;
-        }
-        return $server['REMOTE_ADDR'] ?? '0.0.0.0';
+        return ClientIpResolver::fromRequest($request, '0.0.0.0');
     }
 
 }

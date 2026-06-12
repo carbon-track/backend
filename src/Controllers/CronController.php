@@ -7,6 +7,7 @@ namespace CarbonTrack\Controllers;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\ClientIpResolver;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Log\LoggerInterface;
@@ -111,16 +112,7 @@ class CronController
 
     private function clientIp(Request $request): ?string
     {
-        $serverParams = $request->getServerParams();
-        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'] as $key) {
-            $value = $serverParams[$key] ?? null;
-            if (!is_string($value) || trim($value) === '') {
-                continue;
-            }
-            return str_contains($value, ',') ? trim(explode(',', $value)[0]) : trim($value);
-        }
-
-        return null;
+        return ClientIpResolver::fromRequest($request, null);
     }
 
     private function resolveInvocationKey(Request $request, string $headerName): string

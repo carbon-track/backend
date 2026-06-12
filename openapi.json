@@ -51,7 +51,7 @@
       ]
     },
     "proof_of_work": {
-      "description": "移动端匿名认证防滥用机制。移动端先调用 /api/v1/security/pow/challenge 获取一次性 challenge，再在认证请求中提交 client_type=mobile、pow_challenge 和 pow_nonce；challenge 校验成功后立即消费，不能重放。",
+      "description": "移动端匿名认证防滥用机制。移动端先调用 /api/v1/security/pow/challenge 获取一次性 challenge，再在认证请求中提交 Header X-Client-Platform: mobile、X-Mobile-Client-Token 以及 body 的 client_type=mobile、pow_challenge 和 pow_nonce；challenge 校验成功后立即消费，不能重放。",
       "required_mobile_routes": [
         "/auth/register",
         "/auth/login",
@@ -92,6 +92,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -141,7 +151,33 @@
         },
         "responses": {
           "200": {
-            "description": "Password changed."
+            "description": "Password changed. The current access token and mobile refresh sessions are revoked; clients must clear local auth state and sign in again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Password changed successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "reauth_required": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request.",
@@ -175,8 +211,31 @@
           "Auth"
         ],
         "summary": "Forgot Password (legacy /api alias)",
-        "description": "旧版 /api 别名。必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；接口返回统一提示，不暴露邮箱是否存在。\n\nDeprecated alias. Use `/api/v1/auth/forgot-password` as the canonical runtime path.",
+        "description": "旧版 /api 别名。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端 PoW 通道必须提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。接口返回统一提示，不暴露邮箱是否存在。\n\nDeprecated alias. Use `/api/v1/auth/forgot-password` as the canonical runtime path.",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -213,6 +272,29 @@
         ],
         "summary": "User Login (legacy /api alias)",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -309,6 +391,29 @@
         ],
         "summary": "Register User (legacy /api alias)",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -399,8 +504,31 @@
           "Auth"
         ],
         "summary": "Send Verification Code (legacy /api alias)",
-        "description": "旧版 /api 别名。必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验。\n\nDeprecated alias. Use `/api/v1/auth/send-verification-code` as the canonical runtime path.",
+        "description": "旧版 /api 别名。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端 PoW 通道必须提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。\n\nDeprecated alias. Use `/api/v1/auth/send-verification-code` as the canonical runtime path.",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -437,6 +565,29 @@
         ],
         "summary": "Verify Email (legacy /api alias)",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端验证码 PoW 通道必须提供；邮件 token 验证与 Web 请求不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端验证码 PoW 通道必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -843,6 +994,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "operationId": "schoolIndexAlias",
@@ -1093,6 +1254,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiV1RootResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1935,6 +2106,25 @@
               }
             }
           },
+          "409": {
+            "description": "待确认提案已被确认或拒绝；响应 code 为 PROPOSAL_ALREADY_DECIDED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "alreadyDecided": {
+                    "value": {
+                      "success": false,
+                      "error": "Proposal has already been decided.",
+                      "code": "PROPOSAL_ALREADY_DECIDED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "422": {
             "description": "请求缺少必要字段或会话参数无效。",
             "content": {
@@ -2417,16 +2607,6 @@
               }
             }
           },
-          "503": {
-            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "500": {
             "description": "创建头像失败。",
             "content": {
@@ -2615,16 +2795,6 @@
           },
           "409": {
             "description": "尝试停用正在被使用的头像，但系统中没有可回退的启用默认头像。",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "头像对象存储服务不可用，无法验证 /avatars/ 路径。",
             "content": {
               "application/json": {
                 "schema": {
@@ -9643,6 +9813,16 @@
                     "message": {
                       "type": "string",
                       "example": "Password changed successfully"
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "The password change invalidates the current access token and mobile refresh sessions; clients must clear local auth state and sign in again.",
+                      "properties": {
+                        "reauth_required": {
+                          "type": "boolean",
+                          "example": true
+                        }
+                      }
                     }
                   }
                 }
@@ -9689,8 +9869,31 @@
           "Auth"
         ],
         "summary": "Request Password Reset",
-        "description": "提交找回密码请求。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段。接口会按安全惯例返回统一提示，不暴露邮箱是否存在。",
+        "description": "提交找回密码请求。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段并提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。接口会按安全惯例返回统一提示，不暴露邮箱是否存在。",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -9785,6 +9988,26 @@
               }
             }
           },
+          "429": {
+            "description": "Too many proof-of-work challenges issued from this client recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "rateLimited": {
+                    "summary": "Per-IP issuance rate limited",
+                    "value": {
+                      "success": false,
+                      "message": "Too many proof-of-work challenges from this client",
+                      "code": "POW_RATE_LIMITED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Challenge creation failed.",
             "content": {
@@ -9795,7 +10018,8 @@
               }
             }
           }
-        }
+        },
+        "operationId": "securityCreateProofOfWorkChallenge"
       }
     },
     "/api/v1/auth/login": {
@@ -9804,8 +10028,31 @@
           "Auth"
         ],
         "summary": "User Login",
-        "description": "用户登录。支持使用 identifier、username 或 email 作为登录标识，并返回 JWT 令牌、用户信息及可能的邮箱验证状态。",
+        "description": "用户登录。支持使用 identifier、username 或 email 作为登录标识，并返回 JWT 令牌、用户信息及可能的邮箱验证状态。移动端 PoW 通道必须提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -9843,6 +10090,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "invalidCredentials": {
+                    "summary": "Invalid credentials",
+                    "value": {
+                      "success": false,
+                      "message": "Invalid credentials",
+                      "code": "INVALID_CREDENTIALS"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "登录尝试过于频繁，账号或来源 IP 临时锁定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "accountLocked": {
+                    "summary": "Account locked",
+                    "value": {
+                      "success": false,
+                      "message": "Account temporarily locked. Try again later.",
+                      "code": "ACCOUNT_LOCKED"
+                    }
+                  }
                 }
               }
             }
@@ -9867,7 +10144,7 @@
           "Auth"
         ],
         "summary": "Logout",
-        "description": "注销当前登录会话。需要携带有效的 Bearer Token。",
+        "description": "注销当前登录会话。Bearer Token 用于审计当前用户；移动端可同时提交 refresh_token 以撤销当前设备会话。",
         "security": [],
         "responses": {
           "200": {
@@ -9901,7 +10178,24 @@
             }
           }
         },
-        "operationId": "authLogout"
+        "operationId": "authLogout",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "refresh_token": {
+                    "type": "string",
+                    "description": "Mobile refresh token to revoke for this device."
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/passkey/login/options": {
@@ -10056,8 +10350,31 @@
           "Auth"
         ],
         "summary": "Register User",
-        "description": "注册新用户账号。支持通过 school_id 绑定既有学校，或通过 new_school_name 在注册流程中创建学校；Web 端必须通过 Cloudflare Turnstile，移动端必须通过 proof-of-work。注册成功后会返回登录令牌及邮箱验证状态信息。",
+        "description": "注册新用户账号。支持通过 school_id 绑定既有学校，或通过 new_school_name 在注册流程中创建学校；Web 端必须通过 Cloudflare Turnstile，移动端必须通过 proof-of-work 并提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。注册成功后会返回登录令牌及邮箱验证状态信息。",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -10203,8 +10520,31 @@
           "Auth"
         ],
         "summary": "Send Verification Code",
-        "description": "向指定邮箱发送验证码或验证邮件。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段。成功时会返回有效期、重发时间，已验证账号会返回 already_verified 标记。",
+        "description": "向指定邮箱发送验证码或验证邮件。Web 端必须携带 cf_turnstile_response 通过 Cloudflare Turnstile 校验；移动端必须提交 proof-of-work 字段并提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。成功时会返回有效期、重发时间，已验证账号会返回 already_verified 标记。",
         "security": [],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -10294,7 +10634,30 @@
           "Auth"
         ],
         "summary": "Verify Email",
-        "description": "验证邮箱。支持使用邮件链接中的 token，或使用 email + code 组合进行验证；验证码模式下 Web 端必须携带 cf_turnstile_response，移动端必须提交 proof-of-work 字段。验证成功后会返回新的登录令牌与用户信息。",
+        "description": "验证邮箱。支持使用邮件链接中的 token，或使用 email + code 组合进行验证；验证码模式下 Web 端必须携带 cf_turnstile_response，移动端必须提交 proof-of-work 字段并提供 X-Client-Platform 与 X-Mobile-Client-Token 请求头。验证成功后会返回新的登录令牌与用户信息。",
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端验证码 PoW 通道必须提供；邮件 token 验证与 Web 请求不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端验证码 PoW 通道必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -10714,7 +11077,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录 (v1)",
-        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
+        "description": "提交碳减排记录的标准路径。与 legacy 路径行为基本一致，但该路径严格要求提供图片凭证。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。",
         "security": [
           {
             "bearerAuth": []
@@ -10731,6 +11094,28 @@
               "example": "b7e9a0f1c2d34e56"
             },
             "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)"
+          },
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ],
+              "example": "mobile"
+            },
+            "description": "移动端使用 PoW 通道时必须设置为 mobile；Web 端不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；当服务端配置 MOBILE_CLIENT_TOKEN 时，值必须匹配，否则请求不会进入移动端 PoW 校验路径。"
           }
         ],
         "requestBody": {
@@ -10918,7 +11303,7 @@
           "Carbon Records"
         ],
         "summary": "提交碳记录",
-        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
+        "description": "提交碳减排记录的兼容旧路径。支持 JSON 或 multipart/form-data；旧路径保留向后兼容行为，不强制要求上传图片。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 为活动发生日期；当 date 不是服务端当前日期时会按补打卡处理，成功后消耗一次补打卡额度。\n\nDeprecated alias. Use `/api/v1/carbon-records` as the canonical runtime path.",
         "security": [
           {
             "bearerAuth": []
@@ -10935,6 +11320,28 @@
               "example": "a3f1c09e7b5d4c1a"
             },
             "description": "幂等性请求ID，16位小写十六进制 (^[0-9a-f]{16}$)，24小时内有效。旧客户端若仍发送UUID将被拒绝或忽略幂等语义。"
+          },
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ],
+              "example": "mobile"
+            },
+            "description": "移动端使用 PoW 通道时必须设置为 mobile；Web 端不需要。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；当服务端配置 MOBILE_CLIENT_TOKEN 时，值必须匹配，否则请求不会进入移动端 PoW 校验路径。"
           }
         ],
         "requestBody": {
@@ -12062,7 +12469,7 @@
           "Files"
         ],
         "summary": "Confirm direct upload",
-        "description": "确认直传并落库文件元数据。若 sha256 已被其他 file record 占用，本次确认仍会创建当前用户自己的文件记录，但不会复用该 sha256 去重。",
+        "description": "确认直传并落库文件元数据。确认前会读取对象首字节并验证声明 MIME、扩展名与图片魔数；验证失败时拒绝确认，并在能确认对象归属且尚未落库时尽力删除该对象。若 sha256 已被其他 file record 占用，本次确认仍会创建当前用户自己的文件记录，但不会复用该 sha256 去重。",
         "security": [
           {
             "bearerAuth": []
@@ -12121,7 +12528,7 @@
             }
           },
           "400": {
-            "description": "Invalid request.",
+            "description": "Invalid request, invalid sha256, or uploaded object content does not match the declared file type.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12136,6 +12543,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前用户不是管理员，不能向 products、badges 等管理员专用上传目录写入；响应 code 为 ADMIN_UPLOAD_DIRECTORY_REQUIRED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "adminUploadDirectoryRequired": {
+                    "value": {
+                      "success": false,
+                      "message": "Admin access required for this upload directory",
+                      "code": "ADMIN_UPLOAD_DIRECTORY_REQUIRED"
+                    }
+                  }
                 }
               }
             }
@@ -12394,6 +12820,25 @@
               }
             }
           },
+          "403": {
+            "description": "当前用户不是管理员，不能向 products、badges 等管理员专用上传目录写入；响应 code 为 ADMIN_UPLOAD_DIRECTORY_REQUIRED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "adminUploadDirectoryRequired": {
+                    "value": {
+                      "success": false,
+                      "message": "Admin access required for this upload directory",
+                      "code": "ADMIN_UPLOAD_DIRECTORY_REQUIRED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "初始化分片上传时发生服务器内部错误。",
             "content": {
@@ -12565,6 +13010,25 @@
               }
             }
           },
+          "403": {
+            "description": "当前用户不是管理员，不能向 products、badges 等管理员专用上传目录写入；响应 code 为 ADMIN_UPLOAD_DIRECTORY_REQUIRED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "adminUploadDirectoryRequired": {
+                    "value": {
+                      "success": false,
+                      "message": "Admin access required for this upload directory",
+                      "code": "ADMIN_UPLOAD_DIRECTORY_REQUIRED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "Direct upload presign generation failed.",
             "content": {
@@ -12585,7 +13049,7 @@
           "Files"
         ],
         "summary": "R2 诊断信息",
-        "description": "返回当前 R2 存储配置与连通性诊断信息，便于排查文件上传问题。",
+        "description": "仅管理员可访问。返回脱敏后的 R2 存储连通性诊断信息，便于排查文件上传问题。",
         "security": [
           {
             "bearerAuth": []
@@ -12604,6 +13068,16 @@
           },
           "401": {
             "description": "Authentication is required or the bearer token is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12710,6 +13184,25 @@
               }
             }
           },
+          "403": {
+            "description": "当前用户不是管理员，不能向 products、badges 等管理员专用上传目录写入；响应 code 为 ADMIN_UPLOAD_DIRECTORY_REQUIRED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "adminUploadDirectoryRequired": {
+                    "value": {
+                      "success": false,
+                      "message": "Admin access required for this upload directory",
+                      "code": "ADMIN_UPLOAD_DIRECTORY_REQUIRED"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "500": {
             "description": "文件上传失败。",
             "content": {
@@ -12810,6 +13303,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前用户不是管理员，不能向 products、badges 等管理员专用上传目录写入；响应 code 为 ADMIN_UPLOAD_DIRECTORY_REQUIRED。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "adminUploadDirectoryRequired": {
+                    "value": {
+                      "success": false,
+                      "message": "Admin access required for this upload directory",
+                      "code": "ADMIN_UPLOAD_DIRECTORY_REQUIRED"
+                    }
+                  }
                 }
               }
             }
@@ -13501,6 +14013,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "operationId": "productGetProducts",
@@ -13825,6 +14347,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "operationId": "productSearchProductTags",
@@ -13845,6 +14377,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SchoolListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -14204,6 +14746,16 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -15457,10 +16009,33 @@
           "Users"
         ],
         "summary": "更新当前用户资料",
-        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，Web 端必须提供 Turnstile，移动端必须提供 proof-of-work。",
+        "description": "更新当前登录用户的详细资料。支持修改头像、学校及地区信息；当学校信息发生变化时，Web 端必须提供 Turnstile；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。",
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道修改学校信息时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
           }
         ],
         "requestBody": {
@@ -15834,11 +16409,34 @@
           "Support"
         ],
         "summary": "创建用户工单",
-        "description": "创建新工单，首条消息作为工单线程的起始内容，并要求登录及 Turnstile 验证。",
+        "description": "创建新工单，首条消息作为工单线程的起始内容，并要求登录及防滥用验证。Web 端必须提供 Turnstile；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。",
         "operationId": "supportCreateTicket",
         "security": [
           {
             "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端使用 PoW 通道创建工单时必须提供；Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
           }
         ],
         "requestBody": {
@@ -15995,6 +16593,27 @@
               "type": "integer",
               "minimum": 1
             }
+          },
+          {
+            "name": "X-Client-Platform",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mobile"
+              ]
+            },
+            "description": "移动端用户使用 PoW 通道回复工单时必须提供；客服端和 Web 请求不应设置。"
+          },
+          {
+            "name": "X-Mobile-Client-Token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "移动端使用 PoW 通道时必须提供的客户端令牌；值必须匹配服务端 MOBILE_CLIENT_TOKEN。"
           }
         ],
         "requestBody": {
@@ -16929,7 +17548,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员获取客服工单标签列表，用于客服运营规则、工单标记和报表筛选。"
       },
       "post": {
         "tags": [
@@ -16986,7 +17606,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员创建客服工单标签；名称、颜色和启用状态会写入客服运营配置。"
       }
     },
     "/api/v1/admin/support/tags/{id}": {
@@ -17056,7 +17677,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员更新指定客服工单标签；不存在的标签返回 404，字段校验失败返回 422。"
       }
     },
     "/api/v1/admin/support/rules": {
@@ -17105,7 +17727,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员获取客服自动评分与路由规则列表，用于维护工单运营自动化。"
       },
       "post": {
         "tags": [
@@ -17162,7 +17785,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员创建客服评分或路由规则；请求体定义规则名称、条件、动作和启用状态。"
       }
     },
     "/api/v1/admin/support/rules/{id}": {
@@ -17232,7 +17856,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员更新指定客服评分或路由规则；不存在的规则返回 404，字段校验失败返回 422。"
       }
     },
     "/api/v1/admin/support/tickets": {
@@ -17601,7 +18226,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员获取客服运营报表，支持按时间窗口汇总工单量、处理效率和 SLA 指标。"
       }
     },
     "/api/v1/admin/support/routing-settings": {
@@ -17738,8 +18364,39 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "未登录或登录令牌无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前用户没有客服权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
-        }
+        },
+        "description": "客服人员获取可转派候选处理人列表，用于工单转派和协作处理。"
       }
     },
     "/api/v1/support/tickets/{ticketId}/transfer-requests": {
@@ -17783,6 +18440,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SupportTransferRequestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或登录令牌无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前用户没有处理该工单转派流程的权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单或转派申请不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求字段无效或业务状态不允许执行该操作。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -17831,6 +18538,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SupportTransferRequestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或登录令牌无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "当前用户没有处理该工单转派流程的权限。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "工单或转派申请不存在。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求字段无效或业务状态不允许执行该操作。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器处理请求时发生错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -17964,7 +18721,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员获取统一调度器注册的 cron 任务配置、启用状态、执行间隔和最近运行摘要。"
       }
     },
     "/api/v1/admin/cron/tasks/{taskKey}": {
@@ -18060,7 +18818,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员更新指定 cron 任务的启用状态、执行间隔或任务设置；更新会记录审计日志。"
       }
     },
     "/api/v1/admin/cron/runs": {
@@ -18183,7 +18942,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员查询 cron 任务运行历史，可按任务 key、状态和分页参数筛选。"
       }
     },
     "/api/v1/admin/cron/tasks/{taskKey}/run": {
@@ -18289,7 +19049,8 @@
               }
             }
           }
-        }
+        },
+        "description": "管理员手动触发指定 cron 任务立即执行；调度器会记录运行状态并返回任务执行结果。"
       }
     },
     "/api/v1/auth/refresh": {
@@ -18298,11 +19059,12 @@
           "Auth"
         ],
         "summary": "Refresh JWT Token",
-        "description": "Refresh the current Bearer JWT when it is still valid. Tokens that are invalid or already expired cannot be refreshed.",
+        "description": "Refresh an access token using either a still-valid Bearer JWT or a mobile refresh_token. Mobile refresh tokens are rotated on every successful refresh; expired, revoked, or reused refresh tokens are rejected.",
         "security": [
           {
             "bearerAuth": []
-          }
+          },
+          {}
         ],
         "requestBody": {
           "required": false,
@@ -18310,7 +19072,25 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "additionalProperties": false
+                "additionalProperties": false,
+                "properties": {
+                  "refresh_token": {
+                    "type": "string",
+                    "description": "Mobile device-session refresh token."
+                  },
+                  "device_name": {
+                    "type": "string",
+                    "maxLength": 191
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "ios",
+                      "android",
+                      "web"
+                    ]
+                  }
+                }
               }
             }
           }
@@ -18327,7 +19107,7 @@
             }
           },
           "401": {
-            "description": "Authentication token is missing, invalid, or expired.",
+            "description": "Authentication token or refresh token is missing, invalid, expired, revoked, or reused.",
             "content": {
               "application/json": {
                 "schema": {
@@ -19566,7 +20346,7 @@
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求必须设置为 mobile；带浏览器 Origin 的请求仍按 Web Turnstile 处理。"
+            "description": "移动端请求必须设置为 mobile；请求头还必须包含 X-Client-Platform: mobile 与 X-Mobile-Client-Token，带浏览器 Origin 的请求仍按 Web Turnstile 处理。"
           },
           "pow_challenge": {
             "type": "string",
@@ -19624,14 +20404,14 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 X-Client-Platform + X-Mobile-Client-Token header 与 client_type + pow_challenge + pow_nonce body 字段。"
           },
           "client_type": {
             "type": "string",
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -19654,6 +20434,25 @@
             "maxLength": 6,
             "pattern": "^[A-Z0-9]{1,6}$",
             "description": "Uppercase subdivision code defined under the selected country in locales/states.json."
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -19670,7 +20469,7 @@
             ]
           }
         ],
-        "description": "注册请求。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
+        "description": "注册请求。Web 端必须提供 cf_turnstile_response；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。允许通过 new_school_name 在注册时一次性创建新学校。优先级：若提供 school_id 则忽略 new_school_name。系统在创建前会执行不区分大小写的名称查重以避免重复。"
       },
       "RegisterSuccessResponse": {
         "type": "object",
@@ -19782,6 +20581,24 @@
                   "null"
                 ],
                 "format": "date-time"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
           }
@@ -19813,14 +20630,14 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -19829,6 +20646,25 @@
           "pow_nonce": {
             "type": "string",
             "description": "移动端 proof-of-work nonce。"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -19851,7 +20687,7 @@
             ]
           }
         ],
-        "description": "登录请求。支持使用 identifier、username 或 email 作为账号标识。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。"
+        "description": "登录请求。支持使用 identifier、username 或 email 作为账号标识。Web 端必须提供 cf_turnstile_response；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
       },
       "LoginSuccessResponse": {
         "type": "object",
@@ -19912,6 +20748,24 @@
                   "null"
                 ],
                 "description": "是否因频率限制而未发送新的验证邮件"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
           }
@@ -19930,7 +20784,7 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
@@ -19962,7 +20816,7 @@
             ]
           }
         ],
-        "description": "找回密码请求。Web 端必须提供 Turnstile 令牌；移动端必须提供 PoW 字段。"
+        "description": "找回密码请求。Web 端必须提供 Turnstile 令牌；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
       },
       "SendVerificationCodeRequest": {
         "type": "object",
@@ -19977,7 +20831,7 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
@@ -20009,7 +20863,7 @@
             ]
           }
         ],
-        "description": "发送邮箱验证码请求。Web 端必须提供 Turnstile 令牌；移动端必须提供 PoW 字段。"
+        "description": "发送邮箱验证码请求。Web 端必须提供 Turnstile 令牌；移动端 PoW 通道必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
       },
       "ResetPasswordRequest": {
         "type": "object",
@@ -20054,14 +20908,14 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "验证码模式下 Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "验证码模式下 Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求标识。"
+            "description": "Set to mobile when using the mobile PoW/device-session flow."
           },
           "pow_challenge": {
             "type": "string",
@@ -20070,6 +20924,25 @@
           "pow_nonce": {
             "type": "string",
             "description": "移动端 proof-of-work nonce。"
+          },
+          "device_id": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Stable app-generated device identifier stored in SecureStore."
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 191,
+            "description": "Human-readable device label."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android",
+              "web"
+            ],
+            "description": "Client platform for mobile device-session metadata."
           }
         },
         "anyOf": [
@@ -20486,7 +21359,7 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端修改学校信息时必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端修改学校信息时必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
@@ -20619,18 +21492,18 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
             "enum": [
               "mobile"
             ],
-            "description": "移动端请求必须设置为 mobile。"
+            "description": "移动端请求体必须设置为 mobile；请求头还必须包含 X-Client-Platform: mobile。"
           },
           "pow_challenge": {
             "type": "string",
-            "description": "移动端提交碳记录时使用的一次性 proof-of-work challenge，scope 为 carbon.record.submit。"
+            "description": "移动端提交碳记录时使用的一次性 proof-of-work challenge，scope 为 carbon.record.submit；请求头必须同时包含 X-Mobile-Client-Token。"
           },
           "pow_nonce": {
             "type": "string",
@@ -20651,7 +21524,7 @@
             ]
           }
         ],
-        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
+        "description": "提交碳减排记录。Web 端必须提供 cf_turnstile_response；移动端必须提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（当服务端配置 MOBILE_CLIENT_TOKEN 时需与之匹配），并在请求体提供 client_type=mobile、pow_challenge 与 pow_nonce。date 不是服务端当前日期时会走补打卡业务并消耗补打卡额度。"
       },
       "SubmitRecordResponse": {
         "type": "object",
@@ -26843,23 +27716,28 @@
           "data": {
             "type": "object",
             "properties": {
-              "bucket": {
-                "type": "string"
-              },
-              "endpoint": {
-                "type": "string"
-              },
-              "public_base": {
-                "type": [
-                  "string",
-                  "null"
+              "storage_configured": {
+                "type": "object",
+                "description": "Boolean-only configuration presence flags. Raw bucket names, endpoint URLs, and public bases are intentionally redacted.",
+                "properties": {
+                  "bucket": {
+                    "type": "boolean"
+                  },
+                  "endpoint": {
+                    "type": "boolean"
+                  },
+                  "public_base": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "bucket",
+                  "endpoint",
+                  "public_base"
                 ]
               },
               "endpoint_has_bucket_path": {
                 "type": "boolean"
-              },
-              "recommended_endpoint": {
-                "type": "string"
               },
               "tls_verify": {
                 "type": "boolean"
@@ -26885,9 +27763,6 @@
                       "null"
                     ],
                     "properties": {
-                      "file_path": {
-                        "type": "string"
-                      },
                       "url_length": {
                         "type": "integer"
                       }
@@ -26909,10 +27784,8 @@
               }
             },
             "required": [
-              "bucket",
-              "endpoint",
+              "storage_configured",
               "endpoint_has_bucket_path",
-              "recommended_endpoint",
               "tls_verify",
               "checks",
               "errors",
@@ -28759,7 +29632,7 @@
           },
           "cf_turnstile_response": {
             "type": "string",
-            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端改用 client_type + pow_challenge + pow_nonce。"
+            "description": "Web 端必填的 Cloudflare Turnstile 验证令牌。移动端 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
           },
           "client_type": {
             "type": "string",
@@ -28793,28 +29666,57 @@
         ]
       },
       "CreateMySupportTicketMessageRequest": {
-        "allOf": [
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "已上传附件的 file_path 列表。"
+          },
+          "cf_turnstile_response": {
+            "type": "string",
+            "description": "Web 端用户回复时必填；移动端用户 PoW 通道必须同时提供 Header X-Client-Platform: mobile、X-Mobile-Client-Token（需匹配服务端 MOBILE_CLIENT_TOKEN）以及 body 的 client_type=mobile、pow_challenge、pow_nonce。"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "mobile"
+            ],
+            "description": "移动端请求标识。"
+          },
+          "pow_challenge": {
+            "type": "string",
+            "description": "移动端回复工单时使用的 proof-of-work challenge，scope 为 support.ticket.reply。"
+          },
+          "pow_nonce": {
+            "type": "string",
+            "description": "移动端 proof-of-work nonce。"
+          }
+        },
+        "anyOf": [
           {
-            "$ref": "#/components/schemas/CreateSupportTicketMessageRequest"
+            "required": [
+              "cf_turnstile_response"
+            ]
           },
           {
-            "type": "object",
-            "anyOf": [
-              {
-                "required": [
-                  "cf_turnstile_response"
-                ]
-              },
-              {
-                "required": [
-                  "client_type",
-                  "pow_challenge",
-                  "pow_nonce"
-                ]
-              }
+            "required": [
+              "client_type",
+              "pow_challenge",
+              "pow_nonce"
             ]
           }
-        ]
+        ],
+        "description": "当前用户追加工单回复请求。Web 端使用 Turnstile；移动端 PoW 通道必须同时提供移动端请求头与 PoW 字段。"
       },
       "CreateSupportTicketMessageRequest": {
         "type": "object",
@@ -28842,28 +29744,10 @@
               "resolved",
               "closed"
             ],
-            "description": "客服端回复可选。用于在同一请求中追加回复并设置最终工单状态，例如发送回复并标记为 resolved，避免先发 waiting_user 再发 workflow update。用户端回复会忽略该字段。"
-          },
-          "cf_turnstile_response": {
-            "type": "string",
-            "description": "Web 端用户回复时必填；客服端回复不需要提供。移动端用户回复改用 client_type + pow_challenge + pow_nonce。"
-          },
-          "client_type": {
-            "type": "string",
-            "enum": [
-              "mobile"
-            ],
-            "description": "移动端请求标识。"
-          },
-          "pow_challenge": {
-            "type": "string",
-            "description": "移动端回复工单时使用的 proof-of-work challenge，scope 为 support.ticket.reply。"
-          },
-          "pow_nonce": {
-            "type": "string",
-            "description": "移动端 proof-of-work nonce。"
+            "description": "客服端回复可选。用于在同一请求中追加回复并设置最终工单状态，例如发送回复并标记为 resolved，避免先发 waiting_user 再发 workflow update。"
           }
-        }
+        },
+        "description": "客服与管理员追加工单回复请求。该接口由客服权限中间件保护，不需要 Turnstile 或移动端 PoW 字段。"
       },
       "CreateSupportTicketFeedbackRequest": {
         "type": "object",
@@ -30252,8 +31136,60 @@
                   "null"
                 ],
                 "description": "Seconds remaining before token expiration"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "Mobile refresh token. Store only in SecureStore/Keychain/Keystore."
+              },
+              "refresh_token_type": {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "example": "bearer"
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "example": 2592000
+              },
+              "device_session": {
+                "$ref": "#/components/schemas/MobileDeviceSession"
               }
             }
+          }
+        }
+      },
+      "MobileDeviceSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "example": 42
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "ios-device-1"
+          },
+          "device_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "iOS device"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "ios"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }
