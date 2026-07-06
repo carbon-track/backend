@@ -149,12 +149,15 @@ class OpenAiClientAdapter implements StreamCapableLlmClientInterface
     }
 
     /**
-     * Some OpenAI-compatible gateways omit x-request-id, which breaks openai-php response hydration.
+     * Some OpenAI-compatible gateways return responses that break openai-php hydration.
      */
     private function shouldFallbackToRawHttp(\TypeError $exception): bool
     {
-        return str_contains($exception->getMessage(), 'MetaInformation::__construct()')
-            || str_contains($exception->getMessage(), 'MetaInformation::from()');
+        $message = $exception->getMessage();
+
+        return str_contains($message, 'MetaInformation::__construct()')
+            || str_contains($message, 'MetaInformation::from()')
+            || str_contains($message, 'array_map(): Argument #2 ($array) must be of type array, null given');
     }
 
     /**

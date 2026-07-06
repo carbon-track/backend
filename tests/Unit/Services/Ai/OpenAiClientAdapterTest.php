@@ -96,6 +96,80 @@ class OpenAiClientAdapterTest extends TestCase
         $this->assertSame($result['metadata']['request_id'], $result['id']);
     }
 
+    public function testCreateChatCompletionFallsBackToRawHttpWhenSdkHydrationMapsNullArray(): void
+    {
+        $transporter = new class implements TransporterContract {
+            public function requestObject(Payload $payload): TransporterResponse
+            {
+                throw new \TypeError('array_map(): Argument #2 ($array) must be of type array, null given');
+            }
+
+            public function requestContent(Payload $payload): string
+            {
+                throw new \LogicException('Not used in this test.');
+            }
+
+            public function requestStream(Payload $payload): ResponseInterface
+            {
+                throw new \LogicException('Not used in this test.');
+            }
+        };
+
+        $httpClient = new class implements HttpClientInterface {
+            public ?RequestInterface $request = null;
+
+            public function sendRequest(RequestInterface $request): ResponseInterface
+            {
+                $this->request = $request;
+
+                return new Psr7Response(
+                    200,
+                    [
+                        'Content-Type' => 'application/json',
+                        'x-request-id' => 'req-array-map-fallback',
+                    ],
+                    json_encode([
+                        'id' => 'chatcmpl-array-map-fallback',
+                        'object' => 'chat.completion',
+                        'created' => 123,
+                        'model' => 'gemini-flash-latest',
+                        'choices' => [[
+                            'index' => 0,
+                            'message' => [
+                                'role' => 'assistant',
+                                'content' => '{"activity_uuid":"bike","amount":5,"unit":"km"}',
+                            ],
+                            'finish_reason' => 'stop',
+                        ]],
+                        'usage' => null,
+                    ], JSON_THROW_ON_ERROR)
+                );
+            }
+        };
+
+        $payload = [
+            'model' => 'gemini-flash-latest',
+            'messages' => [
+                ['role' => 'user', 'content' => '上周四骑车骑了5公里'],
+            ],
+        ];
+
+        $adapter = new OpenAiClientAdapter(
+            new Client($transporter),
+            $httpClient,
+            'https://example.test/v1',
+            'secret-api-key'
+        );
+
+        $result = $adapter->createChatCompletion($payload);
+
+        $this->assertSame('https://example.test/v1/chat/completions', (string) $httpClient->request?->getUri());
+        $this->assertSame($payload, json_decode((string) $httpClient->request?->getBody(), true));
+        $this->assertSame('chatcmpl-array-map-fallback', $result['id']);
+        $this->assertSame('req-array-map-fallback', $result['metadata']['request_id']);
+        $this->assertNull($result['usage']);
+    }
+
     public function testCreateChatCompletionRethrowsUnrelatedTypeErrors(): void
     {
         $transporter = new class implements TransporterContract {
