@@ -2082,6 +2082,68 @@ class SupportTicketServiceTest extends TestCase
         $this->assertNull($ticketRow->closed_at);
     }
 
+    public function testUpdateTicketFromSupportClearsStaleClosedAtWhenReopened(): void
+    {
+        $now = date('Y-m-d H:i:s');
+        $closedAt = '2026-01-12 09:30:00';
+        $requester = User::create([
+            'username' => 'requester',
+            'email' => 'requester@example.com',
+            'role' => 'user',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $supportUser = User::create([
+            'username' => 'support-a',
+            'email' => 'support-a@example.com',
+            'role' => 'support',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        self::$capsule->table('support_tickets')->insert([
+            'id' => 73,
+            'user_id' => (int) $requester->id,
+            'subject' => 'Stale closed marker',
+            'category' => 'account',
+            'status' => 'open',
+            'priority' => 'normal',
+            'assigned_to' => (int) $supportUser->id,
+            'sla_status' => 'pending',
+            'closed_at' => $closedAt,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+
+        $service = new SupportTicketService(
+            self::$capsule->getConnection()->getPdo(),
+            $this->createMock(LoggerInterface::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(ErrorLogService::class),
+            $this->createMock(FileMetadataService::class)
+        );
+
+        $ticketBeforeUpdate = self::$capsule->table('support_tickets')->where('id', 73)->first();
+
+        $this->assertSame('open', $ticketBeforeUpdate->status);
+        $this->assertSame('pending', $ticketBeforeUpdate->sla_status);
+        $this->assertNull($ticketBeforeUpdate->resolved_at);
+        $this->assertSame($closedAt, $ticketBeforeUpdate->closed_at);
+
+        $result = $service->updateTicketFromSupport(
+            ['id' => (int) $supportUser->id, 'role' => 'support', 'is_support' => true, 'username' => 'support-a'],
+            73,
+            ['status' => 'in_progress']
+        );
+
+        $ticketRow = self::$capsule->table('support_tickets')->where('id', 73)->first();
+
+        $this->assertSame('in_progress', $result['status']);
+        $this->assertSame('in_progress', $ticketRow->status);
+        $this->assertSame('pending', $ticketRow->sla_status);
+        $this->assertNull($ticketRow->closed_at);
+    }
+
     public function testUpdateTicketFromSupportPreservesTerminalTimestamps(): void
     {
         $now = date('Y-m-d H:i:s');
