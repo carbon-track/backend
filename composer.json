@@ -23,6 +23,7 @@
         "selective/basepath": "^2.0",
         "slim/psr7": "^1.0",
         "slim/slim": "^4.15.2",
+        "symfony/filesystem": "^7.4",
         "tuupola/cors-middleware": "^1.0",
         "vlucas/phpdotenv": "^5.0"
     },

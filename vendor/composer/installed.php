@@ -3,7 +3,7 @@
         'name' => 'carbontrack/backend',
         'pretty_version' => 'dev-dev',
         'version' => 'dev-dev',
-        'reference' => '16d4f3835303688375128c98da50488306c73971',
+        'reference' => '70de495c3312afdafcedfa70d5aef67fb02c19fb',
         'type' => 'project',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -40,7 +40,7 @@
         'carbontrack/backend' => array(
             'pretty_version' => 'dev-dev',
             'version' => 'dev-dev',
-            'reference' => '16d4f3835303688375128c98da50488306c73971',
+            'reference' => '70de495c3312afdafcedfa70d5aef67fb02c19fb',
             'type' => 'project',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
