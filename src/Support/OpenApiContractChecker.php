@@ -313,8 +313,8 @@ final class OpenApiContractChecker
                 continue;
             }
 
-            // nosemgrep: php.lang.security.unlink-use.unlink-use
-            @unlink($realPath);
+            // $realPath is a realpath-verified tempnam product beneath the OS temp directory.
+            @unlink($realPath); // nosemgrep: php.lang.security.unlink-use.unlink-use
         }
 
         return true;
