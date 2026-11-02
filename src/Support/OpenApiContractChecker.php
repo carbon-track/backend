@@ -9,6 +9,8 @@ use DI\Container;
 use RuntimeException;
 use Slim\App;
 use Slim\Factory\AppFactory;
+use Symfony\Component\Filesystem\Exception\IOExceptionInterface;
+use Symfony\Component\Filesystem\Filesystem;
 
 final class OpenApiContractChecker
 {
@@ -292,6 +294,7 @@ final class OpenApiContractChecker
             return false;
         }
 
+        $filesystem = new Filesystem();
         $allowedPaths = [];
         foreach ([$databasePath, $databasePath . '-journal', $databasePath . '-wal', $databasePath . '-shm'] as $path) {
             $allowedPaths[$path] = true;
@@ -308,13 +311,15 @@ final class OpenApiContractChecker
             }
 
             $isTempChild = str_starts_with($realPath, $tempRoot . DIRECTORY_SEPARATOR);
-            $isContractFile = str_starts_with(basename($realPath), 'carbontrack_openapi_contract_');
-            if (!$isTempChild || !$isContractFile || $realPath !== $path) {
+            if (!$isTempChild || $realPath !== $path) {
                 continue;
             }
 
-            // nosemgrep: php.lang.security.unlink-use.unlink-use
-            @unlink($realPath);
+            try {
+                $filesystem->remove($realPath);
+            } catch (IOExceptionInterface) {
+                return false;
+            }
         }
 
         return true;

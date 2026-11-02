@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit;
 
 use CarbonTrack\Support\OpenApiContractChecker;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Filesystem\Filesystem;
 
 final class OpenApiContractCheckerTest extends TestCase
 {
@@ -253,6 +254,38 @@ final class OpenApiContractCheckerTest extends TestCase
                     putenv($key);
                 }
             }
+        }
+    }
+
+    public function testTemporaryDatabaseCleanupOnlyDeletesContractFiles(): void
+    {
+        $filesystem = new Filesystem();
+        $databasePath = tempnam(sys_get_temp_dir(), 'carbontrack_openapi_contract_');
+        $unrelatedPath = tempnam(sys_get_temp_dir(), 'carbontrack_unrelated_');
+
+        try {
+            if (!is_string($databasePath) || !is_string($unrelatedPath)) {
+                self::markTestSkipped('Unable to create temporary files for cleanup coverage.');
+            }
+
+            $walPath = $databasePath . '-wal';
+            $filesystem->dumpFile($walPath, 'wal');
+
+            $checker = new OpenApiContractChecker(dirname(__DIR__, 2));
+            $cleanup = new \ReflectionMethod(OpenApiContractChecker::class, 'removeTemporaryDatabaseFiles');
+
+            self::assertTrue($cleanup->invoke($checker, $databasePath));
+            self::assertFileDoesNotExist($databasePath);
+            self::assertFileDoesNotExist($walPath);
+            self::assertFileExists($unrelatedPath);
+        } finally {
+            $filesystem->remove(array_filter([
+                $databasePath,
+                is_string($databasePath) ? $databasePath . '-journal' : null,
+                is_string($databasePath) ? $databasePath . '-wal' : null,
+                is_string($databasePath) ? $databasePath . '-shm' : null,
+                $unrelatedPath,
+            ], 'is_string'));
         }
     }
 
