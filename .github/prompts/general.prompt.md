@@ -8,6 +8,8 @@ Requirements:
 你应该对MCP服务器和其它工具加以利用，优化效率和代码质量。
 创建 PR 后，以及向已有 PR 推送任何新增 commit 后，必须等待 coding-agent review 意见后再视为可合并。
 可接受 Copilot code review 或仓库配置的等效 Codex/code-review agent。
+- 不得触发或请求 `/gemini review`；以 Copilot/code-agent 意见与仓库必需检查为准。
+- 修改任一已跟踪的开发规则 Markdown 文件后，须将对应规则同步到仓库其余所有已跟踪的开发规则 Markdown 文件。
 若自动 review 未触发，应通过可用的 GitHub 工具或 UI 手动请求 Copilot/code-agent review，并等待结果。
 对可执行的 review 意见应追加 commit 修复，并 resolve 对应 review thread。
 每次向 PR 推送新 commit 后，都应重复等待或请求 review。
