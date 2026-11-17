@@ -19,6 +19,8 @@ use Monolog\Logger;
 
 class AvatarController
 {
+    use LogsClientExceptions;
+
     private const ERR_INVALID_REQUEST_BODY = 'Request body must be a JSON object';
 
     private Avatar $avatarModel;
@@ -58,19 +60,17 @@ class AvatarController
             $includeInactive = !empty($queryParams['include_inactive'])
                 && filter_var($queryParams['include_inactive'], FILTER_VALIDATE_BOOLEAN);
 
-            // 检查是否为管理员（容错：AuthService 可能在匿名请求时抛出异常）
+            // 检查是否为管理员。身份查询失败时仍可返回公开头像。
             $user = null;
             $isAdmin = false;
             try {
                 $user = $this->authService->getCurrentUser($request);
                 $isAdmin = $user && !empty($user['is_admin']);
             } catch (\Throwable $authEx) {
-                // 记日志但不影响公开接口返回
-                if (isset($this->logger)) {
-                    $this->logger->debug('Anonymous avatar listing (auth not resolved)', [
-                        'error' => $authEx->getMessage()
-                    ]);
-                }
+                $this->logException($authEx, $request, 'Avatar listing authentication lookup failed');
+                $this->logger?->debug('Anonymous avatar listing (auth not resolved)', [
+                    'error' => $authEx->getMessage(),
+                ]);
             }
 
             if ($includeInactive && !$isAdmin) {
@@ -82,7 +82,7 @@ class AvatarController
             }
 
             $avatars = $this->avatarModel->getAvailableAvatars($category, $includeInactive && $isAdmin);
-            $avatars = array_map([$this, 'formatAvatar'], array_values($avatars));
+            $avatars = array_map(fn(array $avatar): array => $this->formatAvatar($request, $avatar), array_values($avatars));
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -161,7 +161,7 @@ class AvatarController
                 ], 404);
             }
 
-            $avatar = $this->formatAvatar($avatar);
+            $avatar = $this->formatAvatar($request, $avatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -263,7 +263,7 @@ class AvatarController
             // 获取创建的头像信息
             $createdAvatar = $this->avatarModel->getAvatarById($avatarId);
 
-            $createdAvatar = $this->formatAvatar($createdAvatar);
+            $createdAvatar = $this->formatAvatar($request, $createdAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -272,6 +272,7 @@ class AvatarController
             ], 201);
 
         } catch (\InvalidArgumentException $e) {
+            $this->logClientException($e, $request, 400, __METHOD__, $user ?? null, 'avatar_management');
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -377,6 +378,7 @@ class AvatarController
                     $affectedUsers = $reassignment['users'] ?? [];
                     $fallbackAvatar = $reassignment['fallback_avatar'] ?? null;
                 } catch (AvatarFallbackUnavailableException $e) {
+                    $this->logClientException($e, $request, 409, __METHOD__, $user ?? null, 'avatar_management');
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => $e->getMessage(),
@@ -454,7 +456,7 @@ class AvatarController
             // 获取更新后的头像信息
             $updatedAvatar = $this->avatarModel->getAvatarById($avatarId);
 
-            $updatedAvatar = $this->formatAvatar($updatedAvatar);
+            $updatedAvatar = $this->formatAvatar($request, $updatedAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -463,6 +465,7 @@ class AvatarController
             ]);
 
         } catch (\InvalidArgumentException $e) {
+            $this->logClientException($e, $request, 400, __METHOD__, $user ?? null, 'avatar_management');
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -615,7 +618,7 @@ class AvatarController
             // 获取恢复后的头像信息
             $restoredAvatar = $this->avatarModel->getAvatarById($avatarId);
 
-            $restoredAvatar = $this->formatAvatar($restoredAvatar);
+            $restoredAvatar = $this->formatAvatar($request, $restoredAvatar);
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -917,7 +920,7 @@ class AvatarController
     /**
      * Enrich avatar payload with derived URLs for frontend consumption.
      */
-    private function formatAvatar(array $avatar): array
+    private function formatAvatar(Request $request, array $avatar): array
     {
         foreach (['id', 'sort_order'] as $field) {
             if (array_key_exists($field, $avatar) && $avatar[$field] !== null) {
@@ -941,22 +944,12 @@ class AvatarController
                 try {
                     $avatar['icon_url'] = $this->r2Service->getPublicUrl($normalizedPath);
                 } catch (\Throwable $e) {
-                    if ($this->logger) {
-                        $this->logger->warning('Failed to build avatar icon public URL', [
-                            'error' => $e->getMessage(),
-                            'file_path' => $normalizedPath
-                        ]);
-                    }
+                    $this->logException($e, $request, 'Failed to build avatar icon public URL', ['file_path' => $normalizedPath]);
                 }
                 try {
                     $avatar['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($normalizedPath, 600);
                 } catch (\Throwable $e) {
-                    if ($this->logger) {
-                        $this->logger->warning('Failed to build avatar icon presigned URL', [
-                            'error' => $e->getMessage(),
-                            'file_path' => $normalizedPath
-                        ]);
-                    }
+                    $this->logException($e, $request, 'Failed to build avatar icon presigned URL', ['file_path' => $normalizedPath]);
                 }
             }
             if (!isset($avatar['image_url']) || !$avatar['image_url']) {
@@ -974,17 +967,24 @@ class AvatarController
                 try {
                     $avatar['thumbnail_url'] = $this->r2Service->getPublicUrl($normalizedThumb);
                 } catch (\Throwable $e) {
-                    if ($this->logger) {
-                        $this->logger->warning('Failed to build avatar thumbnail URL', [
-                            'error' => $e->getMessage(),
-                            'file_path' => $normalizedThumb
-                        ]);
-                    }
+                    $this->logException($e, $request, 'Failed to build avatar thumbnail URL', ['file_path' => $normalizedThumb]);
                 }
             }
         }
 
         return $avatar;
+    }
+
+    private function logException(\Throwable $exception, Request $request, string $message, array $context = []): void
+    {
+        try {
+            $this->errorLogService?->logException($exception, $request, $context + ['context_message' => $message]);
+        } catch (\Throwable $ignore) {
+            $this->logger?->warning('Could not persist the avatar request exception', [
+                'error' => $ignore->getMessage(),
+            ]);
+        }
+        $this->logger?->warning($message, $context + ['error' => $exception->getMessage()]);
     }
 
     /**

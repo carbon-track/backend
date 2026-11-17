@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\EmailService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
@@ -27,7 +28,8 @@ class MessageControllerTest extends TestCase
         AuditLogService $audit,
         AuthService $auth,
         ?EmailService $emailService = null,
-        ?UserProfileViewService $userProfileViewService = null
+        ?UserProfileViewService $userProfileViewService = null,
+        ?ErrorLogService $errorLogService = null
     ): MessageController {
         return new MessageController(
             $pdo,
@@ -36,7 +38,7 @@ class MessageControllerTest extends TestCase
             $auth,
             $userProfileViewService ?? $this->makeUserProfileViewService(),
             $emailService,
-            null
+            $errorLogService
         );
     }
 
@@ -980,7 +982,41 @@ class MessageControllerTest extends TestCase
         $this->assertSame('US-UM-81', $result['records'][10]['location']);
     }
 
-    public function testGetBroadcastHistoryReturnsAggregatedData(): void
+    public function testBroadcastHistoryReportsQueryFailuresWithHistoryAction(): void
+    {
+        $pdo = $this->createMock(\PDO::class);
+        $pdo->expects($this->once())->method('query')->willThrowException(new \PDOException('count failed'));
+        $pdo->expects($this->once())->method('prepare')->willThrowException(new \PDOException('list failed'));
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
+        $auth->method('isAdminUser')->willReturn(true);
+        $request = makeRequest('GET', '/api/v1/admin/messages/broadcasts');
+        $entries = [];
+        $log = $this->createMock(ErrorLogService::class);
+        $log->method('logError')->willReturnCallback(
+            static function (string $type, string $message, $request, array $context) use (&$entries): int {
+                $entries[] = [$type, $message, $context['action'], $context['error']];
+                return 1;
+            }
+        );
+        $controller = $this->makeController(
+            $pdo,
+            $this->createMock(MessageService::class),
+            $this->createMock(AuditLogService::class),
+            $auth,
+            errorLogService: $log
+        );
+        $response = $controller->getBroadcastHistory($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame([
+            ['broadcast_error', 'Failed to count broadcast history', 'getBroadcastHistory', 'count failed'],
+            ['broadcast_error', 'Failed to load broadcast history', 'getBroadcastHistory', 'list failed'],
+        ], $entries);
+    }
+
+    /** @dataProvider broadcastRecipientQueryOutcomes */
+    public function testGetBroadcastHistoryReturnsAggregatedData(bool $recipientLookupFails): void
     {
         $pdo = new \PDO('sqlite::memory:');
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
@@ -1091,8 +1127,23 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 99, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
         $request = makeRequest('GET', '/admin/messages/broadcasts');
+        $errorLog = $this->createMock(ErrorLogService::class);
+        if ($recipientLookupFails) {
+            $pdo->exec('ALTER TABLE messages RENAME TO archived_messages');
+            $errorLog->expects($this->once())->method('logException')->with(
+                $this->isInstanceOf(\PDOException::class),
+                $request,
+                [
+                    'controller' => 'MessageController',
+                    'action' => 'getBroadcastHistory',
+                    'context_message' => 'Failed to load broadcast recipients',
+                ]
+            );
+        } else {
+            $errorLog->expects($this->never())->method('logException');
+        }
+        $controller = $this->makeController($pdo, $svc, $audit, $auth, errorLogService: $errorLog);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getBroadcastHistory($request, $response);
 
@@ -1103,6 +1154,13 @@ class MessageControllerTest extends TestCase
 
         $item = $json['data'][0];
         $this->assertSame('Hello world', $item['title']);
+        if ($recipientLookupFails) {
+            $this->assertSame([], $item['read_users']);
+            $this->assertSame([], $item['unread_users']);
+            $this->assertSame(0, $item['read_count']);
+            $this->assertSame(0, $item['unread_count']);
+            return;
+        }
         $this->assertSame(1, $item['read_count']);
         $this->assertSame(1, $item['unread_count']);
         $this->assertSame([7], $item['invalid_user_ids']);
@@ -1126,6 +1184,14 @@ class MessageControllerTest extends TestCase
         $this->assertFalse($item['read_users'][0]['is_admin']);
         $this->assertSame('22222222-2222-4222-8222-222222222222', $item['unread_users'][0]['user_id']);
         $this->assertSame(2, $item['unread_users'][0]['legacy_user_id']);
+    }
+
+    public static function broadcastRecipientQueryOutcomes(): array
+    {
+        return [
+            'recipients available' => [false],
+            'recipient query fails' => [true],
+        ];
     }
 
     public function testFlushBroadcastQueueMarksQueuedAsSentWithoutForce(): void

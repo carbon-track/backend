@@ -39,8 +39,8 @@ class BadgeController
             }
 
             $badges = $this->badgeService->listBadges($includeInactive);
-            $data = array_map(function ($badge) {
-                return $this->formatBadge($badge->toArray());
+            $data = array_map(function ($badge) use ($request) {
+                return $this->formatBadge($request, $badge->toArray());
             }, $badges);
 
             return $this->json($response, ['success' => true, 'data' => $data]);
@@ -62,11 +62,11 @@ class BadgeController
             $includeRevoked = !empty($query['include_revoked']) && filter_var($query['include_revoked'], FILTER_VALIDATE_BOOLEAN);
             $records = $this->badgeService->getUserBadges((int) $user['id'], $includeRevoked);
 
-            $data = array_map(function ($entry) {
+            $data = array_map(function ($entry) use ($request) {
                 $badge = $entry['badge'] ?? [];
                 $userBadge = $entry['user_badge'] ?? [];
                 return [
-                    'badge' => $badge ? $this->formatBadge($badge) : null,
+                    'badge' => $badge ? $this->formatBadge($request, $badge) : null,
                     'user_badge' => $userBadge,
                 ];
             }, $records);
@@ -116,22 +116,21 @@ class BadgeController
         }
     }
 
-    private function formatBadge(array $badge): array
+    private function formatBadge(Request $request, array $badge): array
     {
         if ($this->r2Service && !empty($badge['icon_path'])) {
             try {
                 $badge['icon_url'] = $this->r2Service->getPublicUrl($badge['icon_path']);
                 $badge['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($badge['icon_path'], 600);
             } catch (\Throwable $e) {
-                if ($this->logger) {
-                    $this->logger->warning('Failed to build badge icon URLs', ['error' => $e->getMessage(), 'icon_path' => $badge['icon_path']]);
-                }
+                $this->logError($e, $request, 'badge_icon_url_failed');
             }
         }
         if ($this->r2Service && !empty($badge['icon_thumbnail_path'])) {
             try {
                 $badge['icon_thumbnail_url'] = $this->r2Service->getPublicUrl($badge['icon_thumbnail_path']);
-            } catch (\Throwable $ignore) {
+            } catch (\Throwable $e) {
+                $this->logError($e, $request, 'badge_thumbnail_url_failed');
             }
         }
         return $badge;

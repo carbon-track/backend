@@ -11,6 +11,7 @@ use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\SupportRoutingEngineService;
+use CarbonTrack\Services\SupportOperationException;
 use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Services\TurnstileService;
 use PHPUnit\Framework\TestCase;
@@ -39,14 +40,15 @@ class SupportTicketControllerTest extends TestCase
         ?SupportRoutingEngineService $supportRoutingEngineService = null,
         ?AuditLogService $auditLogService = null,
         ?CronSchedulerService $cronSchedulerService = null,
-        ?ProofOfWorkService $proofOfWorkService = null
+        ?ProofOfWorkService $proofOfWorkService = null,
+        ?ErrorLogService $errorLogService = null
     ): SupportTicketController {
         return new SupportTicketController(
             $supportTicketService ?? $this->createMock(SupportTicketService::class),
             $authService ?? $this->createMock(AuthService::class),
             $turnstileService ?? $this->createMock(TurnstileService::class),
             $this->createMock(LoggerInterface::class),
-            $this->createMock(ErrorLogService::class),
+            $errorLogService ?? $this->createMock(ErrorLogService::class),
             $supportRoutingEngineService,
             $auditLogService,
             $cronSchedulerService,
@@ -271,6 +273,41 @@ class SupportTicketControllerTest extends TestCase
         $this->assertSame(401, $response->getStatusCode());
     }
 
+    public function testMissingUserTicketRecordsFailureAndReturns404(): void
+    {
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 42, 'role' => 'user']);
+        $failure = new SupportOperationException('Ticket not found');
+        $tickets = $this->createMock(SupportTicketService::class);
+        $tickets->method('getTicketDetailForUser')->with(42, 7)->willThrowException($failure);
+        $errorEntries = [];
+        $errors = $this->createMock(ErrorLogService::class);
+        $errors->method('logException')->willReturnCallback(
+            static function (\Throwable $exception, $request, array $context) use (&$errorEntries): int {
+                $errorEntries[] = [$exception, $context['response_code']];
+                return 1;
+            }
+        );
+        $auditEntries = [];
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('log')->willReturnCallback(static function (array $entry) use (&$auditEntries): bool {
+            $auditEntries[] = [$entry['user_id'], $entry['status'], $entry['response_code'], $entry['data']['operation']];
+            return true;
+        });
+        $controller = $this->makeController($tickets, $auth, auditLogService: $audit, errorLogService: $errors);
+
+        $response = $controller->getMyTicket(
+            makeRequest('GET', '/api/v1/tickets/7'),
+            new \Slim\Psr7\Response(),
+            ['ticketId' => '7']
+        );
+
+        $this->assertSame(404, $response->getStatusCode());
+        $this->assertSame('TICKET_NOT_FOUND', json_decode((string) $response->getBody(), true)['code']);
+        $this->assertSame([[$failure, 404]], $errorEntries);
+        $this->assertSame([[42, 'failed', 404, 'getMyTicket']], $auditEntries);
+    }
+
     public function testGetSupportTicketReturnsNotFound(): void
     {
         $auth = $this->createMock(AuthService::class);
@@ -280,7 +317,7 @@ class SupportTicketControllerTest extends TestCase
         $service->expects($this->once())
             ->method('getTicketDetailForSupport')
             ->with(['id' => 1, 'role' => 'support', 'is_support' => true], 42)
-            ->willThrowException(new \RuntimeException('Ticket not found'));
+            ->willThrowException(new SupportOperationException('Ticket not found'));
 
         $controller = $this->makeController($service, $auth);
         $response = $controller->getSupportTicket(

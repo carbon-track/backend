@@ -257,7 +257,8 @@ class CheckinController
                 if ($db->inTransaction()) {
                     $db->commit();
                 }
-            } catch (\Throwable $e) {
+            } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Roll back before propagating the exception to the error-logging handler.
                 if ($db->inTransaction()) {
                     $db->rollBack();
                 }

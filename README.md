@@ -26,6 +26,7 @@
 为减少前端环境切换或历史代码中的路径差异导致的 404，本服务在保留标准前缀 `/api/v1/*` 的同时，提供了关键接口的 `/api/*` 兼容别名：
 
 - 认证：`/api/auth/*`（与 `/api/v1/auth/*` 等价）
+- 消息：`/api/messages/*`（与 `/api/v1/messages/*` 等价，如 `/api/messages/unread-count`）
 - 学校与班级：
   - `GET /api/schools`
   - `POST /api/schools`
@@ -36,13 +37,7 @@
 
 ## system_logs 表迁移说明
 
-如果你拉取代码后访问 `/api/v1/admin/system-logs` 返回 500，且数据库还没有 `system_logs` 表，请先创建该表：
-
-MySQL / MariaDB:
-  执行 `database/migrations/create_system_logs_table.sql`
-
-SQLite (本地 `test.db` 或测试环境):
-  执行 `database/migrations/create_system_logs_table_sqlite.sql`
+如果你拉取代码后访问 `/api/v1/admin/system-logs` 返回 500，且数据库还没有 `system_logs` 表，说明你的库是很旧的版本：`system_logs` 表由 `database/localhost.sql`（第 1099 行起）创建，`database/migrations/` 里并没有单独的建表文件——不存在 `create_system_logs_table.sql` 或 `create_system_logs_table_sqlite.sql`，不要按旧说明去找这两个文件。补救办法是从 `localhost.sql` 里取出 `system_logs` 的建表语句单独执行；后续对这张表的变更见 `database/migrations/` 里以 `system_logs` 命名的迁移（如 `20251229_expand_system_logs_request_id.sql`）。
 
 创建完成后，新的请求会被 `RequestLoggingMiddleware` 写入 `system_logs`。首次创建后表是空的，需要再访问几个接口再查看列表。
 

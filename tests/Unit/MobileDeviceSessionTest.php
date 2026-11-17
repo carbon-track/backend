@@ -52,6 +52,8 @@ final class MobileDeviceSessionTest extends TestCase
                 status TEXT,
                 token_version INTEGER NOT NULL DEFAULT 0,
                 lastlgn TEXT,
+                reset_token TEXT,
+                reset_token_expires_at TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 deleted_at TEXT
@@ -259,6 +261,56 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertSame('INVALID_REFRESH_TOKEN', $refreshPayload['code']);
     }
 
+    /** @dataProvider passwordRotationActions */
+    public function testPasswordRotationPersistsCredentialRevocationFailures(string $action): void
+    {
+        $this->seedUser();
+        $newPassword = 'NewPassword123!';
+        if ($action === 'password_reset') {
+            $this->pdo->exec("UPDATE users SET reset_token = 'test-reset-token', reset_token_expires_at = '2099-01-01'");
+            $request = makeRequest('POST', '/api/v1/auth/reset-password', [
+                'token' => 'test-reset-token',
+                'password' => $newPassword,
+                'confirm_password' => $newPassword,
+            ]);
+            $handler = 'resetPassword';
+        } else {
+            $loginPayload = $this->loginMobile();
+            $request = makeRequest('POST', '/api/v1/auth/change-password', [
+                'current_password' => 'Password123!',
+                'new_password' => $newPassword,
+                'confirm_password' => $newPassword,
+            ], null, ['Authorization' => ['Bearer ' . $loginPayload['data']['token']]]);
+            $handler = 'changePassword';
+        }
+
+        $failure = new \RuntimeException('session store unavailable');
+        $sessions = $this->createMock(MobileDeviceSessionService::class);
+        $sessions->expects($this->once())->method('revokeAllForUser')->with(1, $action)->willThrowException($failure);
+        $logged = [];
+        $log = $this->createMock(ErrorLogService::class);
+        $log->method('logException')->willReturnCallback(
+            static function (\Throwable $exception, $request, array $context) use (&$logged): int {
+                $logged[] = [$exception, $context['user_id'], $context['action']];
+                return 1;
+            }
+        );
+
+        $response = $this->makeController($log, $sessions)->$handler($request, new Response());
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertTrue(password_verify($newPassword, $this->pdo->query('SELECT password_hash FROM users')->fetchColumn()));
+        $this->assertSame([[$failure, 1, $action]], $logged);
+    }
+
+    public static function passwordRotationActions(): array
+    {
+        return [
+            'reset' => ['password_reset'],
+            'change' => ['password_change'],
+        ];
+    }
+
     public function testRevokeAllForUserOnlyRevokesActiveSessionsForTargetUser(): void
     {
         $this->seedUser();
@@ -317,8 +369,10 @@ final class MobileDeviceSessionTest extends TestCase
         ]);
     }
 
-    private function makeController(): AuthController
-    {
+    private function makeController(
+        ?ErrorLogService $errorLogService = null,
+        ?MobileDeviceSessionService $mobileDeviceSessionService = null
+    ): AuthController {
         $audit = $this->createMock(AuditLogService::class);
         $audit->method('log')->willReturn(true);
         $audit->method('logAuthOperation')->willReturn(true);
@@ -343,11 +397,12 @@ final class MobileDeviceSessionTest extends TestCase
             $this->createMock(CloudflareR2Service::class),
             $logger,
             $this->pdo,
-            $this->createMock(ErrorLogService::class),
+            $errorLogService ?? $this->createMock(ErrorLogService::class),
             new RegionService(null, null),
             null,
             null,
-            $proofOfWork
+            $proofOfWork,
+            $mobileDeviceSessionService
         );
     }
 }

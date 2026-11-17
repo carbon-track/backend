@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\Query\Grammars\MySqlGrammar;
 use Illuminate\Database\QueryException;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\SchoolController;
@@ -17,12 +20,57 @@ class SchoolControllerTest extends TestCase
         $this->assertTrue(class_exists(SchoolController::class));
     }
 
-    public function testIndexReturnsSchoolsListShape(): void
+    public function testListsAndCreatesSchoolsOnLegacySchemaWhileLoggingMissingColumn(): void
     {
-        // 由于 SchoolController 使用 Eloquent 静态方法，这里只验证方法存在与基本返回结构约束，不直接调用 Eloquent
-        $this->assertTrue(method_exists(SchoolController::class, 'index'));
-        $this->assertTrue(method_exists(SchoolController::class, 'adminIndex'));
-        $this->assertTrue(method_exists(SchoolController::class, 'stats'));
+        $capsule = new Capsule();
+        $capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+        $connection = $capsule->getConnection();
+        // Backticks enforce identifier resolution in SQLite for the missing sort_order column.
+        $connection->setQueryGrammar(new MySqlGrammar());
+        $pdo = $connection->getPdo();
+        $pdo->exec('CREATE TABLE schools (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, location TEXT, is_active INTEGER,
+            created_at TEXT, updated_at TEXT, deleted_at TEXT
+        )');
+        $pdo->exec("INSERT INTO schools (name, is_active) VALUES ('Zeta School', 1), ('Alpha School', 1)");
+
+        $list = makeRequest('GET', '/api/v1/schools');
+        $create = makeRequest('POST', '/api/v1/schools', ['name' => 'Legacy School']);
+        $errors = $this->createMock(ErrorLogService::class);
+        $errors->expects($this->exactly(2))->method('logException')->withConsecutive(
+            [
+                $this->isInstanceOf(QueryException::class),
+                $list,
+                ['context_message' => 'Retrying school ordering by name after query failure'],
+            ],
+            [
+                $this->isInstanceOf(QueryException::class),
+                $create,
+                ['context_message' => 'Retrying school insert without sort_order'],
+            ]
+        );
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log');
+        $controller = new SchoolController($audit, $errors, $pdo);
+
+        $previousResolver = School::getConnectionResolver();
+        School::setConnectionResolver($capsule->getDatabaseManager());
+        try {
+            $listed = $controller->index($list, new \Slim\Psr7\Response(), []);
+            $created = $controller->createOrFetch($create, new \Slim\Psr7\Response(), []);
+        } finally {
+            if ($previousResolver === null) {
+                School::unsetConnectionResolver();
+            } else {
+                School::setConnectionResolver($previousResolver);
+            }
+        }
+
+        $this->assertSame(200, $listed->getStatusCode());
+        $schools = json_decode((string)$listed->getBody(), true)['data']['schools'];
+        $this->assertSame(['Alpha School', 'Zeta School'], array_column($schools, 'name'));
+        $this->assertSame(201, $created->getStatusCode());
+        $this->assertSame('Legacy School', json_decode((string)$created->getBody(), true)['data']['school']['name']);
     }
 
     public function testSanitizeSchoolPayloadNormalizesEmptyStringNumericFields(): void

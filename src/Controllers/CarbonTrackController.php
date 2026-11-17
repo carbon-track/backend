@@ -249,6 +249,7 @@ class CarbonTrackController
             try {
                 $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], $amountValue, $activity);
             } catch (\Throwable $e) {
+                $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord carbon calculation failed: ' . $e->getMessage());
                 return $this->json($response, ['error' => 'calc_failed', 'message' => $e->getMessage()], 500);
             }
             $carbonSaved = $calc['carbon_savings'] ?? 0;
@@ -429,7 +430,8 @@ class CarbonTrackController
                     $this->db->commit();
                     $recordCommitted = true;
                 }
-            } catch (\Throwable $e) {
+            } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Clean up the transaction and uploaded files before propagating the failure.
                 if ($isMakeup && $this->db->inTransaction()) {
                     $this->db->rollBack();
                 }
@@ -484,8 +486,8 @@ class CarbonTrackController
                     $streakData = $this->checkinService->getUserStreakStats((int) $user['id']);
                     $checkinStats['current_streak'] = (int)($streakData['current_streak_days'] ?? 0);
                     $checkinStats['longest_streak'] = (int)($streakData['longest_streak_days'] ?? 0);
-                } catch (\Throwable $e) {
-                     // 忽略错误，以免影响主要返回
+                } catch (\Throwable $exception) {
+                    $this->logControllerException($exception, $request, 'Failed to load check-in streak after submission');
                 }
             }
 
@@ -524,8 +526,8 @@ class CarbonTrackController
                     'current_month' => $currentMonth
                 ]);
                 $monthlyAchievements = $achievementsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            } catch (\Throwable $e) {
-                // ignore achievement errors in non-MySQL test environments
+            } catch (\Throwable $exception) {
+                $this->logControllerException($exception, $request, 'Failed to load monthly achievements after submission');
             }
 
             // 规范化返回的 images（public_url -> url）
@@ -559,6 +561,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
+            $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord failed: ' . $e->getMessage());
             return $this->json($response, ['error' => self::ERR_INTERNAL, 'exception' => $e->getMessage(), 'trace' => $e->getFile().':'.$e->getLine()], 500);
         }
     }
@@ -1462,7 +1465,8 @@ class CarbonTrackController
             if ($startedTransaction) {
                 $this->db->commit();
             }
-        } catch (\Throwable $e) {
+        } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // Roll back the transaction before propagating the failure to the caller.
             if ($startedTransaction) {
                 try {
                     if ($this->db->inTransaction()) {
@@ -1890,7 +1894,8 @@ class CarbonTrackController
                 $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
                 $this->errorLogService->logException($exception, $request, $extra);
                 return;
-            } catch (\Throwable $loggingError) {
+            } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Use the emergency log if ErrorLogService itself fails.
                 error_log(self::ERRLOG_PREFIX . $loggingError->getMessage());
             }
         }

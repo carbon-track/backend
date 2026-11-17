@@ -17,14 +17,15 @@ class AdminCronControllerTest extends TestCase
     private function makeController(
         ?CronSchedulerService $scheduler = null,
         ?AuthService $authService = null,
-        ?AuditLogService $audit = null
+        ?AuditLogService $audit = null,
+        ?ErrorLogService $errorLog = null
     ): AdminCronController {
         return new AdminCronController(
             $scheduler ?? $this->createMock(CronSchedulerService::class),
             $authService ?? $this->createMock(AuthService::class),
             $audit ?? $this->createMock(AuditLogService::class),
             $this->createMock(LoggerInterface::class),
-            $this->createMock(ErrorLogService::class)
+            $errorLog ?? $this->createMock(ErrorLogService::class)
         );
     }
 
@@ -55,13 +56,28 @@ class AdminCronControllerTest extends TestCase
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin', 'is_admin' => true]);
 
+        $exception = new \InvalidArgumentException('interval_minutes must be between 1 and 1440');
         $scheduler = $this->createMock(CronSchedulerService::class);
         $scheduler->expects($this->once())
             ->method('updateTask')
             ->with('support_sla_sweep', ['interval_minutes' => 0])
-            ->willThrowException(new \InvalidArgumentException('interval_minutes must be between 1 and 1440'));
+            ->willThrowException($exception);
 
-        $controller = $this->makeController($scheduler, $auth, $this->createMock(AuditLogService::class));
+        $errors = [];
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->method('logException')->willReturnCallback(
+            static function (\Throwable $failure, $request, array $context) use (&$errors): int {
+                $errors[] = [$failure, $context['response_code']];
+                return 1;
+            }
+        );
+        $failures = [];
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->method('log')->willReturnCallback(static function (array $entry) use (&$failures): bool {
+            $failures[] = [$entry['user_id'], $entry['operation_category'], $entry['status'], $entry['response_code']];
+            return true;
+        });
+        $controller = $this->makeController($scheduler, $auth, $audit, $errorLog);
         $response = $controller->updateTask(
             makeRequest('PUT', '/api/v1/admin/cron/tasks/support_sla_sweep', ['interval_minutes' => 0]),
             new \Slim\Psr7\Response(),
@@ -69,6 +85,8 @@ class AdminCronControllerTest extends TestCase
         );
 
         $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame([[$exception, 422]], $errors);
+        $this->assertSame([[1, 'admin_cron', 'failed', 422]], $failures);
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertArrayHasKey('request_id', $payload);
     }

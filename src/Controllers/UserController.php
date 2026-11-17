@@ -29,6 +29,8 @@ use PDO;
 
 class UserController
 {
+    use LogsClientExceptions;
+
     private const SECURITY_ACTIVITY_ACTIONS = [
         'login',
         'passkey_login',
@@ -117,15 +119,20 @@ class UserController
         $this->userProfileViewService = $userProfileViewService ?? new UserProfileViewService($regionService);
     }
 
-    private function buildNotificationTestEmailJob(array $user, string $category, string $email, string $displayName): ?array
-    {
+    private function buildNotificationTestEmailJob(
+        Request $request,
+        array $user,
+        string $category,
+        string $email,
+        string $displayName
+    ): ?array {
         $baseContext = [
             'category' => $category,
         ];
 
         switch ($category) {
             case NotificationPreferenceService::CATEGORY_ACTIVITY: {
-                $sample = $this->fetchLatestActivitySample((int)$user['id']);
+                $sample = $this->fetchLatestActivitySample($request, (int)$user['id']);
                 $activityName = $sample['name'];
                 if ($sample['generated']) {
                     $activityName .= ' (Test sample)';
@@ -147,7 +154,7 @@ class UserController
             }
 
             case NotificationPreferenceService::CATEGORY_TRANSACTION: {
-                $sample = $this->fetchLatestExchangeSample((int)$user['id']);
+                $sample = $this->fetchLatestExchangeSample($request, (int)$user['id']);
                 $productName = $sample['product'];
                 if ($sample['generated']) {
                     $productName .= ' (Test sample)';
@@ -269,7 +276,7 @@ class UserController
             }
 
             case NotificationPreferenceService::CATEGORY_MESSAGE: {
-                $sample = $this->fetchLatestMessageSample((int)$user['id']);
+                $sample = $this->fetchLatestMessageSample($request, (int)$user['id']);
                 $subject = $sample['title'];
                 $body = $sample['content'];
 
@@ -318,7 +325,7 @@ class UserController
         return null;
     }
 
-    private function fetchLatestActivitySample(int $userId): array
+    private function fetchLatestActivitySample(Request $request, int $userId): array
     {
         try {
             $stmt = $this->db->prepare("
@@ -349,10 +356,7 @@ class UserController
                 ];
             }
         } catch (\Throwable $e) {
-            $this->logger->debug('Failed to fetch latest carbon record for test email', [
-                'error' => $e->getMessage(),
-                'user_id' => $userId,
-            ]);
+            $this->logException($e, $request, 'Failed to fetch latest carbon record for test email', $userId);
         }
 
         return [
@@ -364,7 +368,7 @@ class UserController
         ];
     }
 
-    private function fetchLatestExchangeSample(int $userId): array
+    private function fetchLatestExchangeSample(Request $request, int $userId): array
     {
         try {
             $stmt = $this->db->prepare("
@@ -396,10 +400,7 @@ class UserController
                 ];
             }
         } catch (\Throwable $e) {
-            $this->logger->debug('Failed to fetch latest exchange for test email', [
-                'error' => $e->getMessage(),
-                'user_id' => $userId,
-            ]);
+            $this->logException($e, $request, 'Failed to fetch latest exchange for test email', $userId);
         }
 
         return [
@@ -411,7 +412,7 @@ class UserController
         ];
     }
 
-    private function fetchLatestMessageSample(int $userId): array
+    private function fetchLatestMessageSample(Request $request, int $userId): array
     {
         try {
             $stmt = $this->db->prepare("
@@ -433,10 +434,7 @@ class UserController
                 ];
             }
         } catch (\Throwable $e) {
-            $this->logger->debug('Failed to fetch latest direct message for test email', [
-                'error' => $e->getMessage(),
-                'user_id' => $userId,
-            ]);
+            $this->logException($e, $request, 'Failed to fetch latest direct message for test email', $userId);
         }
 
         return [
@@ -796,7 +794,7 @@ class UserController
                     ], 400);
                 }
             } elseif ($normalizedNewSchool !== null) {
-                $newSchoolId = $this->findOrCreateSchoolId($normalizedNewSchool);
+                $newSchoolId = $this->findOrCreateSchoolId($normalizedNewSchool, $request, $user);
                 if (!$newSchoolId) {
                     return $this->jsonResponse($response, [
                         'success' => false,
@@ -1063,7 +1061,7 @@ class UserController
             }
 
             $displayName = (string)($user['username'] ?? $email);
-            $job = $this->buildNotificationTestEmailJob($user, $category, $email, $displayName);
+            $job = $this->buildNotificationTestEmailJob($request, $user, $category, $email, $displayName);
 
             if ($job === null) {
                 $appName = $this->emailService->getAppName();
@@ -1478,7 +1476,8 @@ class UserController
             // 兼容 MySQL/SQLite 的时间分组函数
             try {
                 $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Failed to detect database driver for user statistics', (int)$user['id']);
                 $driver = 'mysql';
             }
             $monthExpr = $driver === 'sqlite' ? "strftime('%Y-%m', created_at)" : "DATE_FORMAT(created_at, '%Y-%m')";
@@ -1554,7 +1553,7 @@ class UserController
                     ];
                 }
             } catch (\Throwable $e) {
-                $this->logger->debug('Failed to load store quick stats', ['error' => $e->getMessage()]);
+                $this->logException($e, $request, 'Failed to load store quick stats', (int)$user['id']);
             }
 
             // 额外：碳记录聚合（不影响 prepare 次序）
@@ -1643,7 +1642,7 @@ class UserController
                         $leaderboards['school']['entries'] = $this->normalizeLeaderboardEntries(array_slice($schoolBucket['entries'] ?? [], 0, 5));
                     }
                 } catch (\Throwable $e) {
-                    $this->logger->debug('Failed to load cached leaderboards', ['error' => $e->getMessage()]);
+                    $this->logException($e, $request, 'Failed to load cached leaderboards', (int)$user['id']);
                 }
             }
             $leaderboard = $leaderboards['global']['entries'];
@@ -1685,7 +1684,7 @@ class UserController
                 try {
                     $streakStats = array_merge($streakStats, $this->checkinService->getUserStreakStats((int) $user['id']));
                 } catch (\Throwable $e) {
-                    $this->logger->debug('Failed to load streak stats', ['error' => $e->getMessage()]);
+                    $this->logException($e, $request, 'Failed to load streak stats', (int)$user['id']);
                 }
             }
 
@@ -1710,7 +1709,7 @@ class UserController
                     }
                     $streakRanks['global'] = $snapshot['ranks']['global'][$user['id']] ?? null;
                 } catch (\Throwable $e) {
-                    $this->logger->debug('Failed to load cached streak leaderboards', ['error' => $e->getMessage()]);
+                    $this->logException($e, $request, 'Failed to load cached streak leaderboards', (int)$user['id']);
                 }
             }
 
@@ -1904,10 +1903,22 @@ class UserController
         return $statusMap[$status] ?? $status;
     }
 
-    /**
-     * 返回JSON响应
-     */
-    private function findOrCreateSchoolId(string $name): ?int
+    private function logException(\Throwable $exception, Request $request, string $message, int $userId): void
+    {
+        try {
+            $this->errorLogService?->logException($exception, $request, [
+                'context_message' => $message,
+                'user_id' => $userId,
+            ]);
+        } catch (\Throwable $ignore) {
+            $this->logger->warning('Could not persist a handled user request exception', [
+                'error' => $ignore->getMessage(),
+            ]);
+        }
+        $this->logger->debug($message, ['error' => $exception->getMessage(), 'user_id' => $userId]);
+    }
+
+    private function findOrCreateSchoolId(string $name, Request $request, array $user): ?int
     {
         $normalized = trim(mb_substr($name, 0, 255));
         if ($normalized === '') {
@@ -1929,30 +1940,10 @@ class UserController
             $newId = (int)$this->db->lastInsertId();
             return $newId > 0 ? $newId : null;
         } catch (\Throwable $e) {
+            $this->logClientException($e, $request, 400, __METHOD__, $user, 'user_management');
             $this->logger->error('Failed to resolve school name for profile update', [
                 'error' => $e->getMessage(),
                 'school_name' => $normalized
-            ]);
-            return null;
-        }
-    }
-
-    private function findSchoolNameById(int $schoolId): ?string
-    {
-        if ($schoolId <= 0) {
-            return null;
-        }
-
-        try {
-            $stmt = $this->db->prepare('SELECT name FROM schools WHERE id = ? AND deleted_at IS NULL LIMIT 1');
-            $stmt->execute([$schoolId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            $name = isset($row['name']) ? trim((string) $row['name']) : '';
-            return $name !== '' ? $name : null;
-        } catch (\Throwable $e) {
-            $this->logger->error('Failed to fetch school name by id during profile update', [
-                'error' => $e->getMessage(),
-                'school_id' => $schoolId,
             ]);
             return null;
         }

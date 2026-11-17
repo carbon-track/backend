@@ -18,6 +18,8 @@ use CarbonTrack\Models\File;
 
 class FileUploadController
 {
+    use LogsClientExceptions;
+
     private const ADMIN_ONLY_UPLOAD_ROOTS = ['products', 'badges'];
 
     private CloudflareR2Service $r2Service;
@@ -232,6 +234,7 @@ class FileUploadController
             try {
                 $this->r2Service->validateDirectUploadObject($storagePath, $originalName, $info);
             } catch (\InvalidArgumentException $e) {
+                $this->logClientException($e, $request, 400, __METHOD__);
                 $canDeleteFailedObject = $this->canDeleteFailedDirectUploadObject(
                     $filePath,
                     $storagePath,
@@ -298,7 +301,8 @@ class FileUploadController
                             'error_code' => 'FILE_CONTENT_VALIDATION_ERROR',
                         ],
                     ]);
-                } catch (\Throwable $auditError) {
+                } catch (\Throwable $auditError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                    // The original upload validation response is preserved when its audit write fails.
                     $this->logger->error('AuditLogService failed for direct upload validation error', [
                         'file_path' => $filePath,
                         'storage_path' => $storagePath,
@@ -348,6 +352,7 @@ class FileUploadController
                 'data' => $payload
             ]);
         } catch (FileOwnershipConflictException $e) {
+            $this->logClientException($e, $request, 409, __METHOD__);
             $this->auditLogService->log([
                 'user_id' => isset($user['id']) ? (int) $user['id'] : null,
                 'action' => 'direct_upload_confirmed',
@@ -438,6 +443,7 @@ class FileUploadController
             ]);
 
         } catch (\InvalidArgumentException $e) {
+            $this->logClientException($e, $request, 400, __METHOD__, $user ?? null, 'file_management');
             return $this->jsonResponse($response, [
                 'success' => false,
                 'message' => $e->getMessage()
@@ -994,6 +1000,7 @@ class FileUploadController
                 $fileInfoData['metadata'] = array_replace($metadata, ['original_name' => $originalName]);
                 $this->r2Service->validateDirectUploadObject($filePath, $originalName, $fileInfoData);
             } catch (\InvalidArgumentException $e) {
+                $this->logClientException($e, $request, 400, __METHOD__);
                 try {
                     $this->r2Service->deleteFile($filePath, (int) $user['id']);
                 } catch (\Throwable $cleanupError) {
@@ -1031,7 +1038,8 @@ class FileUploadController
                             'error_code' => 'INVALID_FILE_CONTENT',
                         ],
                     ]);
-                } catch (\Throwable $auditError) {
+                } catch (\Throwable $auditError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                    // The original invalid-object response is preserved when its audit write fails.
                     $this->logger->error('AuditLogService failed for invalid multipart upload object', [
                         'file_path' => $filePath,
                         'upload_id' => $uploadId,
@@ -1080,7 +1088,8 @@ class FileUploadController
                             'error_code' => 'FILE_CONTENT_VALIDATION_ERROR',
                         ],
                     ]);
-                } catch (\Throwable $auditError) {
+                } catch (\Throwable $auditError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                    // The original upload validation response is preserved when its audit write fails.
                     $this->logger->error('AuditLogService failed for multipart upload validation error', [
                         'file_path' => $filePath,
                         'upload_id' => $uploadId,
@@ -1138,7 +1147,9 @@ class FileUploadController
 
             return $this->jsonResponse($response, ['success' => true, 'data' => $result]);
         } catch (FileOwnershipConflictException $e) {
+            $this->logClientException($e, $request, 409, __METHOD__);
             $multipartTrackingCleared = $this->clearCompletedMultipartTrackingIfNeeded(
+                $request,
                 $completedMultipartObject,
                 $multipartTrackingCleared,
                 $uploadId
@@ -1155,6 +1166,7 @@ class FileUploadController
                     'upload_id' => $uploadId !== '' ? $uploadId : null,
                     'error' => $e->getMessage(),
                     'error_code' => 'FILE_OWNERSHIP_CONFLICT',
+                    'tracking_cleared' => $multipartTrackingCleared,
                 ],
             ]);
             return $this->jsonResponse($response, [
@@ -1164,6 +1176,7 @@ class FileUploadController
             ], 409);
         } catch (\Exception $e) {
             $multipartTrackingCleared = $this->clearCompletedMultipartTrackingIfNeeded(
+                $request,
                 $completedMultipartObject,
                 $multipartTrackingCleared,
                 $uploadId
@@ -1179,6 +1192,7 @@ class FileUploadController
                     'file_path' => $filePath !== '' ? $filePath : null,
                     'upload_id' => $uploadId !== '' ? $uploadId : null,
                     'error' => $e->getMessage(),
+                    'tracking_cleared' => $multipartTrackingCleared,
                 ],
             ]);
             try { $this->errorLogService->logException($e, $request); } catch (\Throwable $ignore) { $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage()); }
@@ -1187,6 +1201,7 @@ class FileUploadController
     }
 
     private function clearCompletedMultipartTrackingIfNeeded(
+        Request $request,
         bool $completedMultipartObject,
         bool $multipartTrackingCleared,
         string $uploadId
@@ -1200,6 +1215,14 @@ class FileUploadController
                     'upload_id' => $uploadId,
                     'error' => $cleanupError->getMessage(),
                 ]);
+                try {
+                    $this->errorLogService->logException($cleanupError, $request, [
+                        'context' => 'multipart_upload_tracking_cleanup_failed',
+                        'upload_id' => $uploadId,
+                    ]);
+                } catch (\Throwable $ignore) {
+                    $this->logger->error('ErrorLogService failed: ' . $ignore->getMessage());
+                }
             }
         }
 

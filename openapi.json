@@ -16567,6 +16567,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -16676,6 +16686,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -16747,6 +16767,16 @@
           },
           "422": {
             "description": "工单尚未结束、评分非法，或目标客服不属于当前工单。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17037,6 +17067,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -17116,6 +17156,16 @@
           },
           "422": {
             "description": "状态、优先级或分配人非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17204,6 +17254,16 @@
           },
           "422": {
             "description": "工单状态或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17498,6 +17558,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -17669,6 +17739,16 @@
           },
           "422": {
             "description": "标签 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
             "content": {
               "application/json": {
                 "schema": {
@@ -17848,6 +17928,16 @@
           },
           "422": {
             "description": "规则 id 或请求参数非法。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "处理工单请求时发生服务端错误。",
             "content": {
               "application/json": {
                 "schema": {

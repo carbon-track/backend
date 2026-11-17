@@ -6,6 +6,7 @@ namespace CarbonTrack\Tests\Unit\Controllers;
 
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\FileUploadController;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\FileMetadataService;
 use CarbonTrack\Services\FileOwnershipConflictException;
 use CarbonTrack\Services\MultipartUploadService;
@@ -43,8 +44,13 @@ class FileUploadControllerTest extends TestCase
         parent::tearDown();
     }
 
-    private function controller(?array $user, ?callable $cfg = null, ?FileMetadataService $fileMeta = null, ?MultipartUploadService $multipart = null): FileUploadController
-    {
+    private function controller(
+        ?array $user,
+        ?callable $cfg = null,
+        ?FileMetadataService $fileMeta = null,
+        ?MultipartUploadService $multipart = null,
+        ?ErrorLogService $errorLog = null
+    ): FileUploadController {
         $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
         if ($cfg) { $cfg($r2); }
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -52,7 +58,7 @@ class FileUploadControllerTest extends TestCase
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $logger = new \Monolog\Logger('test');
         $logger->pushHandler(new \Monolog\Handler\NullHandler());
-        $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $errorLog ??= $this->createMock(ErrorLogService::class);
         $fileMeta ??= $this->createMock(FileMetadataService::class);
         $multipart ??= $this->createMock(MultipartUploadService::class);
         return new FileUploadController($r2, $auth, $audit, $logger, $errorLog, $fileMeta, $multipart);
@@ -1846,6 +1852,44 @@ class FileUploadControllerTest extends TestCase
         ]), new \Slim\Psr7\Response());
 
         $this->assertSame(500, $resp->getStatusCode());
+    }
+
+    public function testCompleteMultipartPersistsTrackingCleanupAndOriginalFailure(): void
+    {
+        $uploadId = 'up-cleanup-failure';
+        $upload = new MultipartUpload();
+        $upload->upload_id = $uploadId;
+        $upload->file_path = self::MULTIPART_FILE_PATH;
+        $upload->sha256 = self::MULTIPART_SHA256;
+        $upload->user_id = 42;
+
+        $request = makeRequest('POST', self::ROUTE_MULTIPART_COMPLETE, [
+            'file_path' => self::MULTIPART_FILE_PATH,
+            'upload_id' => $uploadId,
+            'parts' => [['part_number' => 1, 'etag' => 'etag-1']],
+        ]);
+        $originalFailure = new \RuntimeException('Could not fetch storage metadata');
+        $cleanupFailure = new \PDOException('Could not delete multipart tracking row');
+        $multipart = $this->createMock(MultipartUploadService::class);
+        $multipart->method('findActiveUpload')->with($uploadId)->willReturn($upload);
+        $multipart->expects($this->once())->method('clearUpload')->with($uploadId)->willThrowException($cleanupFailure);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->expects($this->exactly(2))->method('logException')->withConsecutive(
+            [$cleanupFailure, $request, ['context' => 'multipart_upload_tracking_cleanup_failed', 'upload_id' => $uploadId]],
+            [$originalFailure, $request]
+        );
+        $controller = $this->controller(['id' => 42], function ($r2) use ($originalFailure): void {
+            $r2->expects($this->once())->method('completeMultipartUpload')->willReturn([
+                'success' => true,
+                'file_path' => self::MULTIPART_FILE_PATH,
+            ]);
+            $r2->expects($this->once())->method('getFileInfo')->with(self::MULTIPART_FILE_PATH)->willThrowException($originalFailure);
+        }, multipart: $multipart, errorLog: $errorLog);
+
+        $response = $controller->completeMultipartUpload($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame('Failed to complete multipart', json_decode((string)$response->getBody(), true)['message']);
     }
 
     public function testGetPrivateInfoAllowedForPersistedOwnerRecord(): void

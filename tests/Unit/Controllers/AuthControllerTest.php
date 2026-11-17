@@ -8,6 +8,7 @@ use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\AuditLogService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\TurnstileService;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\MessageService;
@@ -197,7 +198,8 @@ class AuthControllerTest extends TestCase
 
     }
 
-    public function testLoginCallsAuthAndWritesAudit(): void
+    /** @dataProvider verificationDeliveryOutcomes */
+    public function testLoginCallsAuthAndWritesAudit(bool $deliverySucceeded): void
     {
         $mockAuthService = $this->createMock(AuthService::class);
         $mockEmailService = $this->createMock(EmailService::class);
@@ -236,11 +238,31 @@ class AuthControllerTest extends TestCase
         $mockPdo = $this->createMock(\PDO::class);
         $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt, $verificationStmt);
 
+        $request = makeRequest('POST', '/login', [
+            'username' => 'john',
+            'password' => 'secret',
+            'cf_turnstile_response' => 'test-turnstile',
+        ]);
         $mockTurnstileService->method('verify')->with('test-turnstile')->willReturn(['success' => true]);
         $mockAuthService->method('generateToken')->willReturn('fake.jwt.token');
         $mockAuditLogService->expects($this->atLeastOnce())->method('log');
-        $mockAuditLogService->expects($this->any())->method('logAuthOperation');
-        $mockEmailService->expects($this->once())->method('sendVerificationCode')->willReturn(true);
+        $mockAuditLogService->expects($this->once())
+            ->method('logAuthOperation')
+            ->with('email_verification_code_sent', 1, $deliverySucceeded, $this->isType('array'));
+        $deliver = $mockEmailService->expects($this->once())->method('sendVerificationCode');
+        $errors = $this->createMock(ErrorLogService::class);
+        if ($deliverySucceeded) {
+            $deliver->willReturn(true);
+            $errors->expects($this->never())->method('logException');
+        } else {
+            $failure = new \RuntimeException('Verification email delivery failed');
+            $deliver->willThrowException($failure);
+            $errors->expects($this->once())->method('logException')->with($failure, $request, [
+                'user_id' => 1,
+                'strategy' => 'sync',
+                'context_message' => 'Verification email send failed',
+            ]);
+        }
 
         $controller = new AuthController(
             $mockAuthService,
@@ -251,15 +273,10 @@ class AuthControllerTest extends TestCase
             $mockR2Service,
             $mockLogger,
             $mockPdo,
-            $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
+            $errors,
             $mockRegion
         );
 
-        $request = makeRequest('POST', '/login', [
-            'username' => 'john',
-            'password' => 'secret',
-            'cf_turnstile_response' => 'test-turnstile',
-        ]);
         $response = new \Slim\Psr7\Response();
 
         $resp = $controller->login($request, $response);
@@ -269,8 +286,16 @@ class AuthControllerTest extends TestCase
         $this->assertEquals('fake.jwt.token', $json['data']['token']);
         $this->assertEquals('john', $json['data']['user']['username']);
         $this->assertTrue($json['data']['email_verification_required']);
-        $this->assertTrue($json['data']['email_verification_sent']);
+        $this->assertSame($deliverySucceeded, $json['data']['email_verification_sent']);
         $this->assertNotEmpty($json['data']['verification_expires_at']);
+    }
+
+    public static function verificationDeliveryOutcomes(): array
+    {
+        return [
+            'delivery succeeds' => [true],
+            'delivery throws' => [false],
+        ];
     }
 
     public function testLoginRejectsNonStringCredentialsBeforeLockoutChecks(): void

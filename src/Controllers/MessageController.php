@@ -99,8 +99,8 @@ class MessageController
                 if ($colStmt && $colStmt->fetch()) {
                     $hasPriority = true;
                 }
-            } catch (\Throwable $_) {
-                // ignore - absence of column will be handled
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, __FUNCTION__, 'Failed to check for message priority column');
                 $hasPriority = false;
             }
 
@@ -547,7 +547,7 @@ class MessageController
                 if (!is_array($targetUsersRaw)) {
                     return $this->json($response, ['error' => 'target_users must be an array of positive integers'], 400);
                 }
-                $resolved = $this->resolveExplicitRecipients($targetUsersRaw);
+                $resolved = $this->resolveExplicitRecipients($targetUsersRaw, $request);
                 if ($resolved['error']) {
                     return $this->json($response, ['error' => $resolved['error']], $resolved['status']);
                 }
@@ -560,7 +560,7 @@ class MessageController
                 if (!is_array($filterGroupsRaw)) {
                     return $this->json($response, ['error' => 'target_filters must be an array'], 400);
                 }
-                $filterResult = $this->resolveFilteredRecipients($filterGroupsRaw);
+                $filterResult = $this->resolveFilteredRecipients($request, $filterGroupsRaw);
                 $targetUserIds = array_values(array_unique(array_merge($targetUserIds, $filterResult['user_ids'])));
                 foreach ($filterResult['records'] as $id => $record) {
                     if (!isset($targetUserRecords[$id])) {
@@ -575,7 +575,7 @@ class MessageController
             }
 
             if ($scope === 'all' && empty($targetUserIds)) {
-                $allResult = $this->resolveAllRecipients();
+                $allResult = $this->resolveAllRecipients($request);
                 $targetUserIds = $allResult['user_ids'];
                 $targetUserRecords = $allResult['records'];
             }
@@ -794,22 +794,22 @@ $auditPayload = [
                         $requestId,
                         $auditLogId,
                         $systemLogId,
-                        $this->encodeJson($cleanErrorLogIds),
+                        $this->encodeJson($request, __FUNCTION__, $cleanErrorLogIds),
                         $title,
                         $content,
                         $priority,
                         $scope,
                         count($targetUserIds),
                         $sentCount,
-                        $this->encodeJson($invalidTargetIds),
-                        $this->encodeJson($failedUserIds),
-                        $this->encodeJson($messageIdSample),
-                        $this->encodeJson($messageMapSample),
+                        $this->encodeJson($request, __FUNCTION__, $invalidTargetIds),
+                        $this->encodeJson($request, __FUNCTION__, $failedUserIds),
+                        $this->encodeJson($request, __FUNCTION__, $messageIdSample),
+                        $this->encodeJson($request, __FUNCTION__, $messageMapSample),
                         $messageIdCount,
                         $contentHash,
-                        $this->encodeJson($emailDeliveryForLog),
-                        $this->encodeJson($filtersSnapshot),
-                        $this->encodeJson(!empty($metaSnapshot) ? $metaSnapshot : null),
+                        $this->encodeJson($request, __FUNCTION__, $emailDeliveryForLog),
+                        $this->encodeJson($request, __FUNCTION__, $filtersSnapshot),
+                        $this->encodeJson($request, __FUNCTION__, $metaSnapshot ?: null),
                         $user['id'] ?? null,
                     ]);
                 }
@@ -934,7 +934,7 @@ $auditPayload = [
     /**
      * 获取广播历史（管理员）
      */
-        public function getBroadcastHistory(Request $request, Response $response): Response
+    public function getBroadcastHistory(Request $request, Response $response): Response
     {
         try {
             $user = $this->authService->getCurrentUser($request);
@@ -953,7 +953,12 @@ $auditPayload = [
                 if ($countStmt !== false) {
                     $total = (int) $countStmt->fetchColumn();
                 }
-            } catch (\Throwable $countError) {
+            } catch (\Throwable $e) {
+                $this->logBroadcastError($request, 'Failed to count broadcast history', [
+                    'action' => 'getBroadcastHistory',
+                    'exception' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
                 $total = 0;
             }
 
@@ -966,7 +971,12 @@ $auditPayload = [
                     $listStmt->execute();
                     $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
                 }
-            } catch (\Throwable $listError) {
+            } catch (\Throwable $e) {
+                $this->logBroadcastError($request, 'Failed to load broadcast history', [
+                    'action' => 'getBroadcastHistory',
+                    'exception' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
                 $rows = [];
             }
 
@@ -976,7 +986,7 @@ $auditPayload = [
                     $actorIds[] = (int) $row['created_by'];
                 }
             }
-            $actorMap = !empty($actorIds) ? $this->loadUsernames($actorIds) : [];
+            $actorMap = !empty($actorIds) ? $this->loadUsernames($request, $actorIds) : [];
 
             $items = [];
             foreach ($rows as $row) {
@@ -1014,7 +1024,16 @@ $auditPayload = [
                     $startTime = $createdAtRaw->format('Y-m-d H:i:s');
                 }
                 $endTime = date('Y-m-d H:i:s', strtotime($startTime . ' +60 minutes'));
-                $recipients = $this->loadBroadcastRecipients($title, $startTime, $endTime, $messageIds, $row['content_hash'] ?? null, true);
+                $recipients = $this->loadBroadcastRecipients(
+                    $request,
+                    'getBroadcastHistory',
+                    $title,
+                    $startTime,
+                    $endTime,
+                    $messageIds,
+                    $row['content_hash'] ?? null,
+                    true
+                );
 
                 $readUsers = [];
                 $unreadUsers = [];
@@ -1181,6 +1200,8 @@ $auditPayload = [
                 $messageIds = $this->decodeIdList($row['message_ids_snapshot'] ?? []);
                 $contentHash = isset($row['content_hash']) && is_string($row['content_hash']) ? $row['content_hash'] : null;
                 $recipients = $this->loadBroadcastRecipients(
+                    $request,
+                    'flushBroadcastEmailQueue',
                     (string)($row['title'] ?? ''),
                     $startTime,
                     $endTime,
@@ -1294,7 +1315,7 @@ $auditPayload = [
                 $update = $this->db->prepare('UPDATE message_broadcasts SET email_delivery_snapshot = :snapshot, updated_at = NOW() WHERE id = :id');
                 if ($update) {
                     $update->execute([
-                        ':snapshot' => $this->encodeJson($updatedDelivery),
+                        ':snapshot' => $this->encodeJson($request, __FUNCTION__, $updatedDelivery),
                         ':id' => $broadcastId,
                     ]);
                 }
@@ -1353,8 +1374,22 @@ $auditPayload = [
                 'action' => 'sendSystemMessage',
             ], $context);
             return $this->errorLogService->logError('broadcast_error', $message, $request, $payload);
-        } catch (\Throwable $e) {
+        } catch (\Throwable $ignore) {
+            error_log('Could not persist broadcast error ' . $message . '. ' . $ignore->getMessage());
             return null;
+        }
+    }
+
+    private function logException(\Throwable $exception, Request $request, string $action, string $message): void
+    {
+        try {
+            $this->errorLogService?->logException($exception, $request, [
+                'controller' => 'MessageController',
+                'action' => $action,
+                'context_message' => $message,
+            ]);
+        } catch (\Throwable $ignore) {
+            error_log($message . ': ' . $exception->getMessage() . '. Error log failed: ' . $ignore->getMessage());
         }
     }
 
@@ -1377,15 +1412,15 @@ $auditPayload = [
         return null;
     }
 
-    private function encodeJson($value): ?string
+    private function encodeJson(Request $request, string $action, mixed $value): ?string
     {
         if ($value === null) {
             return null;
         }
         try {
-            $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            return $encoded === false ? null : $encoded;
-        } catch (\Throwable $e) {
+            return json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, $action, 'Failed to encode broadcast snapshot');
             return null;
         }
     }
@@ -1447,6 +1482,8 @@ $auditPayload = [
     }
 
     private function loadBroadcastRecipients(
+        Request $request,
+        string $action,
         string $title,
         string $start,
         string $end,
@@ -1506,7 +1543,8 @@ $auditPayload = [
                         if (hash('sha256', $title . '||' . $contentValue) === $contentHash) {
                             $filtered[] = $row;
                         }
-                    } catch (\Throwable $e) {
+                    } catch (\Throwable $exception) {
+                        $this->logException($exception, $request, $action, 'Failed to verify broadcast recipient content');
                         $filtered = $rows;
                         break;
                     }
@@ -1517,7 +1555,8 @@ $auditPayload = [
             }
 
             return $rows;
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, $action, 'Failed to load broadcast recipients');
             return [];
         }
     }
@@ -1546,7 +1585,7 @@ $auditPayload = [
                 $criteria['exclude_ids'] = $this->sanitizeIdList(is_array($params['exclude_ids']) ? $params['exclude_ids'] : explode(',', (string)$params['exclude_ids']));
             }
 
-            $rows = $this->performUserSearch($criteria, $limit + 1, $offset);
+            $rows = $this->performUserSearch($request, 'searchBroadcastRecipients', $criteria, $limit + 1, $offset);
             $hasMore = count($rows) > $limit;
             if ($hasMore) {
                 $rows = array_slice($rows, 0, $limit);
@@ -1580,7 +1619,7 @@ $auditPayload = [
         }
     }
 
-    private function resolveExplicitRecipients(array $ids): array
+    private function resolveExplicitRecipients(array $ids, ?Request $request = null): array
     {
         $result = [
             'error' => null,
@@ -1644,6 +1683,12 @@ $auditPayload = [
             $result['user_ids'] = array_values($collectedIds);
             $result['invalid_ids'] = array_values(array_diff($sanitized, $result['user_ids']));
         } catch (\Throwable $e) {
+            if ($request !== null) {
+                $this->logBroadcastError($request, 'Failed to resolve target users', [
+                    'exception' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
+            }
             $result['error'] = 'Failed to resolve target users';
             $result['status'] = 500;
         }
@@ -1651,7 +1696,7 @@ $auditPayload = [
         return $result;
     }
 
-    private function resolveFilteredRecipients(array $filterGroups): array
+    private function resolveFilteredRecipients(Request $request, array $filterGroups): array
     {
         $aggregated = [
             'user_ids' => [],
@@ -1666,7 +1711,7 @@ $auditPayload = [
             $limit = max(10, min(500, $limit));
             $offset = max(0, (int)($filterGroup['offset'] ?? 0));
 
-            $searchResult = $this->performUserSearch($filterGroup, $limit, $offset);
+            $searchResult = $this->performUserSearch($request, 'sendSystemMessage', $filterGroup, $limit, $offset);
             foreach ($searchResult as $row) {
                 $id = isset($row['id']) ? (int)$row['id'] : 0;
                 if ($id <= 0) {
@@ -1682,7 +1727,7 @@ $auditPayload = [
         return $aggregated;
     }
 
-    private function resolveAllRecipients(): array
+    private function resolveAllRecipients(?Request $request = null): array
     {
         $result = [
             'user_ids' => [],
@@ -1705,14 +1750,25 @@ $auditPayload = [
                 $result['records'][$id] = $this->normalizeUserRow($row);
             }
         } catch (\Throwable $e) {
-            // Swallow exception and return what we have
+            if ($request !== null) {
+                $this->logBroadcastError($request, 'Failed to load all broadcast recipients', [
+                    'exception' => get_class($e),
+                    'error' => $e->getMessage(),
+                ]);
+            }
+            // Return the recipients loaded before this failure.
         }
 
         return $result;
     }
 
-    private function performUserSearch(array $criteria, int $limit, int $offset = 0): array
-    {
+    private function performUserSearch(
+        Request $request,
+        string $action,
+        array $criteria,
+        int $limit,
+        int $offset
+    ): array {
         $where = ['u.deleted_at IS NULL'];
         $params = [];
 
@@ -1863,7 +1919,8 @@ $auditPayload = [
             $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, $action, 'Failed to search for broadcast recipients');
             return [];
         }
     }
@@ -2267,7 +2324,7 @@ $auditPayload = [
         return in_array($priority, [Message::PRIORITY_HIGH, Message::PRIORITY_URGENT], true);
     }
 
-    private function loadUsernames(array $ids): array
+    private function loadUsernames(Request $request, array $ids): array
     {
         $cleanIds = [];
         foreach ($ids as $id) {
@@ -2310,7 +2367,8 @@ $auditPayload = [
                 $result[$uid] = $username;
             }
             return $result;
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, 'getBroadcastHistory', 'Failed to load broadcast actors');
             return [];
         }
     }

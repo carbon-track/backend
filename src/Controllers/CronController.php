@@ -138,7 +138,8 @@ class CronController
 
         try {
             $this->auditLogService->logSystemEvent($action, 'cron_scheduler', $payload);
-        } catch (\Throwable $exception) {
+        } catch (\Throwable $exception) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // The application logger records secondary cron audit failures.
             $this->logger->warning('Cron endpoint audit logging failed', [
                 'action' => $action,
                 'path' => (string) $request->getUri()->getPath(),
@@ -149,18 +150,24 @@ class CronController
 
     private function error(Request $request, Response $response, \Throwable $exception, string $message): Response
     {
-        $this->logger->error($message, ['error' => $exception->getMessage()]);
-        try {
-            $this->errorLogService->logException($exception, $request, ['context_message' => $message]);
-        } catch (\Throwable $loggingError) {
-            $this->logger->error('Cron endpoint error logging failed', ['error' => $loggingError->getMessage()]);
-        }
+        $this->logException($exception, $request, $message);
 
         return $this->json($request, $response, [
             'success' => false,
             'message' => $message,
             'code' => 'INTERNAL_ERROR',
         ], 500);
+    }
+
+    private function logException(\Throwable $exception, Request $request, string $message, array $context = []): void
+    {
+        $this->logger->error($message, $context + ['error' => $exception->getMessage()]);
+        try {
+            $this->errorLogService->logException($exception, $request, $context + ['context_message' => $message]);
+        } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // Use the application logger if ErrorLogService itself fails.
+            $this->logger->error('Cron endpoint error logging failed', ['error' => $loggingError->getMessage()]);
+        }
     }
 
     private function json(Request $request, Response $response, array $payload, int $status = 200): Response
@@ -174,10 +181,9 @@ class CronController
                 JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
             );
         } catch (\JsonException $exception) {
-            $this->logger->error('Cron endpoint JSON encoding failed', [
+            $this->logException($exception, $request, 'Cron endpoint JSON encoding failed', [
                 'status' => $status,
                 'path' => (string) $request->getUri()->getPath(),
-                'error' => $exception->getMessage(),
             ]);
 
             $json = '{"success":false,"message":"Failed to encode response payload","code":"INTERNAL_ERROR"}';

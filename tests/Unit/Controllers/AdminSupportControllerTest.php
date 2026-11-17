@@ -10,6 +10,7 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\SupportRoutingEngineService;
 use CarbonTrack\Services\SupportAutomationService;
+use CarbonTrack\Services\SupportOperationException;
 use CarbonTrack\Services\SupportTicketService;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
@@ -67,6 +68,52 @@ class AdminSupportControllerTest extends TestCase
         $this->assertSame(422, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame('VALIDATION_ERROR', $payload['code']);
+    }
+
+    /**
+     * @dataProvider supportResourceUpdates
+     */
+    public function testSupportResourceUpdateDistinguishesDatabaseFailure(
+        string $handler,
+        string $serviceMethod,
+        string $resource,
+        string $notFoundCode
+    ): void {
+        $request = makeRequest('PUT', '/api/v1/admin/support/' . $resource . '/42', ['name' => 'Test']);
+        $args = ['id' => '42'];
+        $databaseFailure = new \PDOException('database unavailable');
+        $missingResource = new SupportOperationException('Resource not found');
+        $service = $this->createMock(SupportAutomationService::class);
+        $service->expects($this->exactly(2))->method($serviceMethod)->willReturnOnConsecutiveCalls(
+            $this->throwException($missingResource),
+            $this->throwException($databaseFailure)
+        );
+        $loggedExceptions = [];
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->method('logException')->willReturnCallback(
+            static function (\Throwable $exception) use (&$loggedExceptions): int {
+                $loggedExceptions[] = $exception;
+                return 1;
+            }
+        );
+        $controller = $this->makeController($service, errorLogService: $errorLog);
+
+        $missing = $controller->$handler($request, new \Slim\Psr7\Response(), $args);
+        $this->assertSame(404, $missing->getStatusCode());
+        $this->assertSame($notFoundCode, json_decode((string) $missing->getBody(), true)['code']);
+
+        $failure = $controller->$handler($request, new \Slim\Psr7\Response(), $args);
+        $this->assertSame(500, $failure->getStatusCode());
+        $this->assertSame('INTERNAL_ERROR', json_decode((string) $failure->getBody(), true)['code']);
+        $this->assertSame([$missingResource, $databaseFailure], $loggedExceptions);
+    }
+
+    public static function supportResourceUpdates(): array
+    {
+        return [
+            'tag' => ['updateTag', 'saveTag', 'tags', 'TAG_NOT_FOUND'],
+            'rule' => ['updateRule', 'saveRule', 'rules', 'RULE_NOT_FOUND'],
+        ];
     }
 
     public function testReportsReturnsValidationError(): void
@@ -131,7 +178,7 @@ class AdminSupportControllerTest extends TestCase
         $service = $this->createMock(SupportAutomationService::class);
         $service->expects($this->once())
             ->method('saveAssigneeRoutingProfile')
-            ->willThrowException(new \RuntimeException('Support assignee not found'));
+            ->willThrowException(new SupportOperationException('Support assignee not found'));
 
         $controller = $this->makeController($service, $auth);
         $response = $controller->updateAssigneeRoutingProfile(

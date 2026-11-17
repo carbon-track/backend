@@ -156,7 +156,7 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForUser($userId, $ticketId);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
         $detail = $this->formatTicketDetail($ticket, false);
         $this->auditLogService->log([
@@ -175,10 +175,10 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForUser((int) $actor['id'], $ticketId);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
         if (($ticket['status'] ?? '') === self::STATUS_CLOSED) {
-            throw new \RuntimeException('Closed tickets cannot receive new replies');
+            throw new SupportOperationException('Closed tickets cannot receive new replies');
         }
 
         $body = $this->requireString($payload['content'] ?? null, 'content');
@@ -251,10 +251,10 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForUser((int) $actor['id'], $ticketId);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
         if (!in_array((string) ($ticket['status'] ?? ''), self::FEEDBACK_ALLOWED_STATUSES, true)) {
-            throw new \RuntimeException('Feedback is only available after the ticket is resolved or closed');
+            throw new SupportOperationException('Feedback is only available after the ticket is resolved or closed');
         }
 
         $ratedUserId = (int) ($payload['rated_user_id'] ?? 0);
@@ -357,7 +357,7 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForSupport($actor, $ticketId, true);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
         $detail = $this->formatTicketDetail($ticket, true);
         $this->auditLogService->log([
@@ -376,7 +376,7 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForSupport($actor, $ticketId);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
 
         $body = $this->requireString($payload['content'] ?? null, 'content');
@@ -457,7 +457,7 @@ class SupportTicketService
     {
         $ticket = $this->findTicketForSupport($actor, $ticketId);
         if ($ticket === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
 
         $updates = [];
@@ -591,7 +591,7 @@ class SupportTicketService
 
             $ticket = $this->findTicket($ticketId, '', [], true);
             if ($ticket === null) {
-                throw new \RuntimeException('Ticket not found');
+                throw new SupportOperationException('Ticket not found');
             }
             if ((int) ($ticket['assigned_to'] ?? 0) !== $actorId) {
                 throw new \DomainException('Only the current assignee can request a transfer');
@@ -701,7 +701,7 @@ class SupportTicketService
 
             $requestRow = $this->findTransferRequest($requestId, true);
             if ($requestRow === null) {
-                throw new \RuntimeException('Transfer request not found');
+                throw new SupportOperationException('Transfer request not found');
             }
             if (($requestRow['status'] ?? '') !== self::TRANSFER_STATUS_PENDING) {
                 throw new \InvalidArgumentException('Transfer request is no longer pending');
@@ -719,7 +719,7 @@ class SupportTicketService
             if ($decision === self::TRANSFER_STATUS_APPROVED) {
                 $ticket = $this->findTicket((int) $requestRow['ticket_id'], '', [], true);
                 if ($ticket === null) {
-                    throw new \RuntimeException('Ticket not found');
+                    throw new SupportOperationException('Ticket not found');
                 }
                 $ticketBeforeTransfer = $ticket;
                 $currentAssigneeId = isset($ticket['assigned_to']) ? (int) $ticket['assigned_to'] : 0;

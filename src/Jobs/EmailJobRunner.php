@@ -217,21 +217,13 @@ class EmailJobRunner
         $name = (string) ($payload['name'] ?? $email);
         $activity = (string) ($payload['activity_name'] ?? '');
         $points = (float) ($payload['points'] ?? 0);
-        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
 
-        try {
-            $emailService->sendActivityApprovedNotification(
-                $email,
-                $name !== '' ? $name : $email,
-                $activity,
-                $points
-            );
-        } catch (\Throwable $e) {
-            $logger->warning('Failed to send activity approved email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $emailService->sendActivityApprovedNotification(
+            $email,
+            $name !== '' ? $name : $email,
+            $activity,
+            $points
+        );
     }
 
     /**
@@ -248,21 +240,13 @@ class EmailJobRunner
         $name = (string) ($payload['name'] ?? $email);
         $activity = (string) ($payload['activity_name'] ?? '');
         $reason = (string) ($payload['reason'] ?? '');
-        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
 
-        try {
-            $emailService->sendActivityRejectedNotification(
-                $email,
-                $name !== '' ? $name : $email,
-                $activity,
-                $reason
-            );
-        } catch (\Throwable $e) {
-            $logger->warning('Failed to send activity rejected email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $emailService->sendActivityRejectedNotification(
+            $email,
+            $name !== '' ? $name : $email,
+            $activity,
+            $reason
+        );
     }
 
     /**
@@ -308,28 +292,21 @@ class EmailJobRunner
             return;
         }
 
-        try {
-            $sent = $emailService->sendAnnouncementBroadcast(
-                $cleanedRecipients,
-                $title,
-                $content,
-                $priority,
-                $contentFormat,
-                is_string($renderProfile) ? $renderProfile : null,
-                $renderVersion,
-                is_string($sourceKind) ? $sourceKind : null
-            );
+        $sent = $emailService->sendAnnouncementBroadcast(
+            $cleanedRecipients,
+            $title,
+            $content,
+            $priority,
+            $contentFormat,
+            is_string($renderProfile) ? $renderProfile : null,
+            $renderVersion,
+            is_string($sourceKind) ? $sourceKind : null
+        );
 
-            if (!$sent) {
-                $logger->debug('Broadcast announcement email was not dispatched.', [
-                    'recipient_count' => count($cleanedRecipients),
-                    'priority' => $priority,
-                ]);
-            }
-        } catch (\Throwable $e) {
-            $logger->error('Failed to send broadcast announcement email', [
-                'error' => $e->getMessage(),
+        if (!$sent) {
+            $logger->debug('Broadcast announcement email was not dispatched.', [
                 'recipient_count' => count($cleanedRecipients),
+                'priority' => $priority,
             ]);
         }
     }
@@ -355,26 +332,18 @@ class EmailJobRunner
         $reviewNote = isset($payload['review_note']) ? (string) $payload['review_note'] : null;
         $reviewedBy = isset($payload['reviewed_by']) ? (string) $payload['reviewed_by'] : null;
 
-        try {
-            $emailService->sendCarbonRecordReviewSummaryEmail(
-                $email,
-                $name,
-                $action,
-                $records,
-                $title,
-                $reviewNote,
-                $reviewedBy
-            );
-        } catch (\Throwable $e) {
-            $logger->warning('Failed to send carbon record review summary email', [
-                'email' => $email,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $emailService->sendCarbonRecordReviewSummaryEmail(
+            $email,
+            $name,
+            $action,
+            $records,
+            $title,
+            $reviewNote,
+            $reviewedBy
+        );
     }
 
     private static function runExchangeConfirmationJob(EmailService $emailService, Logger $logger, array $payload): void
-
     {
         $email = (string) ($payload['email'] ?? '');
         if ($email === '') {
@@ -386,22 +355,14 @@ class EmailJobRunner
         $product = (string) ($payload['product_name'] ?? '');
         $quantity = (int) ($payload['quantity'] ?? 1);
         $points = (float) ($payload['points_spent'] ?? 0);
-        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
 
-        try {
-            $emailService->sendExchangeConfirmation(
-                $email,
-                $name !== '' ? $name : $email,
-                $product,
-                $quantity,
-                $points
-            );
-        } catch (\Throwable $e) {
-            $logger->warning('Failed to send exchange confirmation email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $emailService->sendExchangeConfirmation(
+            $email,
+            $name !== '' ? $name : $email,
+            $product,
+            $quantity,
+            $points
+        );
     }
 
     /**
@@ -419,21 +380,13 @@ class EmailJobRunner
         $product = (string) ($payload['product_name'] ?? '');
         $status = (string) ($payload['status'] ?? '');
         $notes = (string) ($payload['notes'] ?? '');
-        $userId = isset($payload['user_id']) ? (int) $payload['user_id'] : 0;
 
-        try {
-            $emailService->sendExchangeStatusUpdate(
-                $email,
-                $name !== '' ? $name : $email,
-                $product,
-                $status,
-                $notes
-            );
-        } catch (\Throwable $e) {
-            $logger->warning('Failed to send exchange status update email', [
-                'user_id' => $userId,
-                'error' => $e->getMessage(),
-            ]);
-        }
+        $emailService->sendExchangeStatusUpdate(
+            $email,
+            $name !== '' ? $name : $email,
+            $product,
+            $status,
+            $notes
+        );
     }
 }

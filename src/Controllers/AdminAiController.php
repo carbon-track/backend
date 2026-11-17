@@ -90,6 +90,7 @@ class AdminAiController
 
             return $this->json($response, $result);
         } catch (\InvalidArgumentException $exception) {
+            $this->logException($exception, $request, 'Admin AI request validation failed');
             $this->logAdminAudit('admin_ai_chat_failed', $user ?? null, $request, [
                 'conversation_id' => $conversationId ?? null,
                 'data' => [
@@ -237,6 +238,7 @@ class AdminAiController
                             ],
                         ]);
                     } catch (\InvalidArgumentException $exception) {
+                        $this->logException($exception, $request, 'Admin AI request validation failed');
                         $this->logAdminAudit('admin_ai_chat_stream_failed', $user, $request, [
                             'conversation_id' => $conversationId,
                             'data' => [
@@ -318,6 +320,7 @@ class AdminAiController
 
             return $streamResponse;
         } catch (\InvalidArgumentException $exception) {
+            $this->logException($exception, $request, 'Admin AI request validation failed');
             $this->logAdminAudit('admin_ai_chat_stream_failed', $user ?? null, $request, [
                 'conversation_id' => $conversationId ?? null,
                 'data' => [
@@ -520,6 +523,10 @@ class AdminAiController
                 'data' => $detail,
             ]);
         } catch (\InvalidArgumentException $exception) {
+            $this->logException($exception, $request, 'Admin AI request validation failed');
+            $this->logAdminAudit('admin_ai_conversation_viewed', $user ?? null, $request, [
+                'data' => ['code' => 'INVALID_CONVERSATION_ID'],
+            ], 'failed');
             return $this->json($response, [
                 'success' => false,
                 'error' => $exception->getMessage(),
@@ -885,7 +892,8 @@ class AdminAiController
                 try {
                     $this->read(8192);
                     return (string) ob_get_clean();
-                } catch (\Throwable $throwable) {
+                } catch (\Throwable $throwable) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                    // Release the output buffer and propagate the failure to the stream handler.
                     ob_end_clean();
                     throw $throwable;
                 }
@@ -1261,7 +1269,8 @@ class AdminAiController
             try {
                 $this->errorLogService->logException($exception, $request, ['context' => $context]);
                 return;
-            } catch (\Throwable $loggingError) {
+            } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Use the application logger if ErrorLogService itself fails.
                 // fall back to logger below
                 if ($this->logger) {
                     $this->logger->error('Failed to log admin AI exception via ErrorLogService', [

@@ -185,7 +185,7 @@ class AdminControllerTest extends TestCase
 
         $method = new \ReflectionMethod($controller, 'loadUserRow');
         $method->setAccessible(true);
-        $row = $method->invoke($controller, 2);
+        $row = $method->invoke($controller, makeRequest('GET', '/api/v1/admin/users/2'), 2);
 
         $this->assertSame('Canonical Academy', $row['school_name']);
         $this->assertSame(7, $row['school_id']);

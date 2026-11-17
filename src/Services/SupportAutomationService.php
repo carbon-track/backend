@@ -264,7 +264,7 @@ class SupportAutomationService
     {
         $assignee = $this->getAssignableUserDetail($userId);
         if ($assignee === null) {
-            throw new \RuntimeException('Support assignee not found');
+            throw new SupportOperationException('Support assignee not found');
         }
 
         $existing = $this->findAssigneeProfileRow($userId);
@@ -324,7 +324,7 @@ class SupportAutomationService
     {
         $existing = $tagId ? $this->findTagRow($tagId) : null;
         if ($tagId && $existing === null) {
-            throw new \RuntimeException('Tag not found');
+            throw new SupportOperationException('Tag not found');
         }
 
         $name = $this->requireString($payload['name'] ?? null, 'name');
@@ -405,7 +405,7 @@ class SupportAutomationService
     {
         $existing = $ruleId ? $this->findRuleRow($ruleId) : null;
         if ($ruleId && $existing === null) {
-            throw new \RuntimeException('Rule not found');
+            throw new SupportOperationException('Rule not found');
         }
 
         $name = $this->requireString($payload['name'] ?? null, 'name');
@@ -497,7 +497,7 @@ class SupportAutomationService
     {
         $ticketRow = $ticket ?? $this->findTicketRow($ticketId);
         if ($ticketRow === null) {
-            throw new \RuntimeException('Ticket not found');
+            throw new SupportOperationException('Ticket not found');
         }
 
         $rulesStmt = $this->db->query("

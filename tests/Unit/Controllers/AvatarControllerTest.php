@@ -85,7 +85,8 @@ class AvatarControllerTest extends TestCase
         $this->assertTrue($payload['data'][1]['is_default']);
     }
 
-    public function testGetAvatarsIncludesIconUrls(): void
+    /** @dataProvider publicAvatarAuthOutcomes */
+    public function testPublicAvatarListingIncludesIconUrls(bool $authLookupFails): void
     {
         $avatarModel = $this->createMock(\CarbonTrack\Models\Avatar::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -94,7 +95,18 @@ class AvatarControllerTest extends TestCase
         $logger = $this->createMock(\Monolog\Logger::class);
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
 
-        $auth->method('getCurrentUser')->willReturn(null);
+        $request = makeRequest('GET', '/avatars');
+        $getCurrentUser = $auth->expects($this->once())->method('getCurrentUser')->with($request);
+        if ($authLookupFails) {
+            $failure = new \RuntimeException('Authentication lookup unavailable');
+            $getCurrentUser->willThrowException($failure);
+            $errorLog->expects($this->once())->method('logException')->with($failure, $request, [
+                'context_message' => 'Avatar listing authentication lookup failed',
+            ]);
+        } else {
+            $getCurrentUser->willReturn(null);
+            $errorLog->expects($this->never())->method('logException');
+        }
         $avatarModel->method('getAvailableAvatars')->willReturn([
             [
                 'id' => 10,
@@ -129,7 +141,7 @@ class AvatarControllerTest extends TestCase
         /** @var \CarbonTrack\Services\ErrorLogService $errorLog */
         $controller = new AvatarController($avatarModel, $auth, $audit, $r2, $logger, $errorLog);
 
-        $response = $controller->getAvatars(makeRequest('GET', '/avatars'), new \Slim\Psr7\Response());
+        $response = $controller->getAvatars($request, new \Slim\Psr7\Response());
         $this->assertSame(200, $response->getStatusCode());
         $payload = json_decode((string)$response->getBody(), true);
         $this->assertTrue($payload['success']);
@@ -141,6 +153,14 @@ class AvatarControllerTest extends TestCase
         $this->assertSame('https://cdn.example/avatar.png', $avatar['image_url']);
         $this->assertSame('https://cdn.example/avatar.png', $avatar['url']);
         $this->assertSame('https://cdn.example/avatar-thumb.png', $avatar['thumbnail_url']);
+    }
+
+    public static function publicAvatarAuthOutcomes(): array
+    {
+        return [
+            'anonymous request' => [false],
+            'authentication lookup fails' => [true],
+        ];
     }
 
     public function testGetAvatarRequiresAdmin(): void

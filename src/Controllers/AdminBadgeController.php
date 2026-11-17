@@ -42,7 +42,7 @@ class AdminBadgeController
             $defaultStats = $this->defaultBadgeStats();
             $data = [];
             foreach ($badges as $badge) {
-                $payload = $this->formatBadge($badge->toArray());
+                $payload = $this->formatBadge($request, $badge->toArray());
                 $payload['stats'] = $statsByBadge[$badge->id] ?? $defaultStats;
                 $data[] = $payload;
             }
@@ -68,7 +68,7 @@ class AdminBadgeController
                 return $this->json($response, ['success' => false, 'message' => 'Badge not found'], 404);
             }
 
-            $payload = $this->formatBadge($badge->toArray());
+            $payload = $this->formatBadge($request, $badge->toArray());
             $stats = $this->badgeService->getBadgeAwardStats([$badgeId]);
             $payload['stats'] = $stats[$badgeId] ?? $this->defaultBadgeStats();
             $recent = $this->badgeService->getBadgeRecipients($badgeId, [
@@ -95,7 +95,7 @@ class AdminBadgeController
 
             $data = $request->getParsedBody() ?: [];
             $badge = $this->badgeService->createBadge($data, (int) $admin['id']);
-            return $this->json($response, ['success' => true, 'data' => $this->formatBadge($badge->toArray())], 201);
+            return $this->json($response, ['success' => true, 'data' => $this->formatBadge($request, $badge->toArray())], 201);
         } catch (\Throwable $e) {
             $this->logError($e, $request, 'admin_badge_create_failed');
             return $this->json($response, ['success' => false, 'message' => 'Failed to create badge'], 500);
@@ -116,7 +116,7 @@ class AdminBadgeController
                 return $this->json($response, ['success' => false, 'message' => 'Badge not found'], 404);
             }
 
-            return $this->json($response, ['success' => true, 'data' => $this->formatBadge($badge->toArray())]);
+            return $this->json($response, ['success' => true, 'data' => $this->formatBadge($request, $badge->toArray())]);
         } catch (\Throwable $e) {
             $this->logError($e, $request, 'admin_badge_update_failed');
             return $this->json($response, ['success' => false, 'message' => 'Failed to update badge'], 500);
@@ -248,7 +248,7 @@ class AdminBadgeController
 
             $result = $this->badgeService->getBadgeRecipients($badgeId, $options);
             $payload = $result;
-            $payload['badge'] = $this->formatBadge($badge->toArray());
+            $payload['badge'] = $this->formatBadge($request, $badge->toArray());
 
             return $this->json($response, ['success' => true, 'data' => $payload]);
         } catch (\Throwable $e) {
@@ -280,22 +280,22 @@ class AdminBadgeController
 
 
 
-    private function formatBadge(array $badge): array
+    private function formatBadge(Request $request, array $badge): array
     {
         if ($this->r2Service && !empty($badge['icon_path'])) {
             try {
                 $badge['icon_url'] = $this->r2Service->getPublicUrl($badge['icon_path']);
                 $badge['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($badge['icon_path'], 600);
             } catch (\Throwable $e) {
-                if ($this->logger) {
-                    $this->logger->warning('Failed to build badge icon URLs', ['error' => $e->getMessage(), 'icon_path' => $badge['icon_path']]);
-                }
+                $this->logError($e, $request, 'admin_badge_icon_url_failed');
             }
         }
         if ($this->r2Service && !empty($badge['icon_thumbnail_path'])) {
             try {
                 $badge['icon_thumbnail_url'] = $this->r2Service->getPublicUrl($badge['icon_thumbnail_path']);
-            } catch (\Throwable $ignore) {}
+            } catch (\Throwable $e) {
+                $this->logError($e, $request, 'admin_badge_thumbnail_url_failed');
+            }
         }
         return $badge;
     }

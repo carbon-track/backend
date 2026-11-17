@@ -154,7 +154,7 @@ class AdminController
             ];
             $orderBy = $sortMap[$sort] ?? 'u.created_at DESC';
 
-                        $lastLoginSelect = $this->buildLastLoginSelect('u');
+                        $lastLoginSelect = $this->buildLastLoginSelect($request, 'u');
 
 $sql = "
                 SELECT
@@ -347,7 +347,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -357,7 +357,7 @@ $sql = "
             $query = $request->getQueryParams();
             $includeRevoked = !empty($query['include_revoked']) && filter_var($query['include_revoked'], FILTER_VALIDATE_BOOLEAN);
 
-            $badgePayload = $this->buildUserBadgePayload($userId, $includeRevoked);
+            $badgePayload = $this->buildUserBadgePayload($request, $userId, $includeRevoked);
             $badgePayload['metrics'] = $this->badgeService->compileUserMetrics($userId);
             $badgePayload['user'] = $userRow;
 
@@ -379,7 +379,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -387,7 +387,7 @@ $sql = "
             $userRow = $target['user'];
 
             $metrics = $this->badgeService->compileUserMetrics($userId);
-            $badgePayload = $this->buildUserBadgePayload($userId, true);
+            $badgePayload = $this->buildUserBadgePayload($request, $userId, true);
             $checkinStats = $this->checkinService->getUserStreakStats($userId);
               $payload = [
                   'user' => $userRow,
@@ -618,7 +618,7 @@ $sql = "
             if (!$admin || !$this->authService->isAdminUser($admin)) {
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -765,7 +765,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -845,7 +845,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -907,7 +907,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Access denied'], 403);
             }
 
-            $target = $this->resolveUserTarget($args);
+            $target = $this->resolveUserTarget($request, $args);
             if ($target['error'] !== null) {
                 return $this->jsonResponse($response, ['error' => $target['error']], $target['status']);
             }
@@ -936,7 +936,7 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'User not found'], 404);
             }
 
-            $freshUser = $this->loadUserRow($userId);
+            $freshUser = $this->loadUserRow($request, $userId);
             if ($freshUser === null) {
                 return $this->jsonResponse($response, ['error' => 'User not found'], 404);
             }
@@ -971,7 +971,7 @@ $sql = "
         }
     }
 
-    private function buildUserBadgePayload(int $userId, bool $includeRevoked = false): array
+    private function buildUserBadgePayload(Request $request, int $userId, bool $includeRevoked = false): array
     {
         $records = $this->badgeService->getUserBadges($userId, $includeRevoked);
         $items = [];
@@ -980,7 +980,7 @@ $sql = "
         foreach ($records as $entry) {
             $badge = $entry['badge'] ?? null;
             if (is_array($badge)) {
-                $badge = $this->formatBadgeForAdmin($badge);
+                $badge = $this->formatBadgeForAdmin($request, $badge);
             }
             $userBadge = $entry['user_badge'] ?? [];
             $status = $userBadge['status'] ?? null;
@@ -1006,20 +1006,22 @@ $sql = "
         ];
     }
 
-    private function formatBadgeForAdmin(array $badge): array
+    private function formatBadgeForAdmin(Request $request, array $badge): array
     {
         if ($this->r2Service && !empty($badge['icon_path'])) {
             try {
                 $badge['icon_url'] = $this->r2Service->getPublicUrl($badge['icon_path']);
                 $badge['icon_presigned_url'] = $this->r2Service->generatePresignedUrl($badge['icon_path'], 600);
-            } catch (\Throwable $e) {
-                // ignore formatting failures for optional assets
+            } catch (\Throwable $exception) {
+                $this->logExceptionWithFallback($exception, $request, 'Failed to build badge icon URLs for admin user profile');
             }
         }
         if ($this->r2Service && !empty($badge['icon_thumbnail_path'])) {
             try {
                 $badge['icon_thumbnail_url'] = $this->r2Service->getPublicUrl($badge['icon_thumbnail_path']);
-            } catch (\Throwable $ignore) {}
+            } catch (\Throwable $exception) {
+                $this->logExceptionWithFallback($exception, $request, 'Failed to build badge thumbnail URL for admin user profile');
+            }
         }
         return $badge;
     }
@@ -1028,7 +1030,7 @@ $sql = "
      * @param array<string, mixed> $args
      * @return array{user: array<string, mixed>|null, error: string|null, status: int}
      */
-    private function resolveUserTarget(array $args): array
+    private function resolveUserTarget(Request $request, array $args): array
     {
         if (isset($args['uuid'])) {
             $userUuid = trim((string) $args['uuid']);
@@ -1036,7 +1038,7 @@ $sql = "
                 return ['user' => null, 'error' => 'Invalid user uuid', 'status' => 400];
             }
 
-            $user = $this->loadUserRowByUuid($userUuid);
+            $user = $this->loadUserRowByUuid($request, $userUuid);
             if ($user === null) {
                 return ['user' => null, 'error' => 'User not found', 'status' => 404];
             }
@@ -1049,7 +1051,7 @@ $sql = "
             return ['user' => null, 'error' => 'Invalid user id', 'status' => 400];
         }
 
-        $user = $this->loadUserRow($userId);
+        $user = $this->loadUserRow($request, $userId);
         if ($user === null) {
             return ['user' => null, 'error' => 'User not found', 'status' => 404];
         }
@@ -1057,22 +1059,22 @@ $sql = "
         return ['user' => $user, 'error' => null, 'status' => 200];
     }
 
-    private function loadUserRow(int $userId): ?array
+    private function loadUserRow(Request $request, int $userId): ?array
     {
-        return $this->loadUserRowByColumn('u.id = :value', ['value' => $userId]);
+        return $this->loadUserRowByColumn($request, 'u.id = :value', ['value' => $userId]);
     }
 
-    private function loadUserRowByUuid(string $userUuid): ?array
+    private function loadUserRowByUuid(Request $request, string $userUuid): ?array
     {
-        return $this->loadUserRowByColumn('u.uuid = :value', ['value' => strtolower($userUuid)]);
+        return $this->loadUserRowByColumn($request, 'u.uuid = :value', ['value' => strtolower($userUuid)]);
     }
 
     /**
      * @param array<string, mixed> $params
      */
-    private function loadUserRowByColumn(string $whereClause, array $params): ?array
+    private function loadUserRowByColumn(Request $request, string $whereClause, array $params): ?array
     {
-        $lastLoginSelect = $this->buildLastLoginSelect('u');
+        $lastLoginSelect = $this->buildLastLoginSelect($request, 'u');
         $stmt = $this->db->prepare(
               'SELECT
                 u.id,
@@ -1113,7 +1115,7 @@ $sql = "
         $row['is_admin'] = (bool) ($row['is_admin'] ?? false);
         $row['points'] = (float) ($row['points'] ?? 0);
         $row['passkey_count'] = (int) ($row['passkey_count'] ?? 0);
-        $row['days_since_registration'] = $this->computeDaysSince($row['created_at'] ?? null);
+        $row['days_since_registration'] = $this->computeDaysSince($request, $row['created_at'] ?? null);
         return $row;
     }
 
@@ -1291,7 +1293,7 @@ $sql = "
         return $decoded;
     }
 
-    private function computeDaysSince(?string $timestamp): int
+    private function computeDaysSince(Request $request, ?string $timestamp): int
     {
         if (!$timestamp) {
             return 0;
@@ -1305,28 +1307,29 @@ $sql = "
             $created = new DateTimeImmutable((string) $timestamp, $timezone);
             $now = new DateTimeImmutable('now', $timezone);
             return max(0, (int) $created->diff($now)->format('%a'));
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logExceptionWithFallback($exception, $request, 'Failed to calculate days since registration');
             return 0;
         }
     }
 
-    private function buildLastLoginSelect(string $alias = 'u'): string
+    private function buildLastLoginSelect(Request $request, string $alias = 'u'): string
     {
-        $column = $this->resolveLastLoginColumn();
+        $column = $this->resolveLastLoginColumn($request);
         if ($column === null) {
             return 'NULL AS lastlgn';
         }
         return $alias . '.' . $column . ' AS lastlgn';
     }
 
-    private function resolveLastLoginColumn(): ?string
+    private function resolveLastLoginColumn(Request $request): ?string
     {
         if ($this->lastLoginColumn !== null) {
             return $this->lastLoginColumn !== '' ? $this->lastLoginColumn : null;
         }
 
         foreach (['lastlgn', 'last_login_at'] as $candidate) {
-            if ($this->columnExists('users', $candidate)) {
+            if ($this->columnExists($request, 'users', $candidate)) {
                 $this->lastLoginColumn = $candidate;
                 return $candidate;
             }
@@ -1336,11 +1339,12 @@ $sql = "
         return null;
     }
 
-    private function columnExists(string $table, string $column): bool
+    private function columnExists(Request $request, string $table, string $column): bool
     {
         try {
             $driver = (string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logExceptionWithFallback($exception, $request, 'Failed to detect database driver for user column lookup');
             $driver = null;
         }
 
@@ -1361,8 +1365,8 @@ $sql = "
             if ($stmt && $stmt->execute([$column])) {
                 return (bool) $stmt->fetch(PDO::FETCH_ASSOC);
             }
-        } catch (\Throwable $e) {
-            // ignore detection errors
+        } catch (\Throwable $exception) {
+            $this->logExceptionWithFallback($exception, $request, 'Failed to check database column ' . $column);
         }
 
         return false;
@@ -1442,7 +1446,8 @@ $sql = "
                 $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
                 $this->errorLogService->logException($exception, $request, $extra);
                 return;
-            } catch (\Throwable $loggingError) {
+            } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Use the emergency log if ErrorLogService itself fails.
                 error_log('ErrorLogService failed: ' . $loggingError->getMessage());
             }
         }

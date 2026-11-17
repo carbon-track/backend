@@ -26,6 +26,8 @@ use PDO;
 
 class AuthController
 {
+    use LogsClientExceptions;
+
     private AuthService $authService;
     private EmailService $emailService;
     private TurnstileService $turnstileService;
@@ -109,6 +111,7 @@ class AuthController
                 $challenge = $this->proofOfWorkService->createChallenge($scope, $this->getClientIP($request));
             } catch (\RuntimeException $rateLimitError) {
                 if (strpos($rateLimitError->getMessage(), 'rate limit') !== false) {
+                    $this->logClientException($rateLimitError, $request, 429, __METHOD__, auditCategory: 'authentication');
                     return $this->jsonResponse($response, [
                         'success' => false,
                         'message' => 'Too many proof-of-work challenges from this client',
@@ -129,7 +132,8 @@ class AuthController
                 if ($this->errorLogService) {
                     $this->errorLogService->logException($e, $request);
                 }
-            } catch (\Throwable $loggingError) {
+            } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Use the application logger if ErrorLogService itself fails.
                 $this->logger->warning('ErrorLogService failed while logging proof-of-work challenge error', [
                     'error' => $loggingError->getMessage(),
                     'original_error' => $e->getMessage(),
@@ -257,12 +261,16 @@ class AuthController
                     'region_code' => $regionCode
                 ]
             ]);
-            try { $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']); } catch (\Throwable $e) { $this->logger->warning('Failed to send welcome email', ['error' => $e->getMessage()]); }
+            try {
+                $this->emailService->sendWelcomeEmail((string)$data['email'], (string)$data['username']);
+            } catch (\Throwable $e) {
+                $this->logException($e, $request, 'Failed to send welcome email', ['user_id' => $userId]);
+            }
             $verificationMeta = null;
             try {
-                $verificationMeta = $this->dispatchEmailVerification($userId, (string)$data['email'], (string)$data['username'], 1);
+                $verificationMeta = $this->dispatchEmailVerification($request, $userId, (string)$data['email'], (string)$data['username'], 1);
             } catch (\Throwable $e) {
-                $this->logger->warning('Failed to dispatch verification email', ['error' => $e->getMessage()]);
+                $this->logException($e, $request, 'Failed to dispatch verification email', ['user_id' => $userId]);
             }
             // 发送站内欢迎消息暂时跳过（测试最小 schema 可能缺少完整列 / 触发 Eloquent timestamps 逻辑），以保持测试稳定
             // 生成登录 token 以符合测试对返回结构的期望
@@ -364,9 +372,7 @@ class AuthController
                 }
             } catch (\Throwable $lockCheckError) {
                 // Infrastructure failures in the lockout check should not block all logins.
-                $this->logger->warning('Login lockout check failed', [
-                    'error' => $lockCheckError->getMessage(),
-                ]);
+                $this->logException($lockCheckError, $request, 'Login lockout check failed', []);
             }
             $challenge = $this->verifyClientChallenge($request, $data, 'auth.login');
             if (!$challenge['success']) {
@@ -393,9 +399,7 @@ class AuthController
                 try {
                     $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, false);
                 } catch (\Throwable $recordError) {
-                    $this->logger->warning('Login attempt record failed (failed branch)', [
-                        'error' => $recordError->getMessage(),
-                    ]);
+                    $this->logException($recordError, $request, 'Login attempt record failed', ['login_succeeded' => false]);
                 }
                 $this->auditLogService->logAuthOperation('login', null, false, [
                     'identifier' => $identifier,
@@ -411,27 +415,29 @@ class AuthController
             try {
                 $this->authService->recordLoginAttempt((string) $identifier, (string) $clientIp, true);
             } catch (\Throwable $recordError) {
-                $this->logger->warning('Login attempt record failed (success branch)', [
-                    'error' => $recordError->getMessage(),
+                $this->logException($recordError, $request, 'Login attempt record failed', [
+                    'user_id' => $user['id'],
+                    'login_succeeded' => true,
                 ]);
             }
             try {
                 $upd = $this->db->prepare('UPDATE users SET lastlgn = NOW() WHERE id = ?');
                 $upd->execute([$user['id']]);
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                // Older schemas use last_login_at instead of lastlgn.
+                $this->logException($exception, $request, 'Retrying last login update with legacy column', ['user_id' => $user['id']]);
                 try {
                     $upd = $this->db->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
                     $upd->execute([$user['id']]);
-                } catch (\Throwable $e2) {
-                    // ignore
+                } catch (\Throwable $exception) {
+                    $this->logException($exception, $request, 'Failed to update last login time', ['user_id' => $user['id']]);
                 }
             }
             if ($this->checkinService) {
                 try {
                     $this->checkinService->syncUserCheckinsFromRecords((int) $user['id']);
                 } catch (\Throwable $e) {
-                    $this->logger->debug('Failed to sync user checkins on login', [
-                        'error' => $e->getMessage(),
+                    $this->logException($e, $request, 'Failed to sync user checkins on login', [
                         'user_id' => $user['id'],
                     ]);
                 }
@@ -452,7 +458,7 @@ class AuthController
             $userInfo = $this->formatUserPayload($user);
             $verificationMeta = null;
             if (empty($user['email_verified_at'])) {
-                $verificationMeta = $this->handlePendingEmailVerification($user);
+                $verificationMeta = $this->handlePendingEmailVerification($request, $user);
             }
 
             $responsePayload = [
@@ -554,6 +560,7 @@ class AuthController
             try {
                 $payload = $this->authService->validateToken($token);
             } catch (\Throwable $e) {
+                $this->logClientException($e, $request, 401, __METHOD__);
                 $this->logTokenRefreshFailure($request, null, 'INVALID_TOKEN');
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -681,7 +688,7 @@ class AuthController
                 ]);
             }
 
-            $throttle = $this->calculateVerificationThrottle($user);
+            $throttle = $this->calculateVerificationThrottle($request, $user);
             if ($throttle['blocked']) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -692,6 +699,7 @@ class AuthController
             }
 
             $challenge = $this->dispatchEmailVerification(
+                $request,
                 (int)$user['id'],
                 (string)$user['email'],
                 (string)($user['username'] ?? ''),
@@ -786,7 +794,8 @@ class AuthController
 
             try {
                 $expiry = new \DateTimeImmutable($expiresAt);
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logClientException($exception, $request, 400, __METHOD__, $user, 'authentication');
                 $expiry = null;
             }
 
@@ -939,7 +948,7 @@ class AuthController
                 try {
                     $this->emailService->sendPasswordResetEmail((string)$user['email'], (string)$user['username'], $resetToken);
                 } catch (\Throwable $e) {
-                    $this->logger->warning('Failed to send password reset email', ['error' => $e->getMessage()]);
+                    $this->logException($e, $request, 'Failed to send password reset email', ['user_id' => $user['id']]);
                 }
                 $this->auditLogService->logAuthOperation('password_reset_request', $user['id'], true, [
                     'ip_address' => $this->getClientIP($request),
@@ -995,11 +1004,13 @@ class AuthController
             try {
                 $upd = $this->db->prepare('UPDATE users SET password_hash = ?, password = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
                 $upd->execute([$hashed, $hashed, $user['id']]);
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Retrying password reset with password_hash column', ['user_id' => $user['id']]);
                 try {
                     $upd = $this->db->prepare('UPDATE users SET password_hash = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
                     $upd->execute([$hashed, $user['id']]);
-                } catch (\Throwable $e2) {
+                } catch (\Throwable $exception) {
+                    $this->logException($exception, $request, 'Retrying password reset with password column', ['user_id' => $user['id']]);
                     $upd = $this->db->prepare('UPDATE users SET password = ?, reset_token = NULL, reset_token_expires_at = NULL, updated_at = NOW() WHERE id = ?');
                     $upd->execute([$hashed, $user['id']]);
                 }
@@ -1011,9 +1022,9 @@ class AuthController
                 $this->authService->incrementTokenVersion((int) $user['id']);
                 $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_reset');
             } catch (\Throwable $bumpError) {
-                $this->logger->warning('Failed to revoke credentials after password reset', [
-                    'user_id' => $user['id'] ?? null,
-                    'error' => $bumpError->getMessage(),
+                $this->logException($bumpError, $request, 'Failed to revoke credentials after password reset', [
+                    'user_id' => (int) $user['id'],
+                    'action' => 'password_reset',
                 ]);
             }
             $this->auditLogService->logAuthOperation('password_reset', $user['id'], true, [
@@ -1085,11 +1096,13 @@ class AuthController
             try {
                 $upd = $this->db->prepare('UPDATE users SET password_hash = ?, password = ?, updated_at = NOW() WHERE id = ?');
                 $upd->execute([$hashed, $hashed, $user['id']]);
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Retrying password change with password_hash column', ['user_id' => $user['id']]);
                 try {
                     $upd = $this->db->prepare('UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?');
                     $upd->execute([$hashed, $user['id']]);
-                } catch (\Throwable $e2) {
+                } catch (\Throwable $exception) {
+                    $this->logException($exception, $request, 'Retrying password change with password column', ['user_id' => $user['id']]);
                     $upd = $this->db->prepare('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?');
                     $upd->execute([$hashed, $user['id']]);
                 }
@@ -1098,9 +1111,9 @@ class AuthController
                 $this->authService->incrementTokenVersion((int) $user['id']);
                 $this->mobileDeviceSessionService->revokeAllForUser((int) $user['id'], 'password_change');
             } catch (\Throwable $bumpError) {
-                $this->logger->warning('Failed to revoke credentials after password change', [
-                    'user_id' => $user['id'] ?? null,
-                    'error' => $bumpError->getMessage(),
+                $this->logException($bumpError, $request, 'Failed to revoke credentials after password change', [
+                    'user_id' => (int) $user['id'],
+                    'action' => 'password_change',
                 ]);
             }
             $this->auditLogService->logAuthOperation('password_change', $user['id'], true, [
@@ -1124,7 +1137,7 @@ class AuthController
         }
     }
 
-    private function handlePendingEmailVerification(array $user): ?array
+    private function handlePendingEmailVerification(Request $request, array $user): ?array
     {
         $email = $user['email'] ?? null;
         if (!$email) {
@@ -1148,7 +1161,8 @@ class AuthController
             try {
                 $expiry = new \DateTimeImmutable((string)$existingExpiryRaw);
                 $meta['expires_at'] = $expiry->format('Y-m-d H:i:s');
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Invalid stored email verification expiry', ['user_id' => $user['id']]);
                 $expiry = null;
                 $meta['expires_at'] = is_string($existingExpiryRaw) ? $existingExpiryRaw : null;
             }
@@ -1162,7 +1176,7 @@ class AuthController
         }
 
         if ($shouldSend) {
-            $throttle = $this->calculateVerificationThrottle($user);
+            $throttle = $this->calculateVerificationThrottle($request, $user);
             if ($throttle['blocked']) {
                 $meta['rate_limited'] = true;
                 $meta['resend_available_at'] = $throttle['retry_after'] ?? null;
@@ -1170,6 +1184,7 @@ class AuthController
             }
 
             $challenge = $this->dispatchEmailVerification(
+                $request,
                 (int)$user['id'],
                 (string)$email,
                 (string)($user['username'] ?? ''),
@@ -1188,7 +1203,8 @@ class AuthController
             try {
                 $lastSent = new \DateTimeImmutable((string)$lastSentRaw);
                 $meta['resend_available_at'] = $lastSent->modify('+1 hour')->format('Y-m-d H:i:s');
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Invalid stored verification send time', ['user_id' => $user['id']]);
                 $meta['resend_available_at'] = is_string($lastSentRaw) ? $lastSentRaw : null;
             }
         }
@@ -1196,7 +1212,7 @@ class AuthController
         return $meta;
     }
 
-    private function calculateVerificationThrottle(array $user): array
+    private function calculateVerificationThrottle(Request $request, array $user): array
     {
         $sendCount = (int)($user['verification_send_count'] ?? 0);
         $lastSentAtRaw = $user['verification_last_sent_at'] ?? null;
@@ -1207,7 +1223,8 @@ class AuthController
         if ($lastSentAtRaw) {
             try {
                 $lastSentAt = new \DateTimeImmutable((string)$lastSentAtRaw);
-            } catch (\Throwable $e) {
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Invalid stored verification send time', ['user_id' => $user['id']]);
                 $lastSentAt = null;
             }
         }
@@ -1237,8 +1254,14 @@ class AuthController
         ];
     }
 
-    private function dispatchEmailVerification(int $userId, string $email, string $username, int $sendCount, ?string $retryAfter = null): array
-    {
+    private function dispatchEmailVerification(
+        Request $request,
+        int $userId,
+        string $email,
+        string $username,
+        int $sendCount,
+        ?string $retryAfter = null
+    ): array {
         $challenge = $this->createVerificationChallenge($userId, $email, $username, $sendCount);
         $challenge['resend_available_at'] = $retryAfter;
 
@@ -1250,6 +1273,7 @@ class AuthController
         ];
 
         $dispatched = $this->sendVerificationEmailWithStrategy(
+            $request,
             $userId,
             $email,
             $challenge['recipient_name'],
@@ -1272,6 +1296,7 @@ class AuthController
     }
 
     private function sendVerificationEmailWithStrategy(
+        Request $request,
         int $userId,
         string $email,
         string $recipientName,
@@ -1285,6 +1310,7 @@ class AuthController
 
         if ($isCli) {
             return $this->sendVerificationEmailNow(
+                $request,
                 $userId,
                 $email,
                 $recipientName,
@@ -1297,6 +1323,7 @@ class AuthController
         }
 
         $queued = $this->queueVerificationEmail(
+            $request,
             $userId,
             $email,
             $recipientName,
@@ -1308,6 +1335,7 @@ class AuthController
 
         if (!$queued) {
             return $this->sendVerificationEmailNow(
+                $request,
                 $userId,
                 $email,
                 $recipientName,
@@ -1323,6 +1351,7 @@ class AuthController
     }
 
     private function sendVerificationEmailNow(
+        Request $request,
         int $userId,
         string $email,
         string $recipientName,
@@ -1350,11 +1379,9 @@ class AuthController
                 ]);
             }
         } catch (\Throwable $e) {
-            $this->logger->error('Verification email send failed', [
+            $this->logException($e, $request, 'Verification email send failed', [
                 'user_id' => $userId,
-                'email' => $email,
-                'error' => $e->getMessage(),
-                'context' => $asyncContext ? 'async' : 'sync'
+                'strategy' => $asyncContext ? 'async' : 'sync',
             ]);
         }
 
@@ -1367,7 +1394,8 @@ class AuthController
                     'strategy' => $asyncContext ? 'async' : 'sync'
                 ])
             );
-        } catch (\Throwable $e) {
+        } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // The verification email result is available even when its audit write fails.
             $this->logger->debug('Failed to record verification email audit log', [
                 'error' => $e->getMessage(),
                 'strategy' => $asyncContext ? 'async' : 'sync'
@@ -1378,6 +1406,7 @@ class AuthController
     }
 
     private function queueVerificationEmail(
+        Request $request,
         int $userId,
         string $email,
         string $recipientName,
@@ -1388,8 +1417,9 @@ class AuthController
     ): bool {
         try {
             $result = $this->emailService->dispatchAsyncEmail(
-                function (bool $async) use ($userId, $email, $recipientName, $code, $ttlMinutes, $link, $context) {
+                function (bool $async) use ($request, $userId, $email, $recipientName, $code, $ttlMinutes, $link, $context) {
                     return $this->sendVerificationEmailNow(
+                        $request,
                         $userId,
                         $email,
                         $recipientName,
@@ -1411,16 +1441,16 @@ class AuthController
                 $this->auditLogService->logAuthOperation('email_verification_code_schedule', $userId, true, array_merge($context, [
                     'strategy' => $result ? 'async' : 'sync'
                 ]));
-            } catch (\Throwable $e) {
+            } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // An audit write failure leaves the queued verification email intact.
                 $this->logger->debug('Failed to record verification email schedule log', ['error' => $e->getMessage()]);
             }
 
             return $result;
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to queue verification email', [
+            $this->logException($e, $request, 'Failed to queue verification email', [
                 'user_id' => $userId,
-                'email' => $email,
-                'error' => $e->getMessage()
+                'strategy' => 'async',
             ]);
 
             try {
@@ -1428,7 +1458,8 @@ class AuthController
                     'strategy' => 'async',
                     'error' => $e->getMessage()
                 ]));
-            } catch (\Throwable $logError) {
+            } catch (\Throwable $logError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // The application logger records a secondary scheduling audit failure.
                 $this->logger->debug('Failed to record verification email schedule failure', [
                     'error' => $logError->getMessage()
                 ]);
@@ -1605,7 +1636,8 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent'),
                 ],
             ]);
-        } catch (\Throwable $auditError) {
+        } catch (\Throwable $auditError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // The application logger records a secondary challenge audit failure.
             $this->logger->warning('AuditLogService failed while logging challenge rejection', [
                 'action' => $action,
                 'scope' => $scope,
@@ -1757,6 +1789,18 @@ class AuthController
         ];
     }
 
+    private function logException(\Throwable $exception, Request $request, string $message, array $context): void
+    {
+        try {
+            $this->errorLogService?->logException($exception, $request, $context + ['context_message' => $message]);
+        } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // Include the persistence failure in the application warning below.
+            $context['logging_error'] = $loggingError->getMessage();
+        }
+
+        $this->logger->warning($message, $context + ['error' => $exception->getMessage()]);
+    }
+
     private function logTokenRefreshFailure(Request $request, ?int $userId, string $code): void
     {
         try {
@@ -1767,7 +1811,8 @@ class AuthController
                     'user_agent' => $request->getHeaderLine('User-Agent')
                 ]
             ]);
-        } catch (\Throwable $e) {
+        } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+            // The application logger records a secondary token-refresh audit failure.
             $this->logger->debug('Failed to record token refresh failure audit log', [
                 'error' => $e->getMessage(),
                 'code' => $code

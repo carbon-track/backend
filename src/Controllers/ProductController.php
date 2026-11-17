@@ -98,7 +98,7 @@ class ProductController
                     $categorySlug = $this->normalizeSlug($rawCategory);
                     $categoryNames = [];
                     if ($categorySlug !== '') {
-                        $resolvedCategories = $this->fetchCategoriesBySlugs([$categorySlug]);
+                        $resolvedCategories = $this->fetchCategoriesBySlugs($request, [$categorySlug]);
                         if (isset($resolvedCategories[$categorySlug])) {
                             $categoryNames[] = $resolvedCategories[$categorySlug]['name'];
                         }
@@ -320,7 +320,8 @@ class ProductController
                 $sql = "SELECT * FROM products WHERE id = :id AND deleted_at IS NULL";
                 try {
                     $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
-                } catch (\Throwable $driverError) {
+                } catch (\Throwable $exception) {
+                    $this->logControllerException($exception, $request, 'Failed to detect database driver during product exchange');
                     $driver = null;
                 }
                 if ($driver !== 'sqlite') {
@@ -363,7 +364,7 @@ class ProductController
                 }
 
                 // 创建兑换记录
-                $exchangeId = $this->createExchangeRecord([
+                $exchangeId = $this->createExchangeRecord($request, [
                     'user_id' => $user['id'],
                     'product_id' => $productId,
                     'quantity' => $quantity,
@@ -378,6 +379,7 @@ class ProductController
 
                 // 记录积分交易
                 $this->recordPointTransaction(
+                    $request,
                     $user,
                     -$totalPoints,
                     'product_exchange',
@@ -430,7 +432,8 @@ class ProductController
                     'message' => 'Product exchanged successfully'
                 ]);
 
-            } catch (\Exception $e) {
+            } catch (\Exception $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Roll back before the outer handler records the product exchange failure.
                 $this->db->rollBack();
                 throw $e;
             }
@@ -465,7 +468,7 @@ class ProductController
                 return $this->json($response, ['error' => 'Unauthorized'], 401);
             }
             $exchangeId = $args['id'];
-            $userColumn = $this->pointExchangeUserColumn();
+            $userColumn = $this->pointExchangeUserColumn($request);
             $sql = "SELECT * FROM point_exchanges WHERE id = :id AND {$userColumn} = :uid AND deleted_at IS NULL";
             $stmt = $this->db->prepare($sql);
             $stmt->execute(['id' => $exchangeId, 'uid' => $user['id']]);
@@ -497,7 +500,7 @@ class ProductController
             $offset = ($page - 1) * $limit;
 
             $where = [
-                $this->pointExchangeUserColumn('e') . ' = :user_id',
+                $this->pointExchangeUserColumn($request, 'e') . ' = :user_id',
                 'e.deleted_at IS NULL',
             ];
             $bindings = [
@@ -616,7 +619,7 @@ class ProductController
             // 构建查询条件
             $where = ['e.deleted_at IS NULL'];
             $bindings = [];
-            $userJoinSql = 'LEFT JOIN users u ON ' . $this->pointExchangeUserColumn('e') . ' = u.id';
+            $userJoinSql = 'LEFT JOIN users u ON ' . $this->pointExchangeUserColumn($request, 'e') . ' = u.id';
 
             if (!empty($params['status'])) {
                 $where[] = 'e.status = :status';
@@ -624,7 +627,7 @@ class ProductController
             }
 
             if (!empty($params['user_id'])) {
-                $where[] = $this->pointExchangeUserColumn('e') . ' = :user_id';
+                $where[] = $this->pointExchangeUserColumn($request, 'e') . ' = :user_id';
                 $bindings['user_id'] = $params['user_id'];
             }
 
@@ -763,7 +766,7 @@ class ProductController
                     p.image_path as current_product_image_path,
                     p.images as current_product_images
                 FROM point_exchanges e
-                LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
+                LEFT JOIN users u ON " . $this->pointExchangeUserColumn($request, 'e') . " = u.id
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE e.id = :id AND e.deleted_at IS NULL
             ";
@@ -856,10 +859,10 @@ class ProductController
             ]);
 
             // 获取兑换信息用于通知
-            $exchange = $this->getExchangeRecord($exchangeId);
+            $exchange = $this->getExchangeRecord($request, $exchangeId);
             if ($exchange) {
                 // 发送状态更新通知
-                $this->sendStatusUpdateNotification($exchange, $status, $notes, $trackingNumber);
+                $this->sendStatusUpdateNotification($request, $exchange, $status, $notes, $trackingNumber);
             }
 
             // 记录审计日志
@@ -1042,7 +1045,7 @@ class ProductController
             }
             $tagPayload = $data['tags'] ?? [];
             $rawCategory = $data['category'] ?? null;
-            $categoryRecord = $this->resolveCategoryFromPayload($rawCategory);
+            $categoryRecord = $this->resolveCategoryFromPayload($request, $rawCategory);
             $imagePath = $this->extractPrimaryImagePath($data);
             $imagesPayload = isset($data['images']) ? (is_string($data['images']) ? $data['images'] : json_encode($data['images'])) : null;
             $statusInput = $data['status'] ?? 'active';
@@ -1085,7 +1088,7 @@ class ProductController
 
                 $newId = (int)$this->db->lastInsertId();
 
-                $normalizedTags = $this->resolveTagsFromPayload($tagPayload);
+                $normalizedTags = $this->resolveTagsFromPayload($request, $tagPayload);
                 $this->syncProductTags($newId, $normalizedTags);
 
                 $this->db->commit();
@@ -1099,7 +1102,8 @@ class ProductController
                 ]);
 
                 return $this->json($response, ['success' => true, 'id' => $newId, 'message' => 'Product created successfully'], 201);
-            } catch (\Throwable $txError) {
+            } catch (\Throwable $txError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Roll back before the outer handler records the product creation failure.
                 try { $this->db->rollBack(); } catch (\Throwable $ignore) {}
                 throw $txError;
             }
@@ -1144,7 +1148,7 @@ class ProductController
             $categorySlug = null;
             $hasCategoryPayload = array_key_exists('category', $data);
             if ($hasCategoryPayload) {
-                $categoryRecord = $this->resolveCategoryFromPayload($data['category']);
+                $categoryRecord = $this->resolveCategoryFromPayload($request, $data['category']);
                 $categoryName = $categoryRecord['name'] ?? (is_string($data['category']) ? trim((string)$data['category']) : null);
                 if ($categoryName === '') {
                     $categoryName = null;
@@ -1180,7 +1184,7 @@ class ProductController
                 return $this->json($response, ['error' => 'No fields to update'], 400);
             }
 
-            $normalizedTags = $shouldUpdateTags ? $this->resolveTagsFromPayload($data['tags']) : [];
+            $normalizedTags = $shouldUpdateTags ? $this->resolveTagsFromPayload($request, $data['tags']) : [];
 
             $this->db->beginTransaction();
             try {
@@ -1204,7 +1208,8 @@ class ProductController
                 ]);
 
                 return $this->json($response, ['success' => true, 'message' => 'Product updated successfully']);
-            } catch (\Throwable $txError) {
+            } catch (\Throwable $txError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Roll back before the outer handler records the product update failure.
                 try { $this->db->rollBack(); } catch (\Throwable $ignore) {}
                 throw $txError;
             }
@@ -1455,7 +1460,8 @@ class ProductController
                 $extra = $contextMessage !== '' ? ['context_message' => $contextMessage] : [];
                 $this->errorLogService->logException($exception, $request, $extra);
                 return;
-            } catch (\Throwable $loggingError) {
+            } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
+                // Use the emergency log if ErrorLogService itself fails.
                 error_log(self::ERRLOG_PREFIX . $loggingError->getMessage());
             }
         }
@@ -1520,7 +1526,7 @@ class ProductController
         return null;
     }
 
-    private function resolveCategoryFromPayload($rawCategory): ?array
+    private function resolveCategoryFromPayload(Request $request, $rawCategory): ?array
     {
         if ($rawCategory === null || $rawCategory === '') {
             return null;
@@ -1539,7 +1545,7 @@ class ProductController
         }
 
         if ($candidate['slug'] !== '') {
-            $bySlug = $this->fetchCategoriesBySlugs([$candidate['slug']]);
+            $bySlug = $this->fetchCategoriesBySlugs($request, [$candidate['slug']]);
             if (isset($bySlug[$candidate['slug']])) {
                 return $bySlug[$candidate['slug']];
             }
@@ -1555,7 +1561,7 @@ class ProductController
 
         $slug = $candidate['slug'] !== '' ? $candidate['slug'] : $this->slugifyCategoryName($name);
 
-        return $this->createProductCategory($name, $slug);
+        return $this->createProductCategory($request, $name, $slug);
     }
 
     private function normalizeCategoryCandidate($category): ?array
@@ -1649,7 +1655,7 @@ class ProductController
         return $result;
     }
 
-    private function createProductCategory(string $name, string $slug): array
+    private function createProductCategory(Request $request, string $name, string $slug): array
     {
         $name = trim($name) !== '' ? trim($name) : $slug;
         $normalizedSlug = $this->slugifyCategoryName($slug ?: $name);
@@ -1675,7 +1681,8 @@ class ProductController
                     throw $e;
                 }
 
-                $existing = $this->fetchCategoriesBySlugs([$normalizedSlug]);
+                $this->logControllerException($e, $request, 'Recovering from product category constraint conflict');
+                $existing = $this->fetchCategoriesBySlugs($request, [$normalizedSlug]);
                 if (isset($existing[$normalizedSlug])) {
                     return $existing[$normalizedSlug];
                 }
@@ -1700,7 +1707,7 @@ class ProductController
         ];
     }
 
-    private function resolveTagsFromPayload($rawTags): array
+    private function resolveTagsFromPayload(Request $request, $rawTags): array
     {
         if (!is_array($rawTags)) {
             return [];
@@ -1754,7 +1761,7 @@ class ProductController
                 continue;
             }
 
-            $record = $this->createProductTag($candidate['name'], $candidate['slug']);
+            $record = $this->createProductTag($request, $candidate['name'], $candidate['slug']);
             $resolved[$record['id']] = $record;
             $bySlug[$record['slug']] = $record;
         }
@@ -1944,7 +1951,7 @@ class ProductController
         return $result;
     }
 
-    private function fetchCategoriesBySlugs(array $slugs): array
+    private function fetchCategoriesBySlugs(Request $request, array $slugs): array
     {
         $slugs = array_values(array_unique(array_filter($slugs, static fn($slug) => is_string($slug) && $slug !== '')));
         if (empty($slugs)) {
@@ -1976,7 +1983,8 @@ class ProductController
             }
 
             return $result;
-        } catch (\Throwable $e) {
+        } catch (\Throwable $exception) {
+            $this->logControllerException($exception, $request, 'Failed to load product categories by slug');
             return [];
         }
     }
@@ -1989,7 +1997,7 @@ class ProductController
         }
         return $slug;
     }
-    private function createProductTag(string $name, string $slug): array
+    private function createProductTag(Request $request, string $name, string $slug): array
     {
         $name = trim($name) !== '' ? trim($name) : $slug;
         $slug = $this->normalizeSlug($slug);
@@ -2015,6 +2023,7 @@ class ProductController
                     throw $e;
                 }
 
+                $this->logControllerException($e, $request, 'Recovering from product tag constraint conflict');
                 $existing = $this->fetchTagsBySlugs([$slug]);
                 if (isset($existing[$slug])) {
                     return $existing[$slug];
@@ -2094,10 +2103,10 @@ class ProductController
     /**
      * 创建兑换记录
      */
-    private function createExchangeRecord(array $data): string
+    private function createExchangeRecord(Request $request, array $data): string
     {
-        $userColumn = $this->resolvePointExchangeUserIdColumn();
-        $supportsAreaCode = $this->pointExchangeSupportsAreaCode();
+        $userColumn = $this->resolvePointExchangeUserIdColumn($request);
+        $supportsAreaCode = $this->pointExchangeSupportsAreaCode($request);
 
         $columns = [
             'id',
@@ -2170,7 +2179,7 @@ class ProductController
         return $exchangeId;
     }
 
-    private function pointExchangeSupportsAreaCode(): bool
+    private function pointExchangeSupportsAreaCode(Request $request): bool
     {
         if ($this->pointExchangeHasAreaCode !== null) {
             return $this->pointExchangeHasAreaCode;
@@ -2203,6 +2212,7 @@ class ProductController
                 }
             }
         } catch (\Throwable $exception) {
+            $this->logControllerException($exception, $request, 'Failed to check for exchange area code column');
             $hasColumn = false;
         }
 
@@ -2212,8 +2222,15 @@ class ProductController
     /**
      * 记录积分交易
      */
-    private function recordPointTransaction(array $user, float $points, string $type, string $description, ?string $relatedTable = null, ?string $relatedId = null): void
-    {
+    private function recordPointTransaction(
+        Request $request,
+        array $user,
+        float $points,
+        string $type,
+        string $description,
+        ?string $relatedTable = null,
+        ?string $relatedId = null
+    ): void {
         $userId = (int)($user['id'] ?? 0);
         if ($userId <= 0) {
             throw new \InvalidArgumentException('Invalid user for points transaction');
@@ -2247,7 +2264,7 @@ class ProductController
             $columnMap = [];
             $params = [];
 
-            $userColumn = $this->resolvePointsTransactionUserIdColumn();
+            $userColumn = $this->resolvePointsTransactionUserIdColumn($request);
             $columnMap[$userColumn] = 'user_column_value';
             $params['user_column_value'] = $userId;
 
@@ -2344,7 +2361,7 @@ class ProductController
         }
 
         if (!isset($columns['uid']) && !isset($columns['user_id'])) {
-            $userColumn = $this->resolvePointsTransactionUserIdColumn();
+            $userColumn = $this->resolvePointsTransactionUserIdColumn($request);
             $columnMap[$userColumn] = 'user_column_value';
             $params['user_column_value'] = $userId;
         }
@@ -2492,9 +2509,9 @@ class ProductController
         return $this->pointsTransactionColumns = $columns;
     }
 
-    private function pointExchangeUserColumn(?string $alias = null): string
+    private function pointExchangeUserColumn(Request $request, ?string $alias = null): string
     {
-        $column = $this->resolvePointExchangeUserIdColumn();
+        $column = $this->resolvePointExchangeUserIdColumn($request);
         if ($alias !== null && $alias !== '') {
             return $alias . '.' . $column;
         }
@@ -2502,7 +2519,7 @@ class ProductController
         return $column;
     }
 
-    private function resolvePointExchangeUserIdColumn(): string
+    private function resolvePointExchangeUserIdColumn(Request $request): string
     {
         if ($this->pointExchangeUserIdColumn !== null) {
             return $this->pointExchangeUserIdColumn;
@@ -2546,14 +2563,14 @@ class ProductController
                     }
                 }
             }
-        } catch (\Throwable $e) {
-            // ignore and fall back to default detected value
+        } catch (\Throwable $exception) {
+            $this->logControllerException($exception, $request, 'Failed to detect exchange user ID column');
         }
 
         return $this->pointExchangeUserIdColumn = $detected;
     }
 
-    private function resolvePointsTransactionUserIdColumn(): string
+    private function resolvePointsTransactionUserIdColumn(Request $request): string
     {
         if ($this->pointsTransactionUserIdColumn !== null) {
             return $this->pointsTransactionUserIdColumn;
@@ -2597,8 +2614,8 @@ class ProductController
                     }
                 }
             }
-        } catch (\Throwable $e) {
-            // ignore and fall back to detected value
+        } catch (\Throwable $exception) {
+            $this->logControllerException($exception, $request, 'Failed to detect points transaction user ID column');
         }
 
         return $this->pointsTransactionUserIdColumn = $detected;
@@ -2667,12 +2684,12 @@ class ProductController
     /**
      * 获取兑换记录
      */
-    private function getExchangeRecord(string $exchangeId): ?array
+    private function getExchangeRecord(Request $request, string $exchangeId): ?array
     {
         $sql = "
             SELECT e.*, u.username, u.email
             FROM point_exchanges e
-            LEFT JOIN users u ON " . $this->pointExchangeUserColumn('e') . " = u.id
+            LEFT JOIN users u ON " . $this->pointExchangeUserColumn($request, 'e') . " = u.id
             WHERE e.id = :id AND e.deleted_at IS NULL
         ";
         $stmt = $this->db->prepare($sql);
@@ -2715,8 +2732,13 @@ class ProductController
     /**
      * 发送状态更新通知
      */
-    private function sendStatusUpdateNotification(array $exchange, string $status, ?string $notes, ?string $trackingNumber): void
-    {
+    private function sendStatusUpdateNotification(
+        Request $request,
+        array $exchange,
+        string $status,
+        ?string $notes,
+        ?string $trackingNumber
+    ): void {
         $statusMessages = [
             'processing' => '您的兑换订单正在处理中',
             'shipped' => '您的兑换商品已发货',
@@ -2736,7 +2758,7 @@ class ProductController
             $message .= "\n备注：{$notes}";
         }
 
-        $userColumn = $this->resolvePointExchangeUserIdColumn();
+        $userColumn = $this->resolvePointExchangeUserIdColumn($request);
         $userId = isset($exchange[$userColumn]) ? (int)$exchange[$userColumn] : 0;
 
         if ($userId <= 0) {
