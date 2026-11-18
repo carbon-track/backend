@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
@@ -19,13 +22,12 @@ use Slim\Psr7\Response;
 
 final class AuthEmailVerificationTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->exec("
+        $this->connection = DatabaseFixture::sqlite();
+        $this->connection->unprepared("
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT,
@@ -50,8 +52,8 @@ final class AuthEmailVerificationTest extends TestCase
                 notification_email_mask INTEGER DEFAULT 0
             );
         ");
-        $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT);");
+        $this->connection->unprepared("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT);");
+        $this->connection->unprepared("CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT);");
     }
 
     /**
@@ -90,7 +92,7 @@ final class AuthEmailVerificationTest extends TestCase
             $msg,
             $r2,
             $logger,
-            $this->pdo,
+            $this->connection,
             $err,
             $region
         );
@@ -101,10 +103,10 @@ final class AuthEmailVerificationTest extends TestCase
     public function testSendVerificationCodeDispatchesEmail(): void
     {
         $now = date('Y-m-d H:i:s');
-        $this->pdo->prepare("
+        $this->connection->statement("
             INSERT INTO users (username, email, password, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
-        ")->execute(['alice', 'alice@example.com', password_hash('Secret123!', PASSWORD_DEFAULT), $now, $now]);
+        ", ['alice', 'alice@example.com', password_hash('Secret123!', PASSWORD_DEFAULT), $now, $now]);
 
         $setup = $this->makeController();
         $controller = $setup['controller'];
@@ -124,7 +126,7 @@ final class AuthEmailVerificationTest extends TestCase
         $this->assertTrue($payload['success']);
         $this->assertArrayHasKey('data', $payload);
 
-        $row = $this->pdo->query("SELECT verification_token, verification_send_count FROM users WHERE email='alice@example.com'")->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne("SELECT verification_token, verification_send_count FROM users WHERE email='alice@example.com'"));
         $this->assertNotEmpty($row['verification_token']);
         $this->assertSame(1, (int)$row['verification_send_count']);
     }
@@ -133,10 +135,10 @@ final class AuthEmailVerificationTest extends TestCase
     {
         $now = date('Y-m-d H:i:s');
         $token = bin2hex(random_bytes(16));
-        $this->pdo->prepare("
+        $this->connection->statement("
             INSERT INTO users (username, email, password, created_at, updated_at, verification_token, verification_code_expires_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ")->execute([
+        ", [
             'bob',
             'bob@example.com',
             password_hash('Secret123!', PASSWORD_DEFAULT),
@@ -162,7 +164,7 @@ final class AuthEmailVerificationTest extends TestCase
         $this->assertSame('bob@example.com', $payload['data']['user']['email']);
         $this->assertNotEmpty($payload['data']['user']['email_verified_at']);
 
-        $row = $this->pdo->query("SELECT email_verified_at, verification_token FROM users WHERE email='bob@example.com'")->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne("SELECT email_verified_at, verification_token FROM users WHERE email='bob@example.com'"));
         $this->assertNotEmpty($row['email_verified_at']);
         $this->assertNull($row['verification_token']);
     }

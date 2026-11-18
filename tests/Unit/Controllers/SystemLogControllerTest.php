@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
@@ -13,35 +15,39 @@ class SystemLogControllerTest extends TestCase
 {
     public function testListUsesDistinctGeneralSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $auth = $this->createMock(AuthService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
         $bound = [];
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'value';
+        $countStmt->checkParameters = true;
         $countStmt->expects($this->exactly(9))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$bound) {
                 $bound['count'][$key] = [$value, $type];
                 return true;
             });
-        $countStmt->expects($this->once())->method('execute')->willReturn(true);
-        $countStmt->expects($this->once())->method('fetchColumn')->willReturn(0);
+        $countStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $countStmt->expects($this->once())->method('value')->willReturn(0);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
         $listStmt->expects($this->exactly(11))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$bound) {
                 $bound['list'][$key] = [$value, $type];
                 return true;
             });
-        $listStmt->expects($this->once())->method('execute')->willReturn(true);
-        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $listStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $listStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use ($countStmt, $listStmt) {
                 static $prepareCalls = 0;
                 $prepareCalls++;
@@ -51,7 +57,7 @@ class SystemLogControllerTest extends TestCase
                 return $prepareCalls === 1 ? $countStmt : $listStmt;
             });
 
-        $controller = new SystemLogController($pdo, $auth, $audit);
+        $controller = new SystemLogController($connection, $auth, $audit);
         $request = makeRequest('GET', '/admin/system-logs', null, ['q' => 'trace']);
         $response = new \Slim\Psr7\Response();
 

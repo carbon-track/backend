@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\ProductController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
-use PDO;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ServerRequestInterface;
 use Slim\Psr7\Response;
@@ -17,16 +19,16 @@ class AdminProductExchangeFlowTest extends TestCase
 {
     public function testAdminProductLifecycle(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $auditLog->method('log')->willReturn(true);
         $authService = $this->makeAdminAuthService();
 
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $createRequest = makeRequest('POST', '/admin/products', [
             'name' => 'Solar Charger',
@@ -47,20 +49,20 @@ class AdminProductExchangeFlowTest extends TestCase
         $productId = (int)$payload['id'];
         $this->assertGreaterThan(0, $productId);
 
-        $productRow = $pdo->query('SELECT * FROM products WHERE id = ' . $productId)->fetch(PDO::FETCH_ASSOC);
+        $productRow = DatabaseRows::one($connection->selectOne('SELECT * FROM products WHERE id = ' . $productId));
         $this->assertSame('Solar Charger', $productRow['name']);
         $this->assertSame('Outdoor', $productRow['category']);
         $this->assertNotEmpty($productRow['category_slug']);
         $this->assertSame('active', $productRow['status']);
         $this->assertSame('25', (string)$productRow['stock']);
 
-        $tagCount = (int)$pdo->query('SELECT COUNT(*) FROM product_tags')->fetchColumn();
+        $tagCount = (int)DatabaseRows::scalar($connection->selectOne('SELECT COUNT(*) FROM product_tags'));
         $this->assertSame(2, $tagCount);
 
-        $map = $pdo->query('SELECT tag_id FROM product_tag_map WHERE product_id = ' . $productId)->fetchAll(PDO::FETCH_COLUMN);
+        $map = DatabaseRows::column($connection->select('SELECT tag_id FROM product_tag_map WHERE product_id = ' . $productId));
         $this->assertCount(2, $map);
 
-        $existingTagId = (int)$pdo->query("SELECT id FROM product_tags WHERE slug = 'hot'")->fetchColumn();
+        $existingTagId = (int)DatabaseRows::scalar($connection->selectOne("SELECT id FROM product_tags WHERE slug = 'hot'"));
 
         $updateRequest = makeRequest('PUT', '/admin/products/' . $productId, [
             'status' => 'inactive',
@@ -78,22 +80,22 @@ class AdminProductExchangeFlowTest extends TestCase
         $updatePayload = json_decode((string)$updated->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertTrue($updatePayload['success']);
 
-        $productAfterUpdate = $pdo->query('SELECT * FROM products WHERE id = ' . $productId)->fetch(PDO::FETCH_ASSOC);
+        $productAfterUpdate = DatabaseRows::one($connection->selectOne('SELECT * FROM products WHERE id = ' . $productId));
         $this->assertSame('inactive', $productAfterUpdate['status']);
         $this->assertSame('10', (string)$productAfterUpdate['stock']);
         $this->assertSame('Electronics', $productAfterUpdate['category']);
 
-        $mapAfterUpdate = $pdo->query('SELECT tag_id FROM product_tag_map WHERE product_id = ' . $productId)->fetchAll(PDO::FETCH_COLUMN);
+        $mapAfterUpdate = DatabaseRows::column($connection->select('SELECT tag_id FROM product_tag_map WHERE product_id = ' . $productId));
         $this->assertSame([$existingTagId], array_map('intval', $mapAfterUpdate));
     }
 
     public function testAdminCanListAndUpdateExchangeStatus(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProduct($pdo);
-        $this->seedExchange($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProduct($connection);
+        $this->seedExchange($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $messageService->expects($this->once())
@@ -122,7 +124,7 @@ class AdminProductExchangeFlowTest extends TestCase
         $auditLog->method('log')->willReturn(true);
 
         $authService = $this->makeAdminAuthService();
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $listRequest = makeRequest('GET', '/admin/exchanges', null, [
             'status' => 'pending',
@@ -152,7 +154,7 @@ class AdminProductExchangeFlowTest extends TestCase
         $updatePayload = json_decode((string)$updateResult->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertTrue($updatePayload['success']);
 
-        $dbExchange = $pdo->query("SELECT status, tracking_number, notes FROM point_exchanges WHERE id = 'ex-1'")->fetch(PDO::FETCH_ASSOC);
+        $dbExchange = DatabaseRows::one($connection->selectOne("SELECT status, tracking_number, notes FROM point_exchanges WHERE id = 'ex-1'"));
         $this->assertSame('shipped', $dbExchange['status']);
         $this->assertSame('TRACK123', $dbExchange['tracking_number']);
         $this->assertSame('发货完成', $dbExchange['notes']);
@@ -160,11 +162,11 @@ class AdminProductExchangeFlowTest extends TestCase
 
     public function testAdminCanRejectExchangeStatus(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProduct($pdo);
-        $this->seedExchange($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProduct($connection);
+        $this->seedExchange($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $messageService->expects($this->once())
@@ -196,7 +198,7 @@ class AdminProductExchangeFlowTest extends TestCase
         $auditLog->method('log')->willReturn(true);
 
         $authService = $this->makeAdminAuthService();
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $request = makeRequest('PUT', '/admin/exchanges/ex-1', [
             'status' => 'rejected',
@@ -210,25 +212,25 @@ class AdminProductExchangeFlowTest extends TestCase
         $payload = json_decode((string)$result->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertTrue($payload['success']);
 
-        $dbExchange = $pdo->query("SELECT status, tracking_number, notes FROM point_exchanges WHERE id = 'ex-1'")->fetch(PDO::FETCH_ASSOC);
+        $dbExchange = DatabaseRows::one($connection->selectOne("SELECT status, tracking_number, notes FROM point_exchanges WHERE id = 'ex-1'"));
         $this->assertSame('rejected', $dbExchange['status']);
         $this->assertNull($dbExchange['tracking_number']);
         $this->assertSame('库存不足', $dbExchange['notes']);
     }
     public function testAdminExchangeListSupportsSearchAndSort(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProduct($pdo);
-        $this->seedExchange($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProduct($connection);
+        $this->seedExchange($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $auditLog->method('log')->willReturn(true);
 
         $authService = $this->makeAdminAuthService();
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $searchRequest = makeRequest('GET', '/admin/exchanges', null, [
             'search' => 'track-second',
@@ -255,17 +257,17 @@ class AdminProductExchangeFlowTest extends TestCase
 
     public function testStoreProductListSupportsSortModes(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedStoreProducts($pdo);
-        $this->seedCompletedExchangeStats($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedStoreProducts($connection);
+        $this->seedCompletedExchangeStats($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $authService = $this->makeUserAuthService();
 
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $pointsRequest = makeRequest('GET', '/products', null, ['sort' => 'points_asc', 'limit' => 10]);
         $pointsResponse = new Response();
@@ -284,19 +286,15 @@ class AdminProductExchangeFlowTest extends TestCase
         $this->assertSame(['Solar Charger', 'Eco Bottle', 'Seed Packet'], array_column($popularPayload['data']['products'], 'name'));
     }
 
-    private function createConnection(): PDO
+    private function createConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('NOW', static fn() => date('Y-m-d H:i:s'));
-        }
-        return $pdo;
+        $connection = DatabaseFixture::sqlite();
+        return $connection;
     }
 
-    private function createSchema(PDO $pdo): void
+    private function createSchema(Connection $connection): void
     {
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -308,14 +306,14 @@ class AdminProductExchangeFlowTest extends TestCase
             notification_email_mask INTEGER DEFAULT 0
         )');
 
-        $pdo->exec('CREATE TABLE product_categories (
+        $connection->unprepared('CREATE TABLE product_categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             slug TEXT UNIQUE,
             created_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE products (
+        $connection->unprepared('CREATE TABLE products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             category TEXT,
@@ -332,7 +330,7 @@ class AdminProductExchangeFlowTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE product_tags (
+        $connection->unprepared('CREATE TABLE product_tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             slug TEXT UNIQUE,
@@ -340,13 +338,13 @@ class AdminProductExchangeFlowTest extends TestCase
             updated_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE product_tag_map (
+        $connection->unprepared('CREATE TABLE product_tag_map (
             product_id INTEGER,
             tag_id INTEGER,
             created_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE point_exchanges (
+        $connection->unprepared('CREATE TABLE point_exchanges (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
             product_id INTEGER,
@@ -366,27 +364,27 @@ class AdminProductExchangeFlowTest extends TestCase
         )');
     }
 
-    private function seedUsers(PDO $pdo): void
+    private function seedUsers(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO users (id, username, email, points, is_admin, status, created_at) VALUES
+        $connection->unprepared("INSERT INTO users (id, username, email, points, is_admin, status, created_at) VALUES
             (1, 'admin_user', 'admin@example.com', 1000, 1, 'active', '$now'),
             (2, 'normal_user', 'user@example.com', 320, 0, 'active', '$now')
         ");
     }
 
-    private function seedProduct(PDO $pdo): void
+    private function seedProduct(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO products (id, name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at)
+        $connection->unprepared("INSERT INTO products (id, name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at)
             VALUES (1, 'Eco Bottle', 'Lifestyle', 'lifestyle', 150, 'Reusable bottle', 'eco-bottle', '[\"eco-bottle\"]', 20, 'active', 1, '$now')
         ");
     }
 
-    private function seedExchange(PDO $pdo): void
+    private function seedExchange(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO point_exchanges (
+        $connection->unprepared("INSERT INTO point_exchanges (
             id, user_id, product_id, quantity, points_used, product_name, product_price,
             status, tracking_number, created_at
         ) VALUES (
@@ -396,9 +394,9 @@ class AdminProductExchangeFlowTest extends TestCase
         )");
     }
 
-    private function seedStoreProducts(PDO $pdo): void
+    private function seedStoreProducts(Connection $connection): void
     {
-        $pdo->exec("INSERT INTO products (id, name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at)
+        $connection->unprepared("INSERT INTO products (id, name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at)
             VALUES
             (10, 'Eco Bottle', 'Lifestyle', 'lifestyle', 150, 'Reusable bottle', 'eco-bottle', '[\"eco-bottle\"]', 20, 'active', 2, '2026-01-02 10:00:00'),
             (11, 'Solar Charger', 'Electronics', 'electronics', 300, 'Portable charger', 'solar-charger', '[\"solar-charger\"]', 20, 'active', 3, '2026-01-03 10:00:00'),
@@ -406,9 +404,9 @@ class AdminProductExchangeFlowTest extends TestCase
         ");
     }
 
-    private function seedCompletedExchangeStats(PDO $pdo): void
+    private function seedCompletedExchangeStats(Connection $connection): void
     {
-        $pdo->exec("INSERT INTO point_exchanges (
+        $connection->unprepared("INSERT INTO point_exchanges (
             id, user_id, product_id, quantity, points_used, product_name, product_price,
             status, tracking_number, created_at
         ) VALUES

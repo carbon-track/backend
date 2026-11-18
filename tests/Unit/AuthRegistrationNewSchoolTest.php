@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\{AuthService, EmailService, TurnstileService, AuditLogService, ErrorLogService, MessageService, CloudflareR2Service, RegionService};
@@ -13,16 +16,15 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 
 final class AuthRegistrationNewSchoolTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private RegionService $regionService;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->connection = DatabaseFixture::sqlite();
         // Minimal schema: users & schools
-        $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, role TEXT DEFAULT 'user', points INTEGER DEFAULT 0, region_code TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
+        $this->connection->unprepared("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT);");
+        $this->connection->unprepared("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, username TEXT, email TEXT, password TEXT, school_id INTEGER, is_admin INTEGER DEFAULT 0, role TEXT DEFAULT 'user', points INTEGER DEFAULT 0, region_code TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
         $this->regionService = new RegionService(null, null);
     }
 
@@ -53,7 +55,7 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $err = $this->createMock(ErrorLogService::class);
         $region = $this->regionService;
 
-        return new AuthController($auth, $email, $turnstile, $audit, $msg, $r2, $logger, $this->pdo, $err, $region);
+        return new AuthController($auth, $email, $turnstile, $audit, $msg, $r2, $logger, $this->connection, $err, $region);
     }
 
     private function makeRequest(array $body): Request
@@ -83,12 +85,10 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $this->assertEquals(201, $out->getStatusCode(), 'Should return 201 Created');
         $this->assertTrue($data['success']);
         // School should be created
-        $stmt = $this->pdo->query("SELECT COUNT(*) AS c FROM schools WHERE LOWER(name)=LOWER('Carbon Innovation Institute')");
-        $count = (int)$stmt->fetch(PDO::FETCH_ASSOC)['c'];
+        $count = (int)DatabaseRows::one($this->connection->selectOne("SELECT COUNT(*) AS c FROM schools WHERE LOWER(name)=LOWER('Carbon Innovation Institute')"))['c'];
         $this->assertEquals(1, $count, 'School should have been inserted exactly once');
         // User should reference that school
-        $stmt = $this->pdo->query("SELECT u.school_id, s.name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.email='user_new_school@example.com'");
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne("SELECT u.school_id, s.name FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE u.email='user_new_school@example.com'"));
         $this->assertNotEmpty($row['school_id']);
         $this->assertEquals('Carbon Innovation Institute', $row['name']);
     }
@@ -97,8 +97,8 @@ final class AuthRegistrationNewSchoolTest extends TestCase
     {
         // Seed an existing school
         $now = date('Y-m-d H:i:s');
-        $this->pdo->exec("INSERT INTO schools (name, created_at, updated_at) VALUES ('Existing Academy', '$now', '$now')");
-        $schoolId = (int)$this->pdo->lastInsertId();
+        $this->connection->unprepared("INSERT INTO schools (name, created_at, updated_at) VALUES ('Existing Academy', '$now', '$now')");
+        $schoolId = (int)DatabaseRows::scalar($this->connection->selectOne('SELECT last_insert_rowid()'));
 
         $controller = $this->makeController();
         $pwd = 'Password123!';
@@ -119,12 +119,10 @@ final class AuthRegistrationNewSchoolTest extends TestCase
         $this->assertEquals(201, $out->getStatusCode());
         $this->assertTrue($data['success']);
         // Ensure no new school was inserted with the new name
-        $stmt = $this->pdo->query("SELECT COUNT(*) AS c FROM schools WHERE LOWER(name)=LOWER('Another New School Name')");
-        $count = (int)$stmt->fetch(PDO::FETCH_ASSOC)['c'];
+        $count = (int)DatabaseRows::one($this->connection->selectOne("SELECT COUNT(*) AS c FROM schools WHERE LOWER(name)=LOWER('Another New School Name')"))['c'];
         $this->assertEquals(0, $count, 'Should not create a new school when school_id is provided');
         // User should reference original school id
-        $stmt = $this->pdo->query("SELECT school_id FROM users WHERE email='user_existing_school@example.com'");
-        $userSchool = (int)$stmt->fetch(PDO::FETCH_ASSOC)['school_id'];
+        $userSchool = (int)DatabaseRows::one($this->connection->selectOne("SELECT school_id FROM users WHERE email='user_existing_school@example.com'"))['school_id'];
         $this->assertEquals($schoolId, $userSchool);
     }
 }

@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
-use PDO;
 
 class LeaderboardService
 {
@@ -15,7 +16,7 @@ class LeaderboardService
     private const REGION_LIMIT = 20;
     private const SCHOOL_LIMIT = 20;
 
-    private PDO $db;
+    private Connection $db;
     private RegionService $regionService;
     private ?Logger $logger;
     private ?AuditLogService $auditLogService;
@@ -24,7 +25,7 @@ class LeaderboardService
     private string $cacheFile;
     private int $ttlSeconds;
 
-    public function __construct(PDO $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null, ?UserProfileViewService $userProfileViewService = null)
+    public function __construct(Connection $db, RegionService $regionService, ?Logger $logger = null, ?string $cacheDir = null, ?int $ttlSeconds = null, ?AuditLogService $auditLogService = null, ?ErrorLogService $errorLogService = null, ?UserProfileViewService $userProfileViewService = null)
     {
         $this->db = $db;
         $this->regionService = $regionService;
@@ -64,12 +65,12 @@ class LeaderboardService
             return $data;
         } catch (\Throwable $e) {
             $this->log('error', 'Failed to rebuild leaderboard cache', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'reason' => $reason,
             ]);
             $this->logAudit('leaderboard_cache_rebuild_failed', 'failed', [
                 'reason' => $reason,
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ]);
             $this->logError($e, '/internal/leaderboard/rebuild', [
                 'reason' => $reason,
@@ -94,9 +95,7 @@ class LeaderboardService
                 WHERE u.deleted_at IS NULL
                 ORDER BY u.points DESC, u.id ASC";
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = DatabaseRows::all($this->db->select($sql)) ?: [];
 
         $global = [];
         $regions = [];

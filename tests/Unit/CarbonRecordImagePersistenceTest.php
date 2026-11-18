@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
 use CarbonTrack\Services\{CarbonCalculatorService, MessageService, AuditLogService, AuthService, ErrorLogService, CloudflareR2Service};
@@ -13,19 +16,18 @@ use Slim\Psr7\Response;
 
 final class CarbonRecordImagePersistenceTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->exec("CREATE TABLE carbon_records (id TEXT PRIMARY KEY,user_id INTEGER,activity_id TEXT,amount REAL,unit TEXT,carbon_saved REAL,points_earned INTEGER,date TEXT,description TEXT,images TEXT,status TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,deleted_at TEXT);");
-    $this->pdo->exec("CREATE TABLE carbon_activities (id TEXT PRIMARY KEY,name_zh TEXT,name_en TEXT,category TEXT,carbon_factor REAL,unit TEXT,icon TEXT,points_factor REAL DEFAULT 1,description_zh TEXT,description_en TEXT,sort_order INTEGER DEFAULT 0,is_active INTEGER DEFAULT 1,deleted_at TEXT);");
-    $this->pdo->exec("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit,icon) VALUES ('act-1','活动','Activity','daily',1.5,'times','icon-car');");
+        $this->connection = DatabaseFixture::sqlite();
+        $this->connection->unprepared("CREATE TABLE carbon_records (id TEXT PRIMARY KEY,user_id INTEGER,activity_id TEXT,amount REAL,unit TEXT,carbon_saved REAL,points_earned INTEGER,date TEXT,description TEXT,images TEXT,status TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,deleted_at TEXT);");
+    $this->connection->unprepared("CREATE TABLE carbon_activities (id TEXT PRIMARY KEY,name_zh TEXT,name_en TEXT,category TEXT,carbon_factor REAL,unit TEXT,icon TEXT,points_factor REAL DEFAULT 1,description_zh TEXT,description_en TEXT,sort_order INTEGER DEFAULT 0,is_active INTEGER DEFAULT 1,deleted_at TEXT);");
+    $this->connection->unprepared("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit,icon) VALUES ('act-1','活动','Activity','daily',1.5,'times','icon-car');");
     // minimal users table for controller queries (notifyAdminsNewRecord & auth mocks)
-    $this->pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, is_admin INTEGER DEFAULT 0, school_id INTEGER, points REAL DEFAULT 0, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
-    $this->pdo->exec("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (1,'tester','t@example.com',0,1,0);");
-    $this->pdo->exec("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (2,'admin','admin@example.com',1,1,0);");
+    $this->connection->unprepared("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, is_admin INTEGER DEFAULT 0, school_id INTEGER, points REAL DEFAULT 0, deleted_at TEXT, reset_token TEXT, reset_token_expires_at TEXT, email_verified_at TEXT, verification_code TEXT, verification_token TEXT, verification_code_expires_at TEXT, verification_attempts INTEGER DEFAULT 0, verification_send_count INTEGER DEFAULT 0, verification_last_sent_at TEXT, notification_email_mask INTEGER DEFAULT 0);");
+    $this->connection->unprepared("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (1,'tester','t@example.com',0,1,0);");
+    $this->connection->unprepared("INSERT INTO users (id,username,email,is_admin,school_id,points) VALUES (2,'admin','admin@example.com',1,1,0);");
     }
 
     private function makeController(array $uploadResults = []): CarbonTrackController
@@ -43,7 +45,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
             $r2->method('getPublicUrl')->willReturnCallback(fn(string $p) => 'https://cdn.example/' . ltrim($p,'/'));
         }
         return new CarbonTrackController(
-            $this->pdo,
+            $this->connection,
             $calc,
             $msg,
             $audit,
@@ -78,7 +80,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
         $this->assertArrayHasKey('success', $data);
         $this->assertTrue($data['success']);
         $recId = $data['data']['record_id'];
-        $row = $this->pdo->query("SELECT images FROM carbon_records WHERE id = '$recId'")->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne("SELECT images FROM carbon_records WHERE id = '$recId'"));
         $decoded = json_decode($row['images'], true);
         $this->assertCount(2, $decoded);
         $this->assertEquals('https://a/img1.png', $decoded[0]['public_url'] ?? $decoded[0]['url']);
@@ -106,7 +108,7 @@ final class CarbonRecordImagePersistenceTest extends TestCase
     $this->assertArrayHasKey('success', $data, 'Response missing success key. Raw: ' . $raw);
     $this->assertTrue($data['success']);
         $recId = $data['data']['record_id'];
-        $row = $this->pdo->query("SELECT images FROM carbon_records WHERE id = '$recId'")->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne("SELECT images FROM carbon_records WHERE id = '$recId'"));
         $decoded = json_decode($row['images'], true);
         $this->assertCount(1, $decoded);
         $this->assertEquals('https://cdn.example/activities/1/a.jpg', $decoded[0]['public_url'] ?? $decoded[0]['url']);

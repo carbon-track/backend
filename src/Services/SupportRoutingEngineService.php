@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\SupportTicketRoutingRun;
 use CarbonTrack\Models\SupportTicketTagAssignment;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeZone;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class SupportRoutingEngineService
@@ -17,7 +18,7 @@ class SupportRoutingEngineService
     private ?DateTimeZone $appTimeZone = null;
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private LoggerInterface $logger,
         private AuditLogService $auditLogService,
         private ErrorLogService $errorLogService,
@@ -187,7 +188,7 @@ class SupportRoutingEngineService
                 'summary' => $summary,
             ];
         } catch (\Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             $this->logError($exception, ['ticket_id' => $ticketId, 'trigger' => $trigger]);
@@ -197,13 +198,12 @@ class SupportRoutingEngineService
 
     public function runSlaSweep(): array
     {
-        $stmt = $this->db->query("
+        $ticketIds = array_map('intval', DatabaseRows::column($this->db->select("
             SELECT id
             FROM support_tickets
             WHERE status IN ('open', 'in_progress', 'waiting_user')
             ORDER BY id ASC
-        ");
-        $ticketIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        ")) ?: []);
         $processed = 0;
         $breached = 0;
         $rerouted = 0;
@@ -246,7 +246,7 @@ class SupportRoutingEngineService
                 } catch (\Throwable $exception) {
                     $this->logger->warning('Support SLA reroute failed', [
                         'ticket_id' => $ticketId,
-                        'error' => $exception->getMessage(),
+                        'error' => DatabaseService::exceptionMessage($exception),
                     ]);
                     $this->logError($exception, [
                         'ticket_id' => $ticketId,
@@ -270,15 +270,13 @@ class SupportRoutingEngineService
 
     public function getRoutingSummaryForTicket(int $ticketId): ?array
     {
-        $stmt = $this->db->prepare('
+        $row = DatabaseRows::one($this->db->selectOne('
             SELECT summary_json, id
             FROM support_ticket_routing_runs
             WHERE ticket_id = :ticket_id
             ORDER BY id DESC
             LIMIT 1
-        ');
-        $stmt->execute(['ticket_id' => $ticketId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ', ['ticket_id' => $ticketId]));
         if (!$row) {
             return null;
         }
@@ -331,16 +329,6 @@ class SupportRoutingEngineService
 
     public function getRoutingRunsForTicket(int $ticketId, int $limit = 10): array
     {
-        $stmt = $this->db->prepare('
-            SELECT *
-            FROM support_ticket_routing_runs
-            WHERE ticket_id = :ticket_id
-            ORDER BY id DESC
-            LIMIT :limit
-        ');
-        $stmt->bindValue(':ticket_id', $ticketId, PDO::PARAM_INT);
-        $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
-        $stmt->execute();
         return array_map(function (array $row): array {
             $candidateScores = json_decode((string) ($row['candidate_scores_json'] ?? '[]'), true);
             $summary = $this->decodeJsonObject($row['summary_json'] ?? null) ?? [];
@@ -362,7 +350,13 @@ class SupportRoutingEngineService
                 'created_at' => $row['created_at'] ?? null,
                 'updated_at' => $row['updated_at'] ?? null,
             ];
-        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        }, DatabaseRows::all($this->db->select('
+            SELECT *
+            FROM support_ticket_routing_runs
+            WHERE ticket_id = :ticket_id
+            ORDER BY id DESC
+            LIMIT :limit
+        ', [':ticket_id' => (int) $ticketId, ':limit' => (int) max(1, $limit)])) ?: []);
     }
 
     private function buildLockedResult(array $ticket, string $trigger): array
@@ -388,7 +382,7 @@ class SupportRoutingEngineService
 
     private function loadTicket(int $ticketId): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 t.*,
                 requester.username AS requester_username,
@@ -400,29 +394,24 @@ class SupportRoutingEngineService
             INNER JOIN users requester ON requester.id = t.user_id
             WHERE t.id = :id
             LIMIT 1
-        ");
-        $stmt->execute(['id' => $ticketId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['id' => $ticketId]));
         return $row ?: null;
     }
 
     private function loadFirstMessageBody(int $ticketId): string
     {
-        $stmt = $this->db->prepare('
+        return trim((string) (DatabaseRows::scalar($this->db->selectOne('
             SELECT body
             FROM support_ticket_messages
             WHERE ticket_id = :ticket_id
             ORDER BY id ASC
             LIMIT 1
-        ');
-        $stmt->execute(['ticket_id' => $ticketId]);
-        return trim((string) ($stmt->fetchColumn() ?: ''));
+        ', ['ticket_id' => $ticketId])) ?: ''));
     }
 
     private function loadRoutingSettings(): array
     {
-        $stmt = $this->db->query('SELECT * FROM support_routing_settings ORDER BY id ASC LIMIT 1');
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM support_routing_settings ORDER BY id ASC LIMIT 1'));
 
         $defaults = [
             'first_response_minutes' => 240,
@@ -478,9 +467,7 @@ class SupportRoutingEngineService
         $groupRouting = $defaults;
 
         if ($groupId > 0) {
-            $stmt = $this->db->prepare('SELECT config FROM user_groups WHERE id = :id LIMIT 1');
-            $stmt->execute(['id' => $groupId]);
-            $config = $this->decodeJsonObject($stmt->fetchColumn() ?: null) ?? [];
+            $config = $this->decodeJsonObject(DatabaseRows::scalar($this->db->selectOne('SELECT config FROM user_groups WHERE id = :id LIMIT 1', ['id' => $groupId])) ?: null) ?? [];
             $supportRouting = is_array($config['support_routing'] ?? null) ? $config['support_routing'] : [];
             $groupRouting = array_replace($groupRouting, $supportRouting);
         }
@@ -606,18 +593,18 @@ class SupportRoutingEngineService
 
     private function loadActiveRules(): array
     {
-        $stmt = $this->db->query("
+        return DatabaseRows::all($this->db->select("
             SELECT *
             FROM support_ticket_automation_rules
             WHERE is_active = 1
             ORDER BY sort_order ASC, id ASC
-        ");
-        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ")) ?: [];
     }
 
     private function loadCandidateRows(): array
     {
-        $stmt = $this->db->query("
+
+        return DatabaseRows::all($this->db->select("
             SELECT
                 u.id,
                 u.username,
@@ -660,9 +647,7 @@ class SupportRoutingEngineService
             WHERE u.deleted_at IS NULL
               AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
             ORDER BY u.id ASC
-        ");
-
-        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ")) ?: [];
     }
 
     private function scoreCandidate(
@@ -802,9 +787,8 @@ class SupportRoutingEngineService
         }
 
         $existing = [];
-        $stmt = $this->db->prepare('SELECT tag_id FROM support_ticket_tag_assignments WHERE ticket_id = :ticket_id');
-        $stmt->execute(['ticket_id' => $ticketId]);
-        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) ?: [] as $tagId) {
+        $queryRows = $this->db->select('SELECT tag_id FROM support_ticket_tag_assignments WHERE ticket_id = :ticket_id', ['ticket_id' => $ticketId]);
+        foreach (DatabaseRows::column($queryRows) ?: [] as $tagId) {
             $existing[(int) $tagId] = true;
         }
 
@@ -828,14 +812,13 @@ class SupportRoutingEngineService
 
     private function touchRuleMetrics(int $ruleId): void
     {
-        $stmt = $this->db->prepare("
+        $this->db->statement("
             UPDATE support_ticket_automation_rules
             SET trigger_count = trigger_count + 1,
                 last_triggered_at = :timestamp,
                 updated_at = :timestamp
             WHERE id = :id
-        ");
-        $stmt->execute([
+        ", [
             'timestamp' => $this->now(),
             'id' => $ruleId,
         ]);
@@ -934,15 +917,12 @@ class SupportRoutingEngineService
         if ($assignments === []) {
             return;
         }
-        $stmt = $this->db->prepare('UPDATE support_tickets SET ' . implode(', ', $assignments) . ' WHERE id = :id');
-        $stmt->execute($params);
+        $this->db->statement('UPDATE support_tickets SET ' . implode(', ', $assignments) . ' WHERE id = :id', $params);
     }
 
     private function loadUser(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT id, username, email FROM users WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT id, username, email FROM users WHERE id = :id LIMIT 1', ['id' => $userId]));
         return $row ?: null;
     }
 
@@ -970,7 +950,7 @@ class SupportRoutingEngineService
             $this->logger->warning('Failed to send smart assignment system notification', [
                 'ticket_id' => $ticketId,
                 'user_id' => $userId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->recordNotificationFailure($exception, 'support_routing_system_notification_failed', [
                 'ticket_id' => $ticketId,
@@ -995,7 +975,7 @@ class SupportRoutingEngineService
             $this->logger->warning('Failed to send smart assignment email notification', [
                 'ticket_id' => $ticketId,
                 'user_id' => $userId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->recordNotificationFailure($exception, 'support_routing_email_notification_failed', [
                 'ticket_id' => $ticketId,
@@ -1032,7 +1012,7 @@ class SupportRoutingEngineService
             'affected_table' => 'support_tickets',
             'affected_id' => isset($context['ticket_id']) ? (int) $context['ticket_id'] : null,
             'status' => 'failed',
-            'data' => $context + ['error' => $exception->getMessage()],
+            'data' => $context + ['error' => DatabaseService::exceptionMessage($exception)],
         ]);
 
         $this->logError($exception, $context);

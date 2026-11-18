@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\ProductController;
 use CarbonTrack\Models\Message;
 use CarbonTrack\Services\AuditLogService;
@@ -11,7 +14,6 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
 use Monolog\Handler\NullHandler;
 use Monolog\Logger;
-use PDO;
 use PHPUnit\Framework\TestCase;
 use Slim\Psr7\Response;
 
@@ -43,14 +45,10 @@ class ProductExchangeLegacySchemaTest extends TestCase
 
     public function testExchangeProductWithLegacySchema(): void
     {
-        $pdo = new PDO('sqlite:' . $this->dbPath);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('NOW', static fn() => date('Y-m-d H:i:s'));
-        }
+        $connection = DatabaseFixture::sqlite($this->dbPath);
 
-        $this->createLegacySchema($pdo);
-        $this->seedLegacyData($pdo);
+        $this->createLegacySchema($connection);
+        $this->seedLegacyData($connection);
 
         $logger = new Logger('legacy-test');
         $logger->pushHandler(new NullHandler());
@@ -58,13 +56,13 @@ class ProductExchangeLegacySchemaTest extends TestCase
         $auditLogMock = $this->createMock(AuditLogService::class);
         $auditLogMock->expects($this->atLeastOnce())->method('log');
 
-        $messageService = new class($logger, $auditLogMock, $pdo) extends MessageService {
-            private PDO $pdo;
+        $messageService = new class($logger, $auditLogMock, $connection) extends MessageService {
+            private Connection $connection;
 
-            public function __construct(Logger $logger, AuditLogService $auditLogService, PDO $pdo)
+            public function __construct(Logger $logger, AuditLogService $auditLogService, Connection $connection)
             {
                 parent::__construct($logger, $auditLogService);
-                $this->pdo = $pdo;
+                $this->connection = $connection;
             }
 
             public function sendMessage(
@@ -76,9 +74,8 @@ class ProductExchangeLegacySchemaTest extends TestCase
                 ?int $senderId = null,
                 bool $sendEmail = true
             ): Message {
-                $stmt = $this->pdo->prepare('INSERT INTO messages (sender_id, receiver_id, title, content, is_read, created_at, updated_at) VALUES (:sender_id, :receiver_id, :title, :content, 0, :now, :now)');
                 $now = date('Y-m-d H:i:s');
-                $stmt->execute([
+                $this->connection->statement('INSERT INTO messages (sender_id, receiver_id, title, content, is_read, created_at, updated_at) VALUES (:sender_id, :receiver_id, :title, :content, 0, :now, :now)', [
                     'sender_id' => $senderId,
                     'receiver_id' => $receiverId,
                     'title' => $title,
@@ -117,7 +114,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             }
         };
 
-        $controller = new ProductController($pdo, $messageService, $auditLogMock, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLogMock, $authService);
 
         $request = makeRequest('POST', '/products/exchange', [
             'product_id' => 1,
@@ -135,9 +132,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
         $this->assertSame(200, $payload['points_used']);
         $this->assertArrayHasKey('exchange_id', $payload);
 
-        $exchangeStmt = $pdo->prepare('SELECT * FROM point_exchanges WHERE id = :id');
-        $exchangeStmt->execute(['id' => $payload['exchange_id']]);
-        $exchangeRow = $exchangeStmt->fetch(PDO::FETCH_ASSOC);
+        $exchangeRow = DatabaseRows::one($connection->selectOne('SELECT * FROM point_exchanges WHERE id = :id', ['id' => $payload['exchange_id']]));
         $this->assertNotEmpty($exchangeRow);
         $this->assertSame(1, (int)$exchangeRow['user_id']);
         $this->assertSame(1, (int)$exchangeRow['product_id']);
@@ -145,7 +140,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
         $this->assertSame(200, (int)$exchangeRow['points_used']);
         $this->assertSame('pending', $exchangeRow['status']);
 
-        $pointsTxRow = $pdo->query('SELECT * FROM points_transactions ORDER BY id DESC LIMIT 1')->fetch(PDO::FETCH_ASSOC);
+        $pointsTxRow = DatabaseRows::one($connection->selectOne('SELECT * FROM points_transactions ORDER BY id DESC LIMIT 1'));
         $this->assertNotEmpty($pointsTxRow);
         $this->assertSame('legacy@example.com', $pointsTxRow['email']);
         $this->assertSame('legacy_user', $pointsTxRow['username']);
@@ -156,19 +151,19 @@ class ProductExchangeLegacySchemaTest extends TestCase
         $this->assertEquals(200, (int)$pointsTxRow['raw']);
         $this->assertNotEmpty($pointsTxRow['time']);
 
-        $updatedPoints = (int)$pdo->query('SELECT points FROM users WHERE id = 1')->fetchColumn();
+        $updatedPoints = (int)DatabaseRows::scalar($connection->selectOne('SELECT points FROM users WHERE id = 1'));
         $this->assertSame(300, $updatedPoints);
 
-        $messageRow = $pdo->query('SELECT * FROM messages ORDER BY id DESC LIMIT 1')->fetch(PDO::FETCH_ASSOC);
+        $messageRow = DatabaseRows::one($connection->selectOne('SELECT * FROM messages ORDER BY id DESC LIMIT 1'));
         $this->assertNotEmpty($messageRow);
         $this->assertSame(1, (int)$messageRow['receiver_id']);
         $this->assertSame('商品兑换成功', $messageRow['title']);
         $this->assertSame(0, (int)$messageRow['is_read']);
     }
 
-    private function createLegacySchema(PDO $pdo): void
+    private function createLegacySchema(Connection $connection): void
     {
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT NOT NULL,
             email TEXT NOT NULL,
@@ -188,7 +183,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             notification_email_mask INTEGER NOT NULL DEFAULT 0
         )');
 
-        $pdo->exec('CREATE TABLE products (
+        $connection->unprepared('CREATE TABLE products (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT,
@@ -202,7 +197,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE point_exchanges (
+        $connection->unprepared('CREATE TABLE point_exchanges (
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
@@ -221,7 +216,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE points_transactions (
+        $connection->unprepared('CREATE TABLE points_transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT,
             email TEXT NOT NULL,
@@ -244,7 +239,7 @@ class ProductExchangeLegacySchemaTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE messages (
+        $connection->unprepared('CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sender_id INTEGER,
             receiver_id INTEGER NOT NULL,
@@ -257,10 +252,10 @@ class ProductExchangeLegacySchemaTest extends TestCase
         )');
     }
 
-    private function seedLegacyData(PDO $pdo): void
+    private function seedLegacyData(Connection $connection): void
     {
-        $pdo->exec("INSERT INTO users (id, username, email, points, is_admin, status) VALUES (1, 'legacy_user', 'legacy@example.com', 500, 0, 'active')");
-        $pdo->exec("INSERT INTO products (id, name, description, category, category_slug, images, image_path, stock, points_required, status) VALUES (
+        $connection->unprepared("INSERT INTO users (id, username, email, points, is_admin, status) VALUES (1, 'legacy_user', 'legacy@example.com', 500, 0, 'active')");
+        $connection->unprepared("INSERT INTO products (id, name, description, category, category_slug, images, image_path, stock, points_required, status) VALUES (
             1,
             '环保水杯',
             '易于携带的环保水杯',

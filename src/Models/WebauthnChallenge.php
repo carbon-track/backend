@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Models;
 
-use PDO;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
+
 
 class WebauthnChallenge
 {
-    public function __construct(private PDO $db)
+    public function __construct(private Connection $db)
     {
     }
 
@@ -17,16 +19,13 @@ class WebauthnChallenge
      */
     public function create(array $record): void
     {
-        $stmt = $this->db->prepare(
-            'INSERT INTO webauthn_challenges (
+
+        $now = gmdate('Y-m-d H:i:s');
+        $this->db->statement('INSERT INTO webauthn_challenges (
                 challenge_id, user_uuid, flow_type, challenge, request_id, context_json, expires_at, consumed_at, created_at, updated_at
             ) VALUES (
                 :challenge_id, :user_uuid, :flow_type, :challenge, :request_id, :context_json, :expires_at, :consumed_at, :created_at, :updated_at
-            )'
-        );
-
-        $now = gmdate('Y-m-d H:i:s');
-        $stmt->execute([
+            )', [
             'challenge_id' => (string) $record['challenge_id'],
             'user_uuid' => isset($record['user_uuid']) && $record['user_uuid'] !== null
                 ? strtolower((string) $record['user_uuid'])
@@ -65,9 +64,7 @@ class WebauthnChallenge
 
         $sql .= ' ORDER BY id DESC LIMIT 1';
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne($sql, $params));
         if (!$row) {
             return null;
         }
@@ -81,29 +78,23 @@ class WebauthnChallenge
 
     public function markConsumed(int $id): bool
     {
-        $stmt = $this->db->prepare(
-            'UPDATE webauthn_challenges
-             SET consumed_at = :consumed_at, updated_at = :updated_at
-             WHERE id = :id AND consumed_at IS NULL'
-        );
 
         $now = gmdate('Y-m-d H:i:s');
-        $stmt->execute([
+
+        return $this->db->affectingStatement('UPDATE webauthn_challenges
+             SET consumed_at = :consumed_at, updated_at = :updated_at
+             WHERE id = :id AND consumed_at IS NULL', [
             'consumed_at' => $now,
             'updated_at' => $now,
             'id' => $id,
-        ]);
-
-        return $stmt->rowCount() > 0;
+        ]) > 0;
     }
 
     public function deleteExpired(): int
     {
-        $stmt = $this->db->prepare('DELETE FROM webauthn_challenges WHERE expires_at <= :current_time');
-        $stmt->execute([
+        return $this->db->affectingStatement('DELETE FROM webauthn_challenges WHERE expires_at <= :current_time', [
             'current_time' => $this->utcNow(),
         ]);
-        return $stmt->rowCount();
     }
 
     private function utcNow(): string

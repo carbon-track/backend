@@ -8,6 +8,13 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Services\TurnstileService;
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 
 class TurnstileServiceTest extends TestCase
 {
@@ -140,29 +147,72 @@ class TurnstileServiceTest extends TestCase
         }
     }
 
-    public function testApplyCertificateOptionsAddsConfiguredCaBundleAndNativeStore(): void
+    /** @backupGlobals enabled */
+    public function testVerifySendsFormDataWithConfiguredTlsTrust(): void
     {
-        $logger = $this->createMock(\Monolog\Logger::class);
+        $_ENV['APP_ENV'] = 'production';
+        $history = [];
+        $handler = HandlerStack::create(new MockHandler([
+            new Response(200, [], '{"success":true,"hostname":"fixture.example.test"}'),
+        ]));
+        $handler->push(Middleware::history($history));
         $service = new TurnstileService(
-            'secret',
-            $logger,
-            null,
-            null,
-            'C:\\certs\\cacert.pem',
-            true
+            'fixture-secret',
+            $this->createMock(\Monolog\Logger::class),
+            caBundlePath: 'fixture-ca.pem',
+            useNativeCaStore: true,
+            httpClient: new Client(['handler' => $handler])
         );
 
-        $method = new \ReflectionMethod(TurnstileService::class, 'applyCertificateOptions');
-        $method->setAccessible(true);
+        $result = $service->verify('fixture-token', '198.51.100.27');
 
-        $options = [];
-        $method->invokeArgs($service, [&$options]);
-
-        $this->assertSame('C:\\certs\\cacert.pem', $options[CURLOPT_CAINFO]);
-
-        if (\defined('CURLOPT_SSL_OPTIONS') && \defined('CURLSSLOPT_NATIVE_CA')) {
-            $this->assertSame(CURLSSLOPT_NATIVE_CA, $options[CURLOPT_SSL_OPTIONS]);
+        $this->assertTrue($result['success']);
+        $this->assertSame('fixture.example.test', $result['hostname']);
+        $this->assertCount(1, $history);
+        $sent = $history[0]['request'];
+        $this->assertSame('POST', $sent->getMethod());
+        $this->assertSame('https://challenges.cloudflare.com/turnstile/v0/siteverify', (string) $sent->getUri());
+        $this->assertSame('application/x-www-form-urlencoded', $sent->getHeaderLine('Content-Type'));
+        parse_str((string) $sent->getBody(), $form);
+        $this->assertSame([
+            'secret' => 'fixture-secret',
+            'response' => 'fixture-token',
+            'remoteip' => '198.51.100.27',
+        ], $form);
+        $this->assertSame('fixture-ca.pem', $history[0]['options']['verify']);
+        $this->assertFalse($history[0]['options']['allow_redirects']);
+        if (\function_exists('curl_init') && \defined('CURLOPT_SSL_OPTIONS') && \defined('CURLSSLOPT_NATIVE_CA')) {
+            $this->assertSame(CURLSSLOPT_NATIVE_CA, $history[0]['options']['curl'][CURLOPT_SSL_OPTIONS]);
+        } else {
+            $this->assertArrayNotHasKey('curl', $history[0]['options']);
         }
+    }
+
+    /** @backupGlobals enabled */
+    public function testTransportFailureIsLoggedAndRejectsVerification(): void
+    {
+        $_ENV['APP_ENV'] = 'production';
+        $failure = new ConnectException('Connection timed out', new Request('POST', 'https://fixture.example.test'));
+        $client = new Client(['handler' => HandlerStack::create(new MockHandler([$failure]))]);
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool => $entry['action'] === 'turnstile_verification_network_failed'
+                && $entry['status'] === 'failed'
+        ))->willReturn(true);
+        $errors = $this->createMock(ErrorLogService::class);
+        $errors->expects($this->once())->method('logException')->with($this->identicalTo($failure));
+        $service = new TurnstileService(
+            'fixture-secret',
+            $this->createMock(\Monolog\Logger::class),
+            $audit,
+            $errors,
+            httpClient: $client
+        );
+
+        $result = $service->verify('fixture-token');
+
+        $this->assertFalse($result['success']);
+        $this->assertSame('network-error', $result['error']);
     }
 }
 

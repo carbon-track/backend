@@ -27,7 +27,7 @@ class MultipartUploadServiceTest extends TestCase
         $this->capsule->setAsGlobal();
         $this->capsule->bootEloquent();
 
-        TestSchemaBuilder::init($this->capsule->getConnection()->getPdo());
+        TestSchemaBuilder::init($this->capsule->getConnection());
     }
 
     public function testRegisterAndClearUploadWriteAuditLogs(): void

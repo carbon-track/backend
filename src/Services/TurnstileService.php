@@ -6,6 +6,11 @@ namespace CarbonTrack\Services;
 
 use CarbonTrack\Support\SyntheticRequestFactory;
 use CarbonTrack\Support\Environment;
+use GuzzleHttp\Client;
+use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\TransferException;
+use GuzzleHttp\Handler\StreamHandler;
+use GuzzleHttp\HandlerStack;
 use Monolog\Logger;
 
 class TurnstileService
@@ -17,6 +22,7 @@ class TurnstileService
     private ?ErrorLogService $errorLogService;
     private ?string $caBundlePath;
     private bool $useNativeCaStore;
+    private ?ClientInterface $httpClient;
 
     public function __construct(
         string $secretKey,
@@ -24,7 +30,8 @@ class TurnstileService
         ?AuditLogService $auditLogService = null,
         ?ErrorLogService $errorLogService = null,
         ?string $caBundlePath = null,
-        bool $useNativeCaStore = false
+        bool $useNativeCaStore = false,
+        ?ClientInterface $httpClient = null
     )
     {
         $this->secretKey = $secretKey;
@@ -33,6 +40,7 @@ class TurnstileService
         $this->errorLogService = $errorLogService;
         $this->caBundlePath = is_string($caBundlePath) && trim($caBundlePath) !== '' ? trim($caBundlePath) : null;
         $this->useNativeCaStore = $useNativeCaStore;
+        $this->httpClient = $httpClient;
     }
 
     /**
@@ -95,44 +103,10 @@ class TurnstileService
         }
 
         try {
-            $ch = curl_init();
-            $curlOptions = [
-                CURLOPT_URL => $this->verifyUrl,
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => http_build_query($postData),
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_TIMEOUT => 10,
-                CURLOPT_CONNECTTIMEOUT => 5,
-                CURLOPT_USERAGENT => 'CarbonTrack/1.0',
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/x-www-form-urlencoded'
-                ],
-                CURLOPT_SSL_VERIFYPEER => true,
-                CURLOPT_SSL_VERIFYHOST => 2
-            ];
-
-            $this->applyCertificateOptions($curlOptions);
-            curl_setopt_array($ch, $curlOptions);
-
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-
-            if ($curlError) {
-                $this->logFailure('turnstile_verification_network_failed', new \RuntimeException($curlError), ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
-                $this->logger->error('Turnstile verification cURL error', [
-                    'error' => $curlError,
-                    'token' => substr($token, 0, 20) . '...',
-                    'ip' => $remoteIp
-                ]);
-
-                return [
-                    'success' => false,
-                    'error' => 'network-error',
-                    'message' => 'Failed to connect to Turnstile verification service'
-                ];
-            }
+            $client = $this->httpClient ??= $this->createHttpClient();
+            $verificationResponse = $client->request('POST', $this->verifyUrl, $this->verificationOptions($postData));
+            $httpCode = $verificationResponse->getStatusCode();
+            $response = (string) $verificationResponse->getBody();
 
             if ($httpCode !== 200) {
                 $this->logFailure('turnstile_verification_http_failed', new \RuntimeException('Unexpected HTTP status: ' . $httpCode), [
@@ -210,7 +184,19 @@ class TurnstileService
                 ];
             }
 
-        } catch (\Exception $e) {
+        } catch (TransferException $error) {
+            $this->logFailure('turnstile_verification_network_failed', $error, ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
+            $this->logger->error('Turnstile verification network error', [
+                'error' => $error->getMessage(),
+                'ip' => $remoteIp,
+            ]);
+
+            return [
+                'success' => false,
+                'error' => 'network-error',
+                'message' => 'Failed to connect to Turnstile verification service',
+            ];
+        } catch (\Throwable $e) {
             $this->logFailure('turnstile_verification_exception', $e, ['remote_ip' => $remoteIp], '/internal/turnstile/verify');
             $this->logger->error('Turnstile verification exception', [
                 'error' => $e->getMessage(),
@@ -288,23 +274,43 @@ class TurnstileService
         }
     }
 
-    /**
-     * @param array<int|string, mixed> $curlOptions
-     */
-    private function applyCertificateOptions(array &$curlOptions): void
+    private function createHttpClient(): ClientInterface
     {
-        if ($this->caBundlePath !== null) {
-            $curlOptions[CURLOPT_CAINFO] = $this->caBundlePath;
+        if (\function_exists('curl_init')) {
+            return new Client();
         }
+
+        if (!\ini_get('allow_url_fopen') || !\in_array('https', \stream_get_wrappers(), true)) {
+            throw new \RuntimeException('Turnstile verification needs PHP cURL or HTTPS streams (OpenSSL with allow_url_fopen enabled).');
+        }
+
+        // Select the stream handler even when cURL is loaded but curl_init is disabled.
+        return new Client(['handler' => HandlerStack::create(new StreamHandler())]);
+    }
+
+    private function verificationOptions(array $postData): array
+    {
+        $options = [
+            'form_params' => $postData,
+            'headers' => ['User-Agent' => 'CarbonTrack/1.0'],
+            'timeout' => 10,
+            'connect_timeout' => 5,
+            'read_timeout' => 10,
+            'verify' => $this->caBundlePath ?? true,
+            'allow_redirects' => false,
+            'http_errors' => false,
+        ];
 
         if (
             $this->useNativeCaStore
+            && \function_exists('curl_init')
             && \defined('CURLOPT_SSL_OPTIONS')
             && \defined('CURLSSLOPT_NATIVE_CA')
         ) {
-            $existingSslOptions = $curlOptions[CURLOPT_SSL_OPTIONS] ?? 0;
-            $curlOptions[CURLOPT_SSL_OPTIONS] = $existingSslOptions | CURLSSLOPT_NATIVE_CA;
+            $options['curl'] = [CURLOPT_SSL_OPTIONS => CURLSSLOPT_NATIVE_CA];
         }
+
+        return $options;
     }
 }
 

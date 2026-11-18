@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use Firebase\JWT\JWT;
 use PHPUnit\Framework\TestCase;
-use PDO;
 
 class AuthServiceTest extends TestCase
 {
@@ -22,8 +26,8 @@ class AuthServiceTest extends TestCase
     {
         parent::setUp();
         
-        // Mock PDO for testing
-        $mockPdo = $this->createMock(\PDO::class);
+        // Mock connection for testing
+        $mockPdo = new DatabaseConnectionStub();
         $this->auditLogService = $this->createMock(AuditLogService::class);
         $this->errorLogService = $this->createMock(ErrorLogService::class);
         
@@ -140,14 +144,14 @@ class AuthServiceTest extends TestCase
 
     public function testValidateTokenResolvesLocalUserIdFromUuidSubject(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
-        $pdo->exec(
+        $connection = $this->makeSqliteUsersConnection();
+        $connection->unprepared(
             "INSERT INTO users (uuid, username, email, password, status, points, is_admin, created_at, updated_at)
              VALUES ('550e8400-e29b-41d4-a716-4466554400aa', 'uuid-user', 'uuid-user@example.com', 'hash', 'active', 0, 0, '2026-03-11 00:00:00', '2026-03-11 00:00:00')"
         );
 
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         $token = JWT::encode([
             'iss' => 'carbontrack',
@@ -172,9 +176,9 @@ class AuthServiceTest extends TestCase
 
     public function testValidateTokenProvisionLocalUserWhenUuidOnlyIdentityArrives(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
+        $connection = $this->makeSqliteUsersConnection();
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         $token = JWT::encode([
             'iss' => 'carbontrack',
@@ -195,15 +199,15 @@ class AuthServiceTest extends TestCase
         $this->assertSame('550e8400-e29b-41d4-a716-4466554400ab', $payload['uuid']);
         $this->assertIsInt($payload['user_id']);
         $this->assertGreaterThan(0, $payload['user_id']);
-        $this->assertSame(1, (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn());
-        $this->assertSame('new-sso-user', $pdo->query('SELECT username FROM users LIMIT 1')->fetchColumn());
+        $this->assertSame(1, (int) DatabaseRows::scalar($connection->selectOne('SELECT COUNT(*) FROM users')));
+        $this->assertSame('new-sso-user', DatabaseRows::scalar($connection->selectOne('SELECT username FROM users LIMIT 1')));
     }
 
     public function testValidateTokenProvisionLocalUserNormalizesUnknownRole(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
+        $connection = $this->makeSqliteUsersConnection();
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         $token = JWT::encode([
             'iss' => 'carbontrack',
@@ -223,8 +227,8 @@ class AuthServiceTest extends TestCase
         $payload = $service->validateToken($token);
 
         $this->assertSame('user', $payload['role']);
-        $this->assertSame('user', $pdo->query('SELECT role FROM users LIMIT 1')->fetchColumn());
-        $this->assertSame(0, (int) $pdo->query('SELECT is_admin FROM users LIMIT 1')->fetchColumn());
+        $this->assertSame('user', DatabaseRows::scalar($connection->selectOne('SELECT role FROM users LIMIT 1')));
+        $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne('SELECT is_admin FROM users LIMIT 1')));
     }
 
     public function testValidateJwtTokenWithInvalidToken(): void
@@ -325,12 +329,13 @@ class AuthServiceTest extends TestCase
 
     public function testIsAccountLockedLogsAuditWhenThresholdReached(): void
     {
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->expects($this->once())->method('execute')->with(['locked-user', '127.0.0.1']);
-        $stmt->method('fetchColumn')->willReturn(5);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'value';
+        $stmt->expects($this->once())->method('bindings')->with(['locked-user', '127.0.0.1']);
+        $stmt->method('value')->willReturn(5);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->expects($this->once())->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->expects($this->once())->method('responseFor')->willReturn($stmt);
 
         $audit = $this->createMock(AuditLogService::class);
         $audit->expects($this->once())
@@ -343,21 +348,21 @@ class AuthServiceTest extends TestCase
             ->willReturn(true);
 
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $audit, $this->createMock(ErrorLogService::class));
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         $this->assertTrue($service->isAccountLocked('locked-user', '127.0.0.1'));
     }
 
     public function testValidateTokenRejectsStaleTokenVersionAfterIncrement(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
-        $pdo->exec(
+        $connection = $this->makeSqliteUsersConnection();
+        $connection->unprepared(
             "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
              VALUES ('550e8400-e29b-41d4-a716-44665544aa01', 'tv-user', 'tv@example.com', 'hash', 'active', 0, 0, 0, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
         );
 
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         // Token minted while DB.token_version = 0
         $token = $service->generateToken([
@@ -380,14 +385,14 @@ class AuthServiceTest extends TestCase
 
     public function testValidateTokenTreatsMissingTokenVersionAsZero(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
-        $pdo->exec(
+        $connection = $this->makeSqliteUsersConnection();
+        $connection->unprepared(
             "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
              VALUES ('550e8400-e29b-41d4-a716-44665544aa04', 'legacy-tv', 'legacy-tv@example.com', 'hash', 'active', 0, 0, 1, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
         );
 
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
         $now = time();
         $legacyToken = JWT::encode([
             'iss' => 'carbontrack',
@@ -410,14 +415,14 @@ class AuthServiceTest extends TestCase
 
     public function testGenerateTokenStampsCurrentTokenVersionFromDatabase(): void
     {
-        $pdo = $this->makeSqliteUsersPdo();
-        $pdo->exec(
+        $connection = $this->makeSqliteUsersConnection();
+        $connection->unprepared(
             "INSERT INTO users (uuid, username, email, password, status, points, is_admin, token_version, created_at, updated_at)
              VALUES ('550e8400-e29b-41d4-a716-44665544aa02', 'tv2', 'tv2@example.com', 'hash', 'active', 0, 0, 7, '2026-04-01 00:00:00', '2026-04-01 00:00:00')"
         );
 
         $service = new AuthService($this->jwtSecret, 'HS256', 86400, $this->auditLogService, $this->errorLogService);
-        $service->setDatabase($pdo);
+        $service->setDatabase($connection);
 
         $token = $service->generateToken([
             'id' => 1,
@@ -460,12 +465,10 @@ class AuthServiceTest extends TestCase
         }
     }
 
-    private function makeSqliteUsersPdo(): PDO
+    private function makeSqliteUsersConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-        $pdo->exec(
+        $connection = DatabaseFixture::sqlite();
+        $connection->unprepared(
             'CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT,
@@ -483,7 +486,7 @@ class AuthServiceTest extends TestCase
             )'
         );
 
-        return $pdo;
+        return $connection;
     }
 }
 

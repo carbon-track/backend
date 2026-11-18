@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Support;
 
+use CarbonTrack\Services\DatabaseService;
+
 use Psr\Http\Message\ServerRequestInterface;
 use Throwable;
 
@@ -25,7 +27,7 @@ class ErrorResponseBuilder
         ];
 
         if (!$isProduction) {
-            $payload['message'] = $exception->getMessage();
+            $payload['message'] = DatabaseService::exceptionMessage($exception);
             $payload['error'] = get_class($exception);
         }
 

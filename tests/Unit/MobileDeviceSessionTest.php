@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
@@ -20,20 +23,17 @@ use Slim\Psr7\Response;
 
 final class MobileDeviceSessionTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private AuthService $authService;
     private ?string $previousMobileClientToken;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-        $this->pdo->sqliteCreateFunction('NOW', static fn (): string => date('Y-m-d H:i:s'));
+        $this->connection = DatabaseFixture::sqlite();
 
-        $this->pdo->exec('CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT)');
-        $this->pdo->exec('CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT)');
-        $this->pdo->exec(
+        $this->connection->unprepared('CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT)');
+        $this->connection->unprepared('CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT)');
+        $this->connection->unprepared(
             'CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT,
@@ -59,7 +59,7 @@ final class MobileDeviceSessionTest extends TestCase
                 deleted_at TEXT
             )'
         );
-        $this->pdo->exec(
+        $this->connection->unprepared(
             'CREATE TABLE login_attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 identifier TEXT,
@@ -68,7 +68,7 @@ final class MobileDeviceSessionTest extends TestCase
                 attempted_at TEXT
             )'
         );
-        $this->pdo->exec(
+        $this->connection->unprepared(
             'CREATE TABLE mobile_device_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -89,7 +89,7 @@ final class MobileDeviceSessionTest extends TestCase
         );
 
         $this->authService = new AuthService('test-device-session-secret-with-enough-length', 'HS256', 60);
-        $this->authService->setDatabase($this->pdo);
+        $this->authService->setDatabase($this->connection);
 
         $this->previousMobileClientToken = $_ENV['MOBILE_CLIENT_TOKEN'] ?? null;
         $_ENV['MOBILE_CLIENT_TOKEN'] = 'test-mobile-client-token';
@@ -132,7 +132,7 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertGreaterThan(0, $payload['data']['refresh_expires_in']);
         $this->assertSame('ios-device-1', $payload['data']['device_session']['device_id']);
 
-        $session = $this->pdo->query('SELECT * FROM mobile_device_sessions')->fetch();
+        $session = DatabaseRows::one($this->connection->selectOne('SELECT * FROM mobile_device_sessions'));
         $this->assertSame(1, (int) $session['user_id']);
         $this->assertSame('ios-device-1', $session['device_id']);
         $this->assertNotSame($payload['data']['refresh_token'], $session['refresh_token_hash']);
@@ -156,7 +156,7 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertNotEmpty($refreshPayload['data']['refresh_token']);
         $this->assertNotSame($originalRefreshToken, $refreshPayload['data']['refresh_token']);
 
-        $this->pdo->exec("UPDATE mobile_device_sessions SET updated_at = '2000-01-01 00:00:00'");
+        $this->connection->unprepared("UPDATE mobile_device_sessions SET updated_at = '2000-01-01 00:00:00'");
 
         $reuseResponse = $this->makeController()->refresh(makeRequest('POST', '/api/v1/auth/refresh', [
             'refresh_token' => $originalRefreshToken,
@@ -187,7 +187,7 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertTrue($retryPayload['success']);
         $this->assertNotEmpty($retryPayload['data']['refresh_token']);
         $this->assertNotSame($originalRefreshToken, $retryPayload['data']['refresh_token']);
-        $this->assertNull($this->pdo->query('SELECT revoked_at FROM mobile_device_sessions')->fetchColumn());
+        $this->assertNull(DatabaseRows::scalar($this->connection->selectOne('SELECT revoked_at FROM mobile_device_sessions')));
 
         $replayResponse = $this->makeController()->refresh(makeRequest('POST', '/api/v1/auth/refresh', [
             'refresh_token' => $originalRefreshToken,
@@ -213,7 +213,7 @@ final class MobileDeviceSessionTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertTrue($payload['success']);
         $this->assertArrayNotHasKey('refresh_token', $payload['data']);
-        $this->assertSame(0, (int) $this->pdo->query('SELECT COUNT(*) FROM mobile_device_sessions')->fetchColumn());
+        $this->assertSame(0, (int) DatabaseRows::scalar($this->connection->selectOne('SELECT COUNT(*) FROM mobile_device_sessions')));
     }
 
     public function testLogoutRevokesMatchingMobileDeviceSession(): void
@@ -228,7 +228,7 @@ final class MobileDeviceSessionTest extends TestCase
         ]), new Response());
 
         $this->assertSame(200, $response->getStatusCode());
-        $revokedAt = $this->pdo->query('SELECT revoked_at FROM mobile_device_sessions')->fetchColumn();
+        $revokedAt = DatabaseRows::scalar($this->connection->selectOne('SELECT revoked_at FROM mobile_device_sessions'));
         $this->assertNotEmpty($revokedAt);
     }
 
@@ -248,7 +248,7 @@ final class MobileDeviceSessionTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertTrue($payload['data']['reauth_required']);
-        $session = $this->pdo->query('SELECT revoked_at, revoked_reason FROM mobile_device_sessions')->fetch();
+        $session = DatabaseRows::one($this->connection->selectOne('SELECT revoked_at, revoked_reason FROM mobile_device_sessions'));
         $this->assertNotEmpty($session['revoked_at']);
         $this->assertSame('password_change', $session['revoked_reason']);
 
@@ -267,7 +267,7 @@ final class MobileDeviceSessionTest extends TestCase
         $this->seedUser();
         $newPassword = 'NewPassword123!';
         if ($action === 'password_reset') {
-            $this->pdo->exec("UPDATE users SET reset_token = 'test-reset-token', reset_token_expires_at = '2099-01-01'");
+            $this->connection->unprepared("UPDATE users SET reset_token = 'test-reset-token', reset_token_expires_at = '2099-01-01'");
             $request = makeRequest('POST', '/api/v1/auth/reset-password', [
                 'token' => 'test-reset-token',
                 'password' => $newPassword,
@@ -299,7 +299,7 @@ final class MobileDeviceSessionTest extends TestCase
         $response = $this->makeController($log, $sessions)->$handler($request, new Response());
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertTrue(password_verify($newPassword, $this->pdo->query('SELECT password_hash FROM users')->fetchColumn()));
+        $this->assertTrue(password_verify($newPassword, DatabaseRows::scalar($this->connection->selectOne('SELECT password_hash FROM users'))));
         $this->assertSame([[$failure, 1, $action]], $logged);
     }
 
@@ -315,7 +315,7 @@ final class MobileDeviceSessionTest extends TestCase
     {
         $this->seedUser();
         $service = new MobileDeviceSessionService(
-            $this->pdo,
+            $this->connection,
             new Logger('mobile-device-session-test'),
             null,
             3600,
@@ -352,10 +352,8 @@ final class MobileDeviceSessionTest extends TestCase
     private function seedUser(): void
     {
         $now = date('Y-m-d H:i:s');
-        $this->pdo->prepare(
-            'INSERT INTO users (uuid, username, email, password_hash, role, points, region_code, email_verified_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        )->execute([
+        $this->connection->statement('INSERT INTO users (uuid, username, email, password_hash, role, points, region_code, email_verified_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
             '22222222-2222-4222-8222-222222222222',
             'mobile_user',
             'mobile@example.com',
@@ -396,7 +394,7 @@ final class MobileDeviceSessionTest extends TestCase
             $this->createMock(MessageService::class),
             $this->createMock(CloudflareR2Service::class),
             $logger,
-            $this->pdo,
+            $this->connection,
             $errorLogService ?? $this->createMock(ErrorLogService::class),
             new RegionService(null, null),
             null,

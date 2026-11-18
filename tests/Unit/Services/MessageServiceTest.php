@@ -9,6 +9,9 @@ use CarbonTrack\Models\User;
 use CarbonTrack\Services\MessageService;
 use CarbonTrack\Models\Message;
 use CarbonTrack\Services\NotificationPreferenceService;
+use CarbonTrack\Tests\Integration\TestSchemaBuilder;
+use CarbonTrack\Tests\Support\DatabaseFixture;
+use Illuminate\Database\ConnectionResolver;
 use Monolog\Handler\NullHandler;
 use Monolog\Logger;
 
@@ -114,17 +117,45 @@ class MessageServiceEmailStub extends \CarbonTrack\Services\EmailService
 
 class MessageServiceTest extends TestCase
 {
-    public function testSendSystemMessageBuildsModel(): void
+    public function testSendSystemMessagePersistsPriorityAndUsesNotificationTypeForEmail(): void
     {
-        $logger = $this->createMock(\Monolog\Logger::class);
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
+
+        $logger = $this->createMock(Logger::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $email = new MessageServiceEmailStub();
+        $service = new MessageService($logger, $audit, $email);
+        $user = new User(['id' => 42, 'username' => 'tester', 'email' => 'tester@example.com']);
+        $service->setUserResolver(static fn (int $userId): ?User => $userId === 42 ? $user : null);
 
-        // Mock Message::createSystemMessage static call via a stub class
-        $service = new MessageService($logger, $audit);
+        $originalResolver = Message::getConnectionResolver();
+        $connectionName = $connection->getName();
+        $resolver = new ConnectionResolver([$connectionName => $connection]);
+        $resolver->setDefaultConnection($connectionName);
+        Message::setConnectionResolver($resolver);
+        try {
+            $message = $service->sendSystemMessage(
+                42,
+                'Exchange update',
+                'Body',
+                Message::TYPE_EXCHANGE,
+                Message::PRIORITY_URGENT
+            );
+        } finally {
+            if ($originalResolver !== null) {
+                Message::setConnectionResolver($originalResolver);
+            } else {
+                Message::unsetConnectionResolver();
+            }
+        }
 
-        $this->assertTrue(method_exists($service, 'sendSystemMessage'));
-        $this->assertTrue(defined(Message::class . '::TYPE_SYSTEM'));
-        $this->assertTrue(defined(Message::class . '::PRIORITY_NORMAL'));
+        $row = $connection->table('messages')->where('id', $message->id)->first();
+        $this->assertNotNull($row);
+        $this->assertNull($row->sender_id);
+        $this->assertSame(Message::PRIORITY_URGENT, $row->priority);
+        $this->assertCount(1, $email->messageNotifications);
+        $this->assertSame(NotificationPreferenceService::CATEGORY_TRANSACTION, $email->messageNotifications[0]['category']);
     }
 
     public function testSendBulkMessageDispatches(): void

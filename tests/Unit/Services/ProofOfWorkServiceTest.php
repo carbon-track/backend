@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\ProofOfWorkService;
 use Monolog\Handler\NullHandler;
 use Monolog\Logger;
-use PDO;
 use PHPUnit\Framework\TestCase;
 
 class ProofOfWorkServiceTest extends TestCase
@@ -61,20 +63,18 @@ class ProofOfWorkServiceTest extends TestCase
         $future = $now->modify('+20 minutes')->format('Y-m-d H:i:s');
         $recent = $now->modify('-2 minutes')->format('Y-m-d H:i:s');
 
-        $insert = $db->prepare(
-            'INSERT INTO proof_of_work_challenges (challenge_id, challenge_hash, scope, difficulty, expires_at, used_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        );
-        $insert->execute(['expired', 'hash-expired', 'auth.login', 8, $old, null, $old, $old]);
-        $insert->execute(['old-used', 'hash-old-used', 'auth.login', 8, $future, $old, $old, $old]);
-        $insert->execute(['fresh-used', 'hash-fresh-used', 'auth.login', 8, $future, $recent, $recent, $recent]);
-        $insert->execute(['fresh-open', 'hash-fresh-open', 'auth.login', 8, $future, null, $recent, $recent]);
+        $insertSql = 'INSERT INTO proof_of_work_challenges (challenge_id, challenge_hash, scope, difficulty, expires_at, used_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+        $db->statement($insertSql, ['expired', 'hash-expired', 'auth.login', 8, $old, null, $old, $old]);
+        $db->statement($insertSql, ['old-used', 'hash-old-used', 'auth.login', 8, $future, $old, $old, $old]);
+        $db->statement($insertSql, ['fresh-used', 'hash-fresh-used', 'auth.login', 8, $future, $recent, $recent, $recent]);
+        $db->statement($insertSql, ['fresh-open', 'hash-fresh-open', 'auth.login', 8, $future, null, $recent, $recent]);
 
         $service = $this->makeService(8, $db);
         $result = $service->cleanupExpiredChallenges();
 
         $this->assertSame(2, $result['deleted']);
-        $this->assertSame(2, (int)$db->query('SELECT COUNT(*) FROM proof_of_work_challenges')->fetchColumn());
+        $this->assertSame(2, (int)DatabaseRows::scalar($db->selectOne('SELECT COUNT(*) FROM proof_of_work_challenges')));
     }
 
     public function testProductionRequiresConfiguredSecret(): void
@@ -133,18 +133,17 @@ class ProofOfWorkServiceTest extends TestCase
         $old = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
             ->modify('-2 days')
             ->format('Y-m-d H:i:s');
-        $insert = $db->prepare('INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)');
-        $insert->execute(['203.0.113.7', 'auth.login', $old]);
+        $db->statement('INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)', ['203.0.113.7', 'auth.login', $old]);
 
         $service = $this->makeService(8, $db);
         $result = $service->cleanupExpiredChallenges();
 
         $this->assertSame(1, $result['attempts_deleted']);
-        $this->assertSame(0, (int)$db->query('SELECT COUNT(*) FROM pow_attempts')->fetchColumn());
-        $this->assertSame(0, (int)$db->query("SELECT COUNT(*) FROM pow_attempts WHERE attempted_at = '$old'")->fetchColumn());
+        $this->assertSame(0, (int)DatabaseRows::scalar($db->selectOne('SELECT COUNT(*) FROM pow_attempts')));
+        $this->assertSame(0, (int)DatabaseRows::scalar($db->selectOne("SELECT COUNT(*) FROM pow_attempts WHERE attempted_at = '$old'")));
     }
 
-    private function makeService(int $difficulty, ?PDO $db = null): ProofOfWorkService
+    private function makeService(int $difficulty, ?Connection $db = null): ProofOfWorkService
     {
         $logger = new Logger('test');
         $logger->pushHandler(new NullHandler());
@@ -152,11 +151,10 @@ class ProofOfWorkServiceTest extends TestCase
         return new ProofOfWorkService('test-secret', $logger, null, null, $difficulty, 120, $db);
     }
 
-    private function makeChallengeDatabase(): PDO
+    private function makeChallengeDatabase(): Connection
     {
-        $db = new PDO('sqlite::memory:');
-        $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $db->exec(
+        $db = DatabaseFixture::sqlite();
+        $db->unprepared(
             'CREATE TABLE proof_of_work_challenges (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 challenge_id TEXT NOT NULL UNIQUE,
@@ -169,7 +167,7 @@ class ProofOfWorkServiceTest extends TestCase
                 updated_at TEXT NOT NULL
             )'
         );
-        $db->exec(
+        $db->unprepared(
             'CREATE TABLE pow_attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ip_address TEXT NOT NULL,

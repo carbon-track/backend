@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Models;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
@@ -173,15 +175,13 @@ class CarbonActivity extends Model
     }
 
     /**
-     * Backward-compatible finder used by controllers that still call a static findById with PDO.
+     * Finder for controllers that need an associative record.
      * Returns a plain associative array for compatibility with array-based controller logic.
      */
-    public static function findById(\PDO $db, string $id): ?array
+    public static function findById(Connection $db, string $id): ?array
     {
         $sql = "SELECT id, name_zh, name_en, category, carbon_factor, unit, icon FROM carbon_activities WHERE id = :id AND deleted_at IS NULL";
-        $stmt = $db->prepare($sql);
-        $stmt->execute(['id' => $id]);
-        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($db->selectOne($sql, ['id' => $id]));
         return $row ?: null;
     }
 

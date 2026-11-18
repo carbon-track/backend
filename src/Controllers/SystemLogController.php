@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
-use PDO;
 
 /**
  * SystemLogController
@@ -18,14 +20,14 @@ use PDO;
  */
 class SystemLogController
 {
-    private PDO $db;
+    private Connection $db;
     private AuthService $authService;
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
 
     private const SENSITIVE_KEYS = ['password','pass','token','authorization','auth','secret'];
 
-    public function __construct(PDO $db, AuthService $authService, AuditLogService $auditLogService, ?ErrorLogService $errorLogService = null)
+    public function __construct(Connection $db, AuthService $authService, AuditLogService $auditLogService, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->authService = $authService;
@@ -89,21 +91,19 @@ class SystemLogController
             $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
 
             $countSql = "SELECT COUNT(*) FROM system_logs {$where}";
-            $countStmt = $this->db->prepare($countSql);
-            foreach ($params as $k => $v) { $countStmt->bindValue(':' . $k, $v); }
-            $countStmt->execute();
-            $total = (int)$countStmt->fetchColumn();
+            $countBindings = [];
+            foreach ($params as $k => $v) { $countBindings[':' . $k] = $v; }
+            $total = (int)DatabaseRows::scalar($this->db->selectOne($countSql, $countBindings));
 
             $sql = "SELECT id, request_id, method, path, status_code, user_id, ip_address, user_agent, duration_ms, created_at
                     FROM system_logs {$where}
                     ORDER BY id DESC
                     LIMIT :limit OFFSET :offset";
-            $stmt = $this->db->prepare($sql);
-            foreach ($params as $k => $v) { $stmt->bindValue(':' . $k, $v); }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
-            $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $queryBindings = [];
+            foreach ($params as $k => $v) { $queryBindings[':' . $k] = $v; }
+            $queryBindings[':limit'] = (int) $limit;
+            $queryBindings[':offset'] = (int) $offset;
+            $logs = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             $this->logAudit('admin_system_logs_list_viewed', $admin, $request, [
                 'data' => [
@@ -128,7 +128,7 @@ class SystemLogController
         } catch (\Exception $e) {
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { /* swallow secondary logging failure */ }
             $this->logAudit('admin_system_logs_list_failed', $admin ?? null, $request, [
-                'data' => ['error' => $e->getMessage()],
+                'data' => ['error' => DatabaseService::exceptionMessage($e)],
             ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
@@ -151,10 +151,7 @@ class SystemLogController
                 return $this->json($response, ['error' => 'Invalid id'], 400);
             }
 
-            $stmt = $this->db->prepare('SELECT * FROM system_logs WHERE id = :id');
-            $stmt->bindValue(':id', $id, PDO::PARAM_INT);
-            $stmt->execute();
-            $log = $stmt->fetch(PDO::FETCH_ASSOC);
+            $log = DatabaseRows::one($this->db->selectOne('SELECT * FROM system_logs WHERE id = :id', [':id' => (int) $id]));
             if (!$log) {
                 return $this->json($response, ['error' => 'Not found'], 404);
             }
@@ -179,7 +176,7 @@ class SystemLogController
         } catch (\Exception $e) {
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) { /* swallow secondary logging failure */ }
             $this->logAudit('admin_system_log_detail_failed', $admin ?? null, $request, [
-                'data' => ['error' => $e->getMessage()],
+                'data' => ['error' => DatabaseService::exceptionMessage($e)],
             ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }

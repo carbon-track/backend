@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\ProductController;
 
@@ -17,21 +21,24 @@ class ProductControllerTest extends TestCase
     public function testGetProductsReturnsJson(): void
     {
         // Mocks
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
         // count statement
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total' => 1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total' => 1]);
 
         // list statement
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             [
                 'id' => 1,
                 'name' => 'Eco Bottle',
@@ -43,16 +50,17 @@ class ProductControllerTest extends TestCase
             ]
         ]);
 
-        $tagStmt = $this->createMock(\PDOStatement::class);
-        $tagStmt->method('execute')->willReturn(true);
-        $tagStmt->method('fetchAll')->willReturn([
+        $tagStmt = $this->createMock(DatabaseQueryResponse::class);
+        $tagStmt->shape = 'rows';
+        $tagStmt->method('bindings')->willReturn(true);
+        $tagStmt->method('rows')->willReturn([
             ['product_id' => 1, 'id' => 7, 'name' => 'Popular', 'slug' => 'popular']
         ]);
 
         // prepare returns count then list then tags
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt, $tagStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($countStmt, $listStmt, $tagStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
 
         $request = makeRequest('GET', '/products');
         $response = new \Slim\Psr7\Response();
@@ -71,35 +79,38 @@ class ProductControllerTest extends TestCase
 
     public function testGetProductsUsesDistinctSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $listBound = [];
         $prepareCalls = 0;
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
         $countStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([
                 'search_name' => '%eco%',
                 'search_description' => '%eco%',
             ])
             ->willReturn(true);
-        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+        $countStmt->expects($this->once())->method('row')->willReturn(['total' => 0]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
         $listStmt->expects($this->exactly(4))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$listBound) {
                 $listBound[$key] = [$value, $type];
                 return true;
             });
-        $listStmt->expects($this->once())->method('execute')->willReturn(true);
-        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $listStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $listStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $countStmt, $listStmt) {
                 $prepareCalls++;
                 $this->assertStringContainsString('p.name LIKE :search_name', $sql);
@@ -108,7 +119,7 @@ class ProductControllerTest extends TestCase
                 return $prepareCalls === 1 ? $countStmt : $listStmt;
             });
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products', null, ['search' => 'eco']);
         $response = new \Slim\Psr7\Response();
 
@@ -118,32 +129,34 @@ class ProductControllerTest extends TestCase
         $this->assertSame('%eco%', $listBound['search_name'][0] ?? null);
         $this->assertSame('%eco%', $listBound['search_description'][0] ?? null);
         $this->assertSame(20, $listBound['limit'][0] ?? null);
-        $this->assertSame(\PDO::PARAM_INT, $listBound['limit'][1] ?? null);
+        $this->assertSame('int', $listBound['limit'][1] ?? null);
         $this->assertSame(0, $listBound['offset'][0] ?? null);
-        $this->assertSame(\PDO::PARAM_INT, $listBound['offset'][1] ?? null);
+        $this->assertSame('int', $listBound['offset'][1] ?? null);
     }
 
     public function testGetProductDetail(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn([
             'id'=>1,'name'=>'Eco Bottle','images'=>json_encode(['/a.png']),'stock'=>5,'points_required'=>100
         ]);
-        $tagStmt = $this->createMock(\PDOStatement::class);
-        $tagStmt->method('execute')->willReturn(true);
-        $tagStmt->method('fetchAll')->willReturn([
+        $tagStmt = $this->createMock(DatabaseQueryResponse::class);
+        $tagStmt->shape = 'rows';
+        $tagStmt->method('bindings')->willReturn(true);
+        $tagStmt->method('rows')->willReturn([
             ['product_id' => 1, 'id' => 3, 'name' => 'Eco', 'slug' => 'eco']
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmt, $tagStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($stmt, $tagStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products/1');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getProductDetail($request, $response, ['id'=>1]);
@@ -156,21 +169,23 @@ class ProductControllerTest extends TestCase
 
     public function testSearchProductTags(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('bindValue')->willReturn(true);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->checkParameters = true;
+        $stmt->method('parameter')->willReturn(true);
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('rows')->willReturn([
             ['id' => 1, 'name' => 'Eco', 'slug' => 'eco'],
             ['id' => 2, 'name' => 'Campus', 'slug' => 'campus'],
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products/tags', null, ['search' => 'eco']);
         $response = new \Slim\Psr7\Response();
 
@@ -184,24 +199,26 @@ class ProductControllerTest extends TestCase
 
     public function testSearchProductTagsUsesDistinctSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $bound = [];
 
-        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->checkParameters = true;
         $stmt->expects($this->exactly(3))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$bound) {
                 $bound[$key] = [$value, $type];
                 return true;
             });
-        $stmt->expects($this->once())->method('execute')->willReturn(true);
-        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $stmt->expects($this->once())->method('bindings')->willReturn(true);
+        $stmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->once())
-            ->method('prepare')
+        $connection->expects($this->once())
+            ->method('responseFor')
             ->with($this->callback(static function (string $sql): bool {
                 return str_contains($sql, 'name LIKE :search_name')
                     && str_contains($sql, 'slug LIKE :search_slug')
@@ -209,7 +226,7 @@ class ProductControllerTest extends TestCase
             }))
             ->willReturn($stmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products/tags', null, ['search' => 'eco']);
         $response = new \Slim\Psr7\Response();
 
@@ -218,26 +235,27 @@ class ProductControllerTest extends TestCase
         $this->assertSame('%eco%', $bound['search_name'][0] ?? null);
         $this->assertSame('%eco%', $bound['search_slug'][0] ?? null);
         $this->assertSame(20, $bound['limit'][0] ?? null);
-        $this->assertSame(\PDO::PARAM_INT, $bound['limit'][1] ?? null);
+        $this->assertSame('int', $bound['limit'][1] ?? null);
     }
 
     public function testExchangeProductInsufficientStock(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'responseFor', 'rollBack'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'username'=>'u','points'=>1000]);
 
         // product select FOR UPDATE
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>0,'points_required'=>50]);
-        $pdo->method('beginTransaction')->willReturn(true);
-        $pdo->method('rollBack')->willReturn(true);
-        $pdo->method('prepare')->willReturn($select);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>0,'points_required'=>50]);
+        $connection->method('beginTransaction')->willReturn(true);
+        $connection->method('rollBack')->willReturn(true);
+        $connection->method('responseFor')->willReturn($select);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('POST', '/exchange', ['product_id'=>2, 'quantity'=>1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->exchangeProduct($request, $response);
@@ -248,20 +266,21 @@ class ProductControllerTest extends TestCase
 
     public function testExchangeProductInsufficientPoints(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'responseFor', 'rollBack'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'username'=>'u','points'=>10]);
 
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>10,'points_required'=>50]);
-        $pdo->method('beginTransaction')->willReturn(true);
-        $pdo->method('rollBack')->willReturn(true);
-        $pdo->method('prepare')->willReturn($select);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>10,'points_required'=>50]);
+        $connection->method('beginTransaction')->willReturn(true);
+        $connection->method('rollBack')->willReturn(true);
+        $connection->method('responseFor')->willReturn($select);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('POST', '/exchange', ['product_id'=>2, 'quantity'=>1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->exchangeProduct($request, $response);
@@ -272,7 +291,7 @@ class ProductControllerTest extends TestCase
 
     public function testExchangeProductSuccessFlow(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $messageService->expects($this->once())->method('sendMessage');
         $messageService->expects($this->once())
@@ -290,29 +309,31 @@ class ProductControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'username'=>'u','points'=>1000]);
 
         // product select
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>10,'points_required'=>50]);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id'=>2,'name'=>'Gift','status'=>'active','stock'=>10,'points_required'=>50]);
         // update user points
-        $updateUser = $this->createMock(\PDOStatement::class);
-        $updateUser->method('execute')->willReturn(true);
+        $updateUser = $this->createMock(DatabaseQueryResponse::class);
+        $updateUser->method('bindings')->willReturn(true);
         // update stock
-        $updateStock = $this->createMock(\PDOStatement::class);
-        $updateStock->method('execute')->willReturn(true);
+        $updateStock = $this->createMock(DatabaseQueryResponse::class);
+        $updateStock->method('bindings')->willReturn(true);
         // insert exchange record
-        $insertExchange = $this->createMock(\PDOStatement::class);
-        $insertExchange->method('execute')->willReturn(true);
+        $insertExchange = $this->createMock(DatabaseQueryResponse::class);
+        $insertExchange->method('bindings')->willReturn(true);
         // insert points transaction
-        $insertTxn = $this->createMock(\PDOStatement::class);
-        $insertTxn->method('execute')->willReturn(true);
+        $insertTxn = $this->createMock(DatabaseQueryResponse::class);
+        $insertTxn->method('bindings')->willReturn(true);
         // select admins to notify
-        $selectAdmins = $this->createMock(\PDOStatement::class);
-        $selectAdmins->method('execute')->willReturn(true);
-        $selectAdmins->method('fetchAll')->willReturn([['id'=>9]]);
+        $selectAdmins = $this->createMock(DatabaseQueryResponse::class);
+        $selectAdmins->shape = 'rows';
+        $selectAdmins->method('bindings')->willReturn(true);
+        $selectAdmins->method('rows')->willReturn([['id'=>9]]);
 
-        $pdo->method('beginTransaction')->willReturn(true);
-        $pdo->method('commit')->willReturn(true);
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+        $connection->method('beginTransaction')->willReturn(true);
+        $connection->method('commit')->willReturn(true);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls(
             $select,
             $updateUser,
             $updateStock,
@@ -323,7 +344,7 @@ class ProductControllerTest extends TestCase
             $selectAdmins
         );
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('POST', '/exchange', ['product_id'=>2, 'quantity'=>2]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->exchangeProduct($request, $response);
@@ -335,28 +356,32 @@ class ProductControllerTest extends TestCase
 
     public function testGetCategories(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
-        $categoryStmt = $this->createMock(\PDOStatement::class);
-        $categoryStmt->method('execute')->willReturn(true);
-        $categoryStmt->method('bindValue')->willReturn(true);
-        $categoryStmt->method('fetchAll')->willReturn([
+        $categoryStmt = $this->createMock(DatabaseQueryResponse::class);
+        $categoryStmt->shape = 'rows';
+        $categoryStmt->checkParameters = true;
+        $categoryStmt->method('bindings')->willReturn(true);
+        $categoryStmt->method('parameter')->willReturn(true);
+        $categoryStmt->method('rows')->willReturn([
             ['id' => 1, 'name' => 'Eco Living', 'slug' => 'eco-living', 'product_count' => 5]
         ]);
 
-        $fallbackStmt = $this->createMock(\PDOStatement::class);
-        $fallbackStmt->method('execute')->willReturn(true);
-        $fallbackStmt->method('bindValue')->willReturn(true);
-        $fallbackStmt->method('fetchAll')->willReturn([
+        $fallbackStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackStmt->shape = 'rows';
+        $fallbackStmt->checkParameters = true;
+        $fallbackStmt->method('bindings')->willReturn(true);
+        $fallbackStmt->method('parameter')->willReturn(true);
+        $fallbackStmt->method('rows')->willReturn([
             ['name' => '社区种子', 'slug' => null, 'product_count' => 3]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($categoryStmt, $fallbackStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($categoryStmt, $fallbackStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/products/categories', null, ['limit' => 10]);
         $response = new \Slim\Psr7\Response();
 
@@ -373,14 +398,15 @@ class ProductControllerTest extends TestCase
 
     public function testGetExchangeRecordsRequiresAdmin(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->never())->method('logAdminRead');
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/admin/exchanges');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeRecords($request, $response);
@@ -389,48 +415,62 @@ class ProductControllerTest extends TestCase
 
     public function testGetExchangeRecordsSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total'=>1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total'=>1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
-            ['id'=>'e1','user_id'=>1,'status'=>'pending']
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
+            ['id'=>'e1','user_id'=>1,'status'=>'pending','email'=>'buyer@example.test']
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($this->exchangeUserColumn(), $countStmt, $listStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
-        $request = makeRequest('GET', '/admin/exchanges');
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/api/v1/admin/exchanges', null, [
+            'page' => 0, 'limit' => 5, 'search' => 'buyer@example.test',
+        ])->withAttribute('request_id', 'exchange-list-fixture');
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request,
+            'admin_exchange_records_viewed',
+            9,
+            'point_exchanges',
+            ['page' => 1, 'limit' => 10, 'exchange_ids' => ['e1']]
+        )->willReturn(true);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeRecords($request, $response);
         $this->assertEquals(200, $resp->getStatusCode());
         $json = json_decode((string)$resp->getBody(), true);
         $this->assertTrue($json['success']);
         $this->assertEquals(1, $json['pagination']['total']);
+        $this->assertSame('buyer@example.test', $json['data'][0]['user_email']);
     }
 
     public function testGetExchangeRecordsSearchUsesDistinctBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
         $countStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with($this->callback(function ($params) {
                 foreach (['exchange_search_0', 'exchange_search_1', 'exchange_search_2', 'exchange_search_3', 'exchange_search_4', 'exchange_search_5'] as $key) {
                     if (!array_key_exists($key, $params)) {
@@ -440,16 +480,18 @@ class ProductControllerTest extends TestCase
                 return !array_key_exists('search', $params);
             }))
             ->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total' => 0]);
+        $countStmt->method('row')->willReturn(['total' => 0]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([]);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($this->exchangeUserColumn(), $countStmt, $listStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/admin/exchanges', null, ['search' => '599ef56d-13ad-47ee-8f91-beb85d2d3b67']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeRecords($request, $response);
@@ -459,14 +501,14 @@ class ProductControllerTest extends TestCase
 
     public function testUpdateExchangeStatusInvalid(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('PUT', '/admin/exchanges/e1/status', ['status' => 'unknown']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateExchangeStatus($request, $response, ['id' => 'e1']);
@@ -475,7 +517,7 @@ class ProductControllerTest extends TestCase
 
     public function testUpdateExchangeStatusSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $messageService->expects($this->once())->method('sendMessage');
         $messageService->expects($this->once())
@@ -494,15 +536,16 @@ class ProductControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id'=>'e1','user_id'=>1,'product_name'=>'Gift','quantity'=>1]);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id'=>'e1','user_id'=>1,'product_name'=>'Gift','quantity'=>1]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($update, $select);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($update, $this->exchangeUserColumn(), $select);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('PUT', '/admin/exchanges/e1/status', ['status' => 'shipped', 'tracking_number' => 'T123']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateExchangeStatus($request, $response, ['id' => 'e1']);
@@ -513,26 +556,29 @@ class ProductControllerTest extends TestCase
 
     public function testGetUserExchangesSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>5]);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total'=>1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total'=>1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             ['id'=>'e1','current_product_images'=>null]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($this->exchangeUserColumn(), $countStmt, $listStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/exchange/transactions');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserExchanges($request, $response);
@@ -544,20 +590,29 @@ class ProductControllerTest extends TestCase
 
     public function testGetExchangeRecordDetailSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn(['id'=>'e1','user_id'=>1,'product_name'=>'Gift']);
-        $pdo->method('prepare')->willReturn($stmt);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn(['id'=>'e1','user_id'=>1,'product_name'=>'Gift']);
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
-        $request = makeRequest('GET', '/admin/exchanges/e1');
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
+        $request = makeRequest('GET', '/api/v1/admin/exchanges/e1')
+            ->withAttribute('request_id', 'exchange-detail-fixture');
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request,
+            'admin_exchange_record_viewed',
+            9,
+            'point_exchanges',
+            ['exchange_id' => 'e1']
+        )->willReturn(true);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeRecordDetail($request, $response, ['id' => 'e1']);
         $this->assertEquals(200, $resp->getStatusCode());
@@ -568,26 +623,29 @@ class ProductControllerTest extends TestCase
 
     public function testGetExchangeTransactionsAliasSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>5]);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total'=>1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total'=>1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             ['id'=>'e1','current_product_images'=>null]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($this->exchangeUserColumn(), $countStmt, $listStmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/exchange/transactions');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeTransactions($request, $response);
@@ -599,18 +657,19 @@ class ProductControllerTest extends TestCase
 
     public function testGetExchangeTransactionDetailSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>5]);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn(['id'=>'e1','user_id'=>5,'product_name'=>'Gift']);
-        $pdo->method('prepare')->willReturn($stmt);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn(['id'=>'e1','user_id'=>5,'product_name'=>'Gift']);
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth);
+        $controller = new ProductController($connection, $messageService, $audit, $auth);
         $request = makeRequest('GET', '/exchange/transactions/e1');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getExchangeTransaction($request, $response, ['id' => 'e1']);
@@ -622,18 +681,12 @@ class ProductControllerTest extends TestCase
 
     public function testCreateProductCreatesCategoryAndPersistsSlug(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('NOW', function () {
-                return date('Y-m-d H:i:s');
-            });
-        }
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
-        $pdo->exec('CREATE TABLE product_tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, slug TEXT, description TEXT)');
-        $pdo->exec('CREATE TABLE product_tag_map (product_id INTEGER, tag_id INTEGER, created_at TEXT)');
-        $pdo->exec('CREATE TABLE products (
+        $connection->unprepared('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
+        $connection->unprepared('CREATE TABLE product_tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, slug TEXT, description TEXT)');
+        $connection->unprepared('CREATE TABLE product_tag_map (product_id INTEGER, tag_id INTEGER, created_at TEXT)');
+        $connection->unprepared('CREATE TABLE products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             category TEXT,
@@ -664,7 +717,7 @@ class ProductControllerTest extends TestCase
                 $capturedException = $exception;
             });
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+        $controller = new ProductController($connection, $messageService, $audit, $auth, $errorLog);
 
         $request = makeRequest('POST', '/admin/products', [
             'name' => 'Reusable Cup',
@@ -688,27 +741,21 @@ class ProductControllerTest extends TestCase
         $this->assertTrue($payload['success']);
         $this->assertNotEmpty($payload['id']);
 
-        $categoryRow = $pdo->query('SELECT name, slug FROM product_categories LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $categoryRow = DatabaseRows::one($connection->selectOne('SELECT name, slug FROM product_categories LIMIT 1'));
         $this->assertSame('Office Supplies', $categoryRow['name']);
         $this->assertSame('office-supplies', $categoryRow['slug']);
 
-        $productRow = $pdo->query('SELECT category, category_slug FROM products LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $productRow = DatabaseRows::one($connection->selectOne('SELECT category, category_slug FROM products LIMIT 1'));
         $this->assertSame('Office Supplies', $productRow['category']);
         $this->assertSame('office-supplies', $productRow['category_slug']);
     }
 
     public function testGetCategoriesReturnsStructuredResponse(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('NOW', function () {
-                return date('Y-m-d H:i:s');
-            });
-        }
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
-        $pdo->exec('CREATE TABLE products (
+        $connection->unprepared('CREATE TABLE product_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE, description TEXT, created_at TEXT)');
+        $connection->unprepared('CREATE TABLE products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             category TEXT,
@@ -724,9 +771,9 @@ class ProductControllerTest extends TestCase
             updated_at TEXT,
             deleted_at TEXT
         )');
-        $pdo->exec("INSERT INTO product_categories (name, slug, created_at) VALUES ('Eco Living', 'eco-living', NOW())");
-        $pdo->exec("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('Bottle', 'Eco Living', 'eco-living', 100, '', '', '[]', 10, 'active', 0, NOW())");
-        $pdo->exec("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('DIY Kit', '手工材料', '', 200, '', '', '[]', 5, 'active', 0, NOW())");
+        $connection->unprepared("INSERT INTO product_categories (name, slug, created_at) VALUES ('Eco Living', 'eco-living', CURRENT_TIMESTAMP)");
+        $connection->unprepared("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('Bottle', 'Eco Living', 'eco-living', 100, '', '', '[]', 10, 'active', 0, CURRENT_TIMESTAMP)");
+        $connection->unprepared("INSERT INTO products (name, category, category_slug, points_required, description, image_path, images, stock, status, sort_order, created_at) VALUES ('DIY Kit', '手工材料', '', 200, '', '', '[]', 5, 'active', 0, CURRENT_TIMESTAMP)");
 
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -734,7 +781,7 @@ class ProductControllerTest extends TestCase
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
         $errorLog->expects($this->any())->method('logException');
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+        $controller = new ProductController($connection, $messageService, $audit, $auth, $errorLog);
 
         $request = makeRequest('GET', '/products/categories', null, ['limit' => 10]);
         $response = new \Slim\Psr7\Response();
@@ -755,7 +802,7 @@ class ProductControllerTest extends TestCase
 
     public function testGetCategoriesUsesDistinctSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $messageService = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -764,26 +811,30 @@ class ProductControllerTest extends TestCase
         $categoryBound = [];
         $prepareCalls = 0;
 
-        $categoryStmt = $this->createMock(\PDOStatement::class);
+        $categoryStmt = $this->createMock(DatabaseQueryResponse::class);
+        $categoryStmt->shape = 'rows';
+        $categoryStmt->checkParameters = true;
         $categoryStmt->expects($this->exactly(3))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$categoryBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$categoryBound) {
                 $categoryBound[$key] = [$value, $type];
                 return true;
             });
-        $categoryStmt->expects($this->once())->method('execute')->willReturn(true);
-        $categoryStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $categoryStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $categoryStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $fallbackStmt = $this->createMock(\PDOStatement::class);
+        $fallbackStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackStmt->shape = 'rows';
+        $fallbackStmt->checkParameters = true;
         $fallbackStmt->expects($this->once())
-            ->method('bindValue')
-            ->with('fallback_limit', 20, \PDO::PARAM_INT)
+            ->method('parameter')
+            ->with('fallback_limit', 20, 'int')
             ->willReturn(true);
-        $fallbackStmt->expects($this->once())->method('execute')->willReturn(true);
-        $fallbackStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $fallbackStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $fallbackStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $categoryStmt, $fallbackStmt) {
                 $prepareCalls++;
                 if ($prepareCalls === 1) {
@@ -797,7 +848,7 @@ class ProductControllerTest extends TestCase
                 return $fallbackStmt;
             });
 
-        $controller = new ProductController($pdo, $messageService, $audit, $auth, $errorLog);
+        $controller = new ProductController($connection, $messageService, $audit, $auth, $errorLog);
         $request = makeRequest('GET', '/products/categories', null, ['search' => 'eco', 'limit' => 10]);
         $response = new \Slim\Psr7\Response();
 
@@ -809,8 +860,17 @@ class ProductControllerTest extends TestCase
         $this->assertSame('%eco%', $categoryBound['search_name'][0] ?? null);
         $this->assertSame('%eco%', $categoryBound['search_slug'][0] ?? null);
         $this->assertSame(10, $categoryBound['limit'][0] ?? null);
-        $this->assertSame(\PDO::PARAM_INT, $categoryBound['limit'][1] ?? null);
+        $this->assertSame('int', $categoryBound['limit'][1] ?? null);
     }
 
+
+    private function exchangeUserColumn(): DatabaseQueryResponse
+    {
+        $column = $this->createMock(DatabaseQueryResponse::class);
+        $column->shape = 'row';
+        $column->method('row')->willReturn(['Field' => 'user_id']);
+
+        return $column;
+    }
 }
 

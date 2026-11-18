@@ -4,58 +4,62 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\AdminController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\CheckinService;
+use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserProfileViewService;
+use Illuminate\Database\QueryException;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Slim\Psr7\Response;
 
 class AdminStatsIntegrationTest extends TestCase
 {
     private function makeControllerWithData(): AdminController
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($pdo);
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
 
-        $adminId = (int) $pdo->query("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")->fetchColumn();
+        $adminId = (int) DatabaseRows::scalar($connection->selectOne("SELECT id FROM users WHERE is_admin = 1 LIMIT 1"));
         if ($adminId === 0) {
-            $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, created_at) VALUES (1, 'admin', 'admin@example.com', 'active', 1, 1000, '2025-09-01 00:00:00')");
+            $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, created_at) VALUES (1, 'admin', 'admin@example.com', 'active', 1, 1000, '2025-09-01 00:00:00')");
             $adminId = 1;
         }
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, created_at) VALUES
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, created_at) VALUES
             (2, 'active_user', 'active@example.com', 'active', 0, 120, datetime('now','-1 day')),
             (3, 'inactive_user', 'inactive@example.com', 'inactive', 0, 10, datetime('now','-40 day')),
             (4, 'suspended_user', 'suspended@example.com', 'suspended', 0, 5, datetime('now','-5 day'))");
 
-        $insertPoint = $pdo->prepare("INSERT INTO points_transactions (id, uid, status, points, created_at) VALUES (:id, :uid, :status, :points, :created_at)");
-        $insertPoint->execute([':id' => 'pt_1', ':uid' => 2, ':status' => 'approved', ':points' => 10, ':created_at' => date('Y-m-d H:i:s', strtotime('-2 days'))]);
-        $insertPoint->execute([':id' => 'pt_2', ':uid' => 2, ':status' => 'approved', ':points' => 20, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
-        $insertPoint->execute([':id' => 'pt_3', ':uid' => 3, ':status' => 'pending', ':points' => 5, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
-        $insertPoint->execute([':id' => 'pt_4', ':uid' => 4, ':status' => 'rejected', ':points' => 8, ':created_at' => date('Y-m-d H:i:s', strtotime('-3 day'))]);
+        $insertPointSql = "INSERT INTO points_transactions (id, uid, status, points, created_at) VALUES (:id, :uid, :status, :points, :created_at)";
+        $connection->statement($insertPointSql, [':id' => 'pt_1', ':uid' => 2, ':status' => 'approved', ':points' => 10, ':created_at' => date('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $connection->statement($insertPointSql, [':id' => 'pt_2', ':uid' => 2, ':status' => 'approved', ':points' => 20, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $connection->statement($insertPointSql, [':id' => 'pt_3', ':uid' => 3, ':status' => 'pending', ':points' => 5, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $connection->statement($insertPointSql, [':id' => 'pt_4', ':uid' => 4, ':status' => 'rejected', ':points' => 8, ':created_at' => date('Y-m-d H:i:s', strtotime('-3 day'))]);
 
-        $insertCarbon = $pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, carbon_saved, points_earned, status, created_at) VALUES (:id, :user_id, :activity_id, :carbon_saved, :points_earned, :status, :created_at)");
-        $insertCarbon->execute([':id' => 'cr_1', ':user_id' => 2, ':activity_id' => 'act_a', ':carbon_saved' => 5.5, ':points_earned' => 2, ':status' => 'approved', ':created_at' => date('Y-m-d H:i:s', strtotime('-2 day'))]);
-        $insertCarbon->execute([':id' => 'cr_2', ':user_id' => 2, ':activity_id' => 'act_b', ':carbon_saved' => 3.2, ':points_earned' => 1, ':status' => 'approved', ':created_at' => date('Y-m-d H:i:s', strtotime('-6 day'))]);
-        $insertCarbon->execute([':id' => 'cr_3', ':user_id' => 3, ':activity_id' => 'act_c', ':carbon_saved' => 1.0, ':points_earned' => 0, ':status' => 'pending', ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $insertCarbonSql = "INSERT INTO carbon_records (id, user_id, activity_id, carbon_saved, points_earned, status, created_at) VALUES (:id, :user_id, :activity_id, :carbon_saved, :points_earned, :status, :created_at)";
+        $connection->statement($insertCarbonSql, [':id' => 'cr_1', ':user_id' => 2, ':activity_id' => 'act_a', ':carbon_saved' => 5.5, ':points_earned' => 2, ':status' => 'approved', ':created_at' => date('Y-m-d H:i:s', strtotime('-2 day'))]);
+        $connection->statement($insertCarbonSql, [':id' => 'cr_2', ':user_id' => 2, ':activity_id' => 'act_b', ':carbon_saved' => 3.2, ':points_earned' => 1, ':status' => 'approved', ':created_at' => date('Y-m-d H:i:s', strtotime('-6 day'))]);
+        $connection->statement($insertCarbonSql, [':id' => 'cr_3', ':user_id' => 3, ':activity_id' => 'act_c', ':carbon_saved' => 1.0, ':points_earned' => 0, ':status' => 'pending', ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
 
-        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, name_en, is_active, created_at) VALUES
+        $connection->unprepared("INSERT INTO carbon_activities (id, name_zh, name_en, is_active, created_at) VALUES
             ('act_a', '活动A', 'Activity A', 1, datetime('now')),
             ('act_b', '活动B', 'Activity B', 1, datetime('now')),
             ('act_c', '活动C', 'Activity C', 0, datetime('now'))");
 
-        $insertExchange = $pdo->prepare("INSERT INTO point_exchanges (id, user_id, status, points_used, created_at) VALUES (:id, :user_id, :status, :points_used, :created_at)");
-        $insertExchange->execute([':id' => 'ex_1', ':user_id' => 2, ':status' => 'completed', ':points_used' => 15, ':created_at' => date('Y-m-d H:i:s', strtotime('-4 day'))]);
-        $insertExchange->execute([':id' => 'ex_2', ':user_id' => 3, ':status' => 'pending', ':points_used' => 7, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
+        $insertExchangeSql = "INSERT INTO point_exchanges (id, user_id, status, points_used, created_at) VALUES (:id, :user_id, :status, :points_used, :created_at)";
+        $connection->statement($insertExchangeSql, [':id' => 'ex_1', ':user_id' => 2, ':status' => 'completed', ':points_used' => 15, ':created_at' => date('Y-m-d H:i:s', strtotime('-4 day'))]);
+        $connection->statement($insertExchangeSql, [':id' => 'ex_2', ':user_id' => 3, ':status' => 'pending', ':points_used' => 7, ':created_at' => date('Y-m-d H:i:s', strtotime('-1 day'))]);
 
-        $pdo->exec("INSERT INTO messages (sender_id, receiver_id, title, content, priority, is_read, created_at) VALUES
+        $connection->unprepared("INSERT INTO messages (sender_id, receiver_id, title, content, priority, is_read, created_at) VALUES
             ($adminId, 2, 'Notice', 'Please review', 'urgent', 0, datetime('now','-2 day')),
             ($adminId, 3, 'Reminder', 'Update profile', 'normal', 1, datetime('now','-3 day')),
             ($adminId, 4, 'Alert', 'Pending action', 'high', 0, datetime('now','-1 day'))");
@@ -79,14 +83,14 @@ class AdminStatsIntegrationTest extends TestCase
         $auditLog = $this->createMock(AuditLogService::class);
         $badgeService = $this->createMock(BadgeService::class);
         $statsCacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'carbontrack_stats_cache_' . uniqid();
-        $statsService = new StatisticsService($pdo, $statsCacheDir, 0, 0);
+        $statsService = new StatisticsService($connection, $statsCacheDir, 0, 0);
 
-        $checkinService = new CheckinService($pdo, null, 'UTC');
+        $checkinService = new CheckinService($connection, null, 'UTC');
 
         $quotaConfigService = new QuotaConfigService();
 
         return new AdminController(
-            $pdo,
+            $connection,
             $authService,
             $auditLog,
             $badgeService,
@@ -96,6 +100,53 @@ class AdminStatsIntegrationTest extends TestCase
             new UserProfileViewService(new RegionService(null, null, null, null)),
             null,
             null
+        );
+    }
+
+    public function testLegacyMessagePriorityFallbackPersistsQueryFailure(): void
+    {
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
+        $connection->statement('ALTER TABLE messages DROP COLUMN priority');
+        $connection->table('messages')->insert([
+            'is_read' => 0,
+            'created_at' => date('Y-m-d H:i:s', strtotime('-2 days')),
+        ]);
+
+        $cacheDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'carbontrack_stats_cache_' . uniqid();
+        $service = new StatisticsService(
+            $connection,
+            $cacheDir,
+            errorLogService: new ErrorLogService($connection, new NullLogger())
+        );
+
+        try {
+            $data = $service->getAdminStats(true);
+        } finally {
+            if (is_dir($cacheDir)) {
+                foreach (glob($cacheDir . DIRECTORY_SEPARATOR . '*_stats.json') ?: [] as $cacheFile) {
+                    unlink($cacheFile);
+                }
+                rmdir($cacheDir);
+            }
+        }
+
+        $this->assertSame(1, $data['messages']['total_messages']);
+        $this->assertSame([[
+            'priority' => 'normal',
+            'total' => 1,
+            'unread' => 1,
+            'read' => 0,
+            'unread_ratio' => 1.0,
+        ]], $data['messages']['priority_breakdown']);
+        $this->assertSame(1, array_sum(array_column($data['messages']['daily_counts'], 'total')));
+        $errors = $connection->table('error_logs')->get();
+        $this->assertCount(1, $errors);
+        $this->assertSame(QueryException::class, $errors[0]->error_type);
+        $this->assertSame('/internal/statistics/admin', $errors[0]->script_name);
+        $this->assertSame(
+            ['aggregation' => 'message_priority'],
+            json_decode($errors[0]->client_post, true, 512, JSON_THROW_ON_ERROR)
         );
     }
 
@@ -139,7 +190,10 @@ class AdminStatsIntegrationTest extends TestCase
         $this->assertGreaterThan(0, $data['messages']['unread_ratio']);
         $this->assertArrayHasKey('priority_breakdown', $data['messages']);
         $this->assertArrayHasKey('daily_counts', $data['messages']);
-        $this->assertGreaterThan(0, count($data['messages']['priority_breakdown']));
+        $this->assertSame(
+            ['urgent', 'high', 'normal'],
+            array_column($data['messages']['priority_breakdown'], 'priority')
+        );
         $priorityTotals = array_sum(array_map(static fn(array $entry): int => (int) ($entry['total'] ?? 0), $data['messages']['priority_breakdown']));
         $this->assertSame(3, $priorityTotals);
         $dailyTotals = array_sum(array_map(static fn(array $entry): int => (int) ($entry['total'] ?? 0), $data['messages']['daily_counts']));

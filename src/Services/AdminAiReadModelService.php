@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
-use PDO;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
+
 
 class AdminAiReadModelService
 {
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private ?StatisticsService $statisticsService = null,
         private ?CronSchedulerService $cronSchedulerService = null
     ) {
@@ -77,15 +79,15 @@ class AdminAiReadModelService
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY r.created_at DESC
                 LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => $row['id'],
                 'status' => $row['status'],
@@ -98,16 +100,15 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM carbon_records r WHERE " . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
 
         return [
             'scope' => 'pending_carbon_records',
             'status' => $status,
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM carbon_records r WHERE " . implode(' AND ', $where), $countBindings)),
             'items' => $items,
         ];
     }
@@ -123,19 +124,13 @@ class AdminAiReadModelService
             ->setTime(0, 0, 0)
             ->format('Y-m-d H:i:s');
 
-        $summaryStmt = $this->db->prepare("SELECT COUNT(*) AS total_calls, COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        $summary = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_calls, COALESCE(SUM(total_tokens), 0) AS total_tokens,
                 AVG(latency_ms) AS avg_latency_ms, SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_calls
-            FROM llm_logs WHERE created_at >= :since");
-        $summaryStmt->execute([':since' => $since]);
-        $summary = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            FROM llm_logs WHERE created_at >= :since", [':since' => $since])) ?: [];
 
-        $topModelStmt = $this->db->prepare("SELECT model, COUNT(*) AS calls FROM llm_logs WHERE created_at >= :since GROUP BY model ORDER BY calls DESC LIMIT 1");
-        $topModelStmt->execute([':since' => $since]);
-        $topModel = $topModelStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $topModel = DatabaseRows::one($this->db->selectOne("SELECT model, COUNT(*) AS calls FROM llm_logs WHERE created_at >= :since GROUP BY model ORDER BY calls DESC LIMIT 1", [':since' => $since])) ?: null;
 
-        $topSourceStmt = $this->db->prepare("SELECT source, COUNT(*) AS calls FROM llm_logs WHERE created_at >= :since GROUP BY source ORDER BY calls DESC LIMIT 1");
-        $topSourceStmt->execute([':since' => $since]);
-        $topSource = $topSourceStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $topSource = DatabaseRows::one($this->db->selectOne("SELECT source, COUNT(*) AS calls FROM llm_logs WHERE created_at >= :since GROUP BY source ORDER BY calls DESC LIMIT 1", [':since' => $since])) ?: null;
 
         return [
             'scope' => 'llm_usage_analytics',
@@ -174,14 +169,14 @@ class AdminAiReadModelService
                 GROUP BY r.activity_id, a.name_zh, a.name_en
                 ORDER BY approved_carbon_saved DESC
                 LIMIT 10";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->execute();
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'activity_id' => $row['activity_id'],
                 'activity_name' => $row['activity_name_zh'] ?: ($row['activity_name_en'] ?: null),
@@ -278,15 +273,15 @@ class AdminAiReadModelService
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY {$orderBy}
                 LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
                 'uuid' => $row['uuid'] ?? null,
@@ -301,16 +296,15 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM users u WHERE " . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
 
         return [
             'scope' => 'users',
             'search' => $search !== '' ? $search : null,
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM users u WHERE " . implode(' AND ', $where), $countBindings)),
             'items' => $items,
         ];
     }
@@ -329,31 +323,23 @@ class AdminAiReadModelService
         $userId = (int) ($user['id'] ?? 0);
         $userUuid = strtolower((string) ($user['uuid'] ?? ''));
 
-        $carbonStmt = $this->db->prepare("SELECT
+        $carbon = DatabaseRows::one($this->db->selectOne("SELECT
                 COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
                 SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_records,
                 SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_records
             FROM carbon_records
             WHERE user_id = :user_id
-              AND deleted_at IS NULL");
-        $carbonStmt->execute([':user_id' => $userId]);
-        $carbon = $carbonStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+              AND deleted_at IS NULL", [':user_id' => $userId])) ?: [];
 
-        $checkinStmt = $this->db->prepare("SELECT COUNT(*) AS checkin_days, MAX(checkin_date) AS last_checkin_date
-            FROM user_checkins WHERE user_id = :user_id");
-        $checkinStmt->execute([':user_id' => $userId]);
-        $checkins = $checkinStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $checkins = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS checkin_days, MAX(checkin_date) AS last_checkin_date
+            FROM user_checkins WHERE user_id = :user_id", [':user_id' => $userId])) ?: [];
 
-        $badgeStmt = $this->db->prepare("SELECT COUNT(*) AS badge_count FROM user_badges WHERE user_id = :user_id");
-        $badgeStmt->execute([':user_id' => $userId]);
-        $badgeCount = (int) $badgeStmt->fetchColumn();
+        $badgeCount = (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) AS badge_count FROM user_badges WHERE user_id = :user_id", [':user_id' => $userId]));
 
-        $passkeyStmt = $this->db->prepare("SELECT COUNT(*) AS passkey_count, MAX(last_used_at) AS last_used_at
+        $passkeys = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS passkey_count, MAX(last_used_at) AS last_used_at
             FROM user_passkeys
             WHERE disabled_at IS NULL
-              AND LOWER(user_uuid) = :user_uuid");
-        $passkeyStmt->execute([':user_uuid' => $userUuid]);
-        $passkeys = $passkeyStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+              AND LOWER(user_uuid) = :user_uuid", [':user_uuid' => $userUuid])) ?: [];
 
         return [
             'scope' => 'user_overview',
@@ -436,15 +422,15 @@ class AdminAiReadModelService
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY {$orderBy}
                 LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => $row['id'] ?? null,
                 'status' => $row['status'] ?? null,
@@ -460,19 +446,18 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->prepare("SELECT COUNT(*)
-            FROM point_exchanges e
-            LEFT JOIN users u ON u.id = e.{$userColumn}
-            WHERE " . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
 
         return [
             'scope' => 'exchange_orders',
             'status' => $status !== '' ? $status : null,
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*)
+            FROM point_exchanges e
+            LEFT JOIN users u ON u.id = e.{$userColumn}
+            WHERE " . implode(' AND ', $where), $countBindings)),
             'items' => $items,
         ];
     }
@@ -570,15 +555,15 @@ class AdminAiReadModelService
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY {$orderBy}
                 LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
                 'name' => $row['name'] ?? null,
@@ -592,15 +577,14 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM products p WHERE " . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
 
         return [
             'scope' => 'product_catalog',
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM products p WHERE " . implode(' AND ', $where), $countBindings)),
             'items' => $items,
         ];
     }
@@ -610,7 +594,7 @@ class AdminAiReadModelService
      */
     private function queryPasskeyAdminStats(): array
     {
-        $statsStmt = $this->db->query("SELECT
+        $stats = DatabaseRows::one($this->db->selectOne("SELECT
                 COUNT(*) AS total_passkeys,
                 COUNT(DISTINCT user_uuid) AS users_with_passkeys,
                 SUM(CASE WHEN backup_eligible = 1 THEN 1 ELSE 0 END) AS backup_eligible_count,
@@ -618,13 +602,8 @@ class AdminAiReadModelService
                 SUM(CASE WHEN last_used_at IS NULL THEN 1 ELSE 0 END) AS never_used_count,
                 MAX(last_used_at) AS last_used_at
             FROM user_passkeys
-            WHERE disabled_at IS NULL");
-        $stats = $statsStmt instanceof \PDOStatement ? ($statsStmt->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+            WHERE disabled_at IS NULL")) ?: [];
 
-        $recentStmt = $this->db->query("SELECT COUNT(*) FROM user_passkeys
-            WHERE disabled_at IS NULL
-              AND last_used_at IS NOT NULL
-              AND last_used_at >= datetime('now', '-30 day')");
 
         return [
             'scope' => 'passkey_admin_stats',
@@ -633,7 +612,10 @@ class AdminAiReadModelService
             'backup_eligible_count' => (int) ($stats['backup_eligible_count'] ?? 0),
             'backup_state_count' => (int) ($stats['backup_state_count'] ?? 0),
             'never_used_count' => (int) ($stats['never_used_count'] ?? 0),
-            'used_recently_30d' => (int) (($recentStmt instanceof \PDOStatement ? $recentStmt->fetchColumn() : 0) ?: 0),
+            'used_recently_30d' => (int) ((DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM user_passkeys
+            WHERE disabled_at IS NULL
+              AND last_used_at IS NOT NULL
+              AND last_used_at >= datetime('now', '-30 day')"))) ?: 0),
             'last_used_at' => $stats['last_used_at'] ?? null,
         ];
     }
@@ -683,15 +665,15 @@ class AdminAiReadModelService
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY {$orderBy}
                 LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
                 'user_id' => isset($row['user_id']) ? (int) $row['user_id'] : null,
@@ -707,18 +689,17 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->prepare("SELECT COUNT(*)
-            FROM user_passkeys pk
-            LEFT JOIN users u ON LOWER(u.uuid) = LOWER(pk.user_uuid)
-            WHERE " . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
 
         return [
             'scope' => 'passkey_admin_list',
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*)
+            FROM user_passkeys pk
+            LEFT JOIN users u ON LOWER(u.uuid) = LOWER(pk.user_uuid)
+            WHERE " . implode(' AND ', $where), $countBindings)),
             'items' => $items,
         ];
     }
@@ -737,7 +718,7 @@ class AdminAiReadModelService
             ];
         }
 
-        $stmt = $this->db->query("SELECT
+        $taskRows = $this->db->select("SELECT
                 task_key,
                 task_name,
                 description,
@@ -757,7 +738,7 @@ class AdminAiReadModelService
             ORDER BY task_key ASC");
 
         $items = [];
-        foreach (($stmt?->fetchAll(PDO::FETCH_ASSOC)) ?: [] as $row) {
+        foreach (DatabaseRows::all($taskRows) as $row) {
             $settings = $this->decodeJson($row['settings_json'] ?? null);
             $items[] = [
                 'task_key' => $row['task_key'] ?? null,
@@ -831,28 +812,27 @@ class AdminAiReadModelService
             $params[':trigger_source'] = $triggerSource;
         }
 
-        $countStmt = $this->db->prepare('SELECT COUNT(*) FROM cron_runs WHERE ' . implode(' AND ', $where));
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue($key, $value);
+            $countBindings[$key] = $value;
         }
-        $countStmt->execute();
-        $total = (int) $countStmt->fetchColumn();
+        $total = (int) DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*) FROM cron_runs WHERE ' . implode(' AND ', $where), $countBindings));
 
         $sql = 'SELECT id, task_key, trigger_source, request_id, status, started_at, finished_at, duration_ms, result_json, error_message, created_at
             FROM cron_runs
             WHERE ' . implode(' AND ', $where) . '
             ORDER BY id DESC
             LIMIT :limit OFFSET :offset';
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->bindValue(':offset', ($page - 1) * $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryBindings[':limit'] = (int) $limit;
+        $queryBindings[':offset'] = (int) ($page - 1) * $limit;
+        $queryRows = $this->db->select($sql, $queryBindings);
 
         $items = [];
-        foreach (($stmt->fetchAll(PDO::FETCH_ASSOC)) ?: [] as $row) {
+        foreach ((DatabaseRows::all($queryRows)) ?: [] as $row) {
             $items[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
                 'task_key' => $row['task_key'] ?? null,
@@ -923,13 +903,13 @@ class AdminAiReadModelService
                 $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($params as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $queryBindings[':limit'] = (int) $limit;
+            $queryRows = $this->db->select($sql, $queryBindings);
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $data = $this->decodeJson($row['data'] ?? null);
                 $items[] = [
                     'type' => 'audit',
@@ -969,13 +949,13 @@ class AdminAiReadModelService
                 $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($params as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $queryBindings[':limit'] = (int) $limit;
+            $queryRows = $this->db->select($sql, $queryBindings);
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $items[] = [
                     'type' => 'llm',
                     'id' => (int) ($row['id'] ?? 0),
@@ -1007,13 +987,13 @@ class AdminAiReadModelService
                 $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($params as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $queryBindings[':limit'] = (int) $limit;
+            $queryRows = $this->db->select($sql, $queryBindings);
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $items[] = [
                     'type' => 'error',
                     'id' => (int) ($row['id'] ?? 0),
@@ -1043,13 +1023,13 @@ class AdminAiReadModelService
                 $params += $searchParams;
             }
             $sql .= " ORDER BY created_at DESC, id DESC LIMIT :limit";
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($params as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            $queryBindings[':limit'] = (int) $limit;
+            $queryRows = $this->db->select($sql, $queryBindings);
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $items[] = [
                     'type' => 'system',
                     'id' => (int) ($row['id'] ?? 0),
@@ -1083,12 +1063,10 @@ class AdminAiReadModelService
             FROM message_broadcasts
             ORDER BY id DESC
             LIMIT :limit";
-        $stmt = $this->db->prepare($sql);
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $queryRows = $this->db->select($sql, [':limit' => (int) $limit]);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => isset($row['id']) ? (int) $row['id'] : null,
                 'title' => $row['title'] ?? null,
@@ -1101,11 +1079,10 @@ class AdminAiReadModelService
             ];
         }
 
-        $countStmt = $this->db->query("SELECT COUNT(*) FROM message_broadcasts");
 
         return [
             'scope' => 'broadcast_history',
-            'total' => (int) (($countStmt instanceof \PDOStatement ? $countStmt->fetchColumn() : 0) ?: 0),
+            'total' => (int) ((DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM message_broadcasts"))) ?: 0),
             'items' => $items,
         ];
     }
@@ -1150,18 +1127,17 @@ class AdminAiReadModelService
             return null;
         }
 
-        $stmt = $this->db->prepare("SELECT u.*, s.name AS school_name, g.name AS group_name
+        $queryBindings = [];
+        foreach ($params as $key => $value) {
+            $queryBindings[$key] = $value;
+        }
+
+        $row = DatabaseRows::one($this->db->selectOne("SELECT u.*, s.name AS school_name, g.name AS group_name
             FROM users u
             LEFT JOIN schools s ON s.id = u.school_id
             LEFT JOIN user_groups g ON g.id = u.group_id
             WHERE " . implode(' AND ', $where) . "
-            LIMIT 1");
-        foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
-        }
-        $stmt->execute();
-
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", $queryBindings));
         return is_array($row) ? $row : null;
     }
 
@@ -1174,10 +1150,9 @@ class AdminAiReadModelService
 
         $resolved = 'user_id';
         try {
-            $driver = (string) ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql');
+            $driver = (string) ($this->db->getDriverName() ?: 'mysql');
             if ($driver === 'sqlite') {
-                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
-                $columns = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+                $columns = DatabaseRows::all($this->db->select("PRAGMA table_info(point_exchanges)")) ?: [];
                 $names = array_map(static fn (array $column): string => (string) ($column['name'] ?? ''), $columns);
                 if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
                     $resolved = 'uid';
@@ -1195,14 +1170,12 @@ class AdminAiReadModelService
     private function fetchExchangeRecordById(string $exchangeId): ?array
     {
         $userColumn = $this->resolvePointExchangeUserColumn();
-        $stmt = $this->db->prepare("SELECT e.*, u.username, u.email
+        $row = DatabaseRows::one($this->db->selectOne("SELECT e.*, u.username, u.email
             FROM point_exchanges e
             LEFT JOIN users u ON u.id = e.{$userColumn}
             WHERE e.id = :exchange_id
               AND e.deleted_at IS NULL
-            LIMIT 1");
-        $stmt->execute([':exchange_id' => $exchangeId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", [':exchange_id' => $exchangeId]));
         return is_array($row) ? $row : null;
     }
 

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SensitiveDataRedactor;
-use PDO;
 use Monolog\Logger;
 use JsonException;
+use Psr\Http\Message\ServerRequestInterface;
 
 /**
  * AuditLogService
@@ -20,7 +22,7 @@ class AuditLogService
     private const SQL_AND_ACTOR_TYPE = ' AND actor_type = ?';
     private const SQL_AND_OPERATION_CATEGORY = ' AND operation_category = ?';
 
-    private PDO $db;
+    private Connection $db;
     private Logger $logger;
     private ?int $lastInsertId = null;
     private int $maxDataLength = 10000; // JSON 字段截断长度
@@ -40,7 +42,7 @@ class AuditLogService
         'response_code',
     ];
 
-    public function __construct(PDO $db, Logger $logger)
+    public function __construct(Connection $db, Logger $logger)
     {
         $this->db = $db;
         $this->logger = $logger;
@@ -109,7 +111,7 @@ class AuditLogService
             }
         } catch (\Throwable $e) {
             $this->logger->error('AuditLogService::log failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ]);
             $result = false;
         }
@@ -138,20 +140,17 @@ class AuditLogService
                 if (!array_key_exists($opt, $data)) { $data[$opt] = null; }
             }
 
-            $stmt = $this->db->prepare(
-                "INSERT INTO audit_logs (
-                    user_id, user_uuid, conversation_id, actor_type, action, data, ip_address, user_agent,
-                    request_method, endpoint, old_data, new_data, affected_table,
-                    affected_id, status, response_code, session_id, referrer,
-                    operation_category, operation_subtype, change_type, request_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-            );
 
             // request_id 优先来自显式字段，其次全局 $_SERVER（由中间件注入）
             $requestId = $data['request_id'] ?? ($_SERVER['HTTP_X_REQUEST_ID'] ?? null);
             $userUuid = $this->resolveUserUuid($data);
 
-            $ok = $stmt->execute([
+            $insertId = DatabaseService::insertGetId($this->db, "INSERT INTO audit_logs (
+                    user_id, user_uuid, conversation_id, actor_type, action, data, ip_address, user_agent,
+                    request_method, endpoint, old_data, new_data, affected_table,
+                    affected_id, status, response_code, session_id, referrer,
+                    operation_category, operation_subtype, change_type, request_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                 $data['user_id'] ?? null,
                 $userUuid,
                 $data['conversation_id'] ?? null,
@@ -176,20 +175,11 @@ class AuditLogService
                 $requestId
             ]);
 
-            if (!$ok) {
-                $this->lastInsertId = null;
-                $this->logger->warning('Audit log insert returned false', [
-                    'action' => $data['action'],
-                    'category' => $data['operation_category']
-                ]);
-                return false;
-            }
-            $insertId = (int) $this->db->lastInsertId();
             $this->lastInsertId = $insertId > 0 ? $insertId : null;
             return true;
         } catch (\Throwable $e) {
             $this->logger->error('Audit logging exception', [
-                'message' => $e->getMessage(),
+                'message' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
             ]);
             return false;
@@ -272,6 +262,31 @@ class AuditLogService
         );
     }
 
+    public function logAdminRead(
+        ServerRequestInterface $request,
+        string $action,
+        ?int $adminId,
+        string $table,
+        array $scope,
+        ?int $recordId = null
+    ): bool {
+        return $this->log([
+            'action' => $action,
+            'operation_category' => 'admin',
+            'actor_type' => 'admin',
+            'user_id' => $adminId,
+            'affected_table' => $table,
+            'affected_id' => $recordId,
+            'request_id' => $request->getAttribute('request_id'),
+            'request_method' => $request->getMethod(),
+            'endpoint' => $request->getUri()->getPath(),
+            'data' => $scope,
+            'status' => 'success',
+            'change_type' => 'read',
+            'response_code' => 200,
+        ]);
+    }
+
     // alias kept: primary log() already exists at top for compatibility
 
     /**
@@ -304,14 +319,9 @@ class AuditLogService
     public function getUserLogs(int $userId, int $limit = 50): array
     {
         try {
-            $stmt = $this->db->prepare('SELECT * FROM audit_logs WHERE user_id = :uid OR user_uuid = :user_uuid ORDER BY created_at DESC LIMIT :lim');
-            $stmt->bindValue(':uid', $userId, \PDO::PARAM_INT);
-            $stmt->bindValue(':user_uuid', $this->lookupUserUuidById($userId) ?? '', \PDO::PARAM_STR);
-            $stmt->bindValue(':lim', $limit, \PDO::PARAM_INT);
-            $stmt->execute();
-            return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+            return DatabaseRows::all($this->db->select('SELECT * FROM audit_logs WHERE user_id = :uid OR user_uuid = :user_uuid ORDER BY created_at DESC LIMIT :lim', [':uid' => $userId, ':user_uuid' => $this->lookupUserUuidById($userId) ?? '', ':lim' => $limit])) ?: [];
         } catch (\Throwable $e) {
-            $this->logger->warning('getUserLogs failed', ['error' => $e->getMessage()]);
+            $this->logger->warning('getUserLogs failed', ['error' => DatabaseService::exceptionMessage($e)]);
             return [];
         }
     }
@@ -341,11 +351,9 @@ class AuditLogService
             if (isset($filters['actor_type'])) { $sql .= self::SQL_AND_ACTOR_TYPE; $params[] = $filters['actor_type']; }
             if (isset($filters['category'])) { $sql .= self::SQL_AND_OPERATION_CATEGORY; $params[] = $filters['category']; }
             $sql .= " GROUP BY actor_type, operation_category ORDER BY count DESC";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            return DatabaseRows::all($this->db->select($sql, $params)) ?: [];
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to get audit stats', ['error' => $e->getMessage()]);
+            $this->logger->error('Failed to get audit stats', ['error' => DatabaseService::exceptionMessage($e)]);
             return [];
         }
     }
@@ -364,11 +372,9 @@ class AuditLogService
             if (isset($filters['date_to'])) { $sql .= self::SQL_AND_CREATED_AT_LTE; $params[] = $filters['date_to']; }
             $sql .= " ORDER BY id DESC LIMIT ? OFFSET ?";
             $params[] = $limit; $params[] = $offset;
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            return DatabaseRows::all($this->db->select($sql, $params)) ?: [];
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to get audit logs', ['error' => $e->getMessage()]);
+            $this->logger->error('Failed to get audit logs', ['error' => DatabaseService::exceptionMessage($e)]);
             return [];
         }
     }
@@ -385,11 +391,9 @@ class AuditLogService
             if (isset($filters['status'])) { $sql .= " AND status = ?"; $params[] = $filters['status']; }
             if (isset($filters['date_from'])) { $sql .= " AND created_at >= ?"; $params[] = $filters['date_from']; }
             if (isset($filters['date_to'])) { $sql .= self::SQL_AND_CREATED_AT_LTE; $params[] = $filters['date_to']; }
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
-            return (int)$stmt->fetchColumn();
+            return (int)DatabaseRows::scalar($this->db->selectOne($sql, $params));
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to get audit logs count', ['error' => $e->getMessage()]);
+            $this->logger->error('Failed to get audit logs count', ['error' => DatabaseService::exceptionMessage($e)]);
             return 0;
         }
     }
@@ -398,11 +402,9 @@ class AuditLogService
     {
         try {
             $cutoff = date('Y-m-d H:i:s', strtotime("-$days days"));
-            $stmt = $this->db->prepare("DELETE FROM audit_logs WHERE created_at < ?");
-            $stmt->execute([$cutoff]);
-            return $stmt->rowCount();
+            return $this->db->affectingStatement("DELETE FROM audit_logs WHERE created_at < ?", [$cutoff]);
         } catch (\Throwable $e) {
-            $this->logger->error('Failed to cleanup old audit logs', ['error' => $e->getMessage(), 'days' => $days]);
+            $this->logger->error('Failed to cleanup old audit logs', ['error' => DatabaseService::exceptionMessage($e), 'days' => $days]);
             return 0;
         }
     }
@@ -539,12 +541,7 @@ class AuditLogService
         }
 
         try {
-            $stmt = $this->db->prepare('SELECT uuid FROM users WHERE id = :id LIMIT 1');
-            if (!$stmt) {
-                return null;
-            }
-            $stmt->execute(['id' => $userId]);
-            $uuid = $stmt->fetchColumn();
+            $uuid = DatabaseRows::scalar($this->db->selectOne('SELECT uuid FROM users WHERE id = :id LIMIT 1', ['id' => $userId]));
             $normalized = is_string($uuid) && trim($uuid) !== '' ? strtolower(trim($uuid)) : null;
             $this->userUuidCache[$userId] = $normalized;
             return $normalized;

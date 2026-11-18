@@ -633,7 +633,7 @@ class SupportAutomationServiceTest extends TestCase
         $profileViewService = $this->makeUserProfileViewService();
 
         return new SupportAutomationService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),

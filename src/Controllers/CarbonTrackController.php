@@ -2,6 +2,9 @@
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\CarbonCalculatorService;
@@ -19,11 +22,10 @@ use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\Environment;
 use CarbonTrack\Models\CarbonActivity;
-use PDO;
 
 class CarbonTrackController
 {
-    private PDO $db;
+    private Connection $db;
     private CarbonCalculatorService $carbonCalculator;
     private MessageService $messageService;
     private AuditLogService $auditLog;
@@ -41,7 +43,7 @@ class CarbonTrackController
     private const ERRLOG_PREFIX = 'ErrorLogService failed: ';
 
     public function __construct(
-        PDO $db,
+        Connection $db,
         $carbonCalculator,
         $messageService,
         $auditLog,
@@ -249,8 +251,8 @@ class CarbonTrackController
             try {
                 $calc = $this->carbonCalculator->calculateCarbonSavings($data['activity_id'], $amountValue, $activity);
             } catch (\Throwable $e) {
-                $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord carbon calculation failed: ' . $e->getMessage());
-                return $this->json($response, ['error' => 'calc_failed', 'message' => $e->getMessage()], 500);
+                $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord carbon calculation failed: ' . DatabaseService::exceptionMessage($e));
+                return $this->json($response, ['error' => 'calc_failed', 'message' => DatabaseService::exceptionMessage($e)], 500);
             }
             $carbonSaved = $calc['carbon_savings'] ?? 0;
             $pointsEarned = $calc['points_earned'] ?? (int)round($carbonSaved * 10);
@@ -294,7 +296,7 @@ class CarbonTrackController
                         }
                     }
                 } catch (\Throwable $e) {
-                    $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord image upload error: ' . $e->getMessage());
+                    $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord image upload error: ' . DatabaseService::exceptionMessage($e));
                     // 如果无 R2 服务或上传失败，继续流程但不附带上传图片
                     $images = [];
                 }
@@ -353,7 +355,7 @@ class CarbonTrackController
                 if ($checkinDate && $isMakeup) {
                     $this->db->beginTransaction();
                     if ($this->checkinService->hasCheckin((int) $user['id'], $checkinDate)) {
-                        if ($this->db->inTransaction()) {
+                        if (($this->db->transactionLevel() > 0)) {
                             $this->db->rollBack();
                         }
                         $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
@@ -364,7 +366,7 @@ class CarbonTrackController
                     }
 
                     if (!$userModel || !$this->quotaService->checkAndConsumeOnConnection($this->db, $userModel, 'checkin_makeup', 1)) {
-                        if ($this->db->inTransaction()) {
+                        if (($this->db->transactionLevel() > 0)) {
                             $this->db->rollBack();
                         }
                         $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
@@ -395,7 +397,7 @@ class CarbonTrackController
                         if ($checkinDate && $isMakeup) {
                             $checkinAdded = $this->checkinService->createMakeupCheckin((int) $user['id'], $checkinDate, null, $recordId, $submittedAt);
                             if (!$checkinAdded) {
-                                if ($this->db->inTransaction()) {
+                                if (($this->db->transactionLevel() > 0)) {
                                     $this->db->rollBack();
                                 }
                                 $this->cleanupUploadedImages($uploadedImages, (int) $user['id'], $request);
@@ -422,17 +424,17 @@ class CarbonTrackController
                         if ($isMakeup) {
                             throw $e;
                         }
-                        $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord checkin error: ' . $e->getMessage());
+                        $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord checkin error: ' . DatabaseService::exceptionMessage($e));
                     }
                 }
 
-                if ($isMakeup && $this->db->inTransaction()) {
+                if ($isMakeup && ($this->db->transactionLevel() > 0)) {
                     $this->db->commit();
                     $recordCommitted = true;
                 }
             } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Clean up the transaction and uploaded files before propagating the failure.
-                if ($isMakeup && $this->db->inTransaction()) {
+                if ($isMakeup && ($this->db->transactionLevel() > 0)) {
                     $this->db->rollBack();
                 }
                 if (!$recordCommitted) {
@@ -493,7 +495,7 @@ class CarbonTrackController
 
             $monthlyAchievements = [];
             try {
-                $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                $driver = $this->db->getDriverName();
                 $currentMonth = date('Y-m');
                 if ($driver === 'sqlite') {
                     $achievementsSql = "
@@ -520,12 +522,10 @@ class CarbonTrackController
                         ORDER BY SUM(r.points_earned) DESC
                         LIMIT 10";
                 }
-                $achievementsStmt = $this->db->prepare($achievementsSql);
-                $achievementsStmt->execute([
+                $monthlyAchievements = DatabaseRows::all($this->db->select($achievementsSql, [
                     'user_id' => $user['id'],
                     'current_month' => $currentMonth
-                ]);
-                $monthlyAchievements = $achievementsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                ])) ?: [];
             } catch (\Throwable $exception) {
                 $this->logControllerException($exception, $request, 'Failed to load monthly achievements after submission');
             }
@@ -561,8 +561,8 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord failed: ' . $e->getMessage());
-            return $this->json($response, ['error' => self::ERR_INTERNAL, 'exception' => $e->getMessage(), 'trace' => $e->getFile().':'.$e->getLine()], 500);
+            $this->logControllerException($e, $request, 'CarbonTrackController::submitRecord failed: ' . DatabaseService::exceptionMessage($e));
+            return $this->json($response, ['error' => self::ERR_INTERNAL, 'exception' => DatabaseService::exceptionMessage($e), 'trace' => $e->getFile().':'.$e->getLine()], 500);
         }
     }
 
@@ -631,7 +631,7 @@ class CarbonTrackController
                 ]
             ]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::calculate error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::calculate error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -684,9 +684,7 @@ class CarbonTrackController
                 FROM carbon_records r
                 WHERE {$whereClause}
             ";
-            $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute($bindings);
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $bindings))['total'];
 
             // 获取记录列表
             $sql = "
@@ -703,15 +701,14 @@ class CarbonTrackController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $records = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             // 处理图片字段（统一为标准数组结构）
             foreach ($records as &$record) {
@@ -731,7 +728,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::getUserRecords error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::getUserRecords error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -766,18 +763,14 @@ class CarbonTrackController
             ";
 
             // 非管理员只能查看自己的记录
-            if (!$this->authService->isAdminUser($user)) {
+            $isAdmin = $this->authService->isAdminUser($user);
+            $queryBindings = ['record_id' => $recordId];
+            if (!$isAdmin) {
                 $sql .= " AND r.user_id = :user_id";
+                $queryBindings['user_id'] = $user['id'];
             }
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->bindValue('record_id', $recordId);
-            if (!$this->authService->isAdminUser($user)) {
-                $stmt->bindValue('user_id', $user['id']);
-            }
-            $stmt->execute();
-
-            $record = $stmt->fetch(PDO::FETCH_ASSOC);
+            $record = DatabaseRows::one($this->db->selectOne($sql, $queryBindings));
             if (!$record) {
                 return $this->json($response, ['error' => 'Record not found'], 404);
             }
@@ -786,13 +779,23 @@ class CarbonTrackController
             $decoded = $record['images'] ? json_decode($record['images'], true) : [];
             $record['images'] = $this->normalizeImages($decoded);
 
+            if ($isAdmin) {
+                $this->auditLog->logAdminRead(
+                    $request,
+                    'admin_carbon_record_viewed',
+                    isset($user['id']) ? (int) $user['id'] : null,
+                    'carbon_records',
+                    ['record_id' => $record['id']]
+                );
+            }
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $record
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::getRecordDetail error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::getRecordDetail error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -842,7 +845,7 @@ class CarbonTrackController
                 'skipped' => $result['skipped'],
             ]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecord error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecord error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -901,7 +904,7 @@ class CarbonTrackController
                 'missing_ids' => $missingIds,
             ]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecordsBulk error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::reviewRecordsBulk error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -989,10 +992,9 @@ class CarbonTrackController
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
                 WHERE {$whereClause}
             ";
-            $countStmt = $this->db->prepare($countSql);
-            foreach ($bindings as $k => $v) { $countStmt->bindValue($k, $v); }
-            $countStmt->execute();
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $countBindings = [];
+            foreach ($bindings as $k => $v) { $countBindings[$k] = $v; }
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $countBindings))['total'];
 
             // 获取记录列表
             $sql = "
@@ -1013,13 +1015,12 @@ class CarbonTrackController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
-            foreach ($bindings as $k => $v) { $stmt->bindValue($k, $v); }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings = [];
+            foreach ($bindings as $k => $v) { $queryBindings[$k] = $v; }
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $records = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             // 处理图片字段与前端期望的别名（同时在这里直接返回可用 URL，前端不再单独请求预签名）
             foreach ($records as &$record) {
@@ -1053,6 +1054,14 @@ class CarbonTrackController
             }
 
             $pages = (int)ceil($total / $limit);
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_carbon_records_viewed',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'carbon_records',
+                ['page' => $page, 'limit' => $limit, 'record_ids' => array_column($records, 'id')]
+            );
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $records,
@@ -1070,7 +1079,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::getPendingRecords error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::getPendingRecords error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -1086,7 +1095,7 @@ class CarbonTrackController
                 return $this->json($response, ['error' => 'Unauthorized'], 401);
             }
 
-            $driver = null; try { $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME); } catch (\Throwable $ignore) {}
+            $driver = $this->db->getDriverName();
 
             $stats = [
                 'total_records' => 0,
@@ -1105,11 +1114,11 @@ class CarbonTrackController
                     COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END),0) as total_carbon_saved,
                     COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END),0) as total_points_earned
                     FROM carbon_records WHERE user_id = :user_id AND deleted_at IS NULL";
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute(['user_id' => $user['id']]);
-                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                $row = DatabaseRows::one($this->db->selectOne($sql, ['user_id' => $user['id']]));
                 if ($row) { $stats = $row; }
-            } catch (\Throwable $ignore) { /* mock prepare null or driver unsupported */ }
+            } catch (\Throwable $exception) {
+                $this->logControllerException($exception, $request, 'Failed to compute user carbon record totals');
+            }
 
             // 月度统计：根据驱动选用不同语法
             $monthlyStats = [];
@@ -1135,10 +1144,10 @@ class CarbonTrackController
                         GROUP BY DATE_FORMAT(date,'%Y-%m')
                         ORDER BY month DESC";
                 }
-                $monthlyStmt = $this->db->prepare($monthlySql);
-                $monthlyStmt->execute(['user_id' => $user['id']]);
-                $monthlyStats = $monthlyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            } catch (\Throwable $ignore) { /* swallow for unit mocks */ }
+                $monthlyStats = DatabaseRows::all($this->db->select($monthlySql, ['user_id' => $user['id']])) ?: [];
+            } catch (\Throwable $exception) {
+                $this->logControllerException($exception, $request, 'Failed to compute monthly user carbon record totals');
+            }
 
             $monthlyAchievements = [];
             try {
@@ -1156,10 +1165,10 @@ class CarbonTrackController
                         AND DATE_FORMAT(r.date,'%Y-%m') = :current_month AND r.deleted_at IS NULL
                         GROUP BY r.activity_id, a.name_zh ORDER BY SUM(r.points_earned) DESC LIMIT 10";
                 }
-                $achievementsStmt = $this->db->prepare($achievementsSql);
-                $achievementsStmt->execute(['user_id' => $user['id'], 'current_month' => $currentMonth]);
-                $monthlyAchievements = $achievementsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            } catch (\Throwable $ignore) { /* swallow */ }
+                $monthlyAchievements = DatabaseRows::all($this->db->select($achievementsSql, ['user_id' => $user['id'], 'current_month' => $currentMonth])) ?: [];
+            } catch (\Throwable $exception) {
+                $this->logControllerException($exception, $request, 'Failed to compute monthly user achievements');
+            }
 
             return $this->json($response, [
                 'success' => true,
@@ -1171,7 +1180,7 @@ class CarbonTrackController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::getUserStats error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::getUserStats error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -1204,13 +1213,12 @@ class CarbonTrackController
 
             // 非管理员只能删自己的记录
             $condition = $this->authService->isAdminUser($user) ? '' : ' AND user_id = :user_id';
-            $sql = "UPDATE carbon_records SET deleted_at = NOW() WHERE id = :id{$condition} AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
+            $sql = "UPDATE carbon_records SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id{$condition} AND deleted_at IS NULL";
             $params = ['id' => $recordId];
             if (!$this->authService->isAdminUser($user)) {
                 $params['user_id'] = $user['id'];
             }
-            $stmt->execute($params);
+            $this->db->statement($sql, $params);
 
             // 审计日志：软删除碳减排记录（不区分是否真的删除成功，这里记录用户意图）
             try {
@@ -1229,7 +1237,7 @@ class CarbonTrackController
 
             return $this->json($response, ['success' => true]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'CarbonTrackController::getCarbonFactors error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'CarbonTrackController::getCarbonFactors error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -1239,7 +1247,7 @@ class CarbonTrackController
      */
     private function createCarbonRecord(array $data): string
     {
-        $nowExpr = ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') ? 'datetime("now")' : 'NOW()';
+        $nowExpr = ($this->db->getDriverName() === 'sqlite') ? 'datetime("now")' : 'CURRENT_TIMESTAMP';
         $sql = "
             INSERT INTO carbon_records (
                 id, user_id, activity_id, amount, unit, carbon_saved,
@@ -1255,8 +1263,7 @@ class CarbonTrackController
             $decoded = json_decode((string)$images, true);
             if (is_array($decoded)) { $images = $decoded; } else { $images = []; }
         }
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([
+        $this->db->statement($sql, [
             'id' => $recordId,
             'user_id' => $data['user_id'],
             'activity_id' => $data['activity_id'],
@@ -1305,7 +1312,7 @@ class CarbonTrackController
                 $this->logControllerException(
                     $cleanupError,
                     $request,
-                    'CarbonTrackController::submitRecord uploaded image cleanup error: ' . $cleanupError->getMessage()
+                    'CarbonTrackController::submitRecord uploaded image cleanup error: ' . DatabaseService::exceptionMessage($cleanupError)
                 );
             }
         }
@@ -1419,20 +1426,21 @@ class CarbonTrackController
             $inTransaction = false;
             if (method_exists($this->db, 'inTransaction')) {
                 try {
-                    $inTransaction = $this->db->inTransaction();
+                    $inTransaction = ($this->db->transactionLevel() > 0);
                 } catch (\Throwable $ignore) {
                     $inTransaction = false;
                 }
             }
 
             if (!$inTransaction) {
-                $startedTransaction = $this->db->beginTransaction();
+                $this->db->beginTransaction();
+                $startedTransaction = true;
             }
 
-            $updateStmt = $this->db->prepare("UPDATE carbon_records\n                    SET status = :status,\n                        reviewed_by = :reviewed_by,\n                        reviewed_at = NOW(),\n                        review_note = :review_note\n                 WHERE id = :record_id");
+            $updateSql = "UPDATE carbon_records\n                    SET status = :status,\n                        reviewed_by = :reviewed_by,\n                        reviewed_at = CURRENT_TIMESTAMP,\n                        review_note = :review_note\n                 WHERE id = :record_id";
 
             foreach ($pending as $index => $record) {
-                $updateStmt->execute([
+                $this->db->statement($updateSql, [
                     'status' => $newStatus,
                     'reviewed_by' => $adminUser['id'] ?? null,
                     'review_note' => $reviewNote,
@@ -1469,7 +1477,7 @@ class CarbonTrackController
             // Roll back the transaction before propagating the failure to the caller.
             if ($startedTransaction) {
                 try {
-                    if ($this->db->inTransaction()) {
+                    if (($this->db->transactionLevel() > 0)) {
                         $this->db->rollBack();
                     }
                 } catch (\Throwable $ignore) {
@@ -1599,13 +1607,12 @@ class CarbonTrackController
             implode(',', $placeholders)
         );
 
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->execute();
 
-        $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $records = DatabaseRows::all($this->db->select($sql, $queryBindings));
         if (!is_array($records)) {
             return [];
         }
@@ -1619,8 +1626,7 @@ class CarbonTrackController
     private function updateUserPoints(int $userId, float $points): void
     {
         $sql = "UPDATE users SET points = points + :points WHERE id = :user_id";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute(['points' => $points, 'user_id' => $userId]);
+        $this->db->statement($sql, ['points' => $points, 'user_id' => $userId]);
     }
 
     /**
@@ -1630,9 +1636,7 @@ class CarbonTrackController
     {
         // 获取管理员列表
         $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute();
-        $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $admins = DatabaseRows::all($this->db->select($sql));
 
         if (empty($admins)) {
             return;
@@ -1896,13 +1900,13 @@ class CarbonTrackController
                 return;
             } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Use the emergency log if ErrorLogService itself fails.
-                error_log(self::ERRLOG_PREFIX . $loggingError->getMessage());
+                error_log(self::ERRLOG_PREFIX . DatabaseService::exceptionMessage($loggingError));
             }
         }
         if ($contextMessage !== '') {
             error_log($contextMessage);
         } else {
-            error_log($exception->getMessage());
+            error_log(DatabaseService::exceptionMessage($exception));
         }
     }
 

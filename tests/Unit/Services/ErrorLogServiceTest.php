@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\ErrorLogService;
 use Monolog\Logger;
-use PDO;
 use PHPUnit\Framework\TestCase;
 
 class ErrorLogServiceTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private mixed $previousDisableErrorWrites = null;
     private mixed $previousDisableErrorWritesServer = null;
     private mixed $previousAppEnv = null;
@@ -28,8 +30,8 @@ class ErrorLogServiceTest extends TestCase
         unset($_SERVER['DISABLE_ERROR_LOG_WRITES']);
         $_ENV['APP_ENV'] = 'development';
         $_SERVER['APP_ENV'] = 'development';
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->exec('CREATE TABLE error_logs (
+        $this->connection = DatabaseFixture::sqlite();
+        $this->connection->unprepared('CREATE TABLE error_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             error_type TEXT,
             error_message TEXT,
@@ -75,27 +77,50 @@ class ErrorLogServiceTest extends TestCase
 
     public function testLogExceptionUsesRequestAttributeRequestId(): void
     {
-        $service = new ErrorLogService($this->pdo, new Logger('test'));
+        $service = new ErrorLogService($this->connection, new Logger('test'));
         $request = makeRequest('GET', '/test')
             ->withAttribute('request_id', '550e8400-e29b-41d4-a716-446655440001');
 
         $service->logException(new \RuntimeException('boom'), $request);
 
-        $row = $this->pdo->query('SELECT request_id FROM error_logs')->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne('SELECT request_id FROM error_logs'));
         $this->assertIsArray($row);
         $this->assertSame('550e8400-e29b-41d4-a716-446655440001', $row['request_id']);
     }
 
     public function testLogExceptionFallsBackToExtraRequestId(): void
     {
-        $service = new ErrorLogService($this->pdo, new Logger('test'));
+        $service = new ErrorLogService($this->connection, new Logger('test'));
         $request = makeRequest('POST', '/test');
 
         $service->logException(new \RuntimeException('boom'), $request, ['request_id' => 'extra-request-id']);
 
-        $row = $this->pdo->query('SELECT request_id FROM error_logs')->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->connection->selectOne('SELECT request_id FROM error_logs'));
         $this->assertIsArray($row);
         $this->assertSame('extra-request-id', $row['request_id']);
+    }
+
+    public function testLogExceptionKeepsOriginalErrorInFallbackWhenDatabaseWriteFails(): void
+    {
+        $this->connection->getSchemaBuilder()->drop('error_logs');
+        $logger = $this->createMock(Logger::class);
+        $error = new \RuntimeException('Fixture request failed');
+        $requestId = '550e8400-e29b-41d4-a716-446655440001';
+        $request = makeRequest('POST', '/test', ['fixture' => 'request-body'])
+            ->withAttribute('request_id', $requestId);
+        $logger->expects($this->once())->method('error')->with(
+            'Failed to persist error log',
+            $this->callback(static function (array $context) use ($error, $requestId): bool {
+                return $context['error_type'] === \RuntimeException::class
+                    && $context['error_message'] === $error->getMessage()
+                    && $context['request_id'] === $requestId
+                    && str_contains($context['persistence_error'], 'error_logs')
+                    && !array_key_exists('client_post', $context);
+            })
+        );
+        $service = new ErrorLogService($this->connection, $logger);
+
+        $this->assertNull($service->logException($error, $request));
     }
 
     public function testLogExceptionReturnsNullWhenWritesDisabled(): void
@@ -103,13 +128,13 @@ class ErrorLogServiceTest extends TestCase
         $_ENV['DISABLE_ERROR_LOG_WRITES'] = '1';
         $_SERVER['DISABLE_ERROR_LOG_WRITES'] = '1';
 
-        $service = new ErrorLogService($this->pdo, new Logger('test'));
+        $service = new ErrorLogService($this->connection, new Logger('test'));
         $request = makeRequest('GET', '/test');
 
         $result = $service->logException(new \RuntimeException('boom'), $request);
 
         $this->assertNull($result);
-        $count = (int) $this->pdo->query('SELECT COUNT(*) FROM error_logs')->fetchColumn();
+        $count = (int) DatabaseRows::scalar($this->connection->selectOne('SELECT COUNT(*) FROM error_logs'));
         $this->assertSame(0, $count);
     }
 
@@ -120,13 +145,13 @@ class ErrorLogServiceTest extends TestCase
         $_ENV['DISABLE_ERROR_LOG_WRITES'] = '1';
         $_SERVER['DISABLE_ERROR_LOG_WRITES'] = '1';
 
-        $service = new ErrorLogService($this->pdo, new Logger('test'));
+        $service = new ErrorLogService($this->connection, new Logger('test'));
         $request = makeRequest('GET', '/test');
 
         $result = $service->logException(new \RuntimeException('boom'), $request);
 
         $this->assertSame(1, $result);
-        $count = (int) $this->pdo->query('SELECT COUNT(*) FROM error_logs')->fetchColumn();
+        $count = (int) DatabaseRows::scalar($this->connection->selectOne('SELECT COUNT(*) FROM error_logs'));
         $this->assertSame(1, $count);
     }
 }

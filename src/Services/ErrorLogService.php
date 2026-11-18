@@ -4,19 +4,22 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\RequestIdNormalizer;
 use CarbonTrack\Support\SensitiveDataRedactor;
-use PDO;
 use Psr\Http\Message\ServerRequestInterface as Request;
+use Monolog\Handler\ErrorLogHandler;
+use Monolog\Handler\WhatFailureGroupHandler;
+use Monolog\Logger;
 use Psr\Log\LoggerInterface;
 
 class ErrorLogService
 {
     private const DATE_FMT = 'Y-m-d H:i:s';
-    private PDO $db;
+    private Connection $db;
     private LoggerInterface $logger;
 
-    public function __construct(PDO $db, LoggerInterface $logger)
+    public function __construct(Connection $db, LoggerInterface $logger)
     {
         $this->db = $db;
         $this->logger = $logger;
@@ -33,7 +36,7 @@ class ErrorLogService
 
         return $this->insertLog([
             'error_type' => get_class($e),
-            'error_message' => $e->getMessage(),
+            'error_message' => DatabaseService::exceptionMessage($e),
             'error_file' => $e->getFile(),
             'error_line' => $e->getLine(),
             'error_time' => date(self::DATE_FMT),
@@ -78,8 +81,7 @@ class ErrorLogService
     {
         try {
             $sql = 'INSERT INTO error_logs (error_type, error_message, error_file, error_line, error_time, script_name, client_get, client_post, client_files, client_cookie, client_session, client_server, request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)';
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
+            $id = DatabaseService::insertGetId($this->db, $sql, [
                 $data['error_type'] ?? null,
                 $data['error_message'] ?? null,
                 $data['error_file'] ?? null,
@@ -94,16 +96,24 @@ class ErrorLogService
                 $data['client_server'] ?? null,
                 $data['request_id'] ?? null,
             ]);
-            $id = (int) $this->db->lastInsertId();
             return $id > 0 ? $id : null;
         } catch (\Throwable $ex) {
-            // Fallback to application logger to avoid losing the error entirely
+            $fallback = [
+                'error_type' => $data['error_type'] ?? null,
+                'error_message' => $data['error_message'] ?? null,
+                'error_file' => $data['error_file'] ?? null,
+                'error_line' => $data['error_line'] ?? null,
+                'request_id' => $data['request_id'] ?? null,
+                'persistence_error' => DatabaseService::exceptionMessage($ex),
+            ];
             try {
-                $this->logger->error('Failed to persist error log', [
-                    'message' => $ex->getMessage(),
+                $this->logger->error('Failed to persist error log', $fallback);
+            } catch (\Throwable $loggerFailure) {
+                $fallback['logger_error'] = DatabaseService::exceptionMessage($loggerFailure);
+                $emergencyLogger = new Logger('carbontrack-emergency', [
+                    new WhatFailureGroupHandler([new ErrorLogHandler()]),
                 ]);
-            } catch (\Throwable $ignored) {
-                // swallow
+                $emergencyLogger->error('Failed to persist error log', $fallback);
             }
             return null;
         }

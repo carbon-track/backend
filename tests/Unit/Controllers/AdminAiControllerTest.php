@@ -474,12 +474,21 @@ class AdminAiControllerTest extends TestCase
                 'pending_actions' => [],
             ]);
 
+        $entries = [];
+        $auditLog = $this->createMock(AuditLogService::class);
+        $auditLog->method('logAdminOperation')->willReturnCallback(
+            static function (string $action, ?int $adminId, string $category, array $context) use (&$entries): bool {
+                $entries[] = [$action, $adminId, $category, $context['status'], $context['conversation_id']];
+                return true;
+            }
+        );
+
         $controller = new AdminAiController(
             $authService,
             $this->createMock(AdminAiIntentService::class),
             $this->createMock(AdminAnnouncementAiService::class),
             $this->createMock(AdminAiCommandRepository::class),
-            $this->createMock(AuditLogService::class),
+            $auditLog,
             $this->createMock(ErrorLogService::class),
             new NullLogger(),
             $agentService
@@ -492,6 +501,66 @@ class AdminAiControllerTest extends TestCase
         $payload = json_decode((string) $response->getBody(), true);
         $this->assertTrue($payload['success']);
         $this->assertSame(4, $payload['data']['summary']['message_count']);
+        $this->assertSame([['admin_ai_conversation_viewed', 1, 'admin_ai', 'success', 'admin-ai-2']], $entries);
+    }
+
+    /** @dataProvider invalidConversationIdCases */
+    public function testConversationDetailAuditsRejectedId(string $conversationId, string $errorMessage): void
+    {
+        $authService = $this->createMock(AuthService::class);
+        $authService->method('getCurrentUser')->willReturn(['id' => 1, 'role' => 'admin']);
+        $authService->method('isAdminUser')->willReturn(true);
+
+        $agentService = $this->createMock(AdminAiAgentService::class);
+        if (trim($conversationId) === '') {
+            $agentService->expects($this->never())->method('getConversationDetail');
+        } else {
+            $agentService->expects($this->once())->method('getConversationDetail')
+                ->with($conversationId)
+                ->willThrowException(new \InvalidArgumentException($errorMessage));
+        }
+
+        $entries = [];
+        $auditLog = $this->createMock(AuditLogService::class);
+        $auditLog->method('logAdminOperation')->willReturnCallback(
+            static function (string $action, ?int $adminId, string $category, array $context) use (&$entries): bool {
+                $entries[] = [$action, $adminId, $category, $context['status'], $context['request_data']];
+                return true;
+            }
+        );
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->expects($this->once())->method('logException');
+        $controller = new AdminAiController(
+            $authService,
+            $this->createMock(AdminAiIntentService::class),
+            $this->createMock(AdminAnnouncementAiService::class),
+            $this->createMock(AdminAiCommandRepository::class),
+            $auditLog,
+            $errorLog,
+            new NullLogger(),
+            $agentService
+        );
+
+        $request = makeRequest('GET', '/admin/ai/conversations/' . rawurlencode($conversationId));
+        $response = $controller->conversationDetail($request, new Response(), ['conversation_id' => $conversationId]);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame([
+            'success' => false,
+            'error' => $errorMessage,
+            'code' => 'INVALID_CONVERSATION_ID',
+        ], json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR));
+        $this->assertSame([
+            ['admin_ai_conversation_view_failed', 1, 'admin_ai', 'failed', ['code' => 'INVALID_CONVERSATION_ID']],
+        ], $entries);
+    }
+
+    public static function invalidConversationIdCases(): array
+    {
+        return [
+            'blank' => [' ', 'conversation_id is required'],
+            'invalid format' => ['invalid id', 'Invalid conversation id'],
+        ];
     }
 
     public function testAnalyzeReturns503WhenServiceDisabled(): void

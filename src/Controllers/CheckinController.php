@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
 use CarbonTrack\Models\UserUsageStats;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
@@ -13,7 +15,6 @@ use CarbonTrack\Services\QuotaService;
 use DateTimeImmutable;
 use DateTimeZone;
 use Monolog\Logger;
-use PDO;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
@@ -161,21 +162,16 @@ class CheckinController
 
             try {
                 $recordSql = "SELECT id, status, date FROM carbon_records WHERE id = :rid AND user_id = :uid AND deleted_at IS NULL LIMIT 1";
-                $driverName = (string) $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                $driverName = (string) $db->getDriverName();
                 if (in_array($driverName, ['mysql', 'pgsql'], true)) {
                     $recordSql .= " FOR UPDATE";
                 }
-                $recordStmt = $db->prepare(
-                    $recordSql
-                );
-                $recordStmt->execute([
+                $record = DatabaseRows::one($db->selectOne($recordSql, [
                     'rid' => $recordId,
                     'uid' => (int) $user['id'],
-                ]);
-                $record = $recordStmt->fetch(PDO::FETCH_ASSOC);
-                $recordStmt->closeCursor();
+                ]));
                 if (!$record) {
-                    if ($db->inTransaction()) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
                     return $this->json($response, [
@@ -187,7 +183,7 @@ class CheckinController
 
                 $recordStatus = strtolower(trim((string) ($record['status'] ?? '')));
                 if ($recordStatus !== 'pending') {
-                    if ($db->inTransaction()) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
                     return $this->json($response, [
@@ -200,7 +196,7 @@ class CheckinController
                 $recordDateBefore = isset($record['date']) ? (string) $record['date'] : null;
 
                 if ($this->checkinService->hasCheckin((int) $user['id'], $normalizedDate)) {
-                    if ($db->inTransaction()) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
                     return $this->json($response, [
@@ -210,16 +206,13 @@ class CheckinController
                     ], 409);
                 }
 
-                $updateRecordStmt = $db->prepare(
-                    "UPDATE carbon_records SET date = :cdate WHERE id = :rid AND user_id = :uid AND deleted_at IS NULL AND status = 'pending'"
-                );
-                $updateRecordStmt->execute([
+                $updateRecordAffected = $db->affectingStatement("UPDATE carbon_records SET date = :cdate WHERE id = :rid AND user_id = :uid AND deleted_at IS NULL AND status = 'pending'", [
                     'cdate' => $normalizedDate,
                     'rid' => $recordId,
                     'uid' => (int) $user['id'],
                 ]);
-                if ($updateRecordStmt->rowCount() === 0) {
-                    if ($db->inTransaction()) {
+                if ($updateRecordAffected === 0) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
                     return $this->json($response, [
@@ -230,7 +223,7 @@ class CheckinController
                 }
 
                 if (!$this->quotaService->checkAndConsumeOnConnection($db, $userModel, 'checkin_makeup', 1)) {
-                    if ($db->inTransaction()) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
                     return $this->json($response, [
@@ -243,7 +236,7 @@ class CheckinController
 
                 $ok = $this->checkinService->createMakeupCheckin((int) $user['id'], $normalizedDate, $note, $recordId);
                 if (!$ok) {
-                    if ($db->inTransaction()) {
+                    if (($db->transactionLevel() > 0)) {
                         $db->rollBack();
                     }
 
@@ -254,12 +247,12 @@ class CheckinController
                     ], 409);
                 }
 
-                if ($db->inTransaction()) {
+                if (($db->transactionLevel() > 0)) {
                     $db->commit();
                 }
             } catch (\Throwable $e) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Roll back before propagating the exception to the error-logging handler.
-                if ($db->inTransaction()) {
+                if (($db->transactionLevel() > 0)) {
                     $db->rollBack();
                 }
                 throw $e;
@@ -423,7 +416,7 @@ class CheckinController
     private function logException(\Throwable $e, Request $request, string $message): void
     {
         try {
-            $this->logger->error($message, ['error' => $e->getMessage()]);
+            $this->logger->error($message, ['error' => DatabaseService::exceptionMessage($e)]);
         } catch (\Throwable $ignore) {
             // ignore logger errors
         }

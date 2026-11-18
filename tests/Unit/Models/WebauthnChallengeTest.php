@@ -4,26 +4,25 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Models;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Models\WebauthnChallenge;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
-use PDO;
 use PHPUnit\Framework\TestCase;
 
 class WebauthnChallengeTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private WebauthnChallenge $model;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-        TestSchemaBuilder::init($this->pdo);
+        $this->connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($this->connection);
 
-        $this->model = new WebauthnChallenge($this->pdo);
+        $this->model = new WebauthnChallenge($this->connection);
     }
 
     public function testFindActiveReturnsFutureChallengeForMatchingUser(): void

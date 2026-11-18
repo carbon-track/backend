@@ -10,6 +10,7 @@ use Monolog\Handler\StreamHandler;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\ErrorLogHandler;
 use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\Connection;
 use CarbonTrack\Services\DatabaseService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\CarbonCalculatorService;
@@ -82,7 +83,6 @@ use CarbonTrack\Services\PasskeyConfig;
 use CarbonTrack\Services\PasskeyService;
 use CarbonTrack\Services\WebauthnProviderInterface;
 use CarbonTrack\Services\NativeWebauthnProvider;
-use CarbonTrack\Services\NullWebauthnProvider;
 use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Controllers\PasskeyController;
@@ -179,11 +179,6 @@ $__deps_initializer = function (Container $container) {
                 'driver' => 'sqlite',
                 'database' => $_ENV['DB_DATABASE'] ?? '/tmp/test.db',
                 'prefix' => '',
-                'options' => [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false,
-                ],
             ]);
         } else {
             $capsule->addConnection([
@@ -197,11 +192,6 @@ $__deps_initializer = function (Container $container) {
                 'charset' => 'utf8mb4',
                 'collation' => 'utf8mb4_unicode_ci',
                 'prefix' => '',
-                'options' => [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES => false,
-                ],
             ]);
         }
 
@@ -211,9 +201,8 @@ $__deps_initializer = function (Container $container) {
         return new DatabaseService($capsule);
     });
 
-    // PDO Service (for services that need direct PDO access)
-    $container->set(PDO::class, function (ContainerInterface $c) {
-        return $c->get(DatabaseService::class)->getConnection()->getPdo();
+    $container->set(Connection::class, function (ContainerInterface $c): Connection {
+        return $c->get(DatabaseService::class)->getConnection();
     });
 
     // Auth Service
@@ -229,7 +218,7 @@ $__deps_initializer = function (Container $container) {
         );
         
         // 设置数据库连接
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         $authService->setDatabase($db);
         
         return $authService;
@@ -279,7 +268,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(StatisticsService::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new StatisticsService($db, null, null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class));
     });
 
@@ -288,12 +277,12 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(LeaderboardService::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new LeaderboardService($db, $c->get(RegionService::class), $c->get(Logger::class), null, null, $c->get(AuditLogService::class), $c->get(ErrorLogService::class), $c->get(UserProfileViewService::class));
     });
 
     $container->set(CheckinService::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new CheckinService(
             $db,
             $c->get(Logger::class),
@@ -304,7 +293,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(StreakLeaderboardService::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new StreakLeaderboardService(
             $db,
             $c->get(RegionService::class),
@@ -514,7 +503,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminAiReadModelService::class, function (ContainerInterface $c) {
         return new AdminAiReadModelService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(StatisticsService::class),
             $c->get(CronSchedulerService::class)
         );
@@ -522,7 +511,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminAiConversationStoreService::class, function (ContainerInterface $c) {
         return new AdminAiConversationStoreService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class)
@@ -531,7 +520,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(AdminAiWriteActionService::class, function (ContainerInterface $c) {
         return new AdminAiWriteActionService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(AuditLogService::class),
             $c->get(MessageService::class),
             $c->get(BadgeService::class),
@@ -600,7 +589,7 @@ $__deps_initializer = function (Container $container) {
     // Audit Log Service
     $container->set(AuditLogService::class, function (ContainerInterface $c) {
         return new AuditLogService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(Logger::class)
         );
     });
@@ -608,7 +597,7 @@ $__deps_initializer = function (Container $container) {
     // Error Log Service
     $container->set(ErrorLogService::class, function (ContainerInterface $c) {
         return new ErrorLogService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(Logger::class)
         );
     });
@@ -627,21 +616,16 @@ $__deps_initializer = function (Container $container) {
         return new PasskeyConfig();
     });
 
-    $container->set(WebauthnProviderInterface::class, function (ContainerInterface $c) {
-        $nativeProvider = new NativeWebauthnProvider();
-        if ($nativeProvider->isAvailable()) {
-            return $nativeProvider;
-        }
-
-        return new NullWebauthnProvider($c->get(PasskeyConfig::class));
+    $container->set(WebauthnProviderInterface::class, function () {
+        return new NativeWebauthnProvider();
     });
 
     $container->set(UserPasskey::class, function (ContainerInterface $c) {
-        return new UserPasskey($c->get(PDO::class));
+        return new UserPasskey($c->get(Connection::class));
     });
 
     $container->set(WebauthnChallenge::class, function (ContainerInterface $c) {
-        return new WebauthnChallenge($c->get(PDO::class));
+        return new WebauthnChallenge($c->get(Connection::class));
     });
 
     $container->set(PasskeyService::class, function (ContainerInterface $c) {
@@ -651,7 +635,7 @@ $__deps_initializer = function (Container $container) {
             $c->get(WebauthnChallenge::class),
             $c->get(WebauthnProviderInterface::class),
             $c->get(AuditLogService::class),
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(RegionService::class),
             $c->get(CheckinService::class),
             $c->has(CloudflareR2Service::class) ? $c->get(CloudflareR2Service::class) : null,
@@ -672,7 +656,7 @@ $__deps_initializer = function (Container $container) {
         ];
 
         return new AdminAiAgentService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $llmClient,
             $c->get(LoggerInterface::class),
             $config,
@@ -727,7 +711,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(SupportAutomationService::class, function (ContainerInterface $c) {
         return new SupportAutomationService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),
@@ -737,7 +721,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(CronSchedulerService::class, function (ContainerInterface $c) use ($envBool) {
         return new CronSchedulerService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),
@@ -771,7 +755,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(SupportRoutingEngineService::class, function (ContainerInterface $c) {
         return new SupportRoutingEngineService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),
@@ -783,7 +767,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(SupportTicketService::class, function (ContainerInterface $c) {
         return new SupportTicketService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(LoggerInterface::class),
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),
@@ -830,7 +814,7 @@ $__deps_initializer = function (Container $container) {
     // System Log Service
     $container->set(SystemLogService::class, function (ContainerInterface $c) {
         return new SystemLogService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(Logger::class)
         );
     });
@@ -838,7 +822,7 @@ $__deps_initializer = function (Container $container) {
     // LLM Log Service
     $container->set(LlmLogService::class, function (ContainerInterface $c) {
         return new LlmLogService(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(Logger::class)
         );
     });
@@ -858,7 +842,7 @@ $__deps_initializer = function (Container $container) {
 
     // Models
     $container->set(Avatar::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new Avatar(
             $db,
             $c->get(LoggerInterface::class),
@@ -878,13 +862,13 @@ $__deps_initializer = function (Container $container) {
             $c->get(ErrorLogService::class),
             $difficulty,
             $ttlSeconds,
-            $c->get(DatabaseService::class)->getConnection()->getPdo()
+            $c->get(Connection::class)
         );
     });
 
     $container->set(MobileDeviceSessionService::class, function (ContainerInterface $c) {
         return new MobileDeviceSessionService(
-            $c->get(DatabaseService::class)->getConnection()->getPdo(),
+            $c->get(Connection::class),
             $c->get(Logger::class),
             $c->get(AuditLogService::class),
             Environment::int('MOBILE_REFRESH_TOKEN_TTL_SECONDS', 60 * 60 * 24 * 30),
@@ -907,7 +891,7 @@ $__deps_initializer = function (Container $container) {
 
     $container->set(MessageController::class, function (ContainerInterface $c) {
         return new MessageController(
-            $c->get(PDO::class),
+            $c->get(Connection::class),
             $c->get(MessageService::class),
             $c->get(AuditLogService::class),
             $c->get(AuthService::class),
@@ -918,7 +902,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(UserController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new UserController(
             $c->get(AuthService::class),
             $c->get(AuditLogService::class),
@@ -941,7 +925,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(AuthController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new AuthController(
             $c->get(AuthService::class),
             $c->get(EmailService::class),
@@ -961,7 +945,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(CarbonTrackController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new CarbonTrackController(
             $db,
             $c->get(CarbonCalculatorService::class),
@@ -991,12 +975,12 @@ $__deps_initializer = function (Container $container) {
         return new SchoolController(
             $c->get(AuditLogService::class),
             $c->get(ErrorLogService::class),
-            $c->get(PDO::class)
+            $c->get(Connection::class)
         );
     });
 
     $container->set(AdminController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new AdminController(
             $db,
             $c->get(AuthService::class),
@@ -1012,7 +996,7 @@ $__deps_initializer = function (Container $container) {
     });
 
     $container->set(ProductController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new ProductController(
             $db,
             $c->get(MessageService::class),
@@ -1055,7 +1039,7 @@ $__deps_initializer = function (Container $container) {
 
     // System Log Controller
     $container->set(SystemLogController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new SystemLogController(
             $db,
             $c->get(AuthService::class),
@@ -1066,7 +1050,7 @@ $__deps_initializer = function (Container $container) {
 
     // Unified Log Search Controller
     $container->set(LogSearchController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new LogSearchController(
             $db,
             $c->get(AuthService::class),
@@ -1077,7 +1061,7 @@ $__deps_initializer = function (Container $container) {
 
     // Admin LLM Usage Controller
     $container->set(AdminLlmUsageController::class, function (ContainerInterface $c) {
-        $db = $c->get(DatabaseService::class)->getConnection()->getPdo();
+        $db = $c->get(Connection::class);
         return new AdminLlmUsageController(
             $db,
             $c->get(AuthService::class),

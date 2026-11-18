@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\CheckinController;
 use CarbonTrack\Models\User;
 use CarbonTrack\Models\UserGroup;
@@ -16,14 +19,13 @@ use DateTimeZone;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Monolog\Handler\NullHandler;
 use Monolog\Logger;
-use PDO;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Psr7\Response;
 
 class CheckinControllerTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private string $dbPath;
     private Capsule $capsule;
     private CheckinService $checkinService;
@@ -34,22 +36,21 @@ class CheckinControllerTest extends TestCase
         parent::setUp();
 
         $this->dbPath = tempnam(sys_get_temp_dir(), 'carbontrack_checkins_');
-        $this->pdo = new PDO('sqlite:' . $this->dbPath);
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($this->pdo);
+        $this->connection = DatabaseFixture::sqlite($this->dbPath);
+        TestSchemaBuilder::init($this->connection);
 
         $this->capsule = new Capsule();
         $this->capsule->addConnection([
             'driver' => 'sqlite',
             'database' => $this->dbPath,
             'prefix' => '',
-            'pdo' => $this->pdo,
+            'connection' => $this->connection,
         ]);
         $this->capsule->setAsGlobal();
         $this->capsule->bootEloquent();
 
         $this->seedUser(1);
-        $this->checkinService = new CheckinService($this->pdo, null, 'UTC');
+        $this->checkinService = new CheckinService($this->connection, null, 'UTC');
     }
 
     protected function tearDown(): void
@@ -106,10 +107,10 @@ class CheckinControllerTest extends TestCase
         $firstDate = $today->modify('-2 days')->format('Y-m-d');
         $secondDate = $today->modify('-1 day')->format('Y-m-d');
         $originalRecordDate = $today->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-1', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalRecordDate]);
-        $insertRecord->execute(['rec-makeup-2', $this->user->id, $activityId, 1, 'km', 0.1, 0, $secondDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $insertRecordSql = "INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))";
+        $this->connection->statement($insertRecordSql, ['rec-makeup-1', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalRecordDate]);
+        $this->connection->statement($insertRecordSql, ['rec-makeup-2', $this->user->id, $activityId, 1, 'km', 0.1, 0, $secondDate]);
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
             'date' => $firstDate,
@@ -127,9 +128,9 @@ class CheckinControllerTest extends TestCase
         $this->assertSame(0, (int) $payload['data']['makeup_quota']['remaining']);
         $this->assertSame(
             $firstDate,
-            $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-1'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT date FROM carbon_records WHERE id = 'rec-makeup-1'"))
         );
-        $audit = $this->pdo->query("SELECT affected_table, old_data, new_data FROM audit_logs WHERE action = 'carbon_record_date_updated_for_makeup'")->fetch(PDO::FETCH_ASSOC);
+        $audit = DatabaseRows::one($this->connection->selectOne("SELECT affected_table, old_data, new_data FROM audit_logs WHERE action = 'carbon_record_date_updated_for_makeup'"));
         $this->assertSame('carbon_records', $audit['affected_table']);
         $this->assertSame(['date' => $originalRecordDate], json_decode((string) $audit['old_data'], true, 512, JSON_THROW_ON_ERROR));
         $this->assertSame(['date' => $firstDate], json_decode((string) $audit['new_data'], true, 512, JSON_THROW_ON_ERROR));
@@ -149,9 +150,8 @@ class CheckinControllerTest extends TestCase
 
         $originalDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-10 days')->format('Y-m-d');
         $targetDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-2 days')->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-approved', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $this->connection->statement("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', datetime('now'))", ['rec-makeup-approved', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
             'date' => $targetDate,
@@ -163,11 +163,11 @@ class CheckinControllerTest extends TestCase
         $payload = json_decode((string) $result->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame(409, $result->getStatusCode());
         $this->assertSame('RECORD_NOT_MUTABLE', $payload['code']);
-        $this->assertSame($originalDate, $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-approved'")->fetchColumn());
+        $this->assertSame($originalDate, DatabaseRows::scalar($this->connection->selectOne("SELECT date FROM carbon_records WHERE id = 'rec-makeup-approved'")));
         $this->assertFalse(
-            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'"))
         );
-        $this->assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM user_checkins WHERE record_id = 'rec-makeup-approved'")->fetchColumn());
+        $this->assertSame(0, (int) DatabaseRows::scalar($this->connection->selectOne("SELECT COUNT(*) FROM user_checkins WHERE record_id = 'rec-makeup-approved'")));
     }
 
     public function testMakeupCheckinRejectsInvalidCalendarDate(): void
@@ -175,9 +175,8 @@ class CheckinControllerTest extends TestCase
         $controller = $this->makeController();
 
         $originalDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-10 days')->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-invalid-date', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $this->connection->statement("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))", ['rec-makeup-invalid-date', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
             'date' => '2025-02-31',
@@ -189,9 +188,9 @@ class CheckinControllerTest extends TestCase
         $payload = json_decode((string) $result->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame(400, $result->getStatusCode());
         $this->assertSame('INVALID_DATE', $payload['code']);
-        $this->assertSame($originalDate, $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-invalid-date'")->fetchColumn());
+        $this->assertSame($originalDate, DatabaseRows::scalar($this->connection->selectOne("SELECT date FROM carbon_records WHERE id = 'rec-makeup-invalid-date'")));
         $this->assertFalse(
-            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'"))
         );
     }
 
@@ -200,9 +199,8 @@ class CheckinControllerTest extends TestCase
         $controller = $this->makeController();
 
         $targetDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-2 days')->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-duplicate', $this->user->id, $activityId, 1, 'km', 0.1, 0, $targetDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $this->connection->statement("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))", ['rec-makeup-duplicate', $this->user->id, $activityId, 1, 'km', 0.1, 0, $targetDate]);
         $this->checkinService->createMakeupCheckin((int) $this->user->id, $targetDate, 'existing', 'rec-existing');
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
@@ -214,13 +212,13 @@ class CheckinControllerTest extends TestCase
 
         $this->assertSame(409, $result->getStatusCode());
         $this->assertFalse(
-            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'"))
         );
     }
 
     public function testMakeupCheckinRollsBackQuotaAndRecordDateWhenCheckinWriteFails(): void
     {
-        $this->checkinService = new class($this->pdo, null, 'UTC') extends CheckinService {
+        $this->checkinService = new class($this->connection, null, 'UTC') extends CheckinService {
             public function createMakeupCheckin(
                 int $userId,
                 string $date,
@@ -235,9 +233,8 @@ class CheckinControllerTest extends TestCase
 
         $originalDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
         $targetDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-3 days')->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-fail', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $this->connection->statement("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))", ['rec-makeup-fail', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
             'date' => $targetDate,
@@ -247,16 +244,16 @@ class CheckinControllerTest extends TestCase
         $result = $controller->makeup($request, $response);
 
         $this->assertSame(500, $result->getStatusCode());
-        $this->assertSame($originalDate, $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-fail'")->fetchColumn());
+        $this->assertSame($originalDate, DatabaseRows::scalar($this->connection->selectOne("SELECT date FROM carbon_records WHERE id = 'rec-makeup-fail'")));
         $this->assertFalse(
-            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'"))
         );
-        $this->assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM user_checkins WHERE record_id = 'rec-makeup-fail'")->fetchColumn());
+        $this->assertSame(0, (int) DatabaseRows::scalar($this->connection->selectOne("SELECT COUNT(*) FROM user_checkins WHERE record_id = 'rec-makeup-fail'")));
     }
 
     public function testMakeupCheckinReturnsConflictWhenConcurrentDuplicateWins(): void
     {
-        $this->checkinService = new class($this->pdo, null, 'UTC') extends CheckinService {
+        $this->checkinService = new class($this->connection, null, 'UTC') extends CheckinService {
             private int $hasCheckinCalls = 0;
 
             public function hasCheckin(int $userId, string $date): bool
@@ -284,9 +281,8 @@ class CheckinControllerTest extends TestCase
 
         $originalDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d');
         $targetDate = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->modify('-4 days')->format('Y-m-d');
-        $activityId = (string) $this->pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
-        $insertRecord = $this->pdo->prepare("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))");
-        $insertRecord->execute(['rec-makeup-race', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
+        $activityId = (string) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
+        $this->connection->statement("INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))", ['rec-makeup-race', $this->user->id, $activityId, 1, 'km', 0.1, 0, $originalDate]);
 
         $request = makeRequest('POST', '/users/me/checkins/makeup', [
             'date' => $targetDate,
@@ -297,9 +293,9 @@ class CheckinControllerTest extends TestCase
 
         $this->assertSame(409, $result->getStatusCode());
         $this->assertSame(1, $this->checkinService->getHasCheckinCalls());
-        $this->assertSame($originalDate, $this->pdo->query("SELECT date FROM carbon_records WHERE id = 'rec-makeup-race'")->fetchColumn());
+        $this->assertSame($originalDate, DatabaseRows::scalar($this->connection->selectOne("SELECT date FROM carbon_records WHERE id = 'rec-makeup-race'")));
         $this->assertFalse(
-            $this->pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn()
+            DatabaseRows::scalar($this->connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $this->user->id . " AND resource_key = 'checkin_makeup_monthly'"))
         );
     }
 
@@ -363,7 +359,7 @@ class CheckinControllerTest extends TestCase
             }
         };
 
-        $auditLog = new AuditLogService($this->pdo, $logger);
+        $auditLog = new AuditLogService($this->connection, $logger);
 
         return new CheckinController(
             $authService,

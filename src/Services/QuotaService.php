@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\User;
 use CarbonTrack\Models\UserUsageStats;
 use Illuminate\Support\Carbon;
-use PDO;
 
 class QuotaService
 {
@@ -104,7 +105,7 @@ class QuotaService
         return true;
     }
 
-    private function checkDailyQuotaOnConnection(PDO $db, int $userId, string $resource, int $limit, int $cost): bool
+    private function checkDailyQuotaOnConnection(Connection $db, int $userId, string $resource, int $limit, int $cost): bool
     {
         $key = "{$resource}_daily";
         $stats = $this->findUsageStatsOnConnection($db, $userId, $key);
@@ -127,7 +128,7 @@ class QuotaService
         return true;
     }
 
-    public function checkAndConsumeOnConnection(PDO $db, User $user, string $resource, int $cost = 1): bool
+    public function checkAndConsumeOnConnection(Connection $db, User $user, string $resource, int $cost = 1): bool
     {
         $config = $this->getEffectiveConfig($user, $resource);
         if (empty($config)) {
@@ -182,7 +183,7 @@ class QuotaService
         return true;
     }
 
-    private function checkMonthlyQuotaOnConnection(PDO $db, int $userId, string $resource, int $limit, int $cost): bool
+    private function checkMonthlyQuotaOnConnection(Connection $db, int $userId, string $resource, int $limit, int $cost): bool
     {
         $key = "{$resource}_monthly";
         $stats = $this->findUsageStatsOnConnection($db, $userId, $key);
@@ -238,7 +239,7 @@ class QuotaService
         return true;
     }
 
-    private function checkTokenBucketOnConnection(PDO $db, int $userId, string $resource, float $ratePerMinute, int $cost): bool
+    private function checkTokenBucketOnConnection(Connection $db, int $userId, string $resource, float $ratePerMinute, int $cost): bool
     {
         $key = "{$resource}_bucket";
         $stats = $this->findUsageStatsOnConnection($db, $userId, $key);
@@ -292,25 +293,22 @@ class QuotaService
         );
     }
 
-    private function findUsageStatsOnConnection(PDO $db, int $userId, string $resourceKey): ?array
+    private function findUsageStatsOnConnection(Connection $db, int $userId, string $resourceKey): ?array
     {
         $sql = "SELECT counter, last_updated_at, reset_at FROM user_usage_stats WHERE user_id = :uid AND resource_key = :rkey LIMIT 1";
         if ($this->getDriverName($db) === 'mysql') {
             $sql .= " FOR UPDATE";
         }
 
-        $stmt = $db->prepare($sql);
-        $stmt->execute([
+        $row = DatabaseRows::one($db->selectOne($sql, [
             'uid' => $userId,
             'rkey' => $resourceKey,
-        ]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        $stmt->closeCursor();
+        ]));
 
         return $row ?: null;
     }
 
-    private function persistUsageStatsOnConnection(PDO $db, int $userId, string $resourceKey, float $counter, Carbon $timestamp, $resetAt): void
+    private function persistUsageStatsOnConnection(Connection $db, int $userId, string $resourceKey, float $counter, Carbon $timestamp, $resetAt): void
     {
         $reset = $this->toCarbon($resetAt);
         $payload = [
@@ -323,42 +321,34 @@ class QuotaService
 
         $driver = $this->getDriverName($db);
         if ($driver === 'mysql') {
-            $stmt = $db->prepare(
-                "INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at)
+            $sql = "INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at)
                  VALUES (:uid, :rkey, :counter, :last_updated_at, :reset_at)
                  ON DUPLICATE KEY UPDATE
                     counter = VALUES(counter),
                     last_updated_at = VALUES(last_updated_at),
-                    reset_at = VALUES(reset_at)"
-            );
+                    reset_at = VALUES(reset_at)";
         } elseif ($driver === 'sqlite') {
-            $stmt = $db->prepare(
-                "INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at)
+            $sql = "INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at)
                  VALUES (:uid, :rkey, :counter, :last_updated_at, :reset_at)
                  ON CONFLICT(user_id, resource_key) DO UPDATE SET
                     counter = excluded.counter,
                     last_updated_at = excluded.last_updated_at,
-                    reset_at = excluded.reset_at"
-            );
+                    reset_at = excluded.reset_at";
         } else {
-            $stmt = $db->prepare("UPDATE user_usage_stats SET counter = :counter, last_updated_at = :last_updated_at, reset_at = :reset_at WHERE user_id = :uid AND resource_key = :rkey");
-            $stmt->execute($payload);
-            if ($stmt->rowCount() > 0) {
-                $stmt->closeCursor();
+            $queryAffected = $db->affectingStatement("UPDATE user_usage_stats SET counter = :counter, last_updated_at = :last_updated_at, reset_at = :reset_at WHERE user_id = :uid AND resource_key = :rkey", $payload);
+            if ($queryAffected > 0) {
                 return;
             }
-            $stmt->closeCursor();
-            $stmt = $db->prepare("INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at) VALUES (:uid, :rkey, :counter, :last_updated_at, :reset_at)");
+            $sql = "INSERT INTO user_usage_stats (user_id, resource_key, counter, last_updated_at, reset_at) VALUES (:uid, :rkey, :counter, :last_updated_at, :reset_at)";
         }
 
-        $stmt->execute($payload);
-        $stmt->closeCursor();
+        $db->statement($sql, $payload);
     }
 
-    private function getDriverName(PDO $db): string
+    private function getDriverName(Connection $db): string
     {
         try {
-            return (string) $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+            return (string) $db->getDriverName();
         } catch (\Throwable $e) {
             return '';
         }

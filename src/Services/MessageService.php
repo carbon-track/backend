@@ -146,7 +146,6 @@ class MessageService
             $receiverId,
             $title,
             $content,
-            $type,
             $priority,
             $relatedEntityType,
             $relatedEntityId
@@ -543,67 +542,6 @@ class MessageService
             $content,
             Message::PRIORITY_HIGH
         );
-    }
-
-    /**
-     * Get messages for a user with pagination
-     */
-    public function getMessagesForUser(
-        int $userId,
-        int $page = 1,
-        int $limit = 20,
-        ?string $type = null,
-        ?bool $unreadOnly = null
-    ): array {
-        $query = Message::forUser($userId)->with(['sender']);
-        
-        if ($type) {
-            $query->byType($type);
-        }
-        
-        if ($unreadOnly !== null) {
-            if ($unreadOnly) {
-                $query->unread();
-            } else {
-                $query->read();
-            }
-        }
-        
-        $total = $query->count();
-        $messages = $query->orderBy('created_at', 'desc')
-            ->skip(($page - 1) * $limit)
-            ->take($limit)
-            ->get();
-
-        return [
-            'messages' => $messages->map(function ($message) {
-                return [
-                    'id' => $message->id,
-                    'title' => $message->title,
-                    'content' => $message->content,
-                    // Columns may not exist in provided schema; return nulls for compatibility
-                    'type' => null,
-                    'priority' => null,
-                    'is_read' => $message->is_read,
-                    'read_at' => null,
-                    'created_at' => $message->created_at,
-                    'age' => $message->age,
-                    'sender' => $message->sender ? [
-                        'id' => $message->sender->id,
-                        'username' => $message->sender->username
-                    ] : null,
-                    'related_entity_type' => null,
-                    'related_entity_id' => null
-                ];
-            })->toArray(),
-            'pagination' => [
-                'page' => $page,
-                'limit' => $limit,
-                'total' => $total,
-                'pages' => ceil($total / $limit)
-            ],
-            'statistics' => Message::getStatisticsForUser($userId)
-        ];
     }
 
     /**

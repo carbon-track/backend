@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
 use CarbonTrack\Services\{CarbonCalculatorService, MessageService, AuditLogService, AuthService, ErrorLogService, CloudflareR2Service};
@@ -12,13 +14,12 @@ use Slim\Psr7\Factory\ServerRequestFactory;
 
 final class CarbonRecordImagesNormalizationTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->exec("CREATE TABLE carbon_records (
+        $this->connection = DatabaseFixture::sqlite();
+        $this->connection->unprepared("CREATE TABLE carbon_records (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
             activity_id TEXT,
@@ -33,7 +34,7 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             deleted_at TEXT
         );");
-        $this->pdo->exec("CREATE TABLE carbon_activities (
+        $this->connection->unprepared("CREATE TABLE carbon_activities (
             id TEXT PRIMARY KEY,
             name_zh TEXT,
             name_en TEXT,
@@ -41,7 +42,7 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
             carbon_factor REAL,
             unit TEXT
         );");
-        $this->pdo->exec("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit) VALUES
+        $this->connection->unprepared("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit) VALUES
             ('act-1','测试活动','Test Activity','daily',1.0,'times');");
     }
 
@@ -61,7 +62,7 @@ final class CarbonRecordImagesNormalizationTest extends TestCase
         $r2->method('getPublicUrl')->willReturnCallback(fn(string $p) => 'https://cdn.example/' . ltrim($p,'/'));
 
         return new CarbonTrackController(
-            $this->pdo,
+            $this->connection,
             $calc,
             $msg,
             $audit,

@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\SupportTicket;
 use CarbonTrack\Models\SupportTicketAttachment;
 use CarbonTrack\Models\SupportTicketFeedback;
 use CarbonTrack\Models\SupportTicketMessage;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class SupportTicketService
@@ -45,7 +46,7 @@ class SupportTicketService
     ];
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private LoggerInterface $logger,
         private AuditLogService $auditLogService,
         private ErrorLogService $errorLogService,
@@ -108,7 +109,7 @@ class SupportTicketService
                 } catch (\Throwable $routingException) {
                     $this->logger->warning('Support ticket routing failed after ticket creation', [
                         'ticket_id' => (int) $ticket->id,
-                        'error' => $routingException->getMessage(),
+                        'error' => DatabaseService::exceptionMessage($routingException),
                     ]);
                     $this->recordFailure($routingException, 'support_ticket_routing_failed', $actor, (int) $ticket->id);
                 }
@@ -129,7 +130,7 @@ class SupportTicketService
             );
             return $detail;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             $this->recordFailure($e, 'support_ticket_create_failed', $actor, null);
@@ -239,7 +240,7 @@ class SupportTicketService
             );
             return $detail;
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             $this->recordFailure($e, 'support_ticket_reply_create_failed', $actor, $ticketId);
@@ -445,7 +446,7 @@ class SupportTicketService
             $this->notifyUserReply($emailTicket, $body, $ticketId);
             return $this->getTicketDetailForSupport($actor, $ticketId);
         } catch (\Throwable $e) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             $this->recordFailure($e, 'support_ticket_support_reply_failed', $actor, $ticketId);
@@ -602,14 +603,13 @@ class SupportTicketService
                 throw new \InvalidArgumentException('A pending transfer request already exists for this ticket');
             }
 
-            $stmt = $this->db->prepare("
+            $requestId = DatabaseService::insertGetId($this->db, "
                 INSERT INTO support_ticket_transfer_requests (
                     ticket_id, requested_by, from_assignee, to_assignee, reason, status, created_at, updated_at
                 ) VALUES (
                     :ticket_id, :requested_by, :from_assignee, :to_assignee, :reason, :status, :created_at, :updated_at
                 )
-            ");
-            $stmt->execute([
+            ", [
                 'ticket_id' => $ticketId,
                 'requested_by' => $actorId,
                 'from_assignee' => $actorId,
@@ -619,10 +619,9 @@ class SupportTicketService
                 'created_at' => $now,
                 'updated_at' => $now,
             ]);
-            $requestId = (int) $this->db->lastInsertId();
             $this->db->commit();
         } catch (\Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             throw $exception;
@@ -729,7 +728,7 @@ class SupportTicketService
                 }
             }
 
-            $updateStmt = $this->db->prepare("
+            $updateAffected = $this->db->affectingStatement("
                 UPDATE support_ticket_transfer_requests
                 SET status = :status,
                     review_note = :review_note,
@@ -738,8 +737,7 @@ class SupportTicketService
                     updated_at = :updated_at
                 WHERE id = :id
                   AND status = :expected_status
-            ");
-            $updateStmt->execute([
+            ", [
                 'status' => $decision,
                 'review_note' => $reviewNote,
                 'reviewed_by' => $actorId,
@@ -748,7 +746,7 @@ class SupportTicketService
                 'id' => $requestId,
                 'expected_status' => self::TRANSFER_STATUS_PENDING,
             ]);
-            if ($updateStmt->rowCount() !== 1) {
+            if ($updateAffected !== 1) {
                 throw new \InvalidArgumentException('Transfer request is no longer pending');
             }
 
@@ -765,7 +763,7 @@ class SupportTicketService
             $this->db->commit();
             $updatedRequest = $this->findTransferRequest($requestId);
         } catch (\Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             throw $exception;
@@ -881,12 +879,11 @@ class SupportTicketService
             ORDER BY COALESCE(t.last_replied_at, t.updated_at, t.created_at) DESC, t.id DESC
             LIMIT {$limit} OFFSET {$offset}
         ";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        $queryRows = $this->db->select($sql, $params);
         $slaSettings = $this->supportRoutingEngineService?->getSlaSettingsSnapshot();
         $items = array_map(
             fn (array $row): array => $this->formatTicketSummary($row, $includeRequester, $slaSettings),
-            $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []
+            DatabaseRows::all($queryRows) ?: []
         );
         if ($includeRequester && $items !== [] && $this->supportAutomationService !== null) {
             $tagsByTicket = $this->supportAutomationService->getTagsForTicketIds(array_map(static fn (array $item): int => (int) $item['id'], $items));
@@ -901,16 +898,13 @@ class SupportTicketService
                 return $item;
             }, $items);
         }
-        $countStmt = $this->db->prepare("
+        return [
+            'items' => $items,
+            'pagination' => ['page' => $page, 'limit' => $limit, 'total' => (int) DatabaseRows::scalar($this->db->selectOne("
             SELECT COUNT(*)
             FROM support_tickets t
             INNER JOIN users requester ON requester.id = t.user_id
-            WHERE " . implode(' AND ', $where)
-        );
-        $countStmt->execute($params);
-        return [
-            'items' => $items,
-            'pagination' => ['page' => $page, 'limit' => $limit, 'total' => (int) $countStmt->fetchColumn()],
+            WHERE " . implode(' AND ', $where), $params))],
         ];
     }
 
@@ -953,7 +947,7 @@ class SupportTicketService
 
     private function findTicket(int $ticketId, string $extraWhere = '', array $params = [], bool $forUpdate = false): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 t.*,
                 requester.username AS requester_username,
@@ -966,9 +960,7 @@ class SupportTicketService
             WHERE t.id = :ticket_id {$extraWhere}
             LIMIT 1
             {$this->selectForUpdateClause($forUpdate)}
-        ");
-        $stmt->execute(['ticket_id' => $ticketId] + $params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['ticket_id' => $ticketId] + $params));
         return $row ?: null;
     }
 
@@ -1036,7 +1028,7 @@ class SupportTicketService
 
     private function messages(int $ticketId): array
     {
-        $stmt = $this->db->prepare("
+        $rows = DatabaseRows::all($this->db->select("
             SELECT
                 stm.*,
                 avatar.file_path AS sender_avatar_path
@@ -1045,9 +1037,7 @@ class SupportTicketService
             LEFT JOIN avatars avatar ON avatar.id = sender.avatar_id
             WHERE stm.ticket_id = :ticket_id
             ORDER BY stm.id ASC
-        ");
-        $stmt->execute(['ticket_id' => $ticketId]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ", ['ticket_id' => $ticketId])) ?: [];
         $attachments = $this->attachments(array_map(static fn (array $row): int => (int) $row['id'], $rows));
         return array_map(function (array $row) use ($attachments): array {
             $messageId = (int) $row['id'];
@@ -1070,7 +1060,16 @@ class SupportTicketService
 
     private function feedbackCandidates(int $ticketId): array
     {
-        $stmt = $this->db->prepare("
+
+        return array_map(static function (array $row): array {
+            $role = !empty($row['is_admin']) ? 'admin' : strtolower((string) ($row['role'] ?? 'support'));
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'username' => $row['username'] ?? null,
+                'email' => $row['email'] ?? null,
+                'role' => $role,
+            ];
+        }, DatabaseRows::all($this->db->select("
             SELECT DISTINCT
                 u.id,
                 u.username,
@@ -1093,21 +1092,10 @@ class SupportTicketService
             WHERE u.deleted_at IS NULL
               AND (u.is_admin = 1 OR LOWER(COALESCE(u.role, 'user')) IN ('support', 'admin'))
             ORDER BY COALESCE(u.username, u.email, ''), u.id
-        ");
-        $stmt->execute([
+        ", [
             'message_ticket_id' => $ticketId,
             'assigned_ticket_id' => $ticketId,
-        ]);
-
-        return array_map(static function (array $row): array {
-            $role = !empty($row['is_admin']) ? 'admin' : strtolower((string) ($row['role'] ?? 'support'));
-            return [
-                'id' => (int) ($row['id'] ?? 0),
-                'username' => $row['username'] ?? null,
-                'email' => $row['email'] ?? null,
-                'role' => $role,
-            ];
-        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ])) ?: []);
     }
 
     private function findFeedbackCandidate(int $ticketId, int $ratedUserId): ?array
@@ -1123,22 +1111,6 @@ class SupportTicketService
 
     private function feedback(int $ticketId): array
     {
-        $stmt = $this->db->prepare("
-            SELECT
-                f.*,
-                reviewer.username AS reviewer_username,
-                reviewer.email AS reviewer_email,
-                rated.username AS rated_username,
-                rated.email AS rated_email,
-                rated.role AS rated_role,
-                rated.is_admin AS rated_is_admin
-            FROM support_ticket_feedback f
-            INNER JOIN users reviewer ON reviewer.id = f.user_id
-            INNER JOIN users rated ON rated.id = f.rated_user_id
-            WHERE f.ticket_id = :ticket_id
-            ORDER BY f.id ASC
-        ");
-        $stmt->execute(['ticket_id' => $ticketId]);
 
         return array_map(static function (array $row): array {
             $ratedRole = !empty($row['rated_is_admin']) ? 'admin' : strtolower((string) ($row['rated_role'] ?? 'support'));
@@ -1163,7 +1135,21 @@ class SupportTicketService
                     'role' => $ratedRole,
                 ],
             ];
-        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        }, DatabaseRows::all($this->db->select("
+            SELECT
+                f.*,
+                reviewer.username AS reviewer_username,
+                reviewer.email AS reviewer_email,
+                rated.username AS rated_username,
+                rated.email AS rated_email,
+                rated.role AS rated_role,
+                rated.is_admin AS rated_is_admin
+            FROM support_ticket_feedback f
+            INNER JOIN users reviewer ON reviewer.id = f.user_id
+            INNER JOIN users rated ON rated.id = f.rated_user_id
+            WHERE f.ticket_id = :ticket_id
+            ORDER BY f.id ASC
+        ", ['ticket_id' => $ticketId])) ?: []);
     }
 
     private function findFeedbackRecord(int $ticketId, int $userId, int $ratedUserId): ?SupportTicketFeedback
@@ -1181,9 +1167,7 @@ class SupportTicketService
             return [];
         }
         $sql = 'SELECT * FROM support_ticket_attachments WHERE message_id IN (' . implode(',', array_fill(0, count($messageIds), '?')) . ') ORDER BY id ASC';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($messageIds);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = DatabaseRows::all($this->db->select($sql, $messageIds)) ?: [];
         $result = [];
         foreach ($rows as $row) {
             $messageId = (int) $row['message_id'];
@@ -1206,7 +1190,8 @@ class SupportTicketService
 
     private function transferRequests(int $ticketId): array
     {
-        $stmt = $this->db->prepare("
+
+        return array_map(fn (array $row): array => $this->formatTransferRequest($row), DatabaseRows::all($this->db->select("
             SELECT
                 tr.*,
                 requester.username AS requester_username,
@@ -1224,10 +1209,7 @@ class SupportTicketService
             LEFT JOIN users reviewer ON reviewer.id = tr.reviewed_by
             WHERE tr.ticket_id = :ticket_id
             ORDER BY tr.id DESC
-        ");
-        $stmt->execute(['ticket_id' => $ticketId]);
-
-        return array_map(fn (array $row): array => $this->formatTransferRequest($row), $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ", ['ticket_id' => $ticketId])) ?: []);
     }
 
     private function attachFiles(int $ticketId, int $messageId, array $paths, int $actorUserId, bool $supportActor): void
@@ -1263,19 +1245,17 @@ class SupportTicketService
             return true;
         }
 
-        $stmt = $this->db->prepare('
+
+        return DatabaseRows::scalar($this->db->selectOne('
             SELECT 1
             FROM support_ticket_attachments
             WHERE ticket_id = :ticket_id
               AND file_path = :file_path
             LIMIT 1
-        ');
-        $stmt->execute([
+        ', [
             'ticket_id' => $ticketId,
             'file_path' => $path,
-        ]);
-
-        return $stmt->fetchColumn() !== false;
+        ])) !== false;
     }
 
     private function updateTicket(int $ticketId, array $fields): void
@@ -1286,13 +1266,12 @@ class SupportTicketService
             $set[] = "{$field} = :{$field}";
             $params[$field] = $value;
         }
-        $stmt = $this->db->prepare('UPDATE support_tickets SET ' . implode(', ', $set) . ' WHERE id = :id');
-        $stmt->execute($params);
+        $this->db->statement('UPDATE support_tickets SET ' . implode(', ', $set) . ' WHERE id = :id', $params);
     }
 
     private function findTransferRequest(int $requestId, bool $forUpdate = false): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 tr.*,
                 requester.username AS requester_username,
@@ -1311,9 +1290,7 @@ class SupportTicketService
             WHERE tr.id = :id
             LIMIT 1
             {$this->selectForUpdateClause($forUpdate)}
-        ");
-        $stmt->execute(['id' => $requestId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['id' => $requestId]));
 
         return $row ? $this->formatTransferRequest($row) : null;
     }
@@ -1325,7 +1302,7 @@ class SupportTicketService
         }
 
         try {
-            $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+            $driver = strtolower((string) $this->db->getDriverName());
         } catch (\Throwable) {
             return '';
         }
@@ -1335,18 +1312,16 @@ class SupportTicketService
 
     private function findPendingTransferRequestForTicket(int $ticketId): ?array
     {
-        $stmt = $this->db->prepare('
+        $requestId = DatabaseRows::scalar($this->db->selectOne('
             SELECT id
             FROM support_ticket_transfer_requests
             WHERE ticket_id = :ticket_id AND status = :status
             ORDER BY id DESC
             LIMIT 1
-        ');
-        $stmt->execute([
+        ', [
             'ticket_id' => $ticketId,
             'status' => self::TRANSFER_STATUS_PENDING,
-        ]);
-        $requestId = $stmt->fetchColumn();
+        ]));
 
         return $requestId ? $this->findTransferRequest((int) $requestId) : null;
     }
@@ -1391,9 +1366,7 @@ class SupportTicketService
 
     private function findAssignableUser(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT id, role, is_admin FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1');
-        $stmt->execute(['id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT id, role, is_admin FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1', ['id' => $userId]));
         if (!$row) {
             return null;
         }
@@ -1403,9 +1376,7 @@ class SupportTicketService
 
     private function loadUserById(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT id, username, email, role, is_admin FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1');
-        $stmt->execute(['id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT id, username, email, role, is_admin FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1', ['id' => $userId]));
         return $row ?: null;
     }
 
@@ -1458,7 +1429,7 @@ class SupportTicketService
                 $this->logger->warning('Failed to send support assignee system notification', [
                     'ticket_id' => $ticketId,
                     'user_id' => $userId,
-                    'error' => $exception->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($exception),
                 ]);
                 $this->recordNotificationFailure($exception, 'support_assignee_system_notification_failed', [
                     'ticket_id' => $ticketId,
@@ -1493,7 +1464,7 @@ class SupportTicketService
                 $this->logger->warning('Failed to send support assignee email notification', [
                     'ticket_id' => $ticketId,
                     'user_id' => $userId,
-                    'error' => $exception->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($exception),
                 ]);
                 $this->recordNotificationFailure($exception, 'support_assignee_email_notification_failed', [
                     'ticket_id' => $ticketId,
@@ -1544,7 +1515,10 @@ class SupportTicketService
                 $this->emailService->sendMessageNotification($supportEmail, 'Support Team', $subject, $body, NotificationPreferenceService::CATEGORY_MESSAGE, 'high');
             }
         } catch (\Throwable $e) {
-            $this->logger->warning('Failed to send support mailbox notification', ['subject' => $subject, 'error' => $e->getMessage()]);
+            $this->logger->warning('Failed to send support mailbox notification', ['subject' => $subject, 'error' => DatabaseService::exceptionMessage($e)]);
+            $this->recordNotificationFailure($e, 'support_mailbox_notification_failed', [
+                'ticket_id' => $emailPayload['ticket']['id'] ?? null,
+            ]);
         }
     }
 
@@ -1557,7 +1531,11 @@ class SupportTicketService
             try {
                 $this->messageService->sendSystemMessage($userId, 'Support replied to your ticket', $messageBody, 'message', 'normal', 'support_ticket', $ticketId, false);
             } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send support reply message', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
+                $this->logger->warning('Failed to send support reply message', ['ticket_id' => $ticketId, 'error' => DatabaseService::exceptionMessage($e)]);
+                $this->recordNotificationFailure($e, 'support_requester_reply_message_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                ]);
             }
         }
         if ($this->emailService !== null && !empty($ticket['requester_email'])) {
@@ -1587,7 +1565,11 @@ class SupportTicketService
                     'normal'
                 );
             } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send support reply email', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
+                $this->logger->warning('Failed to send support reply email', ['ticket_id' => $ticketId, 'error' => DatabaseService::exceptionMessage($e)]);
+                $this->recordNotificationFailure($e, 'support_requester_reply_email_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                ]);
             }
         }
     }
@@ -1637,7 +1619,11 @@ class SupportTicketService
                     false
                 );
             } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send support ticket update message', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
+                $this->logger->warning('Failed to send support ticket update message', ['ticket_id' => $ticketId, 'error' => DatabaseService::exceptionMessage($e)]);
+                $this->recordNotificationFailure($e, 'support_requester_update_message_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                ]);
             }
         }
 
@@ -1665,7 +1651,11 @@ class SupportTicketService
                     'normal'
                 );
             } catch (\Throwable $e) {
-                $this->logger->warning('Failed to send support ticket update email', ['ticket_id' => $ticketId, 'error' => $e->getMessage()]);
+                $this->logger->warning('Failed to send support ticket update email', ['ticket_id' => $ticketId, 'error' => DatabaseService::exceptionMessage($e)]);
+                $this->recordNotificationFailure($e, 'support_requester_update_email_failed', [
+                    'ticket_id' => $ticketId,
+                    'user_id' => $userId,
+                ]);
             }
         }
     }
@@ -1979,7 +1969,7 @@ class SupportTicketService
         try {
             return $this->r2Service->generatePresignedUrl($filePath, 900);
         } catch (\Throwable $e) {
-            $this->logger->warning('Failed to build support ticket file URL', ['file_path' => $filePath, 'error' => $e->getMessage()]);
+            $this->logger->warning('Failed to build support ticket file URL', ['file_path' => $filePath, 'error' => DatabaseService::exceptionMessage($e)]);
             return null;
         }
     }
@@ -2157,7 +2147,7 @@ class SupportTicketService
         }
 
         $placeholders = implode(',', array_fill(0, count($ticketIds), '?'));
-        $stmt = $this->db->prepare("
+        $queryRows = $this->db->select("
             SELECT
                 tr.*,
                 requester.username AS requester_username,
@@ -2177,15 +2167,14 @@ class SupportTicketService
               AND tr.to_assignee = ?
               AND tr.status = ?
             ORDER BY tr.id DESC
-        ");
-        $stmt->execute([
+        ", [
             ...$ticketIds,
             $targetUserId,
             self::TRANSFER_STATUS_PENDING,
         ]);
 
         $result = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $ticketId = (int) ($row['ticket_id'] ?? 0);
             if ($ticketId > 0 && !isset($result[$ticketId])) {
                 $result[$ticketId] = $this->formatTransferRequest($row);
@@ -2205,7 +2194,7 @@ class SupportTicketService
             'affected_table' => 'support_tickets',
             'affected_id' => $ticketId,
             'status' => 'failed',
-            'data' => ['error' => $e->getMessage()],
+            'data' => ['error' => DatabaseService::exceptionMessage($e)],
         ]);
     }
 
@@ -2219,7 +2208,7 @@ class SupportTicketService
             'affected_table' => 'support_tickets',
             'affected_id' => isset($context['ticket_id']) ? (int) $context['ticket_id'] : null,
             'status' => 'failed',
-            'data' => $context + ['error' => $exception->getMessage()],
+            'data' => $context + ['error' => DatabaseService::exceptionMessage($exception)],
         ]);
 
         try {

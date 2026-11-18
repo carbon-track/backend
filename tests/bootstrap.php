@@ -64,14 +64,14 @@ $_ENV['ALLOW_TEST_AUTH_FALLBACK'] = $_ENV['ALLOW_TEST_AUTH_FALLBACK'] ?? 'true';
 $_ENV['ALLOW_TURNSTILE_BYPASS'] = $_ENV['ALLOW_TURNSTILE_BYPASS'] ?? 'true';
 
 // Disable error reporting for cleaner test output
-error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
+error_reporting(E_ALL & ~E_DEPRECATED);
 
 // Set timezone
 date_default_timezone_set('UTC');
 
 // Helper to create a Slim PSR-7 Request with sane defaults
 if (!function_exists('makeRequest')) {
-    function makeRequest(string $method, string $path, array $parsedBody = null, array $queryParams = null, array $headers = []): \Slim\Psr7\Request {
+    function makeRequest(string $method, string $path, ?array $parsedBody = null, ?array $queryParams = null, array $headers = []): \Slim\Psr7\Request {
         $uri = new \Slim\Psr7\Uri('http', 'localhost', null, $path);
         $slimHeaders = new \Slim\Psr7\Headers($headers);
         $serverParams = [];

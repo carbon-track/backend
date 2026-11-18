@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
 use PHPUnit\Framework\TestCase;
 use Slim\App;
 use Slim\Psr7\Factory\ServerRequestFactory;
@@ -21,7 +23,7 @@ use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 class ComprehensiveBusinessDataTest extends TestCase
 {
     protected App $app;
-    protected \PDO $pdo;
+    protected Connection $connection;
     protected AuthService $authService;
     protected array $testUsers = [];
     protected array $testProducts = [];
@@ -83,7 +85,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             // After dependencies loaded and before routes, ensure schema exists
             // Initialize minimal test schema
             $dbServiceTmp = $container->get(DatabaseService::class);
-            TestSchemaBuilder::init($dbServiceTmp->getConnection()->getPdo());
+            TestSchemaBuilder::init($dbServiceTmp->getConnection());
 
             // Create Slim app
             $this->app = \Slim\Factory\AppFactory::createFromContainer($container);
@@ -97,7 +99,7 @@ class ComprehensiveBusinessDataTest extends TestCase
 
             // Get services
             $dbService = $container->get(DatabaseService::class);
-            $this->pdo = $dbService->getConnection()->getPdo();
+            $this->connection = $dbService->getConnection();
             $this->authService = $container->get(AuthService::class);
 
             // Set up test data
@@ -114,22 +116,22 @@ class ComprehensiveBusinessDataTest extends TestCase
     {
         // Clear existing test data (ignore errors if tables don't exist)
         try {
-            $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
+            $this->connection->unprepared("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
         } catch (\Throwable $e) {
             // Ignore if table doesn't exist
         }
         try {
-            $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
+            $this->connection->unprepared("DELETE FROM products WHERE name LIKE 'Test Product%'");
         } catch (\Throwable $e) {
             // Ignore if table doesn't exist
         }
         try {
-            $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
+            $this->connection->unprepared("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
         } catch (\Throwable $e) {
             // Ignore if table doesn't exist
         }
         try {
-            $this->pdo->exec("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
+            $this->connection->unprepared("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
         } catch (\Throwable $e) {
             // Ignore if table doesn't exist
         }
@@ -187,8 +189,7 @@ class ComprehensiveBusinessDataTest extends TestCase
             $isAdmin = ($userData['role'] ?? '') === 'admin' ? 1 : 0;
             // Insert including is_admin if column exists
             try {
-                $stmt = $this->pdo->prepare("\n                    INSERT INTO users (username, email, password, school_id, status, points, is_admin, created_at, updated_at)\n                    VALUES (:username, :email, :password, :school_id, :status, :points, :is_admin, datetime('now'), datetime('now'))\n                ");
-                $stmt->execute([
+                $this->connection->statement("\n                    INSERT INTO users (username, email, password, school_id, status, points, is_admin, created_at, updated_at)\n                    VALUES (:username, :email, :password, :school_id, :status, :points, :is_admin, datetime('now'), datetime('now'))\n                ", [
                     'username' => $userData['username'],
                     'email' => $userData['email'],
                     'password' => $hashedPassword,
@@ -199,8 +200,7 @@ class ComprehensiveBusinessDataTest extends TestCase
                 ]);
             } catch (\Throwable $t) {
                 // fallback to old insert without is_admin
-                $stmt = $this->pdo->prepare("\n                    INSERT INTO users (username, email, password, school_id, status, points, created_at, updated_at)\n                    VALUES (:username, :email, :password, :school_id, :status, :points, datetime('now'), datetime('now'))\n                ");
-                $stmt->execute([
+                $this->connection->statement("\n                    INSERT INTO users (username, email, password, school_id, status, points, created_at, updated_at)\n                    VALUES (:username, :email, :password, :school_id, :status, :points, datetime('now'), datetime('now'))\n                ", [
                     'username' => $userData['username'],
                     'email' => $userData['email'],
                     'password' => $hashedPassword,
@@ -210,12 +210,12 @@ class ComprehensiveBusinessDataTest extends TestCase
                 ]);
             }
 
-            $userData['id'] = $this->pdo->lastInsertId();
+            $userData['id'] = DatabaseRows::scalar($this->connection->selectOne('SELECT last_insert_rowid()'));
             $userData['uuid'] = $userUuid; // 缓存到测试数组用于 generateJwtToken
 
             // 尝试写回 uuid 与 is_admin
-            try { $this->pdo->exec("UPDATE users SET uuid = '" . $userUuid . "' WHERE id = " . (int)$userData['id']); } catch (\Throwable $e) {}
-            if ($isAdmin) { try { $this->pdo->exec("UPDATE users SET is_admin = 1 WHERE id = " . (int)$userData['id']); } catch (\Throwable $e) {} }
+            try { $this->connection->unprepared("UPDATE users SET uuid = '" . $userUuid . "' WHERE id = " . (int)$userData['id']); } catch (\Throwable $e) {}
+            if ($isAdmin) { try { $this->connection->unprepared("UPDATE users SET is_admin = 1 WHERE id = " . (int)$userData['id']); } catch (\Throwable $e) {} }
 
             $this->testUsers[] = $userData;
         }
@@ -266,11 +266,6 @@ class ComprehensiveBusinessDataTest extends TestCase
         ];
 
         foreach ($testProductData as $productData) {
-            $stmt = $this->pdo->prepare("
-                INSERT INTO products (name, description, category, images, stock, points_required, status, sort_order, created_at, updated_at)
-                VALUES (:name, :description, :category, :images, :stock, :points_required, :status, :sort_order, datetime('now'), datetime('now'))
-            ");
-            
                 // SQLite 测试 products 表包含非空 image_path 列，补充赋值
                 $imagePath = '/images/products/placeholder.jpg';
                 if (!empty($productData['images'])) {
@@ -282,11 +277,9 @@ class ComprehensiveBusinessDataTest extends TestCase
 
                 $sql = "INSERT INTO products (name, description, category, images, stock, points_required, status, sort_order, image_path, created_at, updated_at) 
                         VALUES (:name, :description, :category, :images, :stock, :points_required, :status, :sort_order, :image_path, datetime('now'), datetime('now'))";
-                $stmt = $this->pdo->prepare($sql);
                 $executeData = $productData;
                 $executeData['image_path'] = $imagePath;
-                $stmt->execute($executeData);
-            $productData['id'] = $this->pdo->lastInsertId();
+            $productData['id'] = DatabaseService::insertGetId($this->connection, $sql, $executeData);
             $this->testProducts[] = $productData;
         }
     }
@@ -294,9 +287,7 @@ class ComprehensiveBusinessDataTest extends TestCase
     protected function createTestCarbonActivities(): void
     {
         // Use existing carbon activities from the database
-        $stmt = $this->pdo->prepare("SELECT * FROM carbon_activities WHERE is_active = 1 LIMIT 5");
-        $stmt->execute();
-        $this->testCarbonActivities = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        $this->testCarbonActivities = DatabaseRows::all($this->connection->select("SELECT * FROM carbon_activities WHERE is_active = 1 LIMIT 5"));
     }
 
     protected function createRequest(string $method, string $uri, array $data = [], array $headers = []): \Psr\Http\Message\ServerRequestInterface
@@ -379,7 +370,7 @@ class ComprehensiveBusinessDataTest extends TestCase
         $this->assertEquals($requestData['email'], $data['data']['user']['email']);
         
         // Clean up
-        $this->pdo->exec("DELETE FROM users WHERE email = '{$requestData['email']}'");
+        $this->connection->unprepared("DELETE FROM users WHERE email = '{$requestData['email']}'");
     }
 
     public function testUserLoginWithRealisticCredentials(): void
@@ -694,24 +685,24 @@ class ComprehensiveBusinessDataTest extends TestCase
     protected function tearDown(): void
     {
         // Clean up test data
-        if ($this->pdo) {
+        if ($this->connection) {
             try {
-                $this->pdo->exec("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
+                $this->connection->unprepared("DELETE FROM users WHERE email LIKE '%@testdomain.com'");
             } catch (\Throwable $e) {
                 // Ignore if table doesn't exist
             }
             try {
-                $this->pdo->exec("DELETE FROM products WHERE name LIKE 'Test Product%'");
+                $this->connection->unprepared("DELETE FROM products WHERE name LIKE 'Test Product%'");
             } catch (\Throwable $e) {
                 // Ignore if table doesn't exist
             }
             try {
-                $this->pdo->exec("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
+                $this->connection->unprepared("DELETE FROM point_exchanges WHERE id LIKE 'test-%'");
             } catch (\Throwable $e) {
                 // Ignore if table doesn't exist
             }
             try {
-                $this->pdo->exec("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
+                $this->connection->unprepared("DELETE FROM carbon_records WHERE id LIKE 'test-%'");
             } catch (\Throwable $e) {
                 // Ignore if table doesn't exist
             }

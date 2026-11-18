@@ -47,8 +47,7 @@
 3. 查看 PHP error log（或 `error_logs` 表）是否有 SQL 语法错误。
 
 ### 新增字段：server_meta
-系统现在会把请求对应的 `$_SERVER`（经脱敏）整体序列化为 JSON 存入 `system_logs.server_meta`：
-- 脱敏键：`HTTP_AUTHORIZATION`, `PHP_AUTH_PW`, `HTTP_COOKIE`
+`RequestLoggingMiddleware` 在采集时过滤请求凭据，包括 `HTTP_AUTHORIZATION`、`PHP_AUTH_PW` 和 `HTTP_COOKIE`。入库服务将采集后的元数据序列化到 `system_logs.server_meta`。
 - 附加 `_summary` 节点包含 method / uri / ip
 - 过长（> 120KB）时会截断并追加 `...[TRUNCATED]`
 

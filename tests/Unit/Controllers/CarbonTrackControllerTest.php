@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\CarbonTrackController;
 use CarbonTrack\Models\User;
@@ -38,7 +43,7 @@ class CarbonTrackControllerTest extends TestCase
     }
 
     private function makeController(
-        \PDO $pdo,
+        Connection $connection,
         $calc,
         $msg,
         $audit,
@@ -52,7 +57,7 @@ class CarbonTrackControllerTest extends TestCase
         $proofOfWorkService = null
     ): CarbonTrackController {
         return new CarbonTrackController(
-            $pdo,
+            $connection,
             $calc,
             $msg,
             $audit,
@@ -75,7 +80,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testCalculateReturnsNumbers(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->getMockBuilder(CarbonCalculatorService::class)->disableOriginalConstructor()->onlyMethods(['calculateCarbonSavings'])->getMock();
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -84,11 +89,12 @@ class CarbonTrackControllerTest extends TestCase
         // mock auth current user
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        // mock activity lookup via CarbonActivity::findById uses PDO directly through the controller
-        $activityStmt = $this->createMock(\PDOStatement::class);
-        $activityStmt->method('execute')->willReturn(true);
-        $activityStmt->method('fetch')->willReturn(['id' => 'uuid-1', 'unit' => 'km']);
-        $pdo->method('prepare')->willReturn($activityStmt);
+        // mock activity lookup via CarbonActivity::findById uses connection directly through the controller
+        $activityStmt = $this->createMock(DatabaseQueryResponse::class);
+        $activityStmt->shape = 'row';
+        $activityStmt->method('bindings')->willReturn(true);
+        $activityStmt->method('row')->willReturn(['id' => 'uuid-1', 'unit' => 'km']);
+        $connection->method('responseFor')->willReturn($activityStmt);
 
         // calculator output
         // adapt controller expect to use calculate or similar mapping
@@ -96,7 +102,7 @@ class CarbonTrackControllerTest extends TestCase
             'carbon_savings' => 25.0
         ]);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
 
         $request = makeRequest('POST', '/carbon-track/calculate', ['activity_id' => 'uuid-1', 'data' => 10]);
         $response = new \Slim\Psr7\Response();
@@ -111,14 +117,14 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testCalculateMissingFields(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/calculate', ['activity_id' => 'uuid-1']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->calculate($request, $response);
@@ -127,13 +133,13 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetCarbonFactors(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/factors');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCarbonFactors($request, $response);
@@ -144,16 +150,17 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetUserStats(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
 
-        $summaryStmt = $this->createMock(\PDOStatement::class);
-        $summaryStmt->method('execute')->willReturn(true);
-        $summaryStmt->method('fetch')->willReturn([
+        $summaryStmt = $this->createMock(DatabaseQueryResponse::class);
+        $summaryStmt->shape = 'row';
+        $summaryStmt->method('bindings')->willReturn(true);
+        $summaryStmt->method('row')->willReturn([
             'total_records'=>3,
             'approved_records'=>1,
             'pending_records'=>1,
@@ -162,15 +169,16 @@ class CarbonTrackControllerTest extends TestCase
             'total_points_earned'=>100
         ]);
 
-        $monthlyStmt = $this->createMock(\PDOStatement::class);
-        $monthlyStmt->method('execute')->willReturn(true);
-        $monthlyStmt->method('fetchAll')->willReturn([
+        $monthlyStmt = $this->createMock(DatabaseQueryResponse::class);
+        $monthlyStmt->shape = 'rows';
+        $monthlyStmt->method('bindings')->willReturn(true);
+        $monthlyStmt->method('rows')->willReturn([
             ['month'=>'2025-01','records_count'=>1,'carbon_saved'=>5,'points_earned'=>50]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($summaryStmt, $monthlyStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($summaryStmt, $monthlyStmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -183,7 +191,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $calc->method('calculateCarbonSavings')->willReturn(['carbon_savings'=>12.3]);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
@@ -194,20 +202,22 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>1,'username'=>'user']);
 
         // find activity
-        $activityStmt = $this->createMock(\PDOStatement::class);
-        $activityStmt->method('execute')->willReturn(true);
-        $activityStmt->method('fetch')->willReturn(['id'=>'a1','name_zh'=>'活动','unit'=>'km']);
+        $activityStmt = $this->createMock(DatabaseQueryResponse::class);
+        $activityStmt->shape = 'row';
+        $activityStmt->method('bindings')->willReturn(true);
+        $activityStmt->method('row')->willReturn(['id'=>'a1','name_zh'=>'活动','unit'=>'km']);
         // insert record
-        $insert = $this->createMock(\PDOStatement::class);
-        $insert->method('execute')->willReturn(true);
+        $insert = $this->createMock(DatabaseQueryResponse::class);
+        $insert->method('bindings')->willReturn(true);
         // select admins
-        $admins = $this->createMock(\PDOStatement::class);
-        $admins->method('execute')->willReturn(true);
-        $admins->method('fetchAll')->willReturn([['id'=>9], ['id'=>10]]);
+        $admins = $this->createMock(DatabaseQueryResponse::class);
+        $admins->shape = 'rows';
+        $admins->method('bindings')->willReturn(true);
+        $admins->method('rows')->willReturn([['id'=>9], ['id'=>10]]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($activityStmt, $insert, $admins);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($activityStmt, $insert, $admins);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/record', [
             'activity_id' => 'a1',
             'amount' => 5,
@@ -227,7 +237,7 @@ class CarbonTrackControllerTest extends TestCase
         $_ENV['APP_ENV'] = 'production';
 
         try {
-            $pdo = $this->createMock(\PDO::class);
+            $connection = new DatabaseConnectionStub();
             $calc = $this->createMock(CarbonCalculatorService::class);
             $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
             $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -238,7 +248,7 @@ class CarbonTrackControllerTest extends TestCase
             $logger->pushHandler(new \Monolog\Handler\NullHandler());
             $turnstile = new \CarbonTrack\Services\TurnstileService('test-secret', $logger);
 
-            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, $turnstile);
+            $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, null, null, null, $turnstile);
             $request = makeRequest('POST', '/api/v1/carbon-track/record', [
                 'activity_id' => 'a1',
                 'amount' => 5,
@@ -268,7 +278,7 @@ class CarbonTrackControllerTest extends TestCase
         $_ENV['MOBILE_CLIENT_TOKEN'] = 'expected-secret';
 
         try {
-            $pdo = $this->createMock(\PDO::class);
+            $connection = new DatabaseConnectionStub();
             $calc = $this->createMock(CarbonCalculatorService::class);
             $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
             $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -277,7 +287,7 @@ class CarbonTrackControllerTest extends TestCase
             $pow = $this->createMock(\CarbonTrack\Services\ProofOfWorkService::class);
             $pow->expects($this->never())->method('verify');
 
-            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
+            $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
             $request = makeRequest('POST', '/api/v1/carbon-records', [
                 'activity_id' => 'a1',
                 'amount' => 5,
@@ -317,7 +327,7 @@ class CarbonTrackControllerTest extends TestCase
         $_ENV['MOBILE_CLIENT_TOKEN'] = 'expected-secret';
 
         try {
-            $pdo = $this->createMock(\PDO::class);
+            $connection = new DatabaseConnectionStub();
             $calc = $this->createMock(CarbonCalculatorService::class);
             $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
             $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -329,7 +339,7 @@ class CarbonTrackControllerTest extends TestCase
                 ->with('challenge', '12345', 'carbon.record.submit')
                 ->willReturn(['success' => false, 'error' => 'expected-test-stop']);
 
-            $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
+            $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, null, null, null, null, $pow);
             $request = makeRequest('POST', '/api/v1/carbon-records', [
                 'activity_id' => 'a1',
                 'amount' => 5,
@@ -363,7 +373,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordMakeupAlreadyCheckedInReturnsConflict(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -375,7 +385,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUserModel')->willReturn(new \CarbonTrack\Models\User(['id' => 1]));
         $checkin->method('hasCheckin')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
 
         $request = makeRequest('POST', '/carbon-track/record', [
             'activity_id' => 'a1',
@@ -391,7 +401,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordMakeupRejectsInvalidCalendarDate(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -403,7 +413,7 @@ class CarbonTrackControllerTest extends TestCase
         $checkin->expects($this->never())->method('hasCheckin');
         $quota->expects($this->never())->method('checkAndConsumeOnConnection');
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
 
         $request = makeRequest('POST', '/carbon-track/record', [
             'activity_id' => 'a1',
@@ -421,8 +431,8 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordMakeupUsesSelectedDateAndConsumesQuotaAfterSuccess(): void
     {
-        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
-        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        [$connection, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) DatabaseRows::scalar($connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
         $checkinDate = (new \DateTimeImmutable('now'))->modify('-3 days')->format('Y-m-d');
 
         $calc = $this->createMock(CarbonCalculatorService::class);
@@ -437,14 +447,14 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUserModel')->willReturn($user);
 
         $controller = $this->makeController(
-            $pdo,
+            $connection,
             $calc,
             $msg,
             $audit,
             $auth,
             null,
             null,
-            new CheckinService($pdo, null, 'UTC'),
+            new CheckinService($connection, null, 'UTC'),
             new QuotaService()
         );
 
@@ -465,22 +475,22 @@ class CarbonTrackControllerTest extends TestCase
         $recordId = $payload['data']['record_id'] ?? null;
         $this->assertNotEmpty($recordId);
 
-        $record = $pdo->query("SELECT id, date FROM carbon_records WHERE id = " . $pdo->quote((string) $recordId))->fetch(\PDO::FETCH_ASSOC);
+        $record = DatabaseRows::one($connection->selectOne("SELECT id, date FROM carbon_records WHERE id = ?", [(string) $recordId]));
         $this->assertSame($checkinDate, $record['date']);
 
-        $checkin = $pdo->query("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id)->fetch(\PDO::FETCH_ASSOC);
+        $checkin = DatabaseRows::one($connection->selectOne("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id));
         $this->assertSame($checkinDate, $checkin['checkin_date']);
         $this->assertSame('makeup', $checkin['source']);
         $this->assertSame($recordId, $checkin['record_id']);
 
-        $usage = $pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn();
+        $usage = DatabaseRows::scalar($connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'"));
         $this->assertSame(1.0, (float) $usage);
     }
 
     public function testSubmitRecordPastActivityDateUsesMakeupAndConsumesQuota(): void
     {
-        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
-        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        [$connection, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) DatabaseRows::scalar($connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
         $activityDate = (new \DateTimeImmutable('now'))->modify('-2 days')->format('Y-m-d');
 
         $calc = $this->createMock(CarbonCalculatorService::class);
@@ -495,14 +505,14 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUserModel')->willReturn($user);
 
         $controller = $this->makeController(
-            $pdo,
+            $connection,
             $calc,
             $msg,
             $audit,
             $auth,
             null,
             null,
-            new CheckinService($pdo, null, 'UTC'),
+            new CheckinService($connection, null, 'UTC'),
             new QuotaService()
         );
 
@@ -522,21 +532,21 @@ class CarbonTrackControllerTest extends TestCase
         $recordId = $payload['data']['record_id'] ?? null;
         $this->assertNotEmpty($recordId);
 
-        $record = $pdo->query("SELECT id, date FROM carbon_records WHERE id = " . $pdo->quote((string) $recordId))->fetch(\PDO::FETCH_ASSOC);
+        $record = DatabaseRows::one($connection->selectOne("SELECT id, date FROM carbon_records WHERE id = ?", [(string) $recordId]));
         $this->assertSame($activityDate, $record['date']);
 
-        $checkin = $pdo->query("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id)->fetch(\PDO::FETCH_ASSOC);
+        $checkin = DatabaseRows::one($connection->selectOne("SELECT checkin_date, source, record_id FROM user_checkins WHERE user_id = " . (int) $user->id));
         $this->assertSame($activityDate, $checkin['checkin_date']);
         $this->assertSame('makeup', $checkin['source']);
         $this->assertSame($recordId, $checkin['record_id']);
 
-        $usage = $pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn();
+        $usage = DatabaseRows::scalar($connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'"));
         $this->assertSame(1.0, (float) $usage);
     }
 
     public function testSubmitRecordRejectsFutureActivityDateWithClearCode(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -548,7 +558,7 @@ class CarbonTrackControllerTest extends TestCase
         $checkin->expects($this->never())->method('hasCheckin');
         $quota->expects($this->never())->method('checkAndConsumeOnConnection');
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth, null, null, $checkin, $quota);
         $request = makeRequest('POST', '/carbon-track/record', [
             'activity_id' => 'a1',
             'amount' => 5,
@@ -568,8 +578,8 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordMakeupRollsBackQuotaWhenCheckinWriteFails(): void
     {
-        [$pdo, $user] = $this->makeRealCheckinDatabase(2);
-        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        [$connection, $user] = $this->makeRealCheckinDatabase(2);
+        $activityId = (string) DatabaseRows::scalar($connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
         $checkinDate = (new \DateTimeImmutable('now'))->modify('-4 days')->format('Y-m-d');
 
         $calc = $this->createMock(CarbonCalculatorService::class);
@@ -583,7 +593,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => $user->id, 'username' => $user->username]);
         $auth->method('getCurrentUserModel')->willReturn($user);
 
-        $failingCheckin = new class($pdo) extends CheckinService {
+        $failingCheckin = new class($connection) extends CheckinService {
             public function createMakeupCheckin(
                 int $userId,
                 string $date,
@@ -596,7 +606,7 @@ class CarbonTrackControllerTest extends TestCase
         };
 
         $controller = $this->makeController(
-            $pdo,
+            $connection,
             $calc,
             $msg,
             $audit,
@@ -620,15 +630,15 @@ class CarbonTrackControllerTest extends TestCase
         $resp = $controller->submitRecord($request, $response);
 
         $this->assertSame(500, $resp->getStatusCode());
-        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)->fetchColumn());
-        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM user_checkins WHERE user_id = " . (int) $user->id)->fetchColumn());
-        $this->assertFalse($pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn());
+        $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)));
+        $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM user_checkins WHERE user_id = " . (int) $user->id)));
+        $this->assertFalse(DatabaseRows::scalar($connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")));
     }
 
     public function testSubmitRecordMakeupDeletesUploadedImagesWhenQuotaFails(): void
     {
-        [$pdo, $user] = $this->makeRealCheckinDatabase(0);
-        $activityId = (string) $pdo->query("SELECT id FROM carbon_activities LIMIT 1")->fetchColumn();
+        [$connection, $user] = $this->makeRealCheckinDatabase(0);
+        $activityId = (string) DatabaseRows::scalar($connection->selectOne("SELECT id FROM carbon_activities LIMIT 1"));
         $checkinDate = (new \DateTimeImmutable('now'))->modify('-5 days')->format('Y-m-d');
 
         $calc = $this->getMockBuilder(CarbonCalculatorService::class)->disableOriginalConstructor()->getMock();
@@ -661,14 +671,14 @@ class CarbonTrackControllerTest extends TestCase
             ->willReturn(true);
 
         $controller = $this->makeController(
-            $pdo,
+            $connection,
             $calc,
             $msg,
             $audit,
             $auth,
             null,
             $r2,
-            new CheckinService($pdo, null, 'UTC'),
+            new CheckinService($connection, null, 'UTC'),
             new QuotaService()
         );
 
@@ -695,21 +705,17 @@ class CarbonTrackControllerTest extends TestCase
         $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
         $this->assertSame(429, $resp->getStatusCode());
         $this->assertSame('QUOTA_EXCEEDED', $payload['code'] ?? null);
-        $this->assertSame(0, (int) $pdo->query("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)->fetchColumn());
-        $this->assertFalse($pdo->query("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")->fetchColumn());
+        $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM carbon_records WHERE user_id = " . (int) $user->id)));
+        $this->assertFalse(DatabaseRows::scalar($connection->selectOne("SELECT counter FROM user_usage_stats WHERE user_id = " . (int) $user->id . " AND resource_key = 'checkin_makeup_monthly'")));
     }
 
     public function testReviewRecordRejectFlow(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->sqliteCreateFunction('NOW', static function (): string {
-            return date('Y-m-d H:i:s');
-        });
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
-        $pdo->exec('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
-        $pdo->exec('CREATE TABLE carbon_records (
+        $connection->unprepared('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
+        $connection->unprepared('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
+        $connection->unprepared('CREATE TABLE carbon_records (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
             activity_id TEXT,
@@ -723,9 +729,9 @@ class CarbonTrackControllerTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec("INSERT INTO users (id, username, email, full_name, points) VALUES (1, 'u1', 'user@example.com', 'User One', 0)");
-        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a1', '活动', 'Activity', 'general', 'kg')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r2', 1, 'a1', 'pending', 20, 5, 10)");
+        $connection->unprepared("INSERT INTO users (id, username, email, full_name, points) VALUES (1, 'u1', 'user@example.com', 'User One', 0)");
+        $connection->unprepared("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a1', '活动', 'Activity', 'general', 'kg')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r2', 1, 'a1', 'pending', 20, 5, 10)");
 
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
@@ -754,7 +760,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/admin/activities/r2/review', ['action' => 'reject', 'review_note' => '资料不完整']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r2']);
@@ -764,22 +770,18 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertTrue($json['success']);
         $this->assertSame(['r2'], $json['processed_ids']);
 
-        $row = $pdo->query("SELECT status, review_note FROM carbon_records WHERE id = 'r2'")->fetch(\PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($connection->selectOne("SELECT status, review_note FROM carbon_records WHERE id = 'r2'"));
         $this->assertSame('rejected', $row['status']);
         $this->assertSame('资料不完整', $row['review_note']);
     }
 
     public function testReviewRecordsBulkApprovesAndAggregatesNotifications(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->sqliteCreateFunction('NOW', static function (): string {
-            return date('Y-m-d H:i:s');
-        });
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
-        $pdo->exec('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
-        $pdo->exec('CREATE TABLE carbon_records (
+        $connection->unprepared('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, full_name TEXT, points REAL DEFAULT 0)');
+        $connection->unprepared('CREATE TABLE carbon_activities (id TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, category TEXT, unit TEXT)');
+        $connection->unprepared('CREATE TABLE carbon_records (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
             activity_id TEXT,
@@ -793,10 +795,10 @@ class CarbonTrackControllerTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec("INSERT INTO users (id, username, email, full_name, points) VALUES (3, 'u3', 'user3@example.com', 'User Three', 10)");
-        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a3', '节能', 'Energy Saving', 'energy', 'kWh')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r10', 3, 'a3', 'pending', 15, 2.5, 5)");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r11', 3, 'a3', 'pending', 25, 3.5, 7)");
+        $connection->unprepared("INSERT INTO users (id, username, email, full_name, points) VALUES (3, 'u3', 'user3@example.com', 'User Three', 10)");
+        $connection->unprepared("INSERT INTO carbon_activities (id, name_zh, name_en, category, unit) VALUES ('a3', '节能', 'Energy Saving', 'energy', 'kWh')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r10', 3, 'a3', 'pending', 15, 2.5, 5)");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, points_earned, carbon_saved, amount) VALUES ('r11', 3, 'a3', 'pending', 25, 3.5, 7)");
 
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
@@ -829,7 +831,7 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'username' => 'admin', 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/admin/activities/review', ['action' => 'approve', 'record_ids' => ['r10', 'r11']]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecordsBulk($request, $response);
@@ -840,18 +842,18 @@ class CarbonTrackControllerTest extends TestCase
         $this->assertSame(['r10', 'r11'], $json['processed_ids']);
         $this->assertEmpty($json['missing_ids']);
 
-        $ids = $pdo->query("SELECT id, status FROM carbon_records ORDER BY id")->fetchAll(\PDO::FETCH_ASSOC);
+        $ids = DatabaseRows::all($connection->select("SELECT id, status FROM carbon_records ORDER BY id"));
         foreach ($ids as $row) {
             $this->assertSame('approved', $row['status']);
         }
 
-        $points = $pdo->query('SELECT points FROM users WHERE id = 3')->fetchColumn();
+        $points = DatabaseRows::scalar($connection->selectOne('SELECT points FROM users WHERE id = 3'));
         $this->assertEquals(50, $points);
     }
 
     public function testGetPendingRecordsUsesCanonicalSchoolName(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -859,14 +861,17 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 9, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total' => 1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total' => 1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             [
                 'id' => 'r1',
                 'images' => null,
@@ -884,9 +889,9 @@ class CarbonTrackControllerTest extends TestCase
             ],
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities/pending');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);
@@ -899,7 +904,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetRecordDetailAsAdmin(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -907,42 +912,58 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('bindValue')->willReturn(true);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn(['id'=>'r3','images'=>null]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->checkParameters = true;
+        $stmt->method('parameter')->willReturn(true);
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn([
+            'id' => 'r3',
+            'user_id' => 2,
+            'images' => null,
+            'description' => 'Private record description',
+        ]);
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
-        $request = makeRequest('GET', '/carbon-track/transactions/r3');
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
+        $request = makeRequest('GET', '/api/v1/carbon-track/transactions/r3')
+            ->withAttribute('request_id', 'carbon-record-detail-fixture');
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request, 'admin_carbon_record_viewed', 9, 'carbon_records', ['record_id' => 'r3']
+        )->willReturn(true);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getRecordDetail($request, $response, ['id' => 'r3']);
         $this->assertEquals(200, $resp->getStatusCode());
+        $payload = json_decode((string) $resp->getBody(), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('Private record description', $payload['data']['description']);
     }
 
     public function testGetUserRecordsPaged(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total'=>1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total'=>1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             ['id'=>'r1','images'=>null]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/records');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserRecords($request, $response);
@@ -954,14 +975,14 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testSubmitRecordValidationMissingField(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('POST', '/carbon-track/record', ['activity_id' => 'a1', 'amount' => 1]); // missing date
         $response = new \Slim\Psr7\Response();
         $resp = $controller->submitRecord($request, $response);
@@ -970,21 +991,24 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetRecordDetailForbiddenForOtherUser(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->never())->method('logAdminRead');
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>2]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('bindValue')->willReturn(true);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn(false); // not found when not owner
-        $pdo->method('prepare')->willReturn($stmt);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->checkParameters = true;
+        $stmt->method('parameter')->willReturn(true);
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn(false); // not found when not owner
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/carbon-track/transactions/r1');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getRecordDetail($request, $response, ['id' => 'r1']);
@@ -993,7 +1017,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testReviewRecordApproveFlow(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1002,22 +1026,24 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('isAdminUser')->willReturn(true);
 
         // fetch record
-        $fetch = $this->createMock(\PDOStatement::class);
-        $fetch->method('bindValue')->willReturn(true);
-        $fetch->method('execute')->willReturn(true);
-        $fetch->method('fetchAll')->willReturn([
+        $fetch = $this->createMock(DatabaseQueryResponse::class);
+        $fetch->shape = 'rows';
+        $fetch->checkParameters = true;
+        $fetch->method('parameter')->willReturn(true);
+        $fetch->method('bindings')->willReturn(true);
+        $fetch->method('rows')->willReturn([
             ['id'=>'r1','user_id'=>1,'points_earned'=>20,'status'=>'pending']
         ]);
         // update record status
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
         // update user points
-        $updatePoints = $this->createMock(\PDOStatement::class);
-        $updatePoints->method('execute')->willReturn(true);
+        $updatePoints = $this->createMock(DatabaseQueryResponse::class);
+        $updatePoints->method('bindings')->willReturn(true);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/carbon-track/transactions/r1/approve', ['action' => 'approve']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r1']);
@@ -1026,7 +1052,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testReviewRecordUnifiedStatusApproved(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1035,22 +1061,24 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('isAdminUser')->willReturn(true);
 
         // fetch record
-        $fetch = $this->createMock(\PDOStatement::class);
-        $fetch->method('bindValue')->willReturn(true);
-        $fetch->method('execute')->willReturn(true);
-        $fetch->method('fetchAll')->willReturn([
+        $fetch = $this->createMock(DatabaseQueryResponse::class);
+        $fetch->shape = 'rows';
+        $fetch->checkParameters = true;
+        $fetch->method('parameter')->willReturn(true);
+        $fetch->method('bindings')->willReturn(true);
+        $fetch->method('rows')->willReturn([
             ['id'=>'r9','user_id'=>1,'points_earned'=>30,'status'=>'pending']
         ]);
         // update record status
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
         // update user points
-        $updatePoints = $this->createMock(\PDOStatement::class);
-        $updatePoints->method('execute')->willReturn(true);
+        $updatePoints = $this->createMock(DatabaseQueryResponse::class);
+        $updatePoints->method('bindings')->willReturn(true);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($fetch, $update, $updatePoints);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('PUT', '/carbon-track/transactions/r9', ['status' => 'approved']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->reviewRecord($request, $response, ['id' => 'r9']);
@@ -1061,7 +1089,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testDeleteTransactionForOwner(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1069,11 +1097,11 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>3]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
-        $pdo->method('prepare')->willReturn($update);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
+        $connection->method('responseFor')->willReturn($update);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('DELETE', '/carbon-track/transactions/r2');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteTransaction($request, $response, ['id' => 'r2']);
@@ -1082,15 +1110,16 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetPendingRecordsRequiresAdmin(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
+        $audit->expects($this->never())->method('logAdminRead');
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id'=>1]);
         $auth->method('isAdmin')->willReturn(false);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);
@@ -1099,7 +1128,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetPendingRecordsSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1107,21 +1136,32 @@ class CarbonTrackControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id'=>9]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total'=>1]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total'=>1]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             ['id'=>'r1','images'=>null]
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
-        $request = makeRequest('GET', '/admin/activities');
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
+        $request = makeRequest('GET', '/api/v1/admin/activities', null, ['search' => 'owner@example.test'])
+            ->withAttribute('request_id', 'carbon-record-list-fixture');
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request,
+            'admin_carbon_records_viewed',
+            9,
+            'carbon_records',
+            ['page' => 1, 'limit' => 20, 'record_ids' => ['r1']]
+        )->willReturn(true);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getPendingRecords($request, $response);
         $this->assertEquals(200, $resp->getStatusCode());
@@ -1132,7 +1172,7 @@ class CarbonTrackControllerTest extends TestCase
 
     public function testGetPendingRecordsUsesDistinctSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $calc = $this->createMock(CarbonCalculatorService::class);
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1142,28 +1182,32 @@ class CarbonTrackControllerTest extends TestCase
         $countBound = [];
         $listBound = [];
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->checkParameters = true;
         $countStmt->expects($this->exactly(4))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$countBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$countBound) {
                 $countBound[$key] = [$value, $type];
                 return true;
             });
-        $countStmt->expects($this->once())->method('execute')->willReturn(true);
-        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+        $countStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $countStmt->expects($this->once())->method('row')->willReturn(['total' => 0]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
         $listStmt->expects($this->exactly(6))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$listBound) {
                 $listBound[$key] = [$value, $type];
                 return true;
             });
-        $listStmt->expects($this->once())->method('execute')->willReturn(true);
-        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $listStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $listStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use ($countStmt, $listStmt) {
                 static $prepareCalls = 0;
                 $prepareCalls++;
@@ -1174,7 +1218,7 @@ class CarbonTrackControllerTest extends TestCase
                 return $prepareCalls === 1 ? $countStmt : $listStmt;
             });
 
-        $controller = $this->makeController($pdo, $calc, $msg, $audit, $auth);
+        $controller = $this->makeController($connection, $calc, $msg, $audit, $auth);
         $request = makeRequest('GET', '/admin/activities', null, ['search' => 'green']);
         $response = new \Slim\Psr7\Response();
 
@@ -1189,22 +1233,21 @@ class CarbonTrackControllerTest extends TestCase
     }
 
     /**
-     * @return array{0:\PDO,1:User}
+     * @return array{0:\Illuminate\Database\Connection,1:User}
      */
     private function makeRealCheckinDatabase(int $monthlyLimit): array
     {
         $dbPath = tempnam(sys_get_temp_dir(), 'carbontrack_record_makeup_');
         $this->tempDbPaths[] = $dbPath;
-        $pdo = new \PDO('sqlite:' . $dbPath);
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($pdo);
+        $connection = DatabaseFixture::sqlite($dbPath);
+        TestSchemaBuilder::init($connection);
 
         $capsule = new Capsule();
         $capsule->addConnection([
             'driver' => 'sqlite',
             'database' => $dbPath,
             'prefix' => '',
-            'pdo' => $pdo,
+            'connection' => $connection,
         ]);
         $capsule->setAsGlobal();
         $capsule->bootEloquent();
@@ -1236,7 +1279,7 @@ class CarbonTrackControllerTest extends TestCase
             'updated_at' => $now,
         ]);
 
-        return [$pdo, $user];
+        return [$connection, $user];
     }
 }
 

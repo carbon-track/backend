@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\Avatar;
@@ -25,7 +28,6 @@ use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\Environment;
 use CarbonTrack\Models\Message;
 use Monolog\Logger;
-use PDO;
 
 class UserController
 {
@@ -62,7 +64,7 @@ class UserController
     private Avatar $avatarModel;
     private ?CloudflareR2Service $r2Service;
     private Logger $logger;
-    private PDO $db;
+    private Connection $db;
     private NotificationPreferenceService $notificationPreferenceService;
     private ?TurnstileService $turnstileService;
     private ?ProofOfWorkService $proofOfWorkService;
@@ -80,7 +82,7 @@ class UserController
         ?TurnstileService $turnstileService = null,
         ?EmailService $emailService = null,
         ?Logger $logger = null,
-        ?PDO $db = null,
+        ?Connection $db = null,
         ?ErrorLogService $errorLogService = null,
         ?CloudflareR2Service $r2Service = null,
         ?RegionService $regionService = null,
@@ -94,7 +96,7 @@ class UserController
             throw new \InvalidArgumentException('UserController requires a logger instance.');
         }
         if ($db === null) {
-            throw new \InvalidArgumentException('UserController requires a PDO instance.');
+            throw new \InvalidArgumentException('UserController requires a database connection.');
         }
         if ($regionService === null) {
             throw new \InvalidArgumentException('UserController requires a RegionService instance.');
@@ -328,16 +330,14 @@ class UserController
     private function fetchLatestActivitySample(Request $request, int $userId): array
     {
         try {
-            $stmt = $this->db->prepare("
+            $row = DatabaseRows::one($this->db->selectOne("
                 SELECT r.points_earned, r.created_at, a.name_en, a.name_zh, a.unit
                 FROM carbon_records r
                 LEFT JOIN carbon_activities a ON r.activity_id = a.id
                 WHERE r.user_id = :uid AND r.deleted_at IS NULL
                 ORDER BY r.created_at DESC
                 LIMIT 1
-            ");
-            $stmt->execute(['uid' => $userId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            ", ['uid' => $userId]));
 
             if ($row) {
                 $nameEn = trim((string)($row['name_en'] ?? ''));
@@ -371,16 +371,14 @@ class UserController
     private function fetchLatestExchangeSample(Request $request, int $userId): array
     {
         try {
-            $stmt = $this->db->prepare("
+            $row = DatabaseRows::one($this->db->selectOne("
                 SELECT e.quantity, e.points_used, e.created_at, e.product_name, p.name AS product_name_fallback
                 FROM point_exchanges e
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE e.user_id = :user_id AND e.deleted_at IS NULL
                 ORDER BY e.created_at DESC
                 LIMIT 1
-            ");
-            $stmt->execute(['user_id' => $userId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            ", ['user_id' => $userId]));
 
             if ($row) {
                 $product = trim((string)($row['product_name'] ?? ''));
@@ -415,15 +413,13 @@ class UserController
     private function fetchLatestMessageSample(Request $request, int $userId): array
     {
         try {
-            $stmt = $this->db->prepare("
+            $row = DatabaseRows::one($this->db->selectOne("
                 SELECT title, content, created_at
                 FROM messages
                 WHERE receiver_id = :uid AND deleted_at IS NULL
                 ORDER BY created_at DESC
                 LIMIT 1
-            ");
-            $stmt->execute(['uid' => $userId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            ", ['uid' => $userId]));
 
             if ($row) {
                 return [
@@ -476,15 +472,13 @@ class UserController
                 ], 401);
             }
 
-            $stmt = $this->db->prepare("
+            $row = DatabaseRows::one($this->db->selectOne("
                 SELECT u.*, s.name as school_name, a.file_path as avatar_path
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 WHERE u.id = ? AND u.deleted_at IS NULL
-            ");
-            $stmt->execute([$user['id']]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            ", [$user['id']]));
             if (!$row) {
                 return $this->jsonResponse($response, [
                     'success' => false,
@@ -529,7 +523,7 @@ class UserController
 
         } catch (\Exception $e) {
             $this->logger->error('Get current user failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -611,7 +605,7 @@ class UserController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Get security activity failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
             ]);
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
@@ -645,9 +639,7 @@ class UserController
             }
 
             // 获取当前用户完整信息
-            $stmt = $this->db->prepare("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL");
-            $stmt->execute([$user['id']]);
-            $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
+            $currentUser = DatabaseRows::one($this->db->selectOne("SELECT * FROM users WHERE id = ? AND deleted_at IS NULL", [$user['id']]));
 
             if (!$currentUser) {
                 return $this->jsonResponse($response, [
@@ -778,9 +770,7 @@ class UserController
                     ], 400);
                 }
 
-                $stmt = $this->db->prepare("SELECT id, name FROM schools WHERE id = ? AND deleted_at IS NULL");
-                $stmt->execute([$incomingSchoolId]);
-                $schoolRow = $stmt->fetch(PDO::FETCH_ASSOC);
+                $schoolRow = DatabaseRows::one($this->db->selectOne("SELECT id, name FROM schools WHERE id = ? AND deleted_at IS NULL", [$incomingSchoolId]));
                 if ($schoolRow) {
                     if ($incomingSchoolId !== $currentSchoolId) {
                         $oldValues['school_id'] = $currentProfileFields['school_id'] ?? null;
@@ -830,12 +820,11 @@ class UserController
                 $params[] = $value;
             }
             
-            $fields[] = "updated_at = NOW()";
+            $fields[] = "updated_at = CURRENT_TIMESTAMP";
             $params[] = $user['id'];
 
             $sql = "UPDATE users SET " . implode(', ', $fields) . " WHERE id = ? AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $success = $stmt->execute($params);
+            $success = $this->db->statement($sql, $params);
 
             if (!$success) {
                 return $this->jsonResponse($response, [
@@ -864,15 +853,13 @@ class UserController
             ]);
 
             // 获取更新后的用户信息
-            $stmt = $this->db->prepare("
+            $updatedUser = DatabaseRows::one($this->db->selectOne("
                 SELECT u.*, s.name as school_name, a.file_path as avatar_path
                 FROM users u 
                 LEFT JOIN schools s ON u.school_id = s.id 
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 WHERE u.id = ? AND u.deleted_at IS NULL
-            ");
-            $stmt->execute([$user['id']]);
-            $updatedUser = $stmt->fetch(PDO::FETCH_ASSOC);
+            ", [$user['id']]));
             $updatedAvatar = $this->resolveAvatar($updatedUser['avatar_path'] ?? null);
             $profileFields = $this->userProfileViewService->buildProfileFields($updatedUser);
             $roleView = $this->authService->normalizeUserRoleView($updatedUser);
@@ -910,7 +897,7 @@ class UserController
 
         } catch (\Exception $e) {
             $this->logger->error('Update profile failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -945,7 +932,7 @@ class UserController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Failed to load notification preferences', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ]);
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
 
@@ -1002,7 +989,7 @@ class UserController
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Failed to update notification preferences', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ]);
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
 
@@ -1140,7 +1127,7 @@ class UserController
         } catch (\Throwable $e) {
             try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
             $this->logger->error('Failed to send notification test email', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ]);
 
             return $this->jsonResponse($response, [
@@ -1187,13 +1174,10 @@ class UserController
             }
 
             // 获取当前头像ID
-            $stmt = $this->db->prepare("SELECT avatar_id FROM users WHERE id = ? AND deleted_at IS NULL");
-            $stmt->execute([$user['id']]);
-            $currentAvatarId = $stmt->fetchColumn();
+            $currentAvatarId = DatabaseRows::scalar($this->db->selectOne("SELECT avatar_id FROM users WHERE id = ? AND deleted_at IS NULL", [$user['id']]));
 
             // 更新用户头像
-            $stmt = $this->db->prepare("UPDATE users SET avatar_id = ?, updated_at = NOW() WHERE id = ? AND deleted_at IS NULL");
-            $success = $stmt->execute([$avatarId, $user['id']]);
+            $success = $this->db->statement("UPDATE users SET avatar_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL", [$avatarId, $user['id']]);
 
             if (!$success) {
                 return $this->jsonResponse($response, [
@@ -1238,7 +1222,7 @@ class UserController
 
         } catch (\Exception $e) {
             $this->logger->error('Select avatar failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -1374,7 +1358,7 @@ class UserController
             $offset = ($page - 1) * $limit;
 
             // 获取积分历史记录
-            $stmt = $this->db->prepare("
+            $transactions = DatabaseRows::all($this->db->select("
                 SELECT 
                     pt.id,
                     NULL AS uuid,
@@ -1393,18 +1377,14 @@ class UserController
                 WHERE pt.uid = ? AND pt.deleted_at IS NULL
                 ORDER BY pt.created_at DESC
                 LIMIT ? OFFSET ?
-            ");
-            $stmt->execute([$user['id'], $limit, $offset]);
-            $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            ", [$user['id'], $limit, $offset]));
 
             // 获取总数
-            $stmt = $this->db->prepare("
+            $total = DatabaseRows::one($this->db->selectOne("
                 SELECT COUNT(*) as total
                 FROM points_transactions 
                 WHERE uid = ? AND deleted_at IS NULL
-            ");
-            $stmt->execute([$user['id']]);
-            $total = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
+            ", [$user['id']]))['total'];
 
             // 格式化数据
             foreach ($transactions as &$transaction) {
@@ -1427,7 +1407,7 @@ class UserController
 
         } catch (\Exception $e) {
             $this->logger->error('Get points history failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -1456,15 +1436,13 @@ class UserController
             }
 
             // 1) 积分汇总（按单元测试约定的准备顺序）
-            $pointsStmt = $this->db->prepare("SELECT 
+            $pointsRow = DatabaseRows::one($this->db->selectOne("SELECT
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN points ELSE 0 END), 0) AS total_earned,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN -points ELSE 0 END), 0) AS total_spent,
                     COALESCE(SUM(CASE WHEN type = 'earn' THEN 1 ELSE 0 END), 0) AS earn_count,
                     COALESCE(SUM(CASE WHEN type = 'spend' THEN 1 ELSE 0 END), 0) AS spend_count,
                     COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count
-                FROM points_transactions WHERE uid = :uid AND deleted_at IS NULL");
-            $pointsStmt->execute(['uid' => $user['id']]);
-            $pointsRow = $pointsStmt->fetch(PDO::FETCH_ASSOC) ?: [
+                FROM points_transactions WHERE uid = :uid AND deleted_at IS NULL", ['uid' => $user['id']])) ?: [
                 'total_earned' => 0,
                 'total_spent' => 0,
                 'earn_count' => 0,
@@ -1475,7 +1453,7 @@ class UserController
             // 2) 月度统计（可用于前端趋势图）
             // 兼容 MySQL/SQLite 的时间分组函数
             try {
-                $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+                $driver = $this->db->getDriverName() ?: 'mysql';
             } catch (\Throwable $exception) {
                 $this->logException($exception, $request, 'Failed to detect database driver for user statistics', (int)$user['id']);
                 $driver = 'mysql';
@@ -1486,22 +1464,16 @@ class UserController
                     COALESCE(SUM(carbon_saved), 0) AS carbon_saved,
                     COALESCE(SUM(points_earned), 0) AS points_earned
                 FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL GROUP BY month ORDER BY month DESC LIMIT 12";
-            $monthlyStmt = $this->db->prepare($monthlySql);
-            $monthlyStmt->execute(['uid' => $user['id']]);
-            $monthly = $monthlyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $monthly = DatabaseRows::all($this->db->select($monthlySql, ['uid' => $user['id']])) ?: [];
 
             // 3) 最近记录（此处仅为保留顺序，与测试对齐）
-            $recentStmt = $this->db->prepare("SELECT id FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 5");
-            $recentStmt->execute(['uid' => $user['id']]);
-            $recentStmt->fetchAll(PDO::FETCH_ASSOC);
+            DatabaseRows::all($this->db->select("SELECT id FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 5", ['uid' => $user['id']]));
 
             // 4) 用户当前积分与注册时间
-            $userInfoStmt = $this->db->prepare("SELECT u.points, u.created_at, u.region_code, u.school_id, s.name AS school_name
+            $userRow = DatabaseRows::one($this->db->selectOne("SELECT u.points, u.created_at, u.region_code, u.school_id, s.name AS school_name
                 FROM users u
                 LEFT JOIN schools s ON u.school_id = s.id
-                WHERE u.id = ? AND u.deleted_at IS NULL");
-            $userInfoStmt->execute([$user['id']]);
-            $userRow = $userInfoStmt->fetch(PDO::FETCH_ASSOC) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
+                WHERE u.id = ? AND u.deleted_at IS NULL", [$user['id']])) ?: ['points' => 0, 'created_at' => null, 'region_code' => null, 'school_id' => null, 'school_name' => null];
             $profileFields = $this->userProfileViewService->buildProfileFields($userRow);
             $regionMeta = [
                 'region_code' => $profileFields['region_code'],
@@ -1518,7 +1490,7 @@ class UserController
             ];
             try {
                 $currentPoints = (int) ($userRow['points'] ?? 0);
-                $storeStatsStmt = $this->db->prepare("
+                $storeRow = DatabaseRows::one($this->db->selectOne("
                     SELECT
                         COALESCE(SUM(
                             CASE
@@ -1540,18 +1512,14 @@ class UserController
                             END
                         ) AS min_exchange_points
                     FROM products
-                ");
-                $storeStatsStmt->execute(['current_points' => $currentPoints]);
-                if ($storeStatsStmt instanceof \PDOStatement) {
-                    $storeRow = $storeStatsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-                    $minExchangePoints = isset($storeRow['min_exchange_points']) && $storeRow['min_exchange_points'] !== null
-                        ? (int) $storeRow['min_exchange_points']
-                        : null;
-                    $storeStats = [
-                        'available_products' => (int) ($storeRow['available_products'] ?? 0),
-                        'min_exchange_points' => $minExchangePoints,
-                    ];
-                }
+                ", ['current_points' => $currentPoints])) ?: [];
+                $minExchangePoints = isset($storeRow['min_exchange_points']) && $storeRow['min_exchange_points'] !== null
+                    ? (int) $storeRow['min_exchange_points']
+                    : null;
+                $storeStats = [
+                    'available_products' => (int) ($storeRow['available_products'] ?? 0),
+                    'min_exchange_points' => $minExchangePoints,
+                ];
             } catch (\Throwable $e) {
                 $this->logException($e, $request, 'Failed to load store quick stats', (int)$user['id']);
             }
@@ -1565,16 +1533,14 @@ class UserController
                 'total_carbon_saved' => 0.0,
                 'total_points_earned' => (float)($pointsRow['total_earned'] ?? 0),
             ];
-            $recordStmt = $this->db->prepare("SELECT 
+            $recordRow = DatabaseRows::one($this->db->selectOne("SELECT
                     COUNT(*) AS total_activities,
                     SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_activities,
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_activities,
                     SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected_activities,
                     COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
                     COALESCE(SUM(CASE WHEN status = 'approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
-                FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL");
-            $recordStmt->execute(['uid' => $user['id']]);
-            $recordRow = $recordStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM carbon_records WHERE user_id = :uid AND deleted_at IS NULL", ['uid' => $user['id']])) ?: [];
             $recStats = [
                 'total_activities' => (int)($recordRow['total_activities'] ?? 0),
                 'approved_activities' => (int)($recordRow['approved_activities'] ?? 0),
@@ -1584,25 +1550,20 @@ class UserController
                 'total_points_earned' => (float)($recordRow['total_points_earned'] ?? ($pointsRow['total_earned'] ?? 0)),
             ];
 
-            // 排名（按用户积分 points 降序）；这里避免额外 prepare 调用，直接置为 null 以兼容单元测试
+            // 积分排名与概览独立计算。
             $rankRow = ['rank' => null];
             try {
-                $rankStmt = $this->db->prepare("SELECT COUNT(*) + 1 AS rank FROM users WHERE deleted_at IS NULL AND points > :points");
-                $rankStmt->execute(['points' => (float)($userRow['points'] ?? 0)]);
-                $fetchedRank = $rankStmt->fetch(PDO::FETCH_ASSOC) ?: null;
-                if (is_array($fetchedRank) && array_key_exists('rank', $fetchedRank)) {
-                    $rankRow['rank'] = (int)$fetchedRank['rank'];
+                $fetchedRank = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) + 1 AS user_rank FROM users WHERE deleted_at IS NULL AND points > :points", ['points' => (float)($userRow['points'] ?? 0)])) ?: null;
+                if (is_array($fetchedRank) && array_key_exists('user_rank', $fetchedRank)) {
+                    $rankRow['rank'] = (int)$fetchedRank['user_rank'];
                 }
-            } catch (\Throwable $ignore) {
-                // ignore rank calculation failures to avoid breaking dashboard
+            } catch (\Throwable $exception) {
+                $this->logException($exception, $request, 'Failed to calculate user points rank', (int)$user['id']);
             }
 
             $totalUsers = 0;
-            $totalUsersStmt = $this->db->query("SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL");
-            if ($totalUsersStmt instanceof \PDOStatement) {
-                $row = $totalUsersStmt->fetch(PDO::FETCH_ASSOC);
-                $totalUsers = (int)($row['total'] ?? 0);
-            }
+            $row = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL"));
+            $totalUsers = (int)($row['total'] ?? 0);
 
             // 未读消息数（为保持 prepare 次数不变，直接返回 0）
             $unread = 0;
@@ -1757,7 +1718,7 @@ class UserController
 
         } catch (\Exception $e) {
             $this->logger->error('Get user stats failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -1766,7 +1727,7 @@ class UserController
             // For unit test diagnostics, include error in message
             return $this->jsonResponse($response, [
                 'success' => false,
-                'message' => 'Failed to get user stats: ' . $e->getMessage()
+                'message' => 'Failed to get user stats: ' . DatabaseService::exceptionMessage($e)
             ], 500);
         }
     }
@@ -1786,7 +1747,7 @@ class UserController
                 ], 401);
             }
 
-            $stmt = $this->db->prepare("
+            $data = DatabaseRows::all($this->db->select("
                 SELECT 
                     DATE(created_at) as date,
                     COALESCE(SUM(CASE WHEN status = 'approved' THEN carbon_saved ELSE 0 END), 0) as carbon_saved,
@@ -1796,9 +1757,7 @@ class UserController
                     AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                 GROUP BY DATE(created_at)
                 ORDER BY date ASC
-            ");
-            $stmt->execute(['user_id' => $user['id']]);
-            $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            ", ['user_id' => $user['id']]));
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -1806,7 +1765,7 @@ class UserController
             ]);
         } catch (\Exception $e) {
             $this->logger->error('Get chart data failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -1836,7 +1795,7 @@ class UserController
             $query = $request->getQueryParams();
             $limit = min(50, max(1, (int)($query['limit'] ?? 10)));
 
-            $stmt = $this->db->prepare("
+            $rows = DatabaseRows::all($this->db->select("
                 SELECT 
                     r.id,
                     r.activity_id,
@@ -1855,11 +1814,7 @@ class UserController
                 WHERE r.user_id = :user_id AND r.deleted_at IS NULL
                 ORDER BY r.created_at DESC
                 LIMIT :limit
-            ");
-            $stmt->bindValue('user_id', $user['id']);
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            ", ['user_id' => $user['id'], 'limit' => (int) $limit]));
 
             foreach ($rows as &$row) {
                 $rawImages = [];
@@ -1877,7 +1832,7 @@ class UserController
             ]);
         } catch (\Exception $e) {
             $this->logger->error('Get recent activities failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
                 'user_id' => $user['id'] ?? null
             ]);
@@ -1912,10 +1867,10 @@ class UserController
             ]);
         } catch (\Throwable $ignore) {
             $this->logger->warning('Could not persist a handled user request exception', [
-                'error' => $ignore->getMessage(),
+                'error' => DatabaseService::exceptionMessage($ignore),
             ]);
         }
-        $this->logger->debug($message, ['error' => $exception->getMessage(), 'user_id' => $userId]);
+        $this->logger->debug($message, ['error' => DatabaseService::exceptionMessage($exception), 'user_id' => $userId]);
     }
 
     private function findOrCreateSchoolId(string $name, Request $request, array $user): ?int
@@ -1926,23 +1881,19 @@ class UserController
         }
 
         try {
-            $stmt = $this->db->prepare('SELECT id FROM schools WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1');
-            $stmt->execute([$normalized]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $row = DatabaseRows::one($this->db->selectOne('SELECT id FROM schools WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1', [$normalized]));
             if ($row && isset($row['id'])) {
                 return (int)$row['id'];
             }
 
-            $insert = $this->db->prepare('INSERT INTO schools (name, created_at, updated_at) VALUES (?, ?, ?)');
             $now = date('Y-m-d H:i:s');
-            $insert->execute([$normalized, $now, $now]);
 
-            $newId = (int)$this->db->lastInsertId();
+            $newId = DatabaseService::insertGetId($this->db, 'INSERT INTO schools (name, created_at, updated_at) VALUES (?, ?, ?)', [$normalized, $now, $now]);
             return $newId > 0 ? $newId : null;
         } catch (\Throwable $e) {
             $this->logClientException($e, $request, 400, __METHOD__, $user, 'user_management');
             $this->logger->error('Failed to resolve school name for profile update', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'school_name' => $normalized
             ]);
             return null;
@@ -2167,39 +2118,31 @@ class UserController
         }
         $whereSql = implode(' AND ', $where);
 
-        $listStmt = $this->db->prepare(
-            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+        $rows = DatabaseRows::all($this->db->select("SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
              FROM audit_logs
              WHERE {$whereSql}
              ORDER BY created_at DESC, id DESC
-             LIMIT ? OFFSET ?"
-        );
-        $listStmt->execute(array_merge($baseParams, [$limit, $offset]));
-        $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+             LIMIT ? OFFSET ?", array_merge($baseParams, [$limit, $offset]))) ?: [];
 
-        $countStmt = $this->db->prepare(
-            "SELECT COUNT(*)
-             FROM audit_logs
-             WHERE {$whereSql}"
-        );
-        $countStmt->execute($baseParams);
 
         return [
             'items' => array_map([$this, 'normalizeSecurityActivityRow'], $rows),
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*)
+             FROM audit_logs
+             WHERE {$whereSql}", $baseParams)),
         ];
     }
 
     private function buildSecurityActivityPeriodClause(int $days): string
     {
         $safeDays = max(1, $days);
-        $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+        $driver = strtolower((string) $this->db->getDriverName());
 
         if ($driver === 'sqlite') {
             return sprintf("created_at >= datetime('now', '-%d days')", $safeDays);
         }
 
-        return sprintf('created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)', $safeDays);
+        return sprintf('created_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL %d DAY)', $safeDays);
     }
 
     /**

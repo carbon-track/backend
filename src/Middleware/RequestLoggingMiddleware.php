@@ -11,6 +11,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\SensitiveDataRedactor;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
 
@@ -114,8 +115,12 @@ class RequestLoggingMiddleware implements MiddlewareInterface
             // to keep system_logs unable to leak passwords, codes, reset / verification
             // tokens, or freshly minted JWTs even if downstream sanitization regresses.
             $sensitive = $this->isSensitiveBodyPath($path);
-            $loggedRequestBody = $sensitive ? '[REDACTED]' : $parsedBody;
-            $loggedResponseBody = $sensitive ? '[REDACTED]' : $this->decodeIfJson($respBody);
+            $loggedRequestBody = $sensitive
+                ? SensitiveDataRedactor::REDACTED
+                : SensitiveDataRedactor::redact($parsedBody);
+            $loggedResponseBody = $sensitive
+                ? SensitiveDataRedactor::REDACTED
+                : SensitiveDataRedactor::redact($this->decodeIfJson($respBody));
 
             $this->systemLogService->log([
                 'request_id' => $requestId,
@@ -129,7 +134,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
                 'duration_ms' => round($duration, 2),
                 'request_body' => $loggedRequestBody,
                 'response_body' => $loggedResponseBody,
-                'server_params' => $serverParams,
+                'server_params' => SensitiveDataRedactor::redactServer($serverParams),
             ]);
         }
 

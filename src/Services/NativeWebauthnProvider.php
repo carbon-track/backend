@@ -23,11 +23,14 @@ class NativeWebauthnProvider implements WebauthnProviderInterface
 
     public function getMetadata(): array
     {
+        $available = $this->isAvailable();
+
         return [
             'package' => null,
             'implementation' => 'native',
-            'available' => $this->isAvailable(),
+            'available' => $available,
             'expected_extension' => 'openssl',
+            'reason' => $available ? null : 'openssl_unavailable',
         ];
     }
 
@@ -177,7 +180,7 @@ class NativeWebauthnProvider implements WebauthnProviderInterface
     private function ensureAvailable(): void
     {
         if (!$this->isAvailable()) {
-            throw new PasskeyIntegrationUnavailableException('native-openssl');
+            throw new PasskeyIntegrationUnavailableException();
         }
     }
 

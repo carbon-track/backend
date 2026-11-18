@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class AdminAiConversationStoreService
@@ -14,7 +15,7 @@ class AdminAiConversationStoreService
     private array $stepStartedAtMonotonic = [];
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private LoggerInterface $logger,
         private ?AuditLogService $auditLogService = null,
         private ?ErrorLogService $errorLogService = null
@@ -81,27 +82,27 @@ class AdminAiConversationStoreService
                     GROUP BY logs.conversation_id
                 ) llm ON llm.conversation_id = c.conversation_id
                 WHERE 1 = 1";
-        /** @var array<string,array{0:mixed,1:int}> $params */
+        /** @var array<string,mixed> $params */
         $params = [];
         if ($actorId !== null) {
             $sql .= " AND c.admin_id = :actor_id";
-            $params[':actor_id'] = [$actorId, PDO::PARAM_INT];
+            $params[':actor_id'] = $actorId;
         }
         if ($conversationIdFilter !== null) {
             $sql .= " AND c.conversation_id = :conversation_id";
-            $params[':conversation_id'] = [$conversationIdFilter, PDO::PARAM_STR];
+            $params[':conversation_id'] = $conversationIdFilter;
         }
         if ($dateFrom !== null) {
             $sql .= " AND c.last_activity_at >= :date_from";
-            $params[':date_from'] = [$dateFrom, PDO::PARAM_STR];
+            $params[':date_from'] = $dateFrom;
         }
         if ($dateTo !== null) {
             $sql .= " AND c.last_activity_at <= :date_to";
-            $params[':date_to'] = [$dateTo, PDO::PARAM_STR];
+            $params[':date_to'] = $dateTo;
         }
         if ($model !== null && $model !== '') {
             $sql .= " AND llm.last_model LIKE :model";
-            $params[':model'] = ['%' . $model . '%', PDO::PARAM_STR];
+            $params[':model'] = '%' . $model . '%';
         }
         if ($status === 'waiting_confirmation') {
             $sql .= " AND COALESCE(pending.pending_action_count, 0) > 0";
@@ -117,15 +118,11 @@ class AdminAiConversationStoreService
         $sql .= " ORDER BY c.last_activity_at DESC LIMIT :limit";
 
         try {
-            $stmt = $this->db->prepare($sql);
-            foreach ($params as $key => [$value, $type]) {
-                $stmt->bindValue($key, $value, $type);
-            }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
+            $params[':limit'] = $limit;
+            $queryRows = $this->db->select($sql, $params);
 
             $items = [];
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $conversationId = (string) ($row['conversation_id'] ?? '');
                 if ($conversationId === '') {
                     continue;
@@ -150,8 +147,11 @@ class AdminAiConversationStoreService
 
             return $items;
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_conversation_list_failed', [
+                'source' => '/admin/ai/conversations',
+            ]);
             $this->logger->warning('Failed to list admin AI conversations from dedicated store.', [
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             return [];
         }
@@ -243,9 +243,7 @@ class AdminAiConversationStoreService
 
     public function getNextTurnNo(string $conversationId): int
     {
-        $stmt = $this->db->prepare('SELECT COALESCE(MAX(turn_no), 0) FROM llm_logs WHERE conversation_id = :conversation_id');
-        $stmt->execute([':conversation_id' => $conversationId]);
-        return ((int) $stmt->fetchColumn()) + 1;
+        return ((int) DatabaseRows::scalar($this->db->selectOne('SELECT COALESCE(MAX(turn_no), 0) FROM llm_logs WHERE conversation_id = :conversation_id', [':conversation_id' => $conversationId]))) + 1;
     }
 
     /**
@@ -254,12 +252,10 @@ class AdminAiConversationStoreService
     public function findProposal(string $conversationId, int $proposalId): ?array
     {
         try {
-            $stmt = $this->db->prepare("SELECT * FROM admin_ai_messages
+            $row = DatabaseRows::one($this->db->selectOne("SELECT * FROM admin_ai_messages
                 WHERE id = :id
                   AND conversation_id = :conversation_id
-                  AND kind = 'action_proposed'");
-            $stmt->execute([':id' => $proposalId, ':conversation_id' => $conversationId]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+                  AND kind = 'action_proposed'", [':id' => $proposalId, ':conversation_id' => $conversationId]));
             if (is_array($row)) {
                 $meta = $this->decodeJson($row['meta_json'] ?? null);
                 $data = isset($meta['data']) && is_array($meta['data']) ? $meta['data'] : $meta;
@@ -271,10 +267,14 @@ class AdminAiConversationStoreService
                 ];
             }
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_proposal_load_failed', [
+                'conversation_id' => $conversationId,
+                'proposal_id' => $proposalId,
+            ]);
             $this->logger->warning('Failed to load admin AI proposal from dedicated store.', [
                 'conversation_id' => $conversationId,
                 'proposal_id' => $proposalId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
         }
 
@@ -287,9 +287,7 @@ class AdminAiConversationStoreService
     public function updateProposalStatus(int $proposalId, string $status, array $meta = [], ?string $expectedStatus = null): bool
     {
         try {
-            $stmt = $this->db->prepare("SELECT meta_json FROM admin_ai_messages WHERE id = :id");
-            $stmt->execute([':id' => $proposalId]);
-            $existingRaw = $stmt->fetchColumn();
+            $existingRaw = DatabaseRows::scalar($this->db->selectOne("SELECT meta_json FROM admin_ai_messages WHERE id = :id", [':id' => $proposalId]));
             if ($existingRaw !== false) {
                 $existing = $this->decodeJson(is_string($existingRaw) ? $existingRaw : null);
                 $existing['data'] = isset($existing['data']) && is_array($existing['data']) ? $existing['data'] : [];
@@ -302,7 +300,6 @@ class AdminAiConversationStoreService
                     : "UPDATE admin_ai_messages
                         SET status = :status, meta_json = :meta_json, updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id";
-                $update = $this->db->prepare($sql);
                 $params = [
                     ':status' => $status,
                     ':meta_json' => json_encode($existing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
@@ -312,13 +309,15 @@ class AdminAiConversationStoreService
                     $params[':expected_status'] = $expectedStatus;
                 }
 
-                $update->execute($params);
-                return $update->rowCount() === 1;
+                return $this->db->affectingStatement($sql, $params) === 1;
             }
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_proposal_update_failed', [
+                'proposal_id' => $proposalId,
+            ]);
             $this->logger->warning('Failed to update admin AI proposal in dedicated store.', [
                 'proposal_id' => $proposalId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
         }
 
@@ -387,7 +386,7 @@ class AdminAiConversationStoreService
             } catch (\Throwable $exception) {
                 $this->logger->warning('Failed to write admin AI conversation audit log.', [
                     'action' => $action,
-                    'error' => $exception->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($exception),
                 ]);
             }
         }
@@ -411,12 +410,11 @@ class AdminAiConversationStoreService
                 null
             );
 
-            $stmt = $this->db->prepare("INSERT INTO admin_ai_runs (
+            $this->db->statement("INSERT INTO admin_ai_runs (
                 run_id, conversation_id, admin_id, autonomy_mode, status, source, request_id, started_at, meta_json
             ) VALUES (
                 :run_id, :conversation_id, :admin_id, :autonomy_mode, 'running', :source, :request_id, :started_at, :meta_json
-            )");
-            $stmt->execute([
+            )", [
                 ':run_id' => $runId,
                 ':conversation_id' => $conversationId,
                 ':admin_id' => isset($logContext['actor_id']) && is_numeric((string) $logContext['actor_id']) ? (int) $logContext['actor_id'] : null,
@@ -430,7 +428,7 @@ class AdminAiConversationStoreService
             $this->logger->warning('Failed to start admin AI run.', [
                 'run_id' => $runId,
                 'conversation_id' => $conversationId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->logPersistenceError($exception, 'admin_ai_run_start_failed', [
                 'run_id' => $runId,
@@ -449,14 +447,13 @@ class AdminAiConversationStoreService
     {
         try {
             $finishedAt = gmdate('Y-m-d H:i:s');
-            $stmt = $this->db->prepare("UPDATE admin_ai_runs
+            $this->db->statement("UPDATE admin_ai_runs
                 SET status = :status,
                     error_message = :error_message,
                     finished_at = :finished_at,
                     meta_json = :meta_json,
                     updated_at = :updated_at
-                WHERE run_id = :run_id");
-            $stmt->execute([
+                WHERE run_id = :run_id", [
                 ':status' => $status,
                 ':error_message' => $errorMessage,
                 ':finished_at' => $finishedAt,
@@ -468,7 +465,7 @@ class AdminAiConversationStoreService
             $this->logger->warning('Failed to finish admin AI run.', [
                 'run_id' => $runId,
                 'status' => $status,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->logPersistenceError($exception, 'admin_ai_run_finish_failed', [
                 'run_id' => $runId,
@@ -493,12 +490,11 @@ class AdminAiConversationStoreService
         try {
             $startedAt = gmdate('Y-m-d H:i:s');
             $this->stepStartedAtMonotonic[$runId . ':' . $stepId] = microtime(true);
-            $stmt = $this->db->prepare("INSERT INTO admin_ai_steps (
+            $this->db->statement("INSERT INTO admin_ai_steps (
                 run_id, step_id, sequence_no, type, tool_name, status, approval_state, input_json, started_at
             ) VALUES (
                 :run_id, :step_id, :sequence_no, :type, :tool_name, 'running', :approval_state, :input_json, :started_at
-            )");
-            $stmt->execute([
+            )", [
                 ':run_id' => $runId,
                 ':step_id' => $stepId,
                 ':sequence_no' => $sequence,
@@ -512,7 +508,7 @@ class AdminAiConversationStoreService
             $this->logger->warning('Failed to start admin AI run step.', [
                 'run_id' => $runId,
                 'step_id' => $stepId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->logPersistenceError($exception, 'admin_ai_run_step_start_failed', [
                 'run_id' => $runId,
@@ -545,12 +541,10 @@ class AdminAiConversationStoreService
             unset($this->stepStartedAtMonotonic[$stepKey]);
             $startedAt = null;
             if ($durationMs === null) {
-                $startedStmt = $this->db->prepare("SELECT started_at FROM admin_ai_steps WHERE run_id = :run_id AND step_id = :step_id LIMIT 1");
-                $startedStmt->execute([
+                $startedAtValue = DatabaseRows::scalar($this->db->selectOne("SELECT started_at FROM admin_ai_steps WHERE run_id = :run_id AND step_id = :step_id LIMIT 1", [
                     ':run_id' => $runId,
                     ':step_id' => $stepId,
-                ]);
-                $startedAtValue = $startedStmt->fetchColumn();
+                ]));
                 if (is_string($startedAtValue) && trim($startedAtValue) !== '') {
                     $startedAt = strtotime($startedAtValue);
                 }
@@ -560,7 +554,7 @@ class AdminAiConversationStoreService
                     : null;
             }
 
-            $stmt = $this->db->prepare("UPDATE admin_ai_steps
+            $this->db->statement("UPDATE admin_ai_steps
                 SET status = :status,
                     output_json = :output_json,
                     error_message = :error_message,
@@ -569,8 +563,7 @@ class AdminAiConversationStoreService
                     finished_at = :finished_at,
                     duration_ms = :duration_ms,
                     updated_at = :updated_at
-                WHERE run_id = :run_id AND step_id = :step_id");
-            $stmt->execute([
+                WHERE run_id = :run_id AND step_id = :step_id", [
                 ':run_id' => $runId,
                 ':status' => $status,
                 ':output_json' => $output !== null ? json_encode($output, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
@@ -587,7 +580,7 @@ class AdminAiConversationStoreService
                 'run_id' => $runId,
                 'step_id' => $stepId,
                 'status' => $status,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             $this->logPersistenceError($exception, 'admin_ai_run_step_finish_failed', [
                 'run_id' => $runId,
@@ -625,8 +618,8 @@ class AdminAiConversationStoreService
         } catch (\Throwable $loggingError) {
             $this->logger->warning('Failed to persist admin AI conversation store error log.', [
                 'context_message' => $contextMessage,
-                'error' => $loggingError->getMessage(),
-                'original_error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($loggingError),
+                'original_error' => DatabaseService::exceptionMessage($exception),
             ]);
         }
     }
@@ -644,14 +637,13 @@ class AdminAiConversationStoreService
      */
     private function fetchConversationLlmCalls(string $conversationId): array
     {
-        $stmt = $this->db->prepare("SELECT *
+        $queryRows = $this->db->select("SELECT *
             FROM llm_logs
             WHERE conversation_id = :conversation_id
-            ORDER BY COALESCE(turn_no, 0) ASC, created_at ASC, id ASC");
-        $stmt->execute([':conversation_id' => $conversationId]);
+            ORDER BY COALESCE(turn_no, 0) ASC, created_at ASC, id ASC", [':conversation_id' => $conversationId]);
 
         $items = [];
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+        foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
             $items[] = [
                 'id' => (int) ($row['id'] ?? 0),
                 'turn_no' => $row['turn_no'] !== null ? (int) $row['turn_no'] : null,
@@ -673,15 +665,14 @@ class AdminAiConversationStoreService
     private function fetchConversationRuns(string $conversationId): array
     {
         try {
-            $stmt = $this->db->prepare("SELECT *
+            $queryRows = $this->db->select("SELECT *
                 FROM admin_ai_runs
                 WHERE conversation_id = :conversation_id
-                ORDER BY started_at ASC, id ASC");
-            $stmt->execute([':conversation_id' => $conversationId]);
+                ORDER BY started_at ASC, id ASC", [':conversation_id' => $conversationId]);
 
             $runs = [];
             $runIds = [];
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $runId = (string) ($row['run_id'] ?? '');
                 if ($runId === '') {
                     continue;
@@ -713,9 +704,12 @@ class AdminAiConversationStoreService
 
             return $runs;
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_conversation_runs_load_failed', [
+                'conversation_id' => $conversationId,
+            ]);
             $this->logger->warning('Failed to fetch admin AI runs.', [
                 'conversation_id' => $conversationId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             return [];
         }
@@ -749,14 +743,13 @@ class AdminAiConversationStoreService
                 $params[$placeholder] = $runId;
             }
 
-            $stmt = $this->db->prepare("SELECT *
+            $queryRows = $this->db->select("SELECT *
                 FROM admin_ai_steps
                 WHERE run_id IN (" . implode(', ', $placeholders) . ")
-                ORDER BY run_id ASC, sequence_no ASC, id ASC");
-            $stmt->execute($params);
+                ORDER BY run_id ASC, sequence_no ASC, id ASC", $params);
 
             $stepsByRun = [];
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $runId = (string) ($row['run_id'] ?? '');
                 if ($runId === '') {
                     continue;
@@ -782,9 +775,12 @@ class AdminAiConversationStoreService
 
             return $stepsByRun;
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_run_steps_load_failed', [
+                'run_count' => count($runIds),
+            ]);
             $this->logger->warning('Failed to fetch admin AI run steps.', [
                 'run_ids' => $runIds,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             return [];
         }
@@ -795,20 +791,16 @@ class AdminAiConversationStoreService
      */
     private function fetchConversationTokenSummary(string $conversationId): array
     {
-        $stmt = $this->db->prepare("SELECT COUNT(*) AS llm_calls, COALESCE(SUM(total_tokens), 0) AS total_tokens
-            FROM llm_logs WHERE conversation_id = :conversation_id");
-        $stmt->execute([':conversation_id' => $conversationId]);
-        $summary = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $summary = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS llm_calls, COALESCE(SUM(total_tokens), 0) AS total_tokens
+            FROM llm_logs WHERE conversation_id = :conversation_id", [':conversation_id' => $conversationId])) ?: [];
 
-        $modelStmt = $this->db->prepare("SELECT model FROM llm_logs
-            WHERE conversation_id = :conversation_id
-            ORDER BY created_at DESC, id DESC LIMIT 1");
-        $modelStmt->execute([':conversation_id' => $conversationId]);
 
         return [
             'llm_calls' => (int) ($summary['llm_calls'] ?? 0),
             'total_tokens' => (int) ($summary['total_tokens'] ?? 0),
-            'last_model' => $modelStmt->fetchColumn() ?: null,
+            'last_model' => DatabaseRows::scalar($this->db->selectOne("SELECT model FROM llm_logs
+            WHERE conversation_id = :conversation_id
+            ORDER BY created_at DESC, id DESC LIMIT 1", [':conversation_id' => $conversationId])) ?: null,
         ];
     }
 
@@ -846,12 +838,12 @@ class AdminAiConversationStoreService
                 $role
             );
 
-            $stmt = $this->db->prepare("INSERT INTO admin_ai_messages (
+
+            $messageId = DatabaseService::insertGetId($this->db, "INSERT INTO admin_ai_messages (
                 conversation_id, kind, role, action, status, content, request_id, response_code, meta_json
             ) VALUES (
                 :conversation_id, :kind, :role, :action, :status, :content, :request_id, :response_code, :meta_json
-            )");
-            $stmt->execute([
+            )", [
                 ':conversation_id' => $conversationId,
                 ':kind' => $kind,
                 ':role' => $role,
@@ -862,15 +854,19 @@ class AdminAiConversationStoreService
                 ':response_code' => $responseCode,
                 ':meta_json' => $metaJson,
             ]);
-
-            $messageId = (int) $this->db->lastInsertId();
             $this->touchConversationRecord($conversationId, $content, $kind, $role);
             return $messageId > 0 ? $messageId : null;
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_conversation_store_write_failed', [
+                'action' => $action,
+                'conversation_id' => $conversationId,
+                'request_id' => $logContext['request_id'] ?? null,
+                'source' => $logContext['source'] ?? '/admin/ai/chat',
+            ]);
             $this->logger->warning('Failed to write admin AI conversation store record.', [
                 'action' => $action,
                 'conversation_id' => $conversationId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             return null;
         }
@@ -885,17 +881,14 @@ class AdminAiConversationStoreService
     ): void {
         $title = $kind === 'message' && $role === 'user' ? $this->buildPreview($content, 80) : null;
         $preview = $kind === 'message' ? $this->buildPreview($content, 120) : null;
-        $existsStmt = $this->db->prepare("SELECT id FROM admin_ai_conversations WHERE conversation_id = :conversation_id LIMIT 1");
-        $existsStmt->execute([':conversation_id' => $conversationId]);
-        $exists = $existsStmt->fetchColumn();
+        $exists = DatabaseRows::scalar($this->db->selectOne("SELECT id FROM admin_ai_conversations WHERE conversation_id = :conversation_id LIMIT 1", [':conversation_id' => $conversationId]));
 
         if ($exists === false) {
-            $insert = $this->db->prepare("INSERT INTO admin_ai_conversations (
+            $this->db->statement("INSERT INTO admin_ai_conversations (
                 conversation_id, admin_id, title, last_message_preview
             ) VALUES (
                 :conversation_id, :admin_id, :title, :last_message_preview
-            )");
-            $insert->execute([
+            )", [
                 ':conversation_id' => $conversationId,
                 ':admin_id' => $adminId,
                 ':title' => $title,
@@ -904,14 +897,13 @@ class AdminAiConversationStoreService
             return;
         }
 
-        $update = $this->db->prepare("UPDATE admin_ai_conversations
+        $this->db->statement("UPDATE admin_ai_conversations
             SET
                 admin_id = COALESCE(admin_id, :admin_id),
                 title = COALESCE(title, :title),
                 last_message_preview = COALESCE(:last_message_preview, last_message_preview),
                 last_activity_at = CURRENT_TIMESTAMP
-            WHERE conversation_id = :conversation_id");
-        $update->execute([
+            WHERE conversation_id = :conversation_id", [
             ':admin_id' => $adminId,
             ':title' => $title,
             ':last_message_preview' => $preview,
@@ -924,13 +916,12 @@ class AdminAiConversationStoreService
         $title = $kind === 'message' && $role === 'user' ? $this->buildPreview($content, 80) : null;
         $preview = $kind === 'message' ? $this->buildPreview($content, 120) : null;
 
-        $stmt = $this->db->prepare("UPDATE admin_ai_conversations
+        $this->db->statement("UPDATE admin_ai_conversations
             SET
                 title = COALESCE(title, :title),
                 last_message_preview = COALESCE(:last_message_preview, last_message_preview),
                 last_activity_at = CURRENT_TIMESTAMP
-            WHERE conversation_id = :conversation_id");
-        $stmt->execute([
+            WHERE conversation_id = :conversation_id", [
             ':title' => $title,
             ':last_message_preview' => $preview,
             ':conversation_id' => $conversationId,
@@ -943,14 +934,13 @@ class AdminAiConversationStoreService
     private function fetchStoredConversationTimeline(string $conversationId): array
     {
         try {
-            $stmt = $this->db->prepare("SELECT id, kind, role, action, status, content, request_id, response_code, meta_json, created_at
+            $queryRows = $this->db->select("SELECT id, kind, role, action, status, content, request_id, response_code, meta_json, created_at
                 FROM admin_ai_messages
                 WHERE conversation_id = :conversation_id
-                ORDER BY created_at ASC, id ASC");
-            $stmt->execute([':conversation_id' => $conversationId]);
+                ORDER BY created_at ASC, id ASC", [':conversation_id' => $conversationId]);
 
             $messages = [];
-            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: [] as $row) {
+            foreach (DatabaseRows::all($queryRows) ?: [] as $row) {
                 $meta = $this->decodeJson($row['meta_json'] ?? null);
                 $data = isset($meta['data']) && is_array($meta['data']) ? $meta['data'] : [];
                 $proposal = null;
@@ -985,9 +975,13 @@ class AdminAiConversationStoreService
 
             return $messages;
         } catch (\Throwable $exception) {
+            $this->logPersistenceError($exception, 'admin_ai_conversation_timeline_load_failed', [
+                'source' => '/admin/ai/conversations',
+                'conversation_id' => $conversationId,
+            ]);
             $this->logger->warning('Failed to fetch admin AI conversation timeline from dedicated store.', [
                 'conversation_id' => $conversationId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             return [];
         }

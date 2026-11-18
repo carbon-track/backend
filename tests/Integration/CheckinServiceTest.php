@@ -4,36 +4,37 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\CheckinService;
 use DateTimeImmutable;
 use DateTimeZone;
-use PDO;
 use PHPUnit\Framework\TestCase;
 
 class CheckinServiceTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($this->pdo);
+        $this->connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($this->connection);
     }
 
     public function testStreakStatsAndDuplicateCheckins(): void
     {
-        $service = new CheckinService($this->pdo, null, 'UTC');
-        $userId = (int) $this->pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
+        $service = new CheckinService($this->connection, null, 'UTC');
+        $userId = (int) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM users LIMIT 1"));
 
         $service->recordCheckinFromSubmission($userId, 'rec-1', new DateTimeImmutable('2026-01-01 10:00:00', new DateTimeZone('UTC')));
         $service->recordCheckinFromSubmission($userId, 'rec-2', new DateTimeImmutable('2026-01-02 10:00:00', new DateTimeZone('UTC')));
         $service->recordCheckinFromSubmission($userId, 'rec-3', new DateTimeImmutable('2026-01-02 20:00:00', new DateTimeZone('UTC')));
         $service->recordCheckinFromSubmission($userId, 'rec-4', new DateTimeImmutable('2026-01-04 10:00:00', new DateTimeZone('UTC')));
 
-        $count = (int) $this->pdo->query("SELECT COUNT(*) FROM user_checkins WHERE user_id = {$userId}")->fetchColumn();
+        $count = (int) DatabaseRows::scalar($this->connection->selectOne("SELECT COUNT(*) FROM user_checkins WHERE user_id = {$userId}"));
         $this->assertSame(3, $count);
 
         $stats = $service->getUserStreakStats($userId, new DateTimeImmutable('2026-01-04', new DateTimeZone('UTC')));
@@ -44,8 +45,8 @@ class CheckinServiceTest extends TestCase
 
     public function testMakeupCheckin(): void
     {
-        $service = new CheckinService($this->pdo, null, 'UTC');
-        $userId = (int) $this->pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
+        $service = new CheckinService($this->connection, null, 'UTC');
+        $userId = (int) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM users LIMIT 1"));
 
         $service->createMakeupCheckin($userId, '2026-01-03', 'manual', 'rec-20260103');
 
@@ -56,11 +57,8 @@ class CheckinServiceTest extends TestCase
 
     public function testSyncUserCheckinsLogsAuditWhenRowsInserted(): void
     {
-        $userId = (int) $this->pdo->query("SELECT id FROM users LIMIT 1")->fetchColumn();
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)'
-        );
-        $stmt->execute([
+        $userId = (int) DatabaseRows::scalar($this->connection->selectOne("SELECT id FROM users LIMIT 1"));
+        $this->connection->statement('INSERT INTO carbon_records (id, user_id, activity_id, amount, unit, carbon_saved, points_earned, date, status, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)', [
             'rec-sync-1',
             $userId,
             '550e8400-e29b-41d4-a716-446655440001',
@@ -84,7 +82,7 @@ class CheckinServiceTest extends TestCase
             }))
             ->willReturn(true);
 
-        $service = new CheckinService($this->pdo, null, 'UTC', $audit, null);
+        $service = new CheckinService($this->connection, null, 'UTC', $audit, null);
 
         $this->assertSame(1, $service->syncUserCheckinsFromRecords($userId));
     }

@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use Illuminate\Database\Capsule\Manager as Capsule;
-use PDO;
+use Illuminate\Database\Connection;
+use Illuminate\Database\QueryException;
 
 class DatabaseService
 {
@@ -27,17 +28,27 @@ class DatabaseService
     /**
      * Get the database connection
      */
-    public function getConnection(): \Illuminate\Database\Connection
+    public function getConnection(): Connection
     {
         return $this->capsule->getConnection();
     }
 
+
     /**
-     * Get PDO instance
+     * Insert using bound SQL and return the generated key from the same connection.
      */
-    public function getPdo(): PDO
+    public static function insertGetId(Connection $connection, string $sql, array $bindings = []): int
     {
-        return $this->getConnection()->getPdo();
+        return (int) $connection->getPostProcessor()->processInsertGetId($connection->query(), $sql, $bindings);
+    }
+
+    public static function exceptionMessage(\Throwable $error): string
+    {
+        if ($error instanceof QueryException) {
+            return $error->getPrevious()?->getMessage() ?? 'Database query failed';
+        }
+
+        return $error->getMessage();
     }
 
     /**
@@ -46,7 +57,7 @@ class DatabaseService
     public function isConnected(): bool
     {
         try {
-            $this->capsule->getConnection()->getPdo()->query('SELECT 1');
+            $this->getConnection()->selectOne('SELECT 1');
             return true;
         } catch (\Exception $e) {
             return false;

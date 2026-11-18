@@ -134,7 +134,7 @@ class CronSchedulerServiceTest extends TestCase
         $audit->expects($this->exactly(2))->method('logSystemEvent');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -160,7 +160,7 @@ class CronSchedulerServiceTest extends TestCase
         $audit->expects($this->never())->method('logSystemEvent');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -193,7 +193,7 @@ class CronSchedulerServiceTest extends TestCase
         ]);
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -470,7 +470,7 @@ class CronSchedulerServiceTest extends TestCase
         ]);
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -579,7 +579,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->atLeastOnce())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -646,7 +646,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->once())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -688,7 +688,7 @@ class CronSchedulerServiceTest extends TestCase
         ");
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -721,7 +721,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->atLeastOnce())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $this->createMock(AuditLogService::class),
             $errorLogService,
@@ -758,7 +758,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->atLeastOnce())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -797,7 +797,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->atLeastOnce())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -833,7 +833,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->once())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -870,7 +870,7 @@ class CronSchedulerServiceTest extends TestCase
         $logger->expects($this->atLeastOnce())->method('warning');
 
         $service = new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -919,7 +919,7 @@ class CronSchedulerServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         return new CronSchedulerService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),

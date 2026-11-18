@@ -4,65 +4,50 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
-use PHPUnit\Framework\TestCase;
 use CarbonTrack\Services\DatabaseService;
-use Illuminate\Database\Capsule\Manager as Capsule;
+use Illuminate\Database\Capsule\Manager;
+use Illuminate\Database\Connection;
+use PHPUnit\Framework\TestCase;
 
-class DatabaseServiceTest extends TestCase
+final class DatabaseServiceTest extends TestCase
 {
-    public function testBasicHelpersAndIsConnected(): void
+    public function testHealthProbeUsesApplicationConnection(): void
     {
-    $pdo = $this->createMock(\PDO::class);
-    $stmt = $this->createMock(\PDOStatement::class);
-    $pdo->method('query')->with('SELECT 1')->willReturn($stmt);
+        $database = $this->database();
+        $this->assertTrue($database->isConnected());
 
-        $connection = $this->getMockBuilder(\Illuminate\Database\Connection::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['getPdo','getTablePrefix','getDatabaseName','select','beginTransaction','commit','rollback'])
-            ->getMock();
-
-        $connection->method('getPdo')->willReturn($pdo);
-        $connection->method('getTablePrefix')->willReturn('ct_');
-        $connection->method('getDatabaseName')->willReturn('testdb');
-        $connection->method('select')->willReturn([["ok" => 1]]);
-
-        $capsule = $this->getMockBuilder(Capsule::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['getConnection'])
-            ->getMock();
-        $capsule->method('getConnection')->willReturn($connection);
-
-        $db = new DatabaseService($capsule);
-        $this->assertSame($capsule, $db->getCapsule());
-        $this->assertTrue($db->isConnected());
-        $this->assertEquals('ct_', $db->getTablePrefix());
-        $this->assertEquals('testdb', $db->getDatabaseName());
-        $this->assertIsArray($db->raw('SELECT 1'));
-
-        // transaction calls should not throw with mocked methods
-        $db->beginTransaction();
-        $db->commit();
-        $db->rollback();
+        $connection = $this->createMock(Connection::class);
+        $connection->expects($this->once())->method('selectOne')
+            ->with('SELECT 1')->willThrowException(new \RuntimeException('Database unavailable'));
+        $manager = $this->createMock(Manager::class);
+        $manager->method('getConnection')->willReturn($connection);
+        $this->assertFalse((new DatabaseService($manager))->isConnected());
     }
 
-    public function testIsConnectedFalseOnException(): void
+    public function testTransactionRollsBackBoundWrite(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('query')->willThrowException(new \Exception('fail'));
+        $database = $this->database();
+        $connection = $database->getConnection();
+        $connection->statement('CREATE TABLE sample (id INTEGER PRIMARY KEY, label TEXT)');
+        $database->beginTransaction();
+        $id = DatabaseService::insertGetId($connection, 'INSERT INTO sample (label) VALUES (?)', ['bound']);
+        $this->assertSame(1, $id);
+        $this->assertSame(1, $connection->transactionLevel());
+        $database->rollback();
+        $this->assertSame(0, $connection->table('sample')->count());
+        $this->assertSame(0, $connection->transactionLevel());
 
-        $connection = $this->getMockBuilder(\Illuminate\Database\Connection::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['getPdo'])
-            ->getMock();
-        $connection->method('getPdo')->willReturn($pdo);
+        $database->beginTransaction();
+        $connection->table('sample')->insert(['label' => 'committed']);
+        $database->commit();
+        $this->assertSame('committed', $connection->table('sample')->value('label'));
+    }
 
-        $capsule = $this->getMockBuilder(Capsule::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['getConnection'])
-            ->getMock();
-        $capsule->method('getConnection')->willReturn($connection);
+    private function database(): DatabaseService
+    {
+        $manager = new Manager();
+        $manager->addConnection(['driver' => 'sqlite', 'database' => ':memory:']);
 
-        $db = new DatabaseService($capsule);
-        $this->assertFalse($db->isConnected());
+        return new DatabaseService($manager);
     }
 }

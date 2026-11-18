@@ -26,6 +26,31 @@ use CarbonTrack\Support\ErrorResponseBuilder;
 use Slim\Middleware\ErrorMiddleware;
 use Slim\Exception\HttpException;
 
+if (!defined('CARBONTRACK_NO_EMIT')) {
+    define('CARBONTRACK_NO_EMIT', false);
+}
+
+if (CARBONTRACK_NO_EMIT === false) {
+    set_exception_handler(static function (Throwable $exception): void {
+        $message = class_exists(DatabaseService::class, false)
+            ? DatabaseService::exceptionMessage($exception)
+            : $exception->getMessage();
+        error_log(sprintf(
+            '[CarbonTrack] Unhandled request failure %s (%s:%d) %s',
+            get_class($exception),
+            $exception->getFile(),
+            $exception->getLine(),
+            str_replace(["\r", "\n"], ' ', $message)
+        ));
+
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: ' . APP_JSON);
+            echo '{"success":false,"error":"Internal server error"}';
+        }
+    });
+}
+
 require_once __DIR__ . '/../vendor/autoload.php';
 
 // Load environment variables (with fallback)
@@ -45,8 +70,15 @@ $_SERVER['APP_ENV'] = $resolvedAppEnv;
 putenv('APP_ENV=' . $resolvedAppEnv);
 $isProduction = $resolvedAppEnv === 'production';
 
-if (!defined('CARBONTRACK_NO_EMIT')) {
-    define('CARBONTRACK_NO_EMIT', false);
+$databaseExtension = ($_ENV['DB_CONNECTION'] ?? 'mysql') === 'sqlite' ? 'pdo_sqlite' : 'pdo_mysql';
+if (!extension_loaded($databaseExtension)) {
+    throw new RuntimeException(sprintf(
+        'Enable PHP extension %s. PHP %s (%s) loaded %s.',
+        $databaseExtension,
+        PHP_VERSION,
+        PHP_SAPI,
+        php_ini_loaded_file() ?: 'no php.ini'
+    ));
 }
 
 // Create Container and register dependencies before creating the app
@@ -81,7 +113,7 @@ try {
     ));
     $app->add(new LoggingMiddleware($logger));
 } catch (\Exception $e) {
-    error_log('Failed to create application middleware: ' . $e->getMessage());
+    error_log('Failed to create application middleware: ' . DatabaseService::exceptionMessage($e));
 }
 
 // 4. Body Parsing Middleware - Added after application middleware so, under
@@ -126,13 +158,16 @@ $errorMiddleware->setDefaultErrorHandler(
             $els = $container->get(ErrorLogService::class);
             $els->logException($exception, $request);
         } catch (Throwable $e) {
-            error_log('Failed to persist unhandled exception: ' . $e->getMessage());
+            error_log('Failed to persist unhandled exception: ' . DatabaseService::exceptionMessage($e));
         }
 
         try {
             if ($container->has(LoggerInterface::class)) {
                 $container->get(LoggerInterface::class)->error('Unhandled application exception', [
-                    'exception' => $exception,
+                    'exception_type' => get_class($exception),
+                    'error' => DatabaseService::exceptionMessage($exception),
+                    'file' => $exception->getFile(),
+                    'line' => $exception->getLine(),
                     'environment' => $resolvedAppEnv,
                     'display_error_details' => $displayErrorDetails,
                     'log_errors' => $logErrors,
@@ -140,7 +175,7 @@ $errorMiddleware->setDefaultErrorHandler(
                 ]);
             }
         } catch (Throwable $loggerEx) {
-            error_log('Failed to log exception via logger: ' . $loggerEx->getMessage());
+            error_log('Failed to log exception via logger: ' . DatabaseService::exceptionMessage($loggerEx));
         }
 
         $response = new \Slim\Psr7\Response();

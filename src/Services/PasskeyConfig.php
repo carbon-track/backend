@@ -163,11 +163,6 @@ class PasskeyConfig
         return $values !== [] ? $values : self::DEFAULT_TRANSPORTS;
     }
 
-    public function getPreferredLibraryPackage(): string
-    {
-        return 'web-auth/webauthn-lib';
-    }
-
     private function getBool(string $key, bool $default): bool
     {
         if (!array_key_exists($key, $this->env)) {

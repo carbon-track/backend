@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Models;
 
-use PDO;
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\InputValueNormalizer;
 use Psr\Log\LoggerInterface;
@@ -12,13 +14,13 @@ use Slim\Psr7\Factory\ServerRequestFactory;
 
 class Avatar
 {
-    private PDO $db;
+    private Connection $db;
 
     private LoggerInterface $logger;
 
     private ?ErrorLogService $errorLogService;
 
-    public function __construct(PDO $db, LoggerInterface $logger, ?ErrorLogService $errorLogService = null)
+    public function __construct(Connection $db, LoggerInterface $logger, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->logger = $logger;
@@ -51,9 +53,7 @@ class Avatar
         $sql .= " ORDER BY sort_order ASC, id ASC";
         
         try {
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
-            $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $result = DatabaseRows::all($this->db->select($sql, $params));
             
             return $result;
         } catch (\Exception $e) {
@@ -67,15 +67,13 @@ class Avatar
      */
     public function getAvatarById(int $avatarId): ?array
     {
-        $stmt = $this->db->prepare("
+
+        $avatar = DatabaseRows::one($this->db->selectOne("
             SELECT id, uuid, name, description, file_path, thumbnail_path, 
                    category, sort_order, is_default, is_active
             FROM avatars 
             WHERE id = ? AND deleted_at IS NULL
-        ");
-        $stmt->execute([$avatarId]);
-        
-        $avatar = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", [$avatarId]));
         return $avatar ?: null;
     }
 
@@ -84,15 +82,13 @@ class Avatar
      */
     public function getAvatarByUuid(string $uuid): ?array
     {
-        $stmt = $this->db->prepare("
+
+        $avatar = DatabaseRows::one($this->db->selectOne("
             SELECT id, uuid, name, description, file_path, thumbnail_path, 
                    category, sort_order, is_default, is_active
             FROM avatars 
             WHERE uuid = ? AND deleted_at IS NULL
-        ");
-        $stmt->execute([$uuid]);
-        
-        $avatar = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", [$uuid]));
         return $avatar ?: null;
     }
 
@@ -101,16 +97,14 @@ class Avatar
      */
     public function getDefaultAvatar(): ?array
     {
-        $stmt = $this->db->prepare("
+
+        $avatar = DatabaseRows::one($this->db->selectOne("
             SELECT id, uuid, name, description, file_path, thumbnail_path, 
                    category, sort_order, is_default
             FROM avatars 
             WHERE is_default = 1 AND is_active = 1 AND deleted_at IS NULL
             LIMIT 1
-        ");
-        $stmt->execute();
-        
-        $avatar = $stmt->fetch(PDO::FETCH_ASSOC);
+        "));
         return $avatar ?: null;
     }
 
@@ -119,16 +113,14 @@ class Avatar
      */
     public function getAvatarCategories(): array
     {
-        $stmt = $this->db->prepare("
+
+        return DatabaseRows::all($this->db->select("
             SELECT DISTINCT category, COUNT(*) as count
             FROM avatars 
             WHERE is_active = 1 AND deleted_at IS NULL
             GROUP BY category
             ORDER BY category ASC
-        ");
-        $stmt->execute();
-        
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        "));
     }
 
     /**
@@ -136,14 +128,12 @@ class Avatar
      */
     public function isAvatarAvailable(int $avatarId): bool
     {
-        $stmt = $this->db->prepare("
+
+        $result = DatabaseRows::one($this->db->selectOne("
             SELECT COUNT(*) as count
             FROM avatars 
             WHERE id = ? AND is_active = 1 AND deleted_at IS NULL
-        ");
-        $stmt->execute([$avatarId]);
-        
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", [$avatarId]));
         return $result['count'] > 0;
     }
 
@@ -163,15 +153,15 @@ class Avatar
                 $this->clearDefaultAvatarFlags();
             }
 
-            $stmt = $this->db->prepare("
+
+
+            $avatarId = DatabaseService::insertGetId($this->db, "
                 INSERT INTO avatars (
                     uuid, name, description, file_path, thumbnail_path, 
                     category, sort_order, is_active, is_default, 
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-            ");
-            
-            $stmt->execute([
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ", [
                 $uuid,
                 $data['name'],
                 $data['description'] ?? null,
@@ -182,8 +172,6 @@ class Avatar
                 $data['is_active'] ?? 1,
                 $data['is_default'] ?? 0
             ]);
-
-            $avatarId = (int)$this->db->lastInsertId();
 
             if ($transactionStarted) {
                 $this->db->commit();
@@ -212,7 +200,7 @@ class Avatar
             return false;
         }
         
-        $fields[] = "updated_at = NOW()";
+        $fields[] = "updated_at = CURRENT_TIMESTAMP";
         $params[] = $avatarId;
         
         try {
@@ -223,8 +211,7 @@ class Avatar
             }
 
             $sql = "UPDATE avatars SET " . implode(', ', $fields) . " WHERE id = ? AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $result = $stmt->execute($params);
+            $result = $this->db->statement($sql, $params);
 
             if ($transactionStarted) {
                 $this->db->commit();
@@ -245,15 +232,13 @@ class Avatar
      */
     public function getUsersAssignedToAvatar(int $avatarId): array
     {
-        $stmt = $this->db->prepare("
+
+        return DatabaseRows::all($this->db->select("
             SELECT id, username, email
             FROM users
             WHERE avatar_id = ? AND deleted_at IS NULL
             ORDER BY id ASC
-        ");
-        $stmt->execute([$avatarId]);
-
-        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ", [$avatarId])) ?: [];
     }
 
     /**
@@ -272,7 +257,7 @@ class Avatar
             ];
         }
 
-        $fields[] = "updated_at = NOW()";
+        $fields[] = "updated_at = CURRENT_TIMESTAMP";
         $params[] = $avatarId;
 
         $this->db->beginTransaction();
@@ -293,18 +278,15 @@ class Avatar
             }
 
             $sql = "UPDATE avatars SET " . implode(', ', $fields) . " WHERE id = ? AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
+            $this->db->statement($sql, $params);
 
             $affectedRows = 0;
             if ($affectedUsers !== []) {
-                $stmt = $this->db->prepare("
+                $affectedRows = $this->db->affectingStatement("
                     UPDATE users
-                    SET avatar_id = ?, updated_at = NOW()
+                    SET avatar_id = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE avatar_id = ? AND deleted_at IS NULL
-                ");
-                $stmt->execute([$fallbackAvatarId, $avatarId]);
-                $affectedRows = $stmt->rowCount();
+                ", [$fallbackAvatarId, $avatarId]);
             }
 
             $this->db->commit();
@@ -326,16 +308,14 @@ class Avatar
     private function lockUsersAssignedToAvatar(int $avatarId): array
     {
         $lockClause = $this->rowLockClause();
-        $stmt = $this->db->prepare("
+
+        return DatabaseRows::all($this->db->select("
             SELECT id, username, email
             FROM users
             WHERE avatar_id = ? AND deleted_at IS NULL
             ORDER BY id ASC
             {$lockClause}
-        ");
-        $stmt->execute([$avatarId]);
-
-        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ", [$avatarId])) ?: [];
     }
 
     /**
@@ -360,9 +340,7 @@ class Avatar
 
         $sql .= " ORDER BY sort_order ASC, id ASC LIMIT 1" . $this->rowLockClause();
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        $fallbackAvatar = $stmt->fetch(PDO::FETCH_ASSOC);
+        $fallbackAvatar = DatabaseRows::one($this->db->selectOne($sql, $params));
 
         return is_array($fallbackAvatar) ? $fallbackAvatar : null;
     }
@@ -370,7 +348,7 @@ class Avatar
     private function rowLockClause(): string
     {
         try {
-            $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+            $driver = strtolower((string) $this->db->getDriverName());
         } catch (\Throwable) {
             return '';
         }
@@ -434,35 +412,30 @@ class Avatar
     public function deleteAvatar(int $avatarId): bool
     {
         // 检查是否有用户正在使用此头像
-        $stmt = $this->db->prepare("
+        $result = DatabaseRows::one($this->db->selectOne("
             SELECT COUNT(*) as count 
             FROM users 
             WHERE avatar_id = ? AND deleted_at IS NULL
-        ");
-        $stmt->execute([$avatarId]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", [$avatarId]));
         
         if ($result['count'] > 0) {
             // 如果有用户使用，将他们的头像改为默认头像
             $defaultAvatar = $this->getDefaultAvatar();
             if ($defaultAvatar) {
-                $stmt = $this->db->prepare("
+                $this->db->statement("
                     UPDATE users 
-                    SET avatar_id = ?, updated_at = NOW() 
+                    SET avatar_id = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE avatar_id = ? AND deleted_at IS NULL
-                ");
-                $stmt->execute([$defaultAvatar['id'], $avatarId]);
+                ", [$defaultAvatar['id'], $avatarId]);
             }
         }
         
         // 软删除头像
-        $stmt = $this->db->prepare("
+        return $this->db->statement("
             UPDATE avatars 
-            SET deleted_at = NOW(), updated_at = NOW() 
+            SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND deleted_at IS NULL
-        ");
-        
-        return $stmt->execute([$avatarId]);
+        ", [$avatarId]);
     }
 
     /**
@@ -470,13 +443,11 @@ class Avatar
      */
     public function restoreAvatar(int $avatarId): bool
     {
-        $stmt = $this->db->prepare("
+        return $this->db->statement("
             UPDATE avatars 
-            SET deleted_at = NULL, updated_at = NOW() 
+            SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND deleted_at IS NOT NULL
-        ");
-        
-        return $stmt->execute([$avatarId]);
+        ", [$avatarId]);
     }
 
     /**
@@ -490,18 +461,18 @@ class Avatar
             $this->clearDefaultAvatarFlags($avatarId);
             
             // 设置新的默认头像
-            $stmt = $this->db->prepare("
+            $this->db->statement("
                 UPDATE avatars 
-                SET is_default = 1, updated_at = NOW() 
+                SET is_default = 1, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND deleted_at IS NULL
-            ");
-            $stmt->execute([$avatarId]);
+            ", [$avatarId]);
             
             $this->db->commit();
             return true;
             
         } catch (\Exception $e) {
             $this->db->rollBack();
+            $this->logErrorWithService($e, 'Failed to set the default avatar:');
             return false;
         }
     }
@@ -515,7 +486,7 @@ class Avatar
     {
         $sql = "
             UPDATE avatars
-            SET is_default = 0, updated_at = NOW()
+            SET is_default = 0, updated_at = CURRENT_TIMESTAMP
             WHERE deleted_at IS NULL AND is_default = 1
         ";
 
@@ -526,8 +497,7 @@ class Avatar
             $params[] = $excludeAvatarId;
         }
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        $this->db->statement($sql, $params);
     }
 
     /**
@@ -538,14 +508,14 @@ class Avatar
         $this->db->beginTransaction();
         
         try {
-            $stmt = $this->db->prepare("
+            $sortSql = "
                 UPDATE avatars 
-                SET sort_order = ?, updated_at = NOW() 
+                SET sort_order = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND deleted_at IS NULL
-            ");
+            ";
             
             foreach ($sortOrders as $avatarId => $sortOrder) {
-                $stmt->execute([$sortOrder, $avatarId]);
+                $this->db->statement($sortSql, [$sortOrder, $avatarId]);
             }
             
             $this->db->commit();
@@ -553,6 +523,7 @@ class Avatar
             
         } catch (\Exception $e) {
             $this->db->rollBack();
+            $this->logErrorWithService($e, 'Failed to update avatar sort orders:');
             return false;
         }
     }
@@ -562,7 +533,8 @@ class Avatar
      */
     public function getAvatarUsageStats(): array
     {
-        $stmt = $this->db->prepare("
+
+        return DatabaseRows::all($this->db->select("
             SELECT 
                 a.id,
                 a.name,
@@ -575,10 +547,7 @@ class Avatar
             WHERE a.deleted_at IS NULL
             GROUP BY a.id, a.name, a.category, a.is_default, a.is_active
             ORDER BY user_count DESC, a.sort_order ASC
-        ");
-        $stmt->execute();
-        
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        "));
     }
 
     /**
@@ -607,14 +576,14 @@ class Avatar
                 return;
             } catch (\Throwable $loggingError) {
                 $this->logger->error('ErrorLogService logging failed for avatar model', [
-                    'message' => $loggingError->getMessage(),
+                    'message' => DatabaseService::exceptionMessage($loggingError),
                     'context_message' => $contextMessage,
                     'exception_type' => get_class($loggingError),
                 ]);
             }
         }
 
-        $this->logger->error(trim($contextMessage . ' ' . $exception->getMessage()), [
+        $this->logger->error(trim($contextMessage . ' ' . DatabaseService::exceptionMessage($exception)), [
             'exception_type' => get_class($exception),
             'exception_file' => $exception->getFile(),
             'exception_line' => $exception->getLine(),

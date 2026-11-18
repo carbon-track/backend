@@ -4,17 +4,18 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use Illuminate\Database\QueryException;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
 use Monolog\Logger;
-use PDO;
-use PDOException;
 
 class CheckinService
 {
-    private PDO $db;
+    private Connection $db;
     private ?Logger $logger;
     private DateTimeZone $timezone;
     private string $driver;
@@ -22,7 +23,7 @@ class CheckinService
     private ?ErrorLogService $errorLogService;
 
     public function __construct(
-        PDO $db,
+        Connection $db,
         ?Logger $logger = null,
         ?string $timezone = null,
         ?AuditLogService $auditLogService = null,
@@ -39,7 +40,7 @@ class CheckinService
         }
         $this->timezone = new DateTimeZone($tzName);
         try {
-            $this->driver = (string) $db->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $this->driver = (string) $db->getDriverName();
         } catch (\Throwable $e) {
             $this->driver = 'mysql';
         }
@@ -94,9 +95,7 @@ class CheckinService
                 GROUP BY cr.user_id, DATE(cr.created_at)";
 
         try {
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['uid' => $userId]);
-            $count = $stmt->rowCount();
+            $count = $this->db->affectingStatement($sql, ['uid' => $userId]);
             if ($count > 0) {
                 $this->logAudit('checkin_sync_completed', [
                     'user_id' => $userId,
@@ -113,41 +112,37 @@ class CheckinService
                 'user_id' => $userId,
             ]);
             $this->log('Checkin sync failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'user_id' => $userId,
             ]);
             return 0;
         }
     }
 
-    public function getConnection(): PDO
+    public function getConnection(): Connection
     {
         return $this->db;
     }
 
     public function hasCheckin(int $userId, string $date): bool
     {
-        $stmt = $this->db->prepare("SELECT 1 FROM user_checkins WHERE user_id = :uid AND checkin_date = :cdate LIMIT 1");
-        $stmt->execute([
+        return (bool) DatabaseRows::scalar($this->db->selectOne("SELECT 1 FROM user_checkins WHERE user_id = :uid AND checkin_date = :cdate LIMIT 1", [
             'uid' => $userId,
             'cdate' => $date,
-        ]);
-        return (bool) $stmt->fetchColumn();
+        ]));
     }
 
     public function getCheckinsForRange(int $userId, string $startDate, string $endDate): array
     {
-        $stmt = $this->db->prepare("SELECT checkin_date, source, created_at, record_id, notes
+
+        $rows = DatabaseRows::all($this->db->select("SELECT checkin_date, source, created_at, record_id, notes
             FROM user_checkins
             WHERE user_id = :uid AND checkin_date BETWEEN :start AND :end
-            ORDER BY checkin_date ASC");
-        $stmt->execute([
+            ORDER BY checkin_date ASC", [
             'uid' => $userId,
             'start' => $startDate,
             'end' => $endDate,
-        ]);
-
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ])) ?: [];
         return array_map(static function (array $row): array {
             return [
                 'date' => $row['checkin_date'] ?? null,
@@ -191,9 +186,7 @@ class CheckinService
 
     private function getUserCheckinDates(int $userId): array
     {
-        $stmt = $this->db->prepare("SELECT checkin_date FROM user_checkins WHERE user_id = :uid ORDER BY checkin_date ASC");
-        $stmt->execute(['uid' => $userId]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = DatabaseRows::all($this->db->select("SELECT checkin_date FROM user_checkins WHERE user_id = :uid ORDER BY checkin_date ASC", ['uid' => $userId])) ?: [];
         $dates = [];
         foreach ($rows as $row) {
             $date = $row['checkin_date'] ?? null;
@@ -206,13 +199,11 @@ class CheckinService
 
     private function getUserCheckinSummary(int $userId): array
     {
-        $stmt = $this->db->prepare("SELECT
+        $row = DatabaseRows::one($this->db->selectOne("SELECT
                 COUNT(*) AS total_days,
                 SUM(CASE WHEN source = 'makeup' THEN 1 ELSE 0 END) AS makeup_days,
                 MAX(checkin_date) AS last_checkin_date
-            FROM user_checkins WHERE user_id = :uid");
-        $stmt->execute(['uid' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            FROM user_checkins WHERE user_id = :uid", ['uid' => $userId])) ?: [];
 
         return [
             'total_days' => (int) ($row['total_days'] ?? 0),
@@ -296,16 +287,14 @@ class CheckinService
                 VALUES (:uid, :cdate, :source, :record_id, :notes, :created_at)";
 
         try {
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
+            $inserted = $this->db->affectingStatement($sql, [
                 'uid' => $userId,
                 'cdate' => $date,
                 'source' => $source,
                 'record_id' => $recordId,
                 'notes' => $notes,
                 'created_at' => $createdAt->format('Y-m-d H:i:s'),
-            ]);
-            $inserted = $stmt->rowCount() > 0;
+            ]) > 0;
             if ($inserted) {
                 $this->logAudit('checkin_record_persisted', [
                     'user_id' => $userId,
@@ -316,7 +305,7 @@ class CheckinService
             }
 
             return $inserted;
-        } catch (PDOException $e) {
+        } catch (QueryException $e) {
             $this->logAudit('checkin_persist_failed', [
                 'user_id' => $userId,
                 'checkin_date' => $date,
@@ -330,7 +319,7 @@ class CheckinService
                 'record_id' => $recordId,
             ]);
             $this->log('Checkin insert failed', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'user_id' => $userId,
                 'checkin_date' => $date,
                 'source' => $source,
@@ -342,7 +331,7 @@ class CheckinService
         }
     }
 
-    private function isUniqueConstraintViolation(PDOException $e): bool
+    private function isUniqueConstraintViolation(QueryException $e): bool
     {
         $sqlState = (string) ($e->errorInfo[0] ?? $e->getCode());
         $driverCode = (string) ($e->errorInfo[1] ?? '');
@@ -359,7 +348,7 @@ class CheckinService
         }
 
         return $sqlState === '23000'
-            && stripos($e->getMessage(), 'UNIQUE constraint failed') !== false;
+            && stripos(DatabaseService::exceptionMessage($e), 'UNIQUE constraint failed') !== false;
     }
 
     private function formatDate(DateTimeInterface $date): string

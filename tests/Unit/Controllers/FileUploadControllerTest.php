@@ -1869,7 +1869,7 @@ class FileUploadControllerTest extends TestCase
             'parts' => [['part_number' => 1, 'etag' => 'etag-1']],
         ]);
         $originalFailure = new \RuntimeException('Could not fetch storage metadata');
-        $cleanupFailure = new \PDOException('Could not delete multipart tracking row');
+        $cleanupFailure = new \RuntimeException('Could not delete multipart tracking row');
         $multipart = $this->createMock(MultipartUploadService::class);
         $multipart->method('findActiveUpload')->with($uploadId)->willReturn($upload);
         $multipart->expects($this->once())->method('clearUpload')->with($uploadId)->willThrowException($cleanupFailure);

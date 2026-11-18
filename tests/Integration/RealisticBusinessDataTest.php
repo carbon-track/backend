@@ -69,7 +69,7 @@ class RealisticBusinessDataTest extends TestCase
             // Initialize unified minimal schema + seed BEFORE app boot
             /** @var DatabaseService $dbServiceSchema */
             $dbServiceSchema = $this->container->get(DatabaseService::class);
-            TestSchemaBuilder::init($dbServiceSchema->getConnection()->getPdo());
+            TestSchemaBuilder::init($dbServiceSchema->getConnection());
 
             // Create Slim app
             $this->app = \Slim\Factory\AppFactory::createFromContainer($this->container);

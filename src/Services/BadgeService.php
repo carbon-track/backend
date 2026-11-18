@@ -9,7 +9,6 @@ use CarbonTrack\Models\UserBadge;
 use CarbonTrack\Models\User;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Illuminate\Database\ConnectionInterface;
-use PDO;
 use DateTimeImmutable;
 use DateTimeZone;
 use CarbonTrack\Services\CheckinService;
@@ -323,7 +322,7 @@ class BadgeService
             $metrics['total_points_earned'] = (float) ($row['points_earned'] ?? 0);
         } catch (\Throwable $e) {
             $this->logFailure('badge_metrics_compile_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/carbon');
-            $this->logger->warning('Failed to compile carbon metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->warning('Failed to compile carbon metrics', ['user_id' => $userId, 'error' => DatabaseService::exceptionMessage($e)]);
         }
         
         // Compute Checkin Streaks
@@ -334,13 +333,13 @@ class BadgeService
                 $metrics['longest_streak'] = (int) ($streakStats['longest_streak_days'] ?? 0);
             } catch (\Throwable $e) {
                 $this->logFailure('badge_metrics_streak_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/streak');
-                $this->logger->warning('Failed to get streak stats for metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
+                $this->logger->warning('Failed to get streak stats for metrics', ['user_id' => $userId, 'error' => DatabaseService::exceptionMessage($e)]);
             }
         }
 
         $daysFromSql = null;
         try {
-            $diffRows = $this->connection->select("SELECT TIMESTAMPDIFF(DAY, created_at, NOW()) AS diff_days FROM users WHERE id = :user_id LIMIT 1", ['user_id' => $userId]);
+            $diffRows = $this->connection->select("SELECT TIMESTAMPDIFF(DAY, created_at, CURRENT_TIMESTAMP) AS diff_days FROM users WHERE id = :user_id LIMIT 1", ['user_id' => $userId]);
             if (!empty($diffRows)) {
                 $diffRow = (array) $diffRows[0];
                 $rawDays = $diffRow['diff_days'] ?? ($diffRow['days'] ?? ($diffRow['DIFF_DAYS'] ?? null));
@@ -351,7 +350,7 @@ class BadgeService
             }
         } catch (\Throwable $e) {
             $this->logFailure('badge_metrics_registration_days_sql_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/registration-days-sql');
-            $this->logger->debug('Failed to compute registration days via SQL', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->debug('Failed to compute registration days via SQL', ['user_id' => $userId, 'error' => DatabaseService::exceptionMessage($e)]);
         }
 
         try {
@@ -378,13 +377,13 @@ class BadgeService
                         }
                     } catch (\Throwable $dtEx) {
                         $this->logFailure('badge_metrics_registration_days_php_failed', $dtEx, ['user_id' => $userId], '/internal/badges/metrics/registration-days-php');
-                        $this->logger->debug('Failed to compute registration days via PHP fallback', ['user_id' => $userId, 'error' => $dtEx->getMessage()]);
+                        $this->logger->debug('Failed to compute registration days via PHP fallback', ['user_id' => $userId, 'error' => DatabaseService::exceptionMessage($dtEx)]);
                     }
                 }
             }
         } catch (\Throwable $e) {
             $this->logFailure('badge_metrics_user_profile_failed', $e, ['user_id' => $userId], '/internal/badges/metrics/user-profile');
-            $this->logger->warning('Failed to read user profile for metrics', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->warning('Failed to read user profile for metrics', ['user_id' => $userId, 'error' => DatabaseService::exceptionMessage($e)]);
         }
 
         return $metrics;
@@ -589,7 +588,7 @@ class BadgeService
                 'badge_id' => (int) $badge->id,
                 'source' => $source,
             ], '/internal/badges/messages');
-            $this->logger->error('Failed to send badge message', ['user_id' => $user->id, 'badge_id' => $badge->id, 'error' => $e->getMessage()]);
+            $this->logger->error('Failed to send badge message', ['user_id' => $user->id, 'badge_id' => $badge->id, 'error' => DatabaseService::exceptionMessage($e)]);
         }
     }
 

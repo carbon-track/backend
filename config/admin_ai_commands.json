@@ -1233,7 +1233,7 @@
     {
       "name": "search_system_logs",
       "label": "Search system logs",
-      "description": "Search admin audit, LLM, and error logs by keyword, conversation, or request id.",
+      "description": "Search admin audit, LLM, and error logs by keyword, conversation, or request id. Count admin_ai_conversation_viewed records with status success as completed conversation views. Rejected conversation IDs use admin_ai_conversation_view_failed. Admin read actions include admin_pending_transactions_viewed, admin_carbon_records_viewed, admin_carbon_record_viewed, admin_exchange_records_viewed, admin_exchange_record_viewed, admin_user_overview_viewed, admin_user_badges_viewed, admin_broadcast_history_viewed, and admin_broadcast_recipients_searched.",
       "api": {
         "method": "GET",
         "path": "/api/v1/admin/logs/search",

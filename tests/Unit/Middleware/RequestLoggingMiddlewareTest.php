@@ -171,6 +171,46 @@ class RequestLoggingMiddlewareTest extends TestCase
         $this->assertNotEmpty($response->getHeaderLine('X-Request-ID'));
     }
 
+    /** @backupGlobals enabled */
+    public function testFiltersCredentialsBeforePassingSnapshotToWriter(): void
+    {
+        $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer fixture-token';
+        $_SERVER['HTTP_COOKIE'] = 'session=fixture-cookie';
+        $systemLog = $this->createMock(SystemLogService::class);
+        $systemLog->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool => $entry['request_body'] === [
+                'title' => 'Fixture title',
+                'nested' => ['password' => '[REDACTED]'],
+            ]
+                && $entry['response_body'] === ['success' => true, 'token' => '[REDACTED]']
+                && $entry['server_params']['HTTP_AUTHORIZATION'] === '[REDACTED]'
+                && $entry['server_params']['HTTP_COOKIE'] === '[REDACTED]'
+        ));
+
+        $middleware = new RequestLoggingMiddleware(
+            $systemLog,
+            $this->createMock(AuthService::class),
+            $this->createMock(Logger::class)
+        );
+        $handler = new class implements RequestHandlerInterface {
+            public function handle(ServerRequestInterface $request): \Psr\Http\Message\ResponseInterface
+            {
+                $response = new Response(200);
+                $response->getBody()->write('{"success":true,"token":"fixture-response-token"}');
+                return $response;
+            }
+        };
+        $request = makeRequest('POST', '/api/v1/fixture', [
+            'title' => 'Fixture title',
+            'nested' => ['password' => 'fixture-password'],
+        ]);
+
+        $response = $middleware->process($request, $handler);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('{"success":true,"token":"fixture-response-token"}', (string) $response->getBody());
+    }
+
     public function testDropsBodiesForCredentialRoutes(): void
     {
         $systemLog = $this->createMock(SystemLogService::class);

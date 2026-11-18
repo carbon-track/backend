@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\SupportAssigneeProfile;
 use CarbonTrack\Models\SupportRoutingSetting;
 use CarbonTrack\Models\SupportTicketAutomationRule;
@@ -11,7 +13,6 @@ use CarbonTrack\Models\SupportTicketTag;
 use CarbonTrack\Models\SupportTicketTagAssignment;
 use DateTimeImmutable;
 use DateTimeZone;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class SupportAutomationService
@@ -19,7 +20,7 @@ class SupportAutomationService
     private const VALID_COLORS = ['slate', 'emerald', 'sky', 'amber', 'rose', 'violet'];
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private LoggerInterface $logger,
         private AuditLogService $auditLogService,
         private ErrorLogService $errorLogService,
@@ -29,7 +30,8 @@ class SupportAutomationService
 
     public function listAssignableUsers(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(fn (array $row): array => $this->formatAssignableUser($row), DatabaseRows::all($this->db->select("
             SELECT
                 u.id,
                 u.uuid,
@@ -96,14 +98,12 @@ class SupportAutomationService
                 feedback.avg_rating,
                 feedback.rating_count
             ORDER BY u.is_admin DESC, COALESCE(u.username, u.email, '') ASC, u.id ASC
-        ");
-
-        return array_map(fn (array $row): array => $this->formatAssignableUser($row), $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     public function getAssignableUserDetail(int $userId): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 u.id,
                 u.uuid,
@@ -173,9 +173,7 @@ class SupportAutomationService
                 feedback.avg_rating,
                 feedback.rating_count
             LIMIT 1
-        ");
-        $stmt->execute(['id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['id' => $userId]));
         if (!$row) {
             return null;
         }
@@ -307,7 +305,8 @@ class SupportAutomationService
 
     public function listTags(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(fn (array $row): array => $this->formatTag($row), DatabaseRows::all($this->db->select("
             SELECT
                 t.*,
                 COUNT(DISTINCT sta.ticket_id) AS ticket_count
@@ -315,9 +314,7 @@ class SupportAutomationService
             LEFT JOIN support_ticket_tag_assignments sta ON sta.tag_id = t.id
             GROUP BY t.id
             ORDER BY t.is_active DESC, t.name ASC, t.id ASC
-        ");
-
-        return array_map(fn (array $row): array => $this->formatTag($row), $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     public function saveTag(array $actor, array $payload, ?int $tagId = null): array
@@ -333,13 +330,12 @@ class SupportAutomationService
         $description = $this->nullableString($payload['description'] ?? null);
         $isActive = array_key_exists('is_active', $payload) ? (bool) $payload['is_active'] : (bool) ($existing['is_active'] ?? true);
 
-        $duplicateStmt = $this->db->prepare('SELECT id FROM support_ticket_tags WHERE slug = :slug AND (:tag_id_null IS NULL OR id <> :tag_id_compare) LIMIT 1');
-        $duplicateStmt->execute([
+        $duplicateRow = $this->db->selectOne('SELECT id FROM support_ticket_tags WHERE slug = :slug AND (:tag_id_null IS NULL OR id <> :tag_id_compare) LIMIT 1', [
             'slug' => $slug,
             'tag_id_null' => $tagId,
             'tag_id_compare' => $tagId,
         ]);
-        if ($duplicateStmt->fetchColumn()) {
+        if (DatabaseRows::scalar($duplicateRow)) {
             throw new \InvalidArgumentException('Tag slug already exists');
         }
 
@@ -387,7 +383,7 @@ class SupportAutomationService
 
     public function listRules(): array
     {
-        $stmt = $this->db->query("
+        $rows = DatabaseRows::all($this->db->select("
             SELECT
                 r.*,
                 assignee.username AS assignee_username,
@@ -395,8 +391,7 @@ class SupportAutomationService
             FROM support_ticket_automation_rules r
             LEFT JOIN users assignee ON assignee.id = r.assign_to
             ORDER BY r.sort_order ASC, r.id ASC
-        ");
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ")) ?: [];
 
         return array_map(fn (array $row): array => $this->formatRule($row), $rows);
     }
@@ -500,7 +495,7 @@ class SupportAutomationService
             throw new SupportOperationException('Ticket not found');
         }
 
-        $rulesStmt = $this->db->query("
+        $rules = DatabaseRows::all($this->db->select("
             SELECT
                 r.*,
                 assignee.username AS assignee_username,
@@ -509,8 +504,7 @@ class SupportAutomationService
             LEFT JOIN users assignee ON assignee.id = r.assign_to
             WHERE r.is_active = 1
             ORDER BY r.sort_order ASC, r.id ASC
-        ");
-        $rules = $rulesStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ")) ?: [];
 
         $ticketTags = $this->getTagsForTicketIds([$ticketId]);
         $applied = [];
@@ -604,9 +598,7 @@ class SupportAutomationService
             WHERE sta.ticket_id IN (' . implode(',', array_fill(0, count($ticketIds), '?')) . ')
             ORDER BY t.name ASC, t.id ASC
         ';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($ticketIds);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = DatabaseRows::all($this->db->select($sql, $ticketIds)) ?: [];
 
         $tagsByTicket = [];
         foreach ($rows as $row) {
@@ -622,7 +614,7 @@ class SupportAutomationService
 
     private function summaryMetrics(): array
     {
-        $stmt = $this->db->query("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
@@ -635,12 +627,10 @@ class SupportAutomationService
                 SUM(CASE WHEN assignment_source = 'manual' THEN 1 ELSE 0 END) AS manual_assigned_count,
                 SUM(CASE WHEN sla_status IN ('breached', 'escalated') THEN 1 ELSE 0 END) AS sla_breach_count
             FROM support_tickets
-        ");
-        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        ")) ?: [];
 
         $avgResolutionHours = null;
-        $resolutionStmt = $this->db->query('SELECT created_at, resolved_at FROM support_tickets WHERE resolved_at IS NOT NULL');
-        $resolutionRows = $resolutionStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $resolutionRows = DatabaseRows::all($this->db->select('SELECT created_at, resolved_at FROM support_tickets WHERE resolved_at IS NOT NULL')) ?: [];
         if ($resolutionRows !== []) {
             $hours = [];
             foreach ($resolutionRows as $resolutionRow) {
@@ -675,15 +665,13 @@ class SupportAutomationService
     private function createdTimeline(int $days): array
     {
         $startDate = (new DateTimeImmutable('today'))->modify('-' . ($days - 1) . ' days')->format('Y-m-d 00:00:00');
-        $stmt = $this->db->prepare("
+        $rows = DatabaseRows::all($this->db->select("
             SELECT DATE(created_at) AS date_key, COUNT(*) AS ticket_count
             FROM support_tickets
             WHERE created_at >= :start_date
             GROUP BY DATE(created_at)
             ORDER BY DATE(created_at) ASC
-        ");
-        $stmt->execute(['start_date' => $startDate]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        ", ['start_date' => $startDate])) ?: [];
         $indexed = [];
         foreach ($rows as $row) {
             $indexed[(string) $row['date_key']] = (int) $row['ticket_count'];
@@ -700,22 +688,26 @@ class SupportAutomationService
 
     private function breakdown(string $field): array
     {
-        $stmt = $this->db->query("
-            SELECT {$field} AS bucket, COUNT(*) AS ticket_count
-            FROM support_tickets
-            GROUP BY {$field}
-            ORDER BY ticket_count DESC, {$field} ASC
-        ");
 
         return array_map(fn (array $row): array => [
             'key' => (string) ($row['bucket'] ?? ''),
             'count' => (int) ($row['ticket_count'] ?? 0),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ], DatabaseRows::all($this->db->select("
+            SELECT {$field} AS bucket, COUNT(*) AS ticket_count
+            FROM support_tickets
+            GROUP BY {$field}
+            ORDER BY ticket_count DESC, {$field} ASC
+        ")) ?: []);
     }
 
     private function assigneeBreakdown(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(fn (array $row): array => [
+            'id' => isset($row['assigned_to']) ? (int) $row['assigned_to'] : null,
+            'label' => (string) ($row['label'] ?? 'unassigned'),
+            'count' => (int) ($row['ticket_count'] ?? 0),
+        ], DatabaseRows::all($this->db->select("
             SELECT
                 COALESCE(u.username, 'unassigned') AS label,
                 t.assigned_to,
@@ -724,18 +716,16 @@ class SupportAutomationService
             LEFT JOIN users u ON u.id = t.assigned_to
             GROUP BY t.assigned_to, COALESCE(u.username, 'unassigned')
             ORDER BY ticket_count DESC, label ASC
-        ");
-
-        return array_map(fn (array $row): array => [
-            'id' => isset($row['assigned_to']) ? (int) $row['assigned_to'] : null,
-            'label' => (string) ($row['label'] ?? 'unassigned'),
-            'count' => (int) ($row['ticket_count'] ?? 0),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     private function agentLevelBreakdown(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(static fn (array $row): array => [
+            'level' => (int) ($row['level_bucket'] ?? 0),
+            'count' => (int) ($row['assignee_count'] ?? 0),
+        ], DatabaseRows::all($this->db->select("
             SELECT
                 COALESCE(p.level, 0) AS level_bucket,
                 COUNT(*) AS assignee_count
@@ -745,17 +735,19 @@ class SupportAutomationService
               AND (u.is_admin = 1 OR u.role IN ('support', 'admin'))
             GROUP BY COALESCE(p.level, 0)
             ORDER BY level_bucket ASC
-        ");
-
-        return array_map(static fn (array $row): array => [
-            'level' => (int) ($row['level_bucket'] ?? 0),
-            'count' => (int) ($row['assignee_count'] ?? 0),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     private function tagBreakdown(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'slug' => (string) $row['slug'],
+            'name' => (string) $row['name'],
+            'color' => (string) $row['color'],
+            'count' => (int) ($row['ticket_count'] ?? 0),
+        ], DatabaseRows::all($this->db->select("
             SELECT
                 t.id,
                 t.slug,
@@ -766,24 +758,11 @@ class SupportAutomationService
             LEFT JOIN support_ticket_tag_assignments sta ON sta.tag_id = t.id
             GROUP BY t.id
             ORDER BY ticket_count DESC, t.name ASC
-        ");
-
-        return array_map(fn (array $row): array => [
-            'id' => (int) $row['id'],
-            'slug' => (string) $row['slug'],
-            'name' => (string) $row['name'],
-            'color' => (string) $row['color'],
-            'count' => (int) ($row['ticket_count'] ?? 0),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     private function ruleHitBreakdown(): array
     {
-        $stmt = $this->db->query("
-            SELECT id, name, trigger_count, last_triggered_at, is_active
-            FROM support_ticket_automation_rules
-            ORDER BY trigger_count DESC, sort_order ASC, id ASC
-        ");
 
         return array_map(fn (array $row): array => [
             'id' => (int) $row['id'],
@@ -791,12 +770,22 @@ class SupportAutomationService
             'trigger_count' => (int) ($row['trigger_count'] ?? 0),
             'last_triggered_at' => $row['last_triggered_at'] ?? null,
             'is_active' => !empty($row['is_active']),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ], DatabaseRows::all($this->db->select("
+            SELECT id, name, trigger_count, last_triggered_at, is_active
+            FROM support_ticket_automation_rules
+            ORDER BY trigger_count DESC, sort_order ASC, id ASC
+        ")) ?: []);
     }
 
     private function routingOutcomeBreakdown(): array
     {
-        $stmt = $this->db->query("
+
+        return array_map(static fn (array $row): array => [
+            'trigger' => (string) ($row['trigger_bucket'] ?? 'unknown'),
+            'count' => (int) ($row['run_count'] ?? 0),
+            'no_winner_count' => (int) ($row['no_winner_count'] ?? 0),
+            'used_ai_count' => (int) ($row['used_ai_count'] ?? 0),
+        ], DatabaseRows::all($this->db->select("
             SELECT
                 COALESCE(`trigger`, 'unknown') AS trigger_bucket,
                 COUNT(*) AS run_count,
@@ -805,27 +794,19 @@ class SupportAutomationService
             FROM support_ticket_routing_runs
             GROUP BY COALESCE(`trigger`, 'unknown')
             ORDER BY run_count DESC, trigger_bucket ASC
-        ");
-
-        return array_map(static fn (array $row): array => [
-            'trigger' => (string) ($row['trigger_bucket'] ?? 'unknown'),
-            'count' => (int) ($row['run_count'] ?? 0),
-            'no_winner_count' => (int) ($row['no_winner_count'] ?? 0),
-            'used_ai_count' => (int) ($row['used_ai_count'] ?? 0),
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ")) ?: []);
     }
 
     private function touchRuleMetrics(int $ruleId): void
     {
-        $stmt = $this->db->prepare("
+        $now = $this->now();
+        $this->db->statement("
             UPDATE support_ticket_automation_rules
             SET trigger_count = trigger_count + 1,
                 last_triggered_at = :last_triggered_at,
                 updated_at = :updated_at
             WHERE id = :id
-        ");
-        $now = $this->now();
-        $stmt->execute([
+        ", [
             'last_triggered_at' => $now,
             'updated_at' => $now,
             'id' => $ruleId,
@@ -834,15 +815,13 @@ class SupportAutomationService
 
     private function findTicketRow(int $ticketId): ?array
     {
-        $stmt = $this->db->prepare('SELECT * FROM support_tickets WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => $ticketId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM support_tickets WHERE id = :id LIMIT 1', ['id' => $ticketId]));
         return $row ?: null;
     }
 
     private function findTagRow(int $tagId): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 t.*,
                 COUNT(DISTINCT sta.ticket_id) AS ticket_count
@@ -851,15 +830,13 @@ class SupportAutomationService
             WHERE t.id = :id
             GROUP BY t.id
             LIMIT 1
-        ");
-        $stmt->execute(['id' => $tagId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['id' => $tagId]));
         return $row ?: null;
     }
 
     private function findRuleRow(int $ruleId): ?array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 r.*,
                 assignee.username AS assignee_username,
@@ -868,9 +845,7 @@ class SupportAutomationService
             LEFT JOIN users assignee ON assignee.id = r.assign_to
             WHERE r.id = :id
             LIMIT 1
-        ");
-        $stmt->execute(['id' => $ruleId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ", ['id' => $ruleId]));
         return $row ?: null;
     }
 
@@ -883,17 +858,13 @@ class SupportAutomationService
             $params['id'] = $settingsId;
         }
         $sql .= ' ORDER BY id ASC LIMIT 1';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne($sql, $params));
         return $row ?: null;
     }
 
     private function findAssigneeProfileRow(int $userId): ?array
     {
-        $stmt = $this->db->prepare('SELECT * FROM support_assignee_profiles WHERE user_id = :user_id LIMIT 1');
-        $stmt->execute(['user_id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM support_assignee_profiles WHERE user_id = :user_id LIMIT 1', ['user_id' => $userId]));
         return $row ?: null;
     }
 
@@ -997,14 +968,6 @@ class SupportAutomationService
 
     private function recentTicketsForAssignee(int $userId): array
     {
-        $stmt = $this->db->prepare("
-            SELECT id, subject, status, priority, last_replied_at, updated_at, created_at
-            FROM support_tickets
-            WHERE assigned_to = :assigned_to
-            ORDER BY COALESCE(last_replied_at, updated_at, created_at) DESC, id DESC
-            LIMIT 10
-        ");
-        $stmt->execute(['assigned_to' => $userId]);
 
         return array_map(static fn (array $row): array => [
             'id' => (int) ($row['id'] ?? 0),
@@ -1014,12 +977,18 @@ class SupportAutomationService
             'last_replied_at' => $row['last_replied_at'] ?? null,
             'updated_at' => $row['updated_at'] ?? null,
             'created_at' => $row['created_at'] ?? null,
-        ], $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        ], DatabaseRows::all($this->db->select("
+            SELECT id, subject, status, priority, last_replied_at, updated_at, created_at
+            FROM support_tickets
+            WHERE assigned_to = :assigned_to
+            ORDER BY COALESCE(last_replied_at, updated_at, created_at) DESC, id DESC
+            LIMIT 10
+        ", ['assigned_to' => $userId])) ?: []);
     }
 
     private function feedbackSummaryForAssignee(int $userId): array
     {
-        $stmt = $this->db->prepare("
+        $row = DatabaseRows::one($this->db->selectOne("
             SELECT
                 COUNT(*) AS rating_count,
                 AVG(rating) AS avg_rating,
@@ -1031,9 +1000,7 @@ class SupportAutomationService
                 SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS rating_1_count
             FROM support_ticket_feedback
             WHERE rated_user_id = :user_id
-        ");
-        $stmt->execute(['user_id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        ", ['user_id' => $userId])) ?: [];
         $ratingCount = (int) ($row['rating_count'] ?? 0);
 
         return [
@@ -1051,30 +1018,6 @@ class SupportAutomationService
 
     private function feedbackEntriesForAssignee(int $userId, int $limit = 20): array
     {
-        $stmt = $this->db->prepare("
-            SELECT
-                f.id,
-                f.ticket_id,
-                f.user_id,
-                f.rating,
-                f.comment,
-                f.created_at,
-                f.updated_at,
-                reviewer.username AS reviewer_username,
-                reviewer.email AS reviewer_email,
-                ticket.subject AS ticket_subject,
-                ticket.status AS ticket_status,
-                ticket.priority AS ticket_priority
-            FROM support_ticket_feedback f
-            LEFT JOIN users reviewer ON reviewer.id = f.user_id AND reviewer.deleted_at IS NULL
-            INNER JOIN support_tickets ticket ON ticket.id = f.ticket_id
-            WHERE f.rated_user_id = :user_id
-            ORDER BY COALESCE(f.updated_at, f.created_at) DESC, f.id DESC
-            LIMIT :limit
-        ");
-        $stmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
-        $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
-        $stmt->execute();
 
         return array_map(static function (array $row): array {
             return [
@@ -1096,7 +1039,27 @@ class SupportAutomationService
                     'priority' => (string) ($row['ticket_priority'] ?? ''),
                 ],
             ];
-        }, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        }, DatabaseRows::all($this->db->select("
+            SELECT
+                f.id,
+                f.ticket_id,
+                f.user_id,
+                f.rating,
+                f.comment,
+                f.created_at,
+                f.updated_at,
+                reviewer.username AS reviewer_username,
+                reviewer.email AS reviewer_email,
+                ticket.subject AS ticket_subject,
+                ticket.status AS ticket_status,
+                ticket.priority AS ticket_priority
+            FROM support_ticket_feedback f
+            LEFT JOIN users reviewer ON reviewer.id = f.user_id AND reviewer.deleted_at IS NULL
+            INNER JOIN support_tickets ticket ON ticket.id = f.ticket_id
+            WHERE f.rated_user_id = :user_id
+            ORDER BY COALESCE(f.updated_at, f.created_at) DESC, f.id DESC
+            LIMIT :limit
+        ", [':user_id' => (int) $userId, ':limit' => (int) max(1, $limit)])) ?: []);
     }
 
     private function formatRule(array $row): array
@@ -1139,9 +1102,7 @@ class SupportAutomationService
             return [];
         }
 
-        $stmt = $this->db->prepare('SELECT * FROM support_ticket_tags WHERE id IN (' . implode(',', array_fill(0, count($tagIds), '?')) . ') ORDER BY name ASC');
-        $stmt->execute($tagIds);
-        return array_map(fn (array $row): array => $this->formatTag($row), $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        return array_map(fn (array $row): array => $this->formatTag($row), DatabaseRows::all($this->db->select('SELECT * FROM support_ticket_tags WHERE id IN (' . implode(',', array_fill(0, count($tagIds), '?')) . ') ORDER BY name ASC', $tagIds)) ?: []);
     }
 
     private function normalizeAssignableUser(mixed $value): ?int
@@ -1153,16 +1114,15 @@ class SupportAutomationService
         if ($userId <= 0) {
             return null;
         }
-        $stmt = $this->db->prepare("
+        $queryRow = $this->db->selectOne("
             SELECT id
             FROM users
             WHERE id = :id
               AND deleted_at IS NULL
               AND (is_admin = 1 OR role IN ('support', 'admin'))
             LIMIT 1
-        ");
-        $stmt->execute(['id' => $userId]);
-        if (!$stmt->fetchColumn()) {
+        ", ['id' => $userId]);
+        if (!DatabaseRows::scalar($queryRow)) {
             throw new \InvalidArgumentException('Assigned user must be support or admin');
         }
         return $userId;

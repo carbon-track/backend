@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
-use PDO;
 
 class StatisticsService
 {
@@ -17,7 +18,7 @@ class StatisticsService
     private DateTimeZone $timezone;
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private ?string $cacheDir = null,
         private ?int $publicTtlSeconds = null,
         private ?int $adminTtlSeconds = null,
@@ -57,7 +58,7 @@ class StatisticsService
 
             return $data;
         } catch (\Throwable $exception) {
-            $this->logAudit('statistics_admin_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => $exception->getMessage()]);
+            $this->logAudit('statistics_admin_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => DatabaseService::exceptionMessage($exception)]);
             $this->logError($exception, '/internal/statistics/admin', ['force_refresh' => $forceRefresh]);
             throw $exception;
         }
@@ -81,7 +82,7 @@ class StatisticsService
 
             return $summary;
         } catch (\Throwable $exception) {
-            $this->logAudit('statistics_public_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => $exception->getMessage()]);
+            $this->logAudit('statistics_public_failed', 'failed', ['force_refresh' => $forceRefresh, 'error' => DatabaseService::exceptionMessage($exception)]);
             $this->logError($exception, '/internal/statistics/public', ['force_refresh' => $forceRefresh]);
             throw $exception;
         }
@@ -93,62 +94,60 @@ class StatisticsService
         $thirtyDaysAgo = $now->modify('-30 days')->format('Y-m-d H:i:s');
         $sevenDaysAgo = $now->modify('-7 days')->format('Y-m-d H:i:s');
 
-        $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $driver = $this->db->getDriverName();
         $dateExpr = $driver === 'sqlite' ? "substr(created_at,1,10)" : "DATE(created_at)";
 
-        $carbonDeletedCondition = $driver === 'sqlite' ? 'deleted_at IS NULL' : "(deleted_at IS NULL OR deleted_at = '0000-00-00 00:00:00')";
-        $carbonDeletedConditionAliasedCr = $driver === 'sqlite' ? 'cr.deleted_at IS NULL' : "(cr.deleted_at IS NULL OR cr.deleted_at = '0000-00-00 00:00:00')";
-        $activityDeletedCondition = $driver === 'sqlite' ? 'deleted_at IS NULL' : "(deleted_at IS NULL OR deleted_at = '0000-00-00 00:00:00')";
+        // Legacy MySQL rows can contain a zero datetime that strict SQL mode rejects as a datetime literal.
+        $carbonDeletedCondition = $driver === 'sqlite'
+            ? 'deleted_at IS NULL'
+            : "(deleted_at IS NULL OR CAST(deleted_at AS CHAR) = '0000-00-00 00:00:00')";
+        $carbonDeletedConditionAliasedCr = $driver === 'sqlite'
+            ? 'cr.deleted_at IS NULL'
+            : "(cr.deleted_at IS NULL OR CAST(cr.deleted_at AS CHAR) = '0000-00-00 00:00:00')";
+        $activityDeletedCondition = $carbonDeletedCondition;
 
-        $stmtUser = $this->db->prepare("SELECT COUNT(*) AS total_users,
+        $userStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_users,
                 SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active_users,
                 SUM(CASE WHEN status IN ('inactive','suspended') THEN 1 ELSE 0 END) AS inactive_users,
                 SUM(CASE WHEN created_at >= :d30 THEN 1 ELSE 0 END) AS new_users_30d
-                FROM users WHERE deleted_at IS NULL");
-        $stmtUser->execute([':d30' => $thirtyDaysAgo]);
-        $userStatsRaw = $stmtUser->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM users WHERE deleted_at IS NULL", [':d30' => $thirtyDaysAgo])) ?: [];
 
-        $transactionStatsRaw = $this->db->query("SELECT COUNT(*) AS total_transactions,
+        $transactionStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_transactions,
                 SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_transactions,
                 SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_transactions,
                 SUM(CASE WHEN LOWER(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected_transactions,
                 COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN points ELSE 0 END), 0) AS total_points_awarded
-                FROM points_transactions WHERE {$activityDeletedCondition}")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM points_transactions WHERE {$activityDeletedCondition}")) ?: [];
 
-        $txWindowStmt = $this->db->prepare("SELECT COUNT(*) AS total_transactions,
+        $txWindowRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_transactions,
                 COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN points ELSE 0 END), 0) AS total_points_awarded
                 FROM points_transactions
-                WHERE {$activityDeletedCondition} AND created_at >= :d7");
-        $txWindowStmt->execute([':d7' => $sevenDaysAgo]);
-        $txWindowRaw = $txWindowStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                WHERE {$activityDeletedCondition} AND created_at >= :d7", [':d7' => $sevenDaysAgo])) ?: [];
 
-        $exchangeStatsRaw = $this->db->query("SELECT COUNT(*) AS total_exchanges,
+        $exchangeStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_exchanges,
                 SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending_exchanges,
                 SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_exchanges,
                 SUM(CASE WHEN status NOT IN ('pending','completed') THEN 1 ELSE 0 END) AS other_exchanges,
                 COALESCE(SUM(points_used), 0) AS total_points_spent
-                FROM point_exchanges WHERE {$activityDeletedCondition}")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM point_exchanges WHERE {$activityDeletedCondition}")) ?: [];
 
-        $messageStatsRaw = $this->db->query("SELECT COUNT(*) AS total_messages,
+        $messageStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_messages,
                 SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_messages,
                 SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read_messages
-                FROM messages WHERE deleted_at IS NULL")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM messages WHERE deleted_at IS NULL")) ?: [];
 
         $messagePriorityRows = [];
         try {
             $prioritySql = "SELECT COALESCE(priority, 'normal') AS priority,
                     COUNT(*) AS total,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
-                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read
+                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read_count
                 FROM messages
                 WHERE deleted_at IS NULL
                 GROUP BY COALESCE(priority, 'normal')";
-            $priorityStmt = $this->db->query($prioritySql);
-            if ($priorityStmt) {
-                $messagePriorityRows = $priorityStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            }
-        } catch (\Throwable $ignore) {
-            $messagePriorityRows = [];
+            $messagePriorityRows = DatabaseRows::all($this->db->select($prioritySql)) ?: [];
+        } catch (\Throwable $exception) {
+            $this->logError($exception, '/internal/statistics/admin', ['aggregation' => 'message_priority']);
         }
 
         $messageTrendRows = [];
@@ -159,73 +158,65 @@ class StatisticsService
             $trendSql = "SELECT {$dateExpr} AS day_label,
                     COUNT(*) AS total,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
-                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read
+                    SUM(CASE WHEN is_read = 1 THEN 1 ELSE 0 END) AS read_count
                 FROM messages
                 WHERE deleted_at IS NULL AND created_at >= :start_date
                 GROUP BY {$dateExpr}
                 ORDER BY {$dateExpr}";
-            $trendStmt = $this->db->prepare($trendSql);
-            if ($trendStmt) {
-                $trendStmt->execute([':start_date' => $messageTrendStart->format('Y-m-d H:i:s')]);
-                $messageTrendRows = $trendStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            }
-        } catch (\Throwable $ignore) {
-            $messageTrendRows = [];
+            $messageTrendRows = DatabaseRows::all($this->db->select($trendSql, [':start_date' => $messageTrendStart->format('Y-m-d H:i:s')])) ?: [];
+        } catch (\Throwable $exception) {
+            $this->logError($exception, '/internal/statistics/admin', ['aggregation' => 'message_trend']);
         }
 
-        $activityRecordStatsRaw = $this->db->query("SELECT COUNT(*) AS total_records,
+        $activityRecordStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_records,
                 SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_records,
                 SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_records,
                 SUM(CASE WHEN LOWER(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected_records
-                FROM carbon_records WHERE {$carbonDeletedCondition}")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM carbon_records WHERE {$carbonDeletedCondition}")) ?: [];
 
-        $activityCatalogStatsRaw = $this->db->query("SELECT COUNT(*) AS total_activities,
+        $activityCatalogStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_activities,
                 SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_activities,
                 SUM(CASE WHEN is_active = 0 OR is_active IS NULL THEN 1 ELSE 0 END) AS inactive_activities
-                FROM carbon_activities WHERE {$activityDeletedCondition}")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM carbon_activities WHERE {$activityDeletedCondition}")) ?: [];
 
-        $carbonStatsRaw = $this->db->query("SELECT COUNT(*) AS total_records,
+        $carbonStatsRaw = DatabaseRows::one($this->db->selectOne("SELECT COUNT(*) AS total_records,
                 SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_records,
                 SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_records,
                 SUM(CASE WHEN LOWER(status) = 'rejected' THEN 1 ELSE 0 END) AS rejected_records,
                 COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN carbon_saved ELSE 0 END), 0) AS total_carbon_saved,
                 COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN points_earned ELSE 0 END), 0) AS total_points_earned
-                FROM carbon_records WHERE {$carbonDeletedCondition}")?->fetch(PDO::FETCH_ASSOC) ?: [];
+                FROM carbon_records WHERE {$carbonDeletedCondition}")) ?: [];
 
-        $carbonWindowStmt = $this->db->prepare("SELECT
+        $carbonWindowRaw = DatabaseRows::one($this->db->selectOne("SELECT
                     COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN carbon_saved ELSE 0 END), 0) AS carbon_saved,
                     COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN points_earned ELSE 0 END), 0) AS points_earned,
                     SUM(CASE WHEN LOWER(status) = 'pending' THEN 1 ELSE 0 END) AS pending_records,
                     SUM(CASE WHEN LOWER(status) = 'approved' THEN 1 ELSE 0 END) AS approved_records
                 FROM carbon_records
-                WHERE {$carbonDeletedCondition} AND created_at >= :d7");
-        $carbonWindowStmt->execute([':d7' => $sevenDaysAgo]);
-        $carbonWindowRaw = $carbonWindowStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                WHERE {$carbonDeletedCondition} AND created_at >= :d7", [':d7' => $sevenDaysAgo])) ?: [];
 
         $trendTransactions = [];
         try {
-            $trendTxStmt = $this->db->prepare("SELECT {$dateExpr} AS date,
+            $trendTransactions = DatabaseRows::all($this->db->select("SELECT {$dateExpr} AS date,
                         COUNT(*) AS transactions,
                         COALESCE(SUM(CASE WHEN LOWER(status) = 'approved' THEN points ELSE 0 END), 0) AS points_awarded
                     FROM points_transactions
                     WHERE {$activityDeletedCondition} AND created_at >= :d30
-                    GROUP BY {$dateExpr}");
-            $trendTxStmt->execute([':d30' => $thirtyDaysAgo]);
-            $trendTransactions = $trendTxStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        } catch (\Throwable $ignore) {
+                    GROUP BY {$dateExpr}", [':d30' => $thirtyDaysAgo])) ?: [];
+        } catch (\Throwable $exception) {
+            $this->logError($exception, '/internal/statistics/admin', ['aggregation' => 'transaction_trend']);
         }
 
         $trendCarbon = [];
         try {
-            $trendCarbonStmt = $this->db->prepare("SELECT {$dateExpr} AS date,
+            $trendCarbon = DatabaseRows::all($this->db->select("SELECT {$dateExpr} AS date,
                         COALESCE(SUM(carbon_saved), 0) AS carbon_saved,
                         COUNT(*) AS approved_records
                     FROM carbon_records
                     WHERE {$carbonDeletedCondition} AND created_at >= :d30 AND LOWER(status) = 'approved'
-                    GROUP BY {$dateExpr}");
-            $trendCarbonStmt->execute([':d30' => $thirtyDaysAgo]);
-            $trendCarbon = $trendCarbonStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        } catch (\Throwable $ignore) {
+                    GROUP BY {$dateExpr}", [':d30' => $thirtyDaysAgo])) ?: [];
+        } catch (\Throwable $exception) {
+            $this->logError($exception, '/internal/statistics/admin', ['aggregation' => 'carbon_trend']);
         }
 
         $trendMap = [];
@@ -301,15 +292,13 @@ class StatisticsService
             'average_daily_carbon_30d' => $trendCount > 0 ? $trendTotals['carbon_saved'] / max($trendCount, 1) : 0.0,
         ];
 
-        $pendingTxStmt = $this->db->prepare("SELECT id, uid AS user_id, username, points, status, created_at
+        $pendingTransactionsList = DatabaseRows::all($this->db->select("SELECT id, uid AS user_id, username, points, status, created_at
                 FROM points_transactions
                 WHERE {$activityDeletedCondition} AND LOWER(status) = 'pending'
                 ORDER BY created_at DESC
-                LIMIT 5");
-        $pendingTxStmt->execute();
-        $pendingTransactionsList = $pendingTxStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                LIMIT 5")) ?: [];
 
-        $pendingRecordsStmt = $this->db->prepare("SELECT cr.id, cr.user_id, u.username, cr.activity_id,
+        $pendingRecordsList = DatabaseRows::all($this->db->select("SELECT cr.id, cr.user_id, u.username, cr.activity_id,
                     ca.name_zh AS activity_name_zh, ca.name_en AS activity_name_en,
                     cr.carbon_saved, cr.points_earned, cr.created_at
                 FROM carbon_records cr
@@ -317,14 +306,10 @@ class StatisticsService
                 LEFT JOIN carbon_activities ca ON ca.id = cr.activity_id
                 WHERE {$carbonDeletedConditionAliasedCr} AND LOWER(cr.status) = 'pending'
                 ORDER BY cr.created_at DESC
-                LIMIT 5");
-        $pendingRecordsStmt->execute();
-        $pendingRecordsList = $pendingRecordsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                LIMIT 5")) ?: [];
 
-        $latestUsersStmt = $this->db->prepare("SELECT id, username, email, status, created_at
-                FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5");
-        $latestUsersStmt->execute();
-        $latestUsers = $latestUsersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $latestUsers = DatabaseRows::all($this->db->select("SELECT id, username, email, status, created_at
+                FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5")) ?: [];
 
         $users = $this->normalizeUsersStats($userStatsRaw);
         $transactions = $this->normalizeTransactionStats($transactionStatsRaw, $txWindowRaw, $carbonStatsRaw, $carbonWindowRaw);
@@ -510,7 +495,7 @@ class StatisticsService
             }
             $total = $this->toInt($row['total'] ?? 0);
             $unread = $this->toInt($row['unread'] ?? 0);
-            $read = $this->toInt($row['read'] ?? 0);
+            $read = $this->toInt($row['read_count'] ?? 0);
             if ($read === 0 && $total >= $unread) {
                 $read = max(0, $total - $unread);
             }
@@ -570,7 +555,7 @@ class StatisticsService
             $label = substr($labelRaw, 0, 10);
             $total = $this->toInt($row['total'] ?? 0);
             $unread = $this->toInt($row['unread'] ?? 0);
-            $read = $this->toInt($row['read'] ?? 0);
+            $read = $this->toInt($row['read_count'] ?? 0);
             if ($read === 0 && $total >= $unread) {
                 $read = max(0, $total - $unread);
             }

@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\CronRun;
 use CarbonTrack\Models\CronTask;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeZone;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class CronSchedulerService
@@ -43,7 +43,7 @@ class CronSchedulerService
     ];
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private LoggerInterface $logger,
         private AuditLogService $auditLogService,
         private ErrorLogService $errorLogService,
@@ -344,7 +344,7 @@ class CronSchedulerService
         } catch (\Throwable $exception) {
             $finishedAt = $this->now();
             $durationMs = $this->diffMilliseconds($startedAtMicro, microtime(true));
-            $errorMessage = trim($exception->getMessage()) !== '' ? $exception->getMessage() : 'Unknown cron task error';
+            $errorMessage = trim(DatabaseService::exceptionMessage($exception)) !== '' ? DatabaseService::exceptionMessage($exception) : 'Unknown cron task error';
             $freshTask = $this->findTask($taskKey);
             $nextRunAt = null;
             if ($freshTask?->enabled) {
@@ -552,10 +552,8 @@ class CronSchedulerService
             ];
         }
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
 
-        return $stmt->rowCount() > 0;
+        return $this->db->affectingStatement($sql, $params) > 0;
     }
 
     private function completeTaskRun(string $taskKey, string $lockToken, array $fields): bool
@@ -572,10 +570,8 @@ class CronSchedulerService
         }
 
         $sql = 'UPDATE cron_tasks SET ' . implode(', ', $set) . ' WHERE task_key = :task_key AND lock_token = :lock_token_match';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
 
-        return $stmt->rowCount() > 0;
+        return $this->db->affectingStatement($sql, $params) > 0;
     }
 
     private function finalizeTaskRun(
@@ -881,7 +877,7 @@ class CronSchedulerService
         $this->logger->error('Cron task execution failed', [
             'task_key' => $taskKey,
             'trigger_source' => $triggerSource,
-            'error' => $exception->getMessage(),
+            'error' => DatabaseService::exceptionMessage($exception),
         ]);
 
         try {
@@ -906,7 +902,7 @@ class CronSchedulerService
             $this->logger->warning('Cron task exception logging failed', [
                 'task_key' => $taskKey,
                 'trigger_source' => $triggerSource,
-                'error' => $loggingException->getMessage(),
+                'error' => DatabaseService::exceptionMessage($loggingException),
             ]);
         }
     }
@@ -924,7 +920,7 @@ class CronSchedulerService
         $this->logger->warning($message, [
             'task_key' => $taskKey,
             'trigger_source' => $triggerSource,
-            'error' => $exception->getMessage(),
+            'error' => DatabaseService::exceptionMessage($exception),
         ]);
 
         try {

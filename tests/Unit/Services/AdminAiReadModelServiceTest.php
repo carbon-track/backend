@@ -4,30 +4,32 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AdminAiReadModelService;
 use CarbonTrack\Services\StatisticsService;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use PHPUnit\Framework\TestCase;
-use PDO;
 
 class AdminAiReadModelServiceTest extends TestCase
 {
-    private function makePdo(): PDO
+    private function makeConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($pdo);
-        return $pdo;
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
+        return $connection;
     }
 
     public function testExecuteSearchUsersFiltersByRoleAndSearch(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, uuid, username, email, status, is_admin, points) VALUES
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, uuid, username, email, status, is_admin, points) VALUES
             (101, '550e8400-e29b-41d4-a716-446655440111', 'admin_alpha', 'admin@example.com', 'active', 1, 42),
             (102, '550e8400-e29b-41d4-a716-446655440112', 'member_beta', 'member@example.com', 'active', 0, 7)");
 
-        $service = new AdminAiReadModelService($pdo);
+        $service = new AdminAiReadModelService($connection);
         $result = $service->execute('search_users', [
             'search' => 'admin',
             'role' => 'admin',
@@ -48,16 +50,16 @@ class AdminAiReadModelServiceTest extends TestCase
 
     public function testExecuteGenerateAdminReportBuildsNestedReadSummary(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $activityId = '550e8400-e29b-41d4-a716-446655440201';
         $today = gmdate('Y-m-d');
         $now = gmdate('Y-m-d H:i:s');
         $llmCreatedAt = gmdate('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO users (id, uuid, username, email, status, is_admin, points) VALUES
+        $connection->unprepared("INSERT INTO users (id, uuid, username, email, status, is_admin, points) VALUES
             (103, '550e8400-e29b-41d4-a716-446655440203', 'review_target', 'review@example.com', 'active', 0, 18)");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned, created_at) VALUES
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned, created_at) VALUES
             ('rec-report-1', 103, '{$activityId}', 'pending', '{$today}', 2.5, 5, '{$now}')");
-        $pdo->exec("INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, latency_ms, created_at)
+        $connection->unprepared("INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, latency_ms, created_at)
             VALUES ('req-report-1', 'admin', 1, 'admin-ai-report-1', 1, '/admin/ai/chat', 'test-model', 'prompt', 'response', 'success', 321, 180, '{$llmCreatedAt}')");
 
         $statisticsService = $this->createMock(StatisticsService::class);
@@ -69,7 +71,7 @@ class AdminAiReadModelServiceTest extends TestCase
                 'active_users' => 12,
             ]);
 
-        $service = new AdminAiReadModelService($pdo, $statisticsService);
+        $service = new AdminAiReadModelService($connection, $statisticsService);
         $report = $service->execute('generate_admin_report', ['days' => 30]);
 
         $this->assertSame('admin_report', $report['scope']);
@@ -84,32 +86,36 @@ class AdminAiReadModelServiceTest extends TestCase
 
     public function testExecuteSearchUsersUsesDistinctBindings(): void
     {
-        $pdo = $this->createMock(PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $listBound = [];
         $countBound = [];
 
-        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
         $listStmt->expects($this->exactly(4))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$listBound) {
                 $listBound[$key] = [$value, $type];
                 return true;
             });
-        $listStmt->expects($this->once())->method('execute')->willReturn(true);
-        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $listStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $listStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'value';
+        $countStmt->checkParameters = true;
         $countStmt->expects($this->exactly(3))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$countBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$countBound) {
                 $countBound[$key] = [$value, $type];
                 return true;
             });
-        $countStmt->expects($this->once())->method('execute')->willReturn(true);
-        $countStmt->expects($this->once())->method('fetchColumn')->willReturn(0);
+        $countStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $countStmt->expects($this->once())->method('value')->willReturn(0);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use ($listStmt, $countStmt) {
                 static $prepareCalls = 0;
                 $prepareCalls++;
@@ -119,7 +125,7 @@ class AdminAiReadModelServiceTest extends TestCase
                 return $prepareCalls === 1 ? $listStmt : $countStmt;
             });
 
-        $service = new AdminAiReadModelService($pdo);
+        $service = new AdminAiReadModelService($connection);
         $result = $service->execute('search_users', [
             'search' => 'admin',
             'limit' => 10,
@@ -135,21 +141,23 @@ class AdminAiReadModelServiceTest extends TestCase
 
     public function testExecuteSearchSystemLogsUsesDistinctBindings(): void
     {
-        $pdo = $this->createMock(PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $bound = [];
 
-        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->checkParameters = true;
         $stmt->expects($this->exactly(3))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$bound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$bound) {
                 $bound[$key] = [$value, $type];
                 return true;
             });
-        $stmt->expects($this->once())->method('execute')->willReturn(true);
-        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $stmt->expects($this->once())->method('bindings')->willReturn(true);
+        $stmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->once())
-            ->method('prepare')
+        $connection->expects($this->once())
+            ->method('responseFor')
             ->with($this->callback(static function (string $sql): bool {
                 return str_contains($sql, 'LOWER(action) LIKE :audit_search_0')
                     && str_contains($sql, 'LOWER(COALESCE(data, \'\')) LIKE :audit_search_1')
@@ -157,7 +165,7 @@ class AdminAiReadModelServiceTest extends TestCase
             }))
             ->willReturn($stmt);
 
-        $service = new AdminAiReadModelService($pdo);
+        $service = new AdminAiReadModelService($connection);
         $result = $service->execute('search_system_logs', [
             'types' => ['audit'],
             'search' => 'trace',

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\SystemLogService;
 use Monolog\Logger;
-use PDO;
 use PHPUnit\Framework\TestCase;
 
 class SystemLogServiceTest extends TestCase
@@ -70,7 +72,7 @@ class SystemLogServiceTest extends TestCase
         $service = $this->makeService();
         $_SERVER = [];
 
-        $metaJson = $this->invokeBuildServerMeta($service, ['HTTP_AUTHORIZATION' => 'secret-token'], [
+        $metaJson = $this->invokeBuildServerMeta($service, ['HTTP_USER_AGENT' => 'fixture-agent'], [
             'method' => 'POST',
             'path' => '/api/system/test',
             'ip_address' => '198.51.100.2',
@@ -78,7 +80,7 @@ class SystemLogServiceTest extends TestCase
 
         $meta = json_decode($metaJson, true);
         $this->assertIsArray($meta);
-        $this->assertSame('[REDACTED]', $meta['HTTP_AUTHORIZATION']);
+        $this->assertSame('fixture-agent', $meta['HTTP_USER_AGENT']);
         $this->assertSame('POST', $meta['_summary']['method']);
         $this->assertSame('/api/system/test', $meta['_summary']['uri']);
         $this->assertSame('198.51.100.2', $meta['_summary']['ip']);
@@ -121,10 +123,10 @@ class SystemLogServiceTest extends TestCase
         $_ENV['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
         $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
 
-        $pdo = $this->createMock(PDO::class);
-        $pdo->expects($this->never())->method('prepare');
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->expects($this->never())->method('responseFor');
 
-        $service = new SystemLogService($pdo, new Logger('test'));
+        $service = new SystemLogService($connection, new Logger('test'));
 
         $result = $service->log([
             'request_id' => 'req-1',
@@ -142,18 +144,21 @@ class SystemLogServiceTest extends TestCase
         $_ENV['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
         $_SERVER['DISABLE_SYSTEM_LOG_WRITES'] = 'true';
 
-        $pdo = $this->createMock(PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $pdo->expects($this->once())->method('prepare')->willReturn($stmt);
-        $pdo->method('lastInsertId')->willReturn('1');
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['generatedKey', 'responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->expects($this->once())->method('bindings')->with($this->callback(
+            static fn (array $values): bool => in_array('{"code":"FIXTURE_ERROR"}', $values, true)
+        ))->willReturn(true);
+        $connection->expects($this->once())->method('responseFor')->willReturn($stmt);
+        $connection->method('generatedKey')->willReturn('1');
 
-        $service = new SystemLogService($pdo, new Logger('test'));
+        $service = new SystemLogService($connection, new Logger('test'));
 
         $result = $service->log([
             'request_id' => 'req-1',
             'method' => 'GET',
             'path' => '/api/test',
+            'response_body' => ['code' => 'FIXTURE_ERROR'],
         ]);
 
         $this->assertSame(1, $result);
@@ -161,9 +166,9 @@ class SystemLogServiceTest extends TestCase
 
     private function makeService(): SystemLogService
     {
-        $pdo = new PDO('sqlite::memory:');
+        $connection = DatabaseFixture::sqlite();
         $logger = new Logger('test');
-        return new SystemLogService($pdo, $logger);
+        return new SystemLogService($connection, $logger);
     }
 
     private function invokeBuildServerMeta(SystemLogService $service, array $server, array $context): string

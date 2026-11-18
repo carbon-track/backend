@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Models\UserPasskey;
 use CarbonTrack\Models\WebauthnChallenge;
 use CarbonTrack\Services\Webauthn\Base64Url;
+use CarbonTrack\Support\SyntheticRequestFactory;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
-use PDO;
 
 class PasskeyService
 {
@@ -28,7 +30,7 @@ class PasskeyService
         private WebauthnChallenge $challengeModel,
         private WebauthnProviderInterface $webauthnProvider,
         private AuditLogService $auditLogService,
-        private PDO $db,
+        private Connection $db,
         private RegionService $regionService,
         private ?CheckinService $checkinService = null,
         private ?CloudflareR2Service $r2Service = null,
@@ -334,7 +336,7 @@ class PasskeyService
             } catch (\Throwable $exception) {
                 if ($this->logger !== null) {
                     $this->logger->debug('Failed to sync user checkins on passkey login', [
-                        'error' => $exception->getMessage(),
+                        'error' => DatabaseService::exceptionMessage($exception),
                         'user_id' => $user['id'],
                     ]);
                 }
@@ -762,16 +764,12 @@ class PasskeyService
     private function findUserByIdentifier(string $identifier): ?array
     {
         $field = filter_var($identifier, FILTER_VALIDATE_EMAIL) !== false ? 'u.email' : 'u.username';
-        $stmt = $this->db->prepare(
-            "SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
+        $user = DatabaseRows::one($this->db->selectOne("SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
              FROM users u
              LEFT JOIN schools s ON u.school_id = s.id
              LEFT JOIN avatars a ON u.avatar_id = a.id
              WHERE {$field} = ? AND u.deleted_at IS NULL
-             LIMIT 1"
-        );
-        $stmt->execute([$identifier]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+             LIMIT 1", [$identifier]));
 
         return $user ?: null;
     }
@@ -781,16 +779,12 @@ class PasskeyService
      */
     private function findUserDetailedByUuid(string $userUuid): ?array
     {
-        $stmt = $this->db->prepare(
-            'SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
+        $row = DatabaseRows::one($this->db->selectOne('SELECT u.*, s.name AS school_name, a.file_path AS avatar_path
              FROM users u
              LEFT JOIN schools s ON u.school_id = s.id
              LEFT JOIN avatars a ON u.avatar_id = a.id
              WHERE u.uuid = ? AND u.deleted_at IS NULL
-             LIMIT 1'
-        );
-        $stmt->execute([strtolower($userUuid)]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+             LIMIT 1', [strtolower($userUuid)]));
 
         return $row ?: null;
     }
@@ -800,29 +794,37 @@ class PasskeyService
         $timestamp = gmdate('Y-m-d H:i:s');
 
         try {
-            $stmt = $this->db->prepare('UPDATE users SET lastlgn = ? WHERE id = ?');
-            $stmt->execute([$timestamp, $userId]);
+            $this->db->statement('UPDATE users SET lastlgn = ? WHERE id = ?', [$timestamp, $userId]);
             return;
         } catch (\Throwable $exception) {
-            if ($this->logger !== null) {
-                $this->logger->debug('Failed to update legacy user login timestamp after passkey authentication', [
-                    'error' => $exception->getMessage(),
-                    'user_id' => $userId,
-                ]);
-            }
+            $this->logLoginTimestampFailure($exception, $userId, 'lastlgn');
         }
 
         try {
-            $stmt = $this->db->prepare('UPDATE users SET last_login_at = ? WHERE id = ?');
-            $stmt->execute([$timestamp, $userId]);
+            $this->db->statement('UPDATE users SET last_login_at = ? WHERE id = ?', [$timestamp, $userId]);
         } catch (\Throwable $exception) {
-            if ($this->logger !== null) {
-                $this->logger->debug('Failed to update user login timestamp after passkey authentication', [
-                    'error' => $exception->getMessage(),
-                    'user_id' => $userId,
-                ]);
-            }
+            $this->logLoginTimestampFailure($exception, $userId, 'last_login_at');
         }
+    }
+
+    private function logLoginTimestampFailure(\Throwable $exception, int $userId, string $column): void
+    {
+        $context = [
+            'user_id' => $userId,
+            'operation' => 'touchUserLogin',
+            'column' => $column,
+        ];
+        try {
+            $request = SyntheticRequestFactory::fromContext('/internal/auth/passkey/login', 'POST');
+            $this->errorLogService?->logException($exception, $request, $context);
+        } catch (\Throwable $loggingError) {
+            $this->logger?->warning('Failed to log passkey login timestamp error', $context + [
+                'error' => DatabaseService::exceptionMessage($loggingError),
+            ]);
+        }
+        $this->logger?->debug('Failed to update user login timestamp after passkey authentication', $context + [
+            'error' => DatabaseService::exceptionMessage($exception),
+        ]);
     }
 
     /**
@@ -903,19 +905,15 @@ class PasskeyService
 
     private function countAuditActionSince(string $action, string $since): int
     {
-        $stmt = $this->db->prepare(
-            'SELECT COUNT(*)
+
+        return (int) DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*)
              FROM audit_logs
              WHERE action = :action
                AND status = :status
-               AND created_at >= :since'
-        );
-        $stmt->execute([
+               AND created_at >= :since', [
             'action' => $action,
             'status' => 'success',
             'since' => $since,
-        ]);
-
-        return (int) $stmt->fetchColumn();
+        ]));
     }
 }

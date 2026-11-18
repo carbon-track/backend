@@ -4,30 +4,32 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use Illuminate\Database\UniqueConstraintViolationException;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
-use PDO;
 use Psr\Log\NullLogger;
 
 class AdminAiConversationStoreServiceTest extends TestCase
 {
-    private function makePdo(): PDO
+    private function makeConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($pdo);
-        return $pdo;
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
+        return $connection;
     }
 
     public function testLogConversationEventBuildsDetailAndProposalState(): void
     {
-        $pdo = $this->makePdo();
-        $auditLogService = new AuditLogService($pdo, new Logger('test'));
-        $service = new AdminAiConversationStoreService($pdo, new NullLogger(), $auditLogService);
+        $connection = $this->makeConnection();
+        $auditLogService = new AuditLogService($connection, new Logger('test'));
+        $service = new AdminAiConversationStoreService($connection, new NullLogger(), $auditLogService);
 
         $conversationId = 'admin-ai-store-1001';
         $logContext = [
@@ -75,36 +77,34 @@ class AdminAiConversationStoreServiceTest extends TestCase
         $this->assertSame('success', $detail['messages'][1]['status']);
         $this->assertSame($proposalId, $detail['messages'][1]['proposal']['proposal_id']);
 
-        $storedPreview = $pdo->query("SELECT title, last_message_preview FROM admin_ai_conversations WHERE conversation_id = '{$conversationId}'")
-            ->fetch(PDO::FETCH_ASSOC);
+        $storedPreview = DatabaseRows::one($connection->selectOne("SELECT title, last_message_preview FROM admin_ai_conversations WHERE conversation_id = '{$conversationId}'"));
         $this->assertIsArray($storedPreview);
         $this->assertSame('查看待审核记录', $storedPreview['title']);
         $this->assertSame('请确认是否执行审批。', $storedPreview['last_message_preview']);
 
-        $auditTarget = $pdo->query("SELECT affected_table FROM audit_logs WHERE action = 'admin_ai_action_proposed' ORDER BY id DESC LIMIT 1")
-            ->fetchColumn();
+        $auditTarget = DatabaseRows::scalar($connection->selectOne("SELECT affected_table FROM audit_logs WHERE action = 'admin_ai_action_proposed' ORDER BY id DESC LIMIT 1"));
         $this->assertSame('admin_ai_messages', $auditTarget);
     }
 
     public function testListConversationsAppliesPendingAndModelFilters(): void
     {
-        $pdo = $this->makePdo();
-        $service = new AdminAiConversationStoreService($pdo, new NullLogger());
+        $connection = $this->makeConnection();
+        $service = new AdminAiConversationStoreService($connection, new NullLogger());
 
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO admin_ai_conversations (conversation_id, admin_id, title, last_message_preview, started_at, last_activity_at)
             VALUES
             ('admin-ai-store-2001', 7, '待确认会话', '需要确认', '2026-03-20 10:00:00', '2026-03-20 10:05:00'),
             ('admin-ai-store-2002', 7, '普通会话', '已完成', '2026-03-18 09:00:00', '2026-03-18 09:05:00')
         ");
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO admin_ai_messages (conversation_id, kind, role, action, status, content, meta_json, created_at)
             VALUES
             ('admin-ai-store-2001', 'message', 'user', 'admin_ai_user_message', 'success', '会话一', '{\"data\":{\"visible_text\":\"会话一\"}}', '2026-03-20 10:00:00'),
             ('admin-ai-store-2001', 'action_proposed', NULL, 'admin_ai_action_proposed', 'pending', '待确认', '{\"data\":{\"action_name\":\"approve_carbon_records\",\"payload\":{\"record_ids\":[\"rec-1\"]}}}', '2026-03-20 10:05:00'),
             ('admin-ai-store-2002', 'message', 'user', 'admin_ai_user_message', 'success', '会话二', '{\"data\":{\"visible_text\":\"会话二\"}}', '2026-03-18 09:00:00')
         ");
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, created_at)
             VALUES
             ('req-store-a', 'admin', 7, 'admin-ai-store-2001', 1, '/admin/ai/chat', 'gpt-5.4', 'hello', '{\"ok\":true}', 'success', 11, '2026-03-20 10:01:00'),
@@ -129,8 +129,8 @@ class AdminAiConversationStoreServiceTest extends TestCase
 
     public function testRunStepsPersistHighPrecisionDuration(): void
     {
-        $pdo = $this->makePdo();
-        $service = new AdminAiConversationStoreService($pdo, new NullLogger());
+        $connection = $this->makeConnection();
+        $service = new AdminAiConversationStoreService($connection, new NullLogger());
         $conversationId = 'admin-ai-store-steps-1';
 
         $service->startRun('run-steps-1', $conversationId, [
@@ -141,8 +141,7 @@ class AdminAiConversationStoreServiceTest extends TestCase
         usleep(20000);
         $service->finishRunStep('run-steps-1', 'step-1', 'success', ['ok' => true]);
 
-        $row = $pdo->query("SELECT duration_ms, started_at, finished_at FROM admin_ai_steps WHERE step_id = 'step-1'")
-            ->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($connection->selectOne("SELECT duration_ms, started_at, finished_at FROM admin_ai_steps WHERE step_id = 'step-1'"));
 
         $this->assertIsArray($row);
         $this->assertGreaterThan(0, (float) $row['duration_ms']);
@@ -153,9 +152,9 @@ class AdminAiConversationStoreServiceTest extends TestCase
 
     public function testRunPersistenceFailuresArePersistedToErrorLog(): void
     {
-        $pdo = $this->makePdo();
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
-        $service = new AdminAiConversationStoreService($pdo, new NullLogger(), null, $errorLogService);
+        $connection = $this->makeConnection();
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
+        $service = new AdminAiConversationStoreService($connection, new NullLogger(), null, $errorLogService);
         $conversationId = 'admin-ai-store-error-1';
 
         $service->startRun('run-error-1', $conversationId, [
@@ -169,11 +168,10 @@ class AdminAiConversationStoreServiceTest extends TestCase
             'source' => '/admin/ai/chat/stream',
         ], 'read_only_auto');
 
-        $row = $pdo->query("SELECT error_type, request_id, client_server FROM error_logs ORDER BY id DESC LIMIT 1")
-            ->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($connection->selectOne("SELECT error_type, request_id, client_server FROM error_logs ORDER BY id DESC LIMIT 1"));
 
         $this->assertIsArray($row);
-        $this->assertSame('PDOException', $row['error_type']);
+        $this->assertSame(UniqueConstraintViolationException::class, $row['error_type']);
         $this->assertSame('req-run-error-1', $row['request_id']);
         $this->assertStringContainsString('admin_ai_run_start_failed', (string) $row['client_server']);
     }

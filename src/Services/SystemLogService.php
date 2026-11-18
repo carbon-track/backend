@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\ClientIpResolver;
-use CarbonTrack\Support\SensitiveDataRedactor;
-use PDO;
 use Monolog\Logger;
 
 /**
@@ -15,7 +15,7 @@ use Monolog\Logger;
  */
 class SystemLogService
 {
-    private PDO $db;
+    private Connection $db;
     private Logger $logger;
     /** @var array<int, string|null> */
     private array $userUuidCache = [];
@@ -23,12 +23,17 @@ class SystemLogService
     // 截断阈值，防止巨大请求/响应撑爆日志表
     private int $maxBodyLength = 8000; // characters
 
-    public function __construct(PDO $db, Logger $logger)
+    public function __construct(Connection $db, Logger $logger)
     {
         $this->db = $db;
         $this->logger = $logger;
     }
 
+    /**
+     * Persist a log snapshot prepared by the caller.
+     *
+     * @param array<string, mixed> $data Credentials in bodies and server parameters must be filtered at capture.
+     */
     public function log(array $data): ?int
     {
         if ($this->isWriteDisabled()) {
@@ -40,8 +45,8 @@ class SystemLogService
             if ($requestId !== null) {
                 $requestId = substr((string) $requestId, 0, 64);
             }
-            $requestBody = $this->sanitizeBody($data['request_body'] ?? null);
-            $responseBody = $this->sanitizeBody($data['response_body'] ?? null);
+            $requestBody = $this->serializeBody($data['request_body'] ?? null);
+            $responseBody = $this->serializeBody($data['response_body'] ?? null);
             $serverMeta = $this->buildServerMeta(
                 $data['server_params'] ?? [],
                 [
@@ -53,11 +58,10 @@ class SystemLogService
             $userUuid = $this->resolveUserUuid($data);
 
             // 为了兼容 MySQL 和 SQLite，采用字符串形式写 created_at，使用默认的 CURRENT_TIMESTAMP 进行处理
-            $stmt = $this->db->prepare("INSERT INTO system_logs (
-                request_id, method, path, status_code, user_id, user_uuid, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
 
-            $stmt->execute([
+            $id = DatabaseService::insertGetId($this->db, "INSERT INTO system_logs (
+                request_id, method, path, status_code, user_id, user_uuid, ip_address, user_agent, duration_ms, request_body, response_body, server_meta
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
                 $requestId,
                 $data['method'] ?? null,
                 $data['path'] ?? null,
@@ -71,13 +75,12 @@ class SystemLogService
                 $responseBody,
                 $serverMeta
             ]);
-            $id = (int) $this->db->lastInsertId();
             return $id > 0 ? $id : null;
         } catch (\Throwable $e) {
             // 记录系统日志插入失败的警告，不影响主流程
             try {
                 $this->logger->warning('System log insert failed', [
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
             } catch (\Throwable $ignore) {
                 // swallow secondary logging failure
@@ -86,14 +89,12 @@ class SystemLogService
         return null;
     }
 
-    private function sanitizeBody($body): ?string
+    private function serializeBody(mixed $body): ?string
     {
         if ($body === null) {
             return null;
         }
-        if (is_array($body) || is_object($body)) {
-            $body = json_encode(SensitiveDataRedactor::redact($body), JSON_UNESCAPED_UNICODE);
-        } elseif (!is_string($body)) {
+        if (!is_string($body)) {
             $body = json_encode($body, JSON_UNESCAPED_UNICODE);
         }
 
@@ -109,13 +110,12 @@ class SystemLogService
 
     private function buildServerMeta(array $server, array $summaryOverride = []): string
     {
-        $clone = SensitiveDataRedactor::redactServer($server);
-        $clone['_summary'] = [
-            'method' => $this->resolveSummaryMethod($clone, $summaryOverride),
-            'uri' => $this->resolveSummaryUri($clone, $summaryOverride),
-            'ip' => $this->resolveSummaryIp($clone, $summaryOverride),
+        $server['_summary'] = [
+            'method' => $this->resolveSummaryMethod($server, $summaryOverride),
+            'uri' => $this->resolveSummaryUri($server, $summaryOverride),
+            'ip' => $this->resolveSummaryIp($server, $summaryOverride),
         ];
-        $json = json_encode($clone, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $json = json_encode($server, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($json === false) { return '{}'; }
         if (strlen($json) > 120000) { // 防止爆炸日志撑满磁盘
             $json = substr($json, 0, 120000) . '...[TRUNCATED]';
@@ -213,12 +213,7 @@ class SystemLogService
         }
 
         try {
-            $stmt = $this->db->prepare('SELECT uuid FROM users WHERE id = :id LIMIT 1');
-            if (!$stmt) {
-                return null;
-            }
-            $stmt->execute(['id' => $userId]);
-            $uuid = $stmt->fetchColumn();
+            $uuid = DatabaseRows::scalar($this->db->selectOne('SELECT uuid FROM users WHERE id = :id LIMIT 1', ['id' => $userId]));
             $normalized = is_string($uuid) && trim($uuid) !== '' ? strtolower(trim($uuid)) : null;
             $this->userUuidCache[$userId] = $normalized;
             return $normalized;

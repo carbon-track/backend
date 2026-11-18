@@ -2,13 +2,14 @@
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Models\School;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\InputValueNormalizer;
-use PDO;
 use Illuminate\Database\QueryException;
 
 class SchoolController extends BaseController
@@ -17,8 +18,7 @@ class SchoolController extends BaseController
 
     protected $auditLogService;
     protected $errorLogService;
-    /** @var PDO */
-    protected $db;
+    protected Connection $db;
 
     private const ERR_SCHOOL_NOT_FOUND = 'School not found';
     private const CODE_SCHOOL_NOT_FOUND = 'SCHOOL_NOT_FOUND';
@@ -26,7 +26,7 @@ class SchoolController extends BaseController
     public function __construct(
         AuditLogService $auditLogService,
         ErrorLogService $errorLogService,
-        PDO $db
+        Connection $db
     )
     {
         $this->auditLogService = $auditLogService;
@@ -127,7 +127,7 @@ class SchoolController extends BaseController
             $this->logClientException($exception, $request, 400, __METHOD__, auditCategory: 'school_management');
             return $this->response($response, [
                 'success' => false,
-                'message' => $exception->getMessage(),
+                'message' => DatabaseService::exceptionMessage($exception),
                 'code' => 'VALIDATION_ERROR',
             ], 400);
         }
@@ -215,7 +215,7 @@ class SchoolController extends BaseController
                         'data' => ['school' => $school]
                     ];
                 } catch (\Throwable $e) {
-                    $this->logExceptionWithFallback($e, $request, 'SchoolController::create error: ' . $e->getMessage());
+                    $this->logExceptionWithFallback($e, $request, 'SchoolController::create error: ' . DatabaseService::exceptionMessage($e));
                     $httpStatus = 500;
                     $payload = [
                         'success' => false,
@@ -269,7 +269,7 @@ class SchoolController extends BaseController
             $this->logClientException($exception, $request, 400, __METHOD__, auditCategory: 'school_management');
             return $this->response($response, [
                 'success' => false,
-                'message' => $exception->getMessage(),
+                'message' => DatabaseService::exceptionMessage($exception),
                 'code' => 'VALIDATION_ERROR',
             ], 400);
         }
@@ -417,27 +417,16 @@ class SchoolController extends BaseController
         $offset = ($page - 1) * $limit;
         $search = trim((string)($params['search'] ?? ''));
 
-        $where = 'WHERE school_id = :sid AND (deleted_at IS NULL)';
-        $bind = ['sid' => $schoolId];
+        $classes = $this->db->table('school_classes')
+            ->where('school_id', $schoolId)
+            ->whereNull('deleted_at');
         if ($search !== '') {
-            $where .= ' AND name LIKE :kw';
-            $bind['kw'] = '%' . $search . '%';
+            $classes->where('name', 'like', '%' . $search . '%');
         }
 
-        $totalStmt = $this->db->prepare("SELECT COUNT(*) FROM school_classes $where");
-        $totalStmt->execute($bind);
-        $total = (int)$totalStmt->fetchColumn();
-
-        $sql = "SELECT id, school_id, name, is_active, created_at, updated_at FROM school_classes $where ORDER BY name ASC LIMIT :limit OFFSET :offset";
-        $stmt = $this->db->prepare($sql);
-        foreach ($bind as $k => $v) {
-            $paramType = is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR;
-            $stmt->bindValue(':' . $k, $v, $paramType);
-        }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $items = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $total = $classes->count();
+        $items = $classes->orderBy('name')->limit($limit)->offset($offset)
+            ->get(['id', 'school_id', 'name', 'is_active', 'created_at', 'updated_at'])->all();
 
         return $this->response($response, [
             'success' => true,
@@ -476,54 +465,60 @@ class SchoolController extends BaseController
         }
 
         $data = $request->getParsedBody();
-        $name = trim((string)($data['name'] ?? ''));
-    $body = null;
-
+        $name = trim((string) ($data['name'] ?? ''));
         if ($name === '') {
-            $httpStatus = 400;
-            $body = [
+            return $this->response($response, [
                 'success' => false,
                 'message' => 'Class name is required',
-                'code' => 'MISSING_NAME'
-            ];
-        } else {
-            // Check existing (case-insensitive)
-            $check = $this->db->prepare('SELECT id, school_id, name, is_active FROM school_classes WHERE school_id = ? AND LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1');
-            $check->execute([$schoolId, $name]);
-            $existing = $check->fetch(PDO::FETCH_ASSOC) ?: null;
-            if ($existing) {
-                $httpStatus = 200;
-                $body = [
-                    'success' => true,
-                    'data' => ['class' => $existing]
-                ];
-            } else {
-                $ins = $this->db->prepare('INSERT INTO school_classes (school_id, name, is_active, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())');
-                $ins->execute([$schoolId, $name]);
-                $id = (int)$this->db->lastInsertId();
-
-                $sel = $this->db->prepare('SELECT id, school_id, name, is_active, created_at, updated_at FROM school_classes WHERE id = ?');
-                $sel->execute([$id]);
-                $row = $sel->fetch(PDO::FETCH_ASSOC);
-
-                // 审计日志
-                $this->auditLogService->log(
-                    $request->getAttribute('user_id'),
-                    'SchoolClass',
-                    $id,
-                    'create',
-                    'User created class for school #' . $schoolId . ': ' . $name
-                );
-
-                $httpStatus = 201;
-                $body = [
-                    'success' => true,
-                    'data' => ['class' => $row]
-                ];
-            }
+                'code' => 'MISSING_NAME',
+            ], 400);
         }
 
-        return $this->response($response, $body ?? [ 'success' => false, 'message' => 'Unexpected state' ], $httpStatus);
+        $existing = $this->db->table('school_classes')
+            ->where('school_id', $schoolId)
+            ->whereRaw('LOWER(name) = LOWER(?)', [$name])
+            ->whereNull('deleted_at')
+            ->first(['id', 'school_id', 'name', 'is_active']);
+        if ($existing !== null) {
+            return $this->response($response, [
+                'success' => true,
+                'data' => ['class' => (array) $existing],
+            ], 200);
+        }
+
+        $class = $this->db->transaction(function () use ($schoolId, $name): array {
+            $classes = $this->db->table('school_classes');
+            $now = $this->db->raw('CURRENT_TIMESTAMP');
+            $id = $classes->insertGetId([
+                'school_id' => $schoolId,
+                'name' => $name,
+                'is_active' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
+            $created = $classes->find($id, ['id', 'school_id', 'name', 'is_active', 'created_at', 'updated_at']);
+            if ($created === null) {
+                throw new \RuntimeException('The newly created class could not be loaded.');
+            }
+
+            return (array) $created;
+        });
+
+        $this->auditLogService->log([
+            'user_id' => $request->getAttribute('user_id'),
+            'action' => 'school_class_created',
+            'operation_category' => 'school',
+            'affected_table' => 'school_classes',
+            'affected_id' => (int) $class['id'],
+            'new_data' => $class,
+            'status' => 'success',
+        ]);
+
+        return $this->response($response, [
+            'success' => true,
+            'data' => ['class' => $class],
+        ], 201);
     }
 
 
@@ -536,13 +531,13 @@ class SchoolController extends BaseController
                 return;
             } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Use the emergency log if ErrorLogService itself fails.
-                error_log('ErrorLogService logging failed: ' . $loggingError->getMessage());
+                error_log('ErrorLogService logging failed: ' . DatabaseService::exceptionMessage($loggingError));
             }
         }
         if ($contextMessage !== '') {
             error_log($contextMessage);
         } else {
-            error_log($exception->getMessage());
+            error_log(DatabaseService::exceptionMessage($exception));
         }
     }
 
@@ -617,7 +612,7 @@ class SchoolController extends BaseController
             return false;
         }
 
-        $message = strtolower($exception->getMessage());
+        $message = strtolower(DatabaseService::exceptionMessage($exception));
         if (!str_contains($message, 'sort_order')) {
             return false;
         }

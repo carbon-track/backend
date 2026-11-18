@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\UserController;
@@ -33,25 +36,28 @@ class UserControllerTest extends TestCase
         $audit->expects($this->once())->method('log');
 
         // 1) SELECT current user / 2) optional SELECT schools / 3) UPDATE users / 4) SELECT joined user
-        $stmtSelectUser = $this->createMock(\PDOStatement::class);
-        $stmtSelectUser->method('execute')->willReturn(true);
-        $stmtSelectUser->method('fetch')->willReturn([
+        $stmtSelectUser = $this->createMock(DatabaseQueryResponse::class);
+        $stmtSelectUser->shape = 'row';
+        $stmtSelectUser->method('bindings')->willReturn(true);
+        $stmtSelectUser->method('row')->willReturn([
             'id' => 1,
             'username' => 'john',
             'avatar_id' => null,
             'school_id' => null
         ]);
 
-        $stmtSelectSchool = $this->createMock(\PDOStatement::class);
-        $stmtSelectSchool->method('execute')->willReturn(true);
-        $stmtSelectSchool->method('fetch')->willReturn(['id' => 5]);
+        $stmtSelectSchool = $this->createMock(DatabaseQueryResponse::class);
+        $stmtSelectSchool->shape = 'row';
+        $stmtSelectSchool->method('bindings')->willReturn(true);
+        $stmtSelectSchool->method('row')->willReturn(['id' => 5]);
 
-        $stmtUpdate = $this->createMock(\PDOStatement::class);
-        $stmtUpdate->method('execute')->willReturn(true);
+        $stmtUpdate = $this->createMock(DatabaseQueryResponse::class);
+        $stmtUpdate->method('bindings')->willReturn(true);
 
-        $stmtJoined = $this->createMock(\PDOStatement::class);
-        $stmtJoined->method('execute')->willReturn(true);
-        $stmtJoined->method('fetch')->willReturn([
+        $stmtJoined = $this->createMock(DatabaseQueryResponse::class);
+        $stmtJoined->shape = 'row';
+        $stmtJoined->method('bindings')->willReturn(true);
+        $stmtJoined->method('row')->willReturn([
             'id' => 1,
             'uuid' => 'u-1',
             'username' => 'john',
@@ -66,9 +72,9 @@ class UserControllerTest extends TestCase
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         // prepare 顺序: select user -> select school -> update -> select joined
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls(
             $stmtSelectUser,
             $stmtSelectSchool,
             $stmtUpdate,
@@ -78,7 +84,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
 
         $request = makeRequest('PUT', '/users/me/profile', ['avatar_id' => 10, 'school_id' => 5]);
         $response = new \Slim\Psr7\Response();
@@ -107,20 +113,21 @@ class UserControllerTest extends TestCase
             $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
             $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
             $logger = $this->createMock(\Monolog\Logger::class);
-            $pdo = $this->createMock(\PDO::class);
+            $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
 
             $auth->method('getCurrentUser')->willReturn(['id' => 7]);
 
-            $stmtSelectUser = $this->createMock(\PDOStatement::class);
-            $stmtSelectUser->method('execute')->willReturn(true);
-            $stmtSelectUser->method('fetch')->willReturn([
+            $stmtSelectUser = $this->createMock(DatabaseQueryResponse::class);
+            $stmtSelectUser->shape = 'row';
+            $stmtSelectUser->method('bindings')->willReturn(true);
+            $stmtSelectUser->method('row')->willReturn([
                 'id' => 7,
                 'username' => 'alice',
                 'avatar_id' => null,
                 'school_id' => null
             ]);
 
-            $pdo->method('prepare')->willReturn($stmtSelectUser);
+            $connection->method('responseFor')->willReturn($stmtSelectUser);
 
             $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
             $turnstile = $this->createMock(\CarbonTrack\Services\TurnstileService::class);
@@ -128,7 +135,7 @@ class UserControllerTest extends TestCase
             $turnstile->expects($this->never())->method('verify');
 
             $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, null, null, $region);
 
             $request = makeRequest('PUT', '/users/me/profile', ['school_id' => 9]);
             $response = new \Slim\Psr7\Response();
@@ -271,28 +278,31 @@ class UserControllerTest extends TestCase
             $avatar->method('isAvatarAvailable')->willReturn(true);
             $audit->expects($this->once())->method('log');
 
-            $stmtSelectUser = $this->createMock(\PDOStatement::class);
-            $stmtSelectUser->method('execute')->willReturn(true);
-            $stmtSelectUser->method('fetch')->willReturn([
+            $stmtSelectUser = $this->createMock(DatabaseQueryResponse::class);
+            $stmtSelectUser->shape = 'row';
+            $stmtSelectUser->method('bindings')->willReturn(true);
+            $stmtSelectUser->method('row')->willReturn([
                 'id' => 12,
                 'username' => 'bob',
                 'avatar_id' => null,
                 'school_id' => null
             ]);
 
-            $stmtFindSchool = $this->createMock(\PDOStatement::class);
-            $stmtFindSchool->method('execute')->willReturn(true);
-            $stmtFindSchool->method('fetch')->willReturn(false);
+            $stmtFindSchool = $this->createMock(DatabaseQueryResponse::class);
+            $stmtFindSchool->shape = 'row';
+            $stmtFindSchool->method('bindings')->willReturn(true);
+            $stmtFindSchool->method('row')->willReturn(false);
 
-            $stmtInsertSchool = $this->createMock(\PDOStatement::class);
-            $stmtInsertSchool->method('execute')->willReturn(true);
+            $stmtInsertSchool = $this->createMock(DatabaseQueryResponse::class);
+            $stmtInsertSchool->method('bindings')->willReturn(true);
 
-            $stmtUpdate = $this->createMock(\PDOStatement::class);
-            $stmtUpdate->method('execute')->willReturn(true);
+            $stmtUpdate = $this->createMock(DatabaseQueryResponse::class);
+            $stmtUpdate->method('bindings')->willReturn(true);
 
-            $stmtJoined = $this->createMock(\PDOStatement::class);
-            $stmtJoined->method('execute')->willReturn(true);
-            $stmtJoined->method('fetch')->willReturn([
+            $stmtJoined = $this->createMock(DatabaseQueryResponse::class);
+            $stmtJoined->shape = 'row';
+            $stmtJoined->method('bindings')->willReturn(true);
+            $stmtJoined->method('row')->willReturn([
                 'id' => 12,
                 'uuid' => 'user-12',
                 'username' => 'bob',
@@ -307,15 +317,15 @@ class UserControllerTest extends TestCase
                 'updated_at' => '2025-01-02 00:00:00'
             ]);
 
-            $pdo = $this->createMock(\PDO::class);
-            $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+            $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['generatedKey', 'responseFor'])->getMock();
+            $connection->method('responseFor')->willReturnOnConsecutiveCalls(
                 $stmtSelectUser,
                 $stmtFindSchool,
                 $stmtInsertSchool,
                 $stmtUpdate,
                 $stmtJoined
             );
-            $pdo->method('lastInsertId')->willReturn('42');
+            $connection->method('generatedKey')->willReturn('42');
 
             $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
 
@@ -327,7 +337,7 @@ class UserControllerTest extends TestCase
                 ->willReturn(['success' => true]);
 
             $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+            $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, null, null, $region);
 
             $request = makeRequest('PUT', '/users/me/profile', [
                 'new_school_name' => 'Climate Academy',
@@ -357,7 +367,7 @@ class UserControllerTest extends TestCase
             'new_school_name' => 'Climate Academy',
             'cf_turnstile_response' => 'token-123',
         ])->withAttribute('request_id', 'school-lookup-failure');
-        $failure = new \PDOException('School lookup failed');
+        $failure = new \RuntimeException('School lookup failed');
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 12]);
@@ -375,13 +385,14 @@ class UserControllerTest extends TestCase
             'response_code' => 400,
         ]);
 
-        $user = $this->createMock(\PDOStatement::class);
-        $user->method('execute')->willReturn(true);
-        $user->method('fetch')->willReturn(['id' => 12, 'school_id' => null]);
-        $school = $this->createMock(\PDOStatement::class);
-        $school->expects($this->once())->method('execute')->with(['Climate Academy'])->willThrowException($failure);
-        $db = $this->createMock(\PDO::class);
-        $db->expects($this->exactly(2))->method('prepare')->willReturnOnConsecutiveCalls($user, $school);
+        $user = $this->createMock(DatabaseQueryResponse::class);
+        $user->shape = 'row';
+        $user->method('bindings')->willReturn(true);
+        $user->method('row')->willReturn(['id' => 12, 'school_id' => null]);
+        $school = $this->createMock(DatabaseQueryResponse::class);
+        $school->expects($this->once())->method('bindings')->with(['Climate Academy'])->willThrowException($failure);
+        $db = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $db->expects($this->exactly(2))->method('responseFor')->willReturnOnConsecutiveCalls($user, $school);
 
         $controller = new UserController(
             $auth,
@@ -411,7 +422,7 @@ class UserControllerTest extends TestCase
         $msg = $this->createMock(\CarbonTrack\Services\MessageService::class);
         $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
         $logger = $this->createMock(\Monolog\Logger::class);
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
 
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
         $avatar->method('isAvatarAvailable')->willReturn(false);
@@ -419,7 +430,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
 
         $request = makeRequest('PUT', '/users/me/avatar', ['avatar_id' => 999]);
         $response = new \Slim\Psr7\Response();
@@ -438,9 +449,10 @@ class UserControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
         // list
-        $stmtList = $this->createMock(\PDOStatement::class);
-        $stmtList->method('execute')->willReturn(true);
-        $stmtList->method('fetchAll')->willReturn([
+        $stmtList = $this->createMock(DatabaseQueryResponse::class);
+        $stmtList->shape = 'rows';
+        $stmtList->method('bindings')->willReturn(true);
+        $stmtList->method('rows')->willReturn([
             [
                 'id' => 't1', 'uuid' => null, 'type' => 'earn', 'points' => 100,
                 'description' => 'walk', 'status' => 'approved', 'activity_id' => 'a1',
@@ -448,17 +460,18 @@ class UserControllerTest extends TestCase
             ]
         ]);
         // count
-        $stmtCount = $this->createMock(\PDOStatement::class);
-        $stmtCount->method('execute')->willReturn(true);
-        $stmtCount->method('fetch')->willReturn(['total' => 1]);
+        $stmtCount = $this->createMock(DatabaseQueryResponse::class);
+        $stmtCount->shape = 'row';
+        $stmtCount->method('bindings')->willReturn(true);
+        $stmtCount->method('row')->willReturn(['total' => 1]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($stmtList, $stmtCount);
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
 
         $request = makeRequest('GET', '/users/me/points-history');
         $response = new \Slim\Psr7\Response();
@@ -476,9 +489,8 @@ class UserControllerTest extends TestCase
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 2]);
 
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec("CREATE TABLE points_transactions (
+        $connection = DatabaseFixture::sqlite();
+        $connection->unprepared("CREATE TABLE points_transactions (
             id TEXT PRIMARY KEY,
             uid INTEGER,
             points REAL,
@@ -491,13 +503,13 @@ class UserControllerTest extends TestCase
             created_at TEXT,
             deleted_at TEXT
         )");
-        $pdo->exec("CREATE TABLE carbon_activities (
+        $connection->unprepared("CREATE TABLE carbon_activities (
             id TEXT PRIMARY KEY,
             name_zh TEXT,
             deleted_at TEXT
         )");
-        $pdo->exec("INSERT INTO carbon_activities (id, name_zh, deleted_at) VALUES ('act-1', '步行', NULL)");
-        $pdo->exec("INSERT INTO points_transactions (id, uid, points, act, notes, type, status, activity_id, approved_at, created_at, deleted_at)
+        $connection->unprepared("INSERT INTO carbon_activities (id, name_zh, deleted_at) VALUES ('act-1', '步行', NULL)");
+        $connection->unprepared("INSERT INTO points_transactions (id, uid, points, act, notes, type, status, activity_id, approved_at, created_at, deleted_at)
             VALUES ('pt-1', 2, 88, 'legacy-act', 'legacy-note', 'earn', 'approved', 'act-1', '2026-04-02 10:00:00', '2026-04-02 09:00:00', NULL)");
 
         $controller = new UserController(
@@ -509,7 +521,7 @@ class UserControllerTest extends TestCase
             $this->mockTurnstile(),
             null,
             $this->createMock(\Monolog\Logger::class),
-            $pdo,
+            $connection,
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
             null,
             $this->createMock(\CarbonTrack\Services\RegionService::class)
@@ -529,6 +541,44 @@ class UserControllerTest extends TestCase
         $this->assertSame('legacy-note', $json['data']['transactions'][0]['admin_notes']);
     }
 
+    public function testStatsQueryFailureKeepsDatabaseDetailsOutOfResponse(): void
+    {
+        $actorId = 424242;
+        $request = makeRequest('GET', '/api/v1/users/me/stats');
+        $failure = new \Illuminate\Database\QueryException(
+            'sqlite',
+            'SELECT points FROM points_transactions WHERE uid = ?',
+            [$actorId],
+            new \RuntimeException('Fixture database unavailable')
+        );
+        $db = $this->createMock(\Illuminate\Database\Connection::class);
+        $db->expects($this->once())->method('selectOne')->willThrowException($failure);
+        $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => $actorId]);
+        $errors = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
+        $errors->expects($this->once())->method('logException')->with($failure, $request);
+
+        $controller = new UserController(
+            $auth,
+            $this->createMock(\CarbonTrack\Services\AuditLogService::class),
+            $this->createMock(\CarbonTrack\Services\MessageService::class),
+            $this->createMock(\CarbonTrack\Models\Avatar::class),
+            $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class),
+            logger: $this->createMock(\Monolog\Logger::class),
+            db: $db,
+            errorLogService: $errors,
+            regionService: $this->createMock(\CarbonTrack\Services\RegionService::class)
+        );
+
+        $response = $controller->getUserStats($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertSame(
+            ['success' => false, 'message' => 'Failed to get user stats: Fixture database unavailable'],
+            json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR)
+        );
+    }
+
     public function testGetUserStatsReturnsAggregates(): void
     {
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
@@ -539,9 +589,10 @@ class UserControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        $stmtPoints = $this->createMock(\PDOStatement::class);
-        $stmtPoints->method('execute')->willReturn(true);
-        $stmtPoints->method('fetch')->willReturn([
+        $stmtPoints = $this->createMock(DatabaseQueryResponse::class);
+        $stmtPoints->shape = 'row';
+        $stmtPoints->method('bindings')->willReturn(true);
+        $stmtPoints->method('row')->willReturn([
             'total_earned' => 300,
             'total_spent' => 100,
             'earn_count' => 3,
@@ -549,9 +600,10 @@ class UserControllerTest extends TestCase
             'pending_count' => 0
         ]);
 
-        $stmtRecords = $this->createMock(\PDOStatement::class);
-        $stmtRecords->method('execute')->willReturn(true);
-        $stmtRecords->method('fetch')->willReturn([
+        $stmtRecords = $this->createMock(DatabaseQueryResponse::class);
+        $stmtRecords->shape = 'row';
+        $stmtRecords->method('bindings')->willReturn(true);
+        $stmtRecords->method('row')->willReturn([
             'total_activities' => 5,
             'approved_activities' => 4,
             'pending_activities' => 1,
@@ -560,19 +612,22 @@ class UserControllerTest extends TestCase
             'total_points_earned' => 280
         ]);
 
-        $stmtMonthly = $this->createMock(\PDOStatement::class);
-        $stmtMonthly->method('execute')->willReturn(true);
-        $stmtMonthly->method('fetchAll')->willReturn([
+        $stmtMonthly = $this->createMock(DatabaseQueryResponse::class);
+        $stmtMonthly->shape = 'rows';
+        $stmtMonthly->method('bindings')->willReturn(true);
+        $stmtMonthly->method('rows')->willReturn([
             ['month' => '2025-01', 'records_count' => 2, 'carbon_saved' => 12.5, 'points_earned' => 125]
         ]);
 
-        $stmtRecent = $this->createMock(\PDOStatement::class);
-        $stmtRecent->method('execute')->willReturn(true);
-        $stmtRecent->method('fetchAll')->willReturn([]);
+        $stmtRecent = $this->createMock(DatabaseQueryResponse::class);
+        $stmtRecent->shape = 'rows';
+        $stmtRecent->method('bindings')->willReturn(true);
+        $stmtRecent->method('rows')->willReturn([]);
 
-        $stmtUserInfo = $this->createMock(\PDOStatement::class);
-        $stmtUserInfo->method('execute')->willReturn(true);
-        $stmtUserInfo->expects($this->once())->method('fetch')->willReturn([
+        $stmtUserInfo = $this->createMock(DatabaseQueryResponse::class);
+        $stmtUserInfo->shape = 'row';
+        $stmtUserInfo->method('bindings')->willReturn(true);
+        $stmtUserInfo->expects($this->once())->method('row')->willReturn([
             'points' => 200,
             'created_at' => '2024-01-01',
             'region_code' => 'US-UM-81',
@@ -580,45 +635,52 @@ class UserControllerTest extends TestCase
             'school_name' => 'Canonical Academy',
         ]);
 
-        $stmtRank = $this->createMock(\PDOStatement::class);
-        $stmtRank->method('execute')->willReturn(true);
-        $stmtRank->method('fetch')->willReturn(['rank' => 7]);
+        $stmtRank = $this->createMock(DatabaseQueryResponse::class);
+        $stmtRank->shape = 'row';
+        $stmtRank->method('bindings')->willReturn(true);
+        $stmtRank->method('row')->willReturn(['user_rank' => 7]);
 
-        $stmtTotalUsers = $this->createMock(\PDOStatement::class);
-        $stmtTotalUsers->expects($this->once())->method('fetch')->willReturn(['total' => 200]);
+        $stmtTotalUsers = $this->createMock(DatabaseQueryResponse::class);
+        $stmtTotalUsers->shape = 'row';
+        $stmtTotalUsers->expects($this->once())->method('row')->willReturn(['total' => 200]);
 
-        $stmtStoreStats = $this->createMock(\PDOStatement::class);
-        $stmtStoreStats->expects($this->once())->method('execute')->with(['current_points' => 200])->willReturn(true);
-        $stmtStoreStats->expects($this->once())->method('fetch')->willReturn([
+        $stmtStoreStats = $this->createMock(DatabaseQueryResponse::class);
+        $stmtStoreStats->shape = 'row';
+        $stmtStoreStats->expects($this->once())->method('bindings')->with(['current_points' => 200])->willReturn(true);
+        $stmtStoreStats->expects($this->once())->method('row')->willReturn([
             'available_products' => 2,
             'min_exchange_points' => 80,
         ]);
 
-        $stmtLeaderboard = $this->createMock(\PDOStatement::class);
-        $stmtLeaderboard->method('fetchAll')->willReturn([
+        $stmtLeaderboard = $this->createMock(DatabaseQueryResponse::class);
+        $stmtLeaderboard->shape = 'rows';
+        $stmtLeaderboard->method('rows')->willReturn([
             ['id' => 99, 'username' => 'alice', 'total_points' => 520, 'avatar_id' => null, 'avatar_path' => null],
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('getAttribute')->willReturn('mysql');
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['getDriverName', 'responseFor'])->getMock();
+        $connection->method('getDriverName')->willReturn('mysql');
+        $responses = [
             $stmtPoints,
             $stmtMonthly,
             $stmtRecent,
             $stmtUserInfo,
             $stmtStoreStats,
             $stmtRecords,
-            $stmtRank
+            $stmtRank,
+        ];
+        $connection->method('responseFor')->willReturnCallback(
+            static function (string $sql) use ($stmtTotalUsers, $stmtLeaderboard, &$responses): ?DatabaseQueryResponse {
+                if (stripos($sql, 'COUNT(*) AS total') !== false && stripos($sql, 'FROM users') !== false) {
+                    return $stmtTotalUsers;
+                }
+                if (stripos($sql, 'ORDER BY u.points DESC') !== false) {
+                    return $stmtLeaderboard;
+                }
+
+                return array_shift($responses);
+            }
         );
-        $pdo->method('query')->willReturnCallback(function ($sql) use ($stmtTotalUsers, $stmtLeaderboard) {
-            if (stripos($sql, 'COUNT(*) AS total') !== false && stripos($sql, 'FROM users') !== false) {
-                return $stmtTotalUsers;
-            }
-            if (stripos($sql, 'ORDER BY u.points DESC') !== false) {
-                return $stmtLeaderboard;
-            }
-            return false;
-        });
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
@@ -655,7 +717,7 @@ class UserControllerTest extends TestCase
                 ],
             ],
         ]);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region, $leaderboardService, null, null, new \CarbonTrack\Services\UserProfileViewService($region));
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region, $leaderboardService, null, null, new \CarbonTrack\Services\UserProfileViewService($region));
         $request = makeRequest('GET', '/users/me/stats');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserStats($request, $response);
@@ -689,12 +751,14 @@ class UserControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id' => 7]);
 
-        $statement = $this->getMockBuilder(\PDOStatement::class)
-            ->onlyMethods(['bindValue', 'execute', 'fetchAll'])
+        $statement = $this->getMockBuilder(DatabaseQueryResponse::class)
+            ->onlyMethods(['parameter', 'bindings', 'rows'])
             ->getMock();
-        $statement->method('bindValue')->willReturn(true);
-        $statement->expects($this->once())->method('execute')->willReturn(true);
-        $statement->expects($this->once())->method('fetchAll')->willReturn([
+        $statement->shape = 'rows';
+        $statement->checkParameters = true;
+        $statement->method('parameter')->willReturn(true);
+        $statement->expects($this->once())->method('bindings')->willReturn(true);
+        $statement->expects($this->once())->method('rows')->willReturn([
             [
                 'id' => 42,
                 'activity_id' => 5,
@@ -714,8 +778,8 @@ class UserControllerTest extends TestCase
             ],
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturn($statement);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturn($statement);
 
         $r2->method('resolveKeyFromUrl')->willReturnCallback(static function ($value) {
             return trim((string)$value, '/');
@@ -726,7 +790,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $errorLog, $r2, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $errorLog, $r2, $region);
 
         $request = makeRequest('GET', '/users/me/activities');
         $response = new \Slim\Psr7\Response();
@@ -755,9 +819,10 @@ class UserControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn([
             'id' => 1,
             'uuid' => 'u-1',
             'username' => 'john',
@@ -772,13 +837,13 @@ class UserControllerTest extends TestCase
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturn($stmt);
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, null, null, $region);
         $request = makeRequest('GET', '/users/me');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCurrentUser($request, $response);
@@ -798,9 +863,10 @@ class UserControllerTest extends TestCase
 
         $auth->method('getCurrentUser')->willReturn(['id' => 3]);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn([
             'id' => 3,
             'uuid' => 'u-3',
             'username' => 'canonical-user',
@@ -816,8 +882,8 @@ class UserControllerTest extends TestCase
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturn($stmt);
 
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
@@ -837,7 +903,7 @@ class UserControllerTest extends TestCase
             ];
         });
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, null, null, $region);
         $request = makeRequest('GET', '/users/me');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getCurrentUser($request, $response);
@@ -873,9 +939,10 @@ class UserControllerTest extends TestCase
                 return true;
             }));
 
-        $stmtSelectUser = $this->createMock(\PDOStatement::class);
-        $stmtSelectUser->method('execute')->willReturn(true);
-        $stmtSelectUser->method('fetch')->willReturn([
+        $stmtSelectUser = $this->createMock(DatabaseQueryResponse::class);
+        $stmtSelectUser->shape = 'row';
+        $stmtSelectUser->method('bindings')->willReturn(true);
+        $stmtSelectUser->method('row')->willReturn([
             'id' => 1,
             'username' => 'john',
             'avatar_id' => null,
@@ -883,16 +950,17 @@ class UserControllerTest extends TestCase
             'region_code' => 'US-UM-80',
         ]);
 
-        $stmtSelectSchool = $this->createMock(\PDOStatement::class);
-        $stmtSelectSchool->method('execute')->willReturn(true);
-        $stmtSelectSchool->method('fetch')->willReturn([
+        $stmtSelectSchool = $this->createMock(DatabaseQueryResponse::class);
+        $stmtSelectSchool->shape = 'row';
+        $stmtSelectSchool->method('bindings')->willReturn(true);
+        $stmtSelectSchool->method('row')->willReturn([
             'id' => 9,
             'name' => 'Canonical Academy',
         ]);
 
-        $stmtUpdate = $this->createMock(\PDOStatement::class);
+        $stmtUpdate = $this->createMock(DatabaseQueryResponse::class);
         $stmtUpdate->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with($this->callback(function (array $params): bool {
                 return in_array(9, $params, true)
                     && in_array('US-UM-81', $params, true)
@@ -901,9 +969,10 @@ class UserControllerTest extends TestCase
             }))
             ->willReturn(true);
 
-        $stmtJoined = $this->createMock(\PDOStatement::class);
-        $stmtJoined->method('execute')->willReturn(true);
-        $stmtJoined->method('fetch')->willReturn([
+        $stmtJoined = $this->createMock(DatabaseQueryResponse::class);
+        $stmtJoined->shape = 'row';
+        $stmtJoined->method('bindings')->willReturn(true);
+        $stmtJoined->method('row')->willReturn([
             'id' => 1,
             'uuid' => 'u-1',
             'username' => 'john',
@@ -919,8 +988,8 @@ class UserControllerTest extends TestCase
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls(
             $stmtSelectUser,
             $stmtSelectSchool,
             $stmtUpdate,
@@ -957,7 +1026,7 @@ class UserControllerTest extends TestCase
             return $map[$value] ?? null;
         });
 
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, $this->createMock(\CarbonTrack\Services\ErrorLogService::class), null, $region);
         $request = makeRequest('PUT', '/users/me/profile', [
             'school_id' => 9,
             'country_code' => 'US',
@@ -993,21 +1062,23 @@ class UserControllerTest extends TestCase
         $audit->expects($this->once())->method('log');
 
         // 1) SELECT current user / 2) UPDATE users / 3) SELECT joined user
-        $stmtSelectUser = $this->createMock(\PDOStatement::class);
-        $stmtSelectUser->method('execute')->willReturn(true);
-        $stmtSelectUser->method('fetch')->willReturn([
+        $stmtSelectUser = $this->createMock(DatabaseQueryResponse::class);
+        $stmtSelectUser->shape = 'row';
+        $stmtSelectUser->method('bindings')->willReturn(true);
+        $stmtSelectUser->method('row')->willReturn([
             'id' => 1,
             'username' => 'john',
             'avatar_id' => null,
             'school_id' => null
         ]);
 
-        $stmtUpdate = $this->createMock(\PDOStatement::class);
-        $stmtUpdate->method('execute')->willReturn(true);
+        $stmtUpdate = $this->createMock(DatabaseQueryResponse::class);
+        $stmtUpdate->method('bindings')->willReturn(true);
 
-        $stmtJoined = $this->createMock(\PDOStatement::class);
-        $stmtJoined->method('execute')->willReturn(true);
-        $stmtJoined->method('fetch')->willReturn([
+        $stmtJoined = $this->createMock(DatabaseQueryResponse::class);
+        $stmtJoined->shape = 'row';
+        $stmtJoined->method('bindings')->willReturn(true);
+        $stmtJoined->method('row')->willReturn([
             'id' => 1,
             'uuid' => 'u-1',
             'username' => 'john',
@@ -1022,9 +1093,9 @@ class UserControllerTest extends TestCase
             'updated_at' => '2025-01-01 00:00:00'
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         // prepare 顺序: select user -> update -> select joined
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls(
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls(
             $stmtSelectUser,
             $stmtUpdate,
             $stmtJoined
@@ -1033,7 +1104,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
-        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $pdo, null, null, $region);
+        $controller = new UserController($auth, $audit, $msg, $avatar, $prefs, $turnstile, null, $logger, $connection, null, null, $region);
     $request = makeRequest('PUT', '/users/me', ['avatar_id' => 10]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->updateCurrentUser($request, $response);
@@ -1106,9 +1177,10 @@ class UserControllerTest extends TestCase
             'activity' => ['label' => 'Activity reviews', 'locked' => false],
         ]);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->expects($this->once())->method('execute')->with(['uid' => 5])->willReturn(true);
-        $stmt->method('fetch')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->expects($this->once())->method('bindings')->with(['uid' => 5])->willReturn(true);
+        $stmt->method('row')->willReturn([
             'points_earned' => 42.5,
             'created_at' => '2025-01-10 10:00:00',
             'name_en' => 'Metro ride to office',
@@ -1116,8 +1188,8 @@ class UserControllerTest extends TestCase
             'unit' => 'km',
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturn($stmt);
 
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
         $turnstile = $this->mockTurnstile();
@@ -1132,7 +1204,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             $emailService,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1207,9 +1279,8 @@ class UserControllerTest extends TestCase
             'transaction' => ['label' => 'Reward exchanges', 'locked' => false],
         ]);
 
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec("CREATE TABLE point_exchanges (
+        $connection = DatabaseFixture::sqlite();
+        $connection->unprepared("CREATE TABLE point_exchanges (
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
@@ -1219,12 +1290,12 @@ class UserControllerTest extends TestCase
             deleted_at TEXT,
             created_at TEXT
         )");
-        $pdo->exec("CREATE TABLE products (
+        $connection->unprepared("CREATE TABLE products (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL
         )");
-        $pdo->exec("INSERT INTO products (id, name) VALUES (8, 'Eco Bottle')");
-        $pdo->exec("INSERT INTO point_exchanges (id, user_id, product_id, quantity, points_used, product_name, deleted_at, created_at)
+        $connection->unprepared("INSERT INTO products (id, name) VALUES (8, 'Eco Bottle')");
+        $connection->unprepared("INSERT INTO point_exchanges (id, user_id, product_id, quantity, points_used, product_name, deleted_at, created_at)
             VALUES ('ex-1', 11, 8, 2, 180, 'Eco Bottle', NULL, '2026-04-02 09:00:00')");
 
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
@@ -1240,7 +1311,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             $emailService,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1317,10 +1388,11 @@ class UserControllerTest extends TestCase
 
         $request = makeRequest('POST', '/users/me/notification-preferences/test-email', ['category' => 'activity']);
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $execute = $stmt->expects($this->once())->method('execute')->with(['uid' => 8]);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $execute = $stmt->expects($this->once())->method('bindings')->with(['uid' => 8]);
         if ($queryFails) {
-            $failure = new \PDOException('Activity sample lookup failed');
+            $failure = new \RuntimeException('Activity sample lookup failed');
             $execute->willThrowException($failure);
             $errorLog->expects($this->once())->method('logException')->with($failure, $request, [
                 'context_message' => 'Failed to fetch latest carbon record for test email',
@@ -1328,12 +1400,12 @@ class UserControllerTest extends TestCase
             ]);
         } else {
             $execute->willReturn(true);
-            $stmt->method('fetch')->willReturn(false);
+            $stmt->method('row')->willReturn(false);
             $errorLog->expects($this->never())->method('logException');
         }
 
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->method('responseFor')->willReturn($stmt);
 
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
@@ -1347,7 +1419,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             $emailService,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1397,7 +1469,7 @@ class UserControllerTest extends TestCase
             'system' => ['label' => 'System updates', 'locked' => false],
         ]);
 
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
         $turnstile = $this->mockTurnstile();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
@@ -1411,7 +1483,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             $emailService,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1436,7 +1508,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $logger = $this->createMock(\Monolog\Logger::class);
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
         $r2 = $this->createMock(\CarbonTrack\Services\CloudflareR2Service::class);
@@ -1456,7 +1528,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             null,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             $r2,
             $region
@@ -1481,7 +1553,7 @@ class UserControllerTest extends TestCase
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $turnstile = $this->mockTurnstile();
         $logger = $this->createMock(\Monolog\Logger::class);
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $errorLog = $this->createMock(\CarbonTrack\Services\ErrorLogService::class);
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
 
@@ -1494,7 +1566,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             null,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1513,19 +1585,15 @@ class UserControllerTest extends TestCase
 
     public function testGetSecurityActivityReturnsOnlyOwnWhitelistedEvents(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-        TestSchemaBuilder::init($pdo);
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
 
-        $insert = $pdo->prepare(
-            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        );
-        $insert->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-1 hour'))]);
-        $insert->execute([null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_label_updated', 'success', json_encode(['old_label' => 'Old', 'new_label' => 'New', 'passkey_id' => 3]), gmdate('Y-m-d H:i:s', strtotime('-30 minutes'))]);
-        $insert->execute([1, null, 'user', 'passkey_list_viewed', 'success', json_encode(['count' => 2]), gmdate('Y-m-d H:i:s', strtotime('-20 minutes'))]);
-        $insert->execute([2, null, 'user', 'logout', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-10 minutes'))]);
+        $insertSql = 'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)';
+        $connection->statement($insertSql, [1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-1 hour'))]);
+        $connection->statement($insertSql, [null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_label_updated', 'success', json_encode(['old_label' => 'Old', 'new_label' => 'New', 'passkey_id' => 3]), gmdate('Y-m-d H:i:s', strtotime('-30 minutes'))]);
+        $connection->statement($insertSql, [1, null, 'user', 'passkey_list_viewed', 'success', json_encode(['count' => 2]), gmdate('Y-m-d H:i:s', strtotime('-20 minutes'))]);
+        $connection->statement($insertSql, [2, null, 'user', 'logout', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-10 minutes'))]);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'uuid' => '550e8400-e29b-41d4-a716-4466554400aa']);
@@ -1557,7 +1625,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             null,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1583,18 +1651,14 @@ class UserControllerTest extends TestCase
 
     public function testGetSecurityActivityAppliesTypeAndPeriodFilters(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-        TestSchemaBuilder::init($pdo);
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
 
-        $insert = $pdo->prepare(
-            'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        );
-        $insert->execute([1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-45 days'))]);
-        $insert->execute([null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_login', 'success', json_encode(['label' => 'Phone']), gmdate('Y-m-d H:i:s', strtotime('-3 days'))]);
-        $insert->execute([1, null, 'user', 'password_change', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
+        $insertSql = 'INSERT INTO audit_logs (user_id, user_uuid, actor_type, action, status, data, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)';
+        $connection->statement($insertSql, [1, null, 'user', 'login', 'success', json_encode(['ip_address' => '1.1.1.1']), gmdate('Y-m-d H:i:s', strtotime('-45 days'))]);
+        $connection->statement($insertSql, [null, '550e8400-e29b-41d4-a716-4466554400aa', 'user', 'passkey_login', 'success', json_encode(['label' => 'Phone']), gmdate('Y-m-d H:i:s', strtotime('-3 days'))]);
+        $connection->statement($insertSql, [1, null, 'user', 'password_change', 'success', json_encode([]), gmdate('Y-m-d H:i:s', strtotime('-2 days'))]);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'uuid' => '550e8400-e29b-41d4-a716-4466554400aa']);
@@ -1627,7 +1691,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             null,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1650,10 +1714,8 @@ class UserControllerTest extends TestCase
 
     public function testBuildSecurityActivityPeriodClauseUsesDatabaseClockForSqlite(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_ASSOC);
-        TestSchemaBuilder::init($pdo);
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
 
         $auth = $this->createMock(\CarbonTrack\Services\AuthService::class);
         $audit = $this->createMock(\CarbonTrack\Services\AuditLogService::class);
@@ -1674,7 +1736,7 @@ class UserControllerTest extends TestCase
             $turnstile,
             null,
             $logger,
-            $pdo,
+            $connection,
             $errorLog,
             null,
             $region
@@ -1707,10 +1769,10 @@ class UserControllerTest extends TestCase
         $avatar = $this->createMock(\CarbonTrack\Models\Avatar::class);
         $prefs = $this->createMock(\CarbonTrack\Services\NotificationPreferenceService::class);
         $logger = $this->createMock(\Monolog\Logger::class);
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $region = $this->createMock(\CarbonTrack\Services\RegionService::class);
 
-        $pdo->method('prepare')->willReturn($this->createMock(\PDOStatement::class));
+        $connection->method('responseFor')->willReturn($this->createMock(DatabaseQueryResponse::class));
 
         return new UserController(
             $auth,
@@ -1721,7 +1783,7 @@ class UserControllerTest extends TestCase
             $turnstile ?? $this->mockTurnstile(true),
             null,
             $logger,
-            $pdo,
+            $connection,
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
             null,
             $region,

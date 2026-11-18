@@ -261,7 +261,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -320,7 +320,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -389,7 +389,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -422,7 +422,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $emailService->method('sendMessageNotification')->willThrowException(new \RuntimeException('email failed'));
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $logger,
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -463,7 +463,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         ]);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -502,7 +502,7 @@ class SupportRoutingEngineServiceTest extends TestCase
             ]);
 
             $engine = new SupportRoutingEngineService(
-                self::$capsule->getConnection()->getPdo(),
+                self::$capsule->getConnection(),
                 $this->createMock(LoggerInterface::class),
                 $this->createMock(AuditLogService::class),
                 $this->createMock(ErrorLogService::class),
@@ -579,7 +579,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -650,7 +650,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -708,7 +708,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         $audit->method('logSystemEvent')->willReturn(true);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $audit,
             $this->createMock(ErrorLogService::class),
@@ -745,7 +745,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         ]);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -775,7 +775,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         ]);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),
@@ -806,7 +806,7 @@ class SupportRoutingEngineServiceTest extends TestCase
         ]);
 
         $engine = new SupportRoutingEngineService(
-            self::$capsule->getConnection()->getPdo(),
+            self::$capsule->getConnection(),
             $this->createMock(LoggerInterface::class),
             $this->createMock(AuditLogService::class),
             $this->createMock(ErrorLogService::class),

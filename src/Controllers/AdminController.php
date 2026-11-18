@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\AuthService;
@@ -17,7 +20,6 @@ use CarbonTrack\Services\QuotaConfigService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Support\InputValueNormalizer;
 use CarbonTrack\Support\Uuid;
-use PDO;
 use DateTimeImmutable;
 use DateTimeZone;
 
@@ -49,7 +51,7 @@ class AdminController
     private UserProfileViewService $userProfileViewService;
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private AuthService $authService,
         private AuditLogService $auditLog,
         private BadgeService $badgeService,
@@ -220,14 +222,13 @@ $sql = "
                 ORDER BY {$orderBy}
                 LIMIT :limit OFFSET :offset";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($queryParams as $k => $v) {
-                $stmt->bindValue(":{$k}", $v);
+                $queryBindings[":{$k}"] = $v;
             }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
-            $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $queryBindings[':limit'] = (int) $limit;
+            $queryBindings[':offset'] = (int) $offset;
+            $users = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             $timezoneName = $_ENV['APP_TIMEZONE'] ?? date_default_timezone_get();
             if (!$timezoneName) {
@@ -269,12 +270,11 @@ $sql = "
             unset($row);
 
             $countSql = "SELECT COUNT(DISTINCT u.id) FROM users u LEFT JOIN schools s ON u.school_id = s.id WHERE {$whereClause}";
-            $countStmt = $this->db->prepare($countSql);
+            $countBindings = [];
             foreach ($queryParams as $k => $v) {
-                $countStmt->bindValue(":{$k}", $v);
+                $countBindings[":{$k}"] = $v;
             }
-            $countStmt->execute();
-            $total = (int)$countStmt->fetchColumn();
+            $total = (int)DatabaseRows::scalar($this->db->selectOne($countSql, $countBindings));
 
             $this->auditLog->logDataChange(
                 'admin',
@@ -304,7 +304,7 @@ $sql = "
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
                 throw $e;
             }
-            $this->logExceptionWithFallback($e, $request, 'getUsers exception: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+            $this->logExceptionWithFallback($e, $request, 'getUsers exception: ' . DatabaseService::exceptionMessage($e) . "\n" . $e->getTraceAsString());
             return $this->jsonResponse($response, ['error' => 'Internal server error'], 500);
         }
     }
@@ -361,6 +361,15 @@ $sql = "
             $badgePayload['metrics'] = $this->badgeService->compileUserMetrics($userId);
             $badgePayload['user'] = $userRow;
 
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_user_badges_viewed',
+                isset($admin['id']) ? (int) $admin['id'] : null,
+                'users',
+                ['include_revoked' => $includeRevoked],
+                $userId
+            );
+
             return $this->jsonResponse($response, ['success' => true, 'data' => $badgePayload]);
         } catch (\Throwable $e) {
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
@@ -403,6 +412,15 @@ $sql = "
                   ),
               ];
 
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_user_overview_viewed',
+                isset($admin['id']) ? (int) $admin['id'] : null,
+                'users',
+                [],
+                $userId
+            );
+
             return $this->jsonResponse($response, ['success' => true, 'data' => $payload]);
         } catch (\Throwable $e) {
             if (($_ENV['APP_ENV'] ?? '') === 'testing') {
@@ -439,11 +457,7 @@ $sql = "
                     WHERE pt.status = 'pending' AND pt.deleted_at IS NULL
                     ORDER BY pt.created_at ASC
                     LIMIT :limit OFFSET :offset";
-            $stmt = $this->db->prepare($sql);
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
-            $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $transactions = DatabaseRows::all($this->db->select($sql, [':limit' => (int) $limit, ':offset' => (int) $offset]));
 
             foreach ($transactions as &$t) {
                 $imgs = [];
@@ -468,7 +482,15 @@ $sql = "
                 unset($t['img']);
             }
 
-            $total = (int)$this->db->query("SELECT COUNT(*) FROM points_transactions pt WHERE pt.status='pending' AND pt.deleted_at IS NULL")->fetchColumn();
+            $total = (int)DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM points_transactions pt WHERE pt.status='pending' AND pt.deleted_at IS NULL"));
+
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_pending_transactions_viewed',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'points_transactions',
+                ['page' => $page, 'limit' => $limit, 'transaction_ids' => array_column($transactions, 'id')]
+            );
 
             return $this->jsonResponse($response, [
                 'success' => true,
@@ -671,9 +693,7 @@ $sql = "
                 // Fetch current quota override if not provided in payload's quota_override
                 if (!array_key_exists('quota_override', $params)) {
                      // We need to fetch the current value to merge safely
-                     $currStmt = $this->db->prepare("SELECT quota_override FROM users WHERE id = :id");
-                     $currStmt->execute(['id' => $userId]);
-                     $currRaw = $currStmt->fetchColumn();
+                     $currRaw = DatabaseRows::scalar($this->db->selectOne("SELECT quota_override FROM users WHERE id = :id", ['id' => $userId]));
                      $currentJson = $this->quotaConfigService->decodeJsonToArray($currRaw) ?? [];
                 } else {
                     // If we are also updating quota_override directly, use that as base (unlikely but safe)
@@ -693,9 +713,7 @@ $sql = "
             }
             if (array_key_exists('support_routing', $payload) && is_array($payload['support_routing'])) {
                 if (!array_key_exists('quota_override', $params)) {
-                    $currStmt = $this->db->prepare("SELECT quota_override FROM users WHERE id = :id");
-                    $currStmt->execute(['id' => $userId]);
-                    $currentJson = $this->quotaConfigService->decodeJsonToArray($currStmt->fetchColumn()) ?? [];
+                    $currentJson = $this->quotaConfigService->decodeJsonToArray(DatabaseRows::scalar($this->db->selectOne("SELECT quota_override FROM users WHERE id = :id", ['id' => $userId]))) ?? [];
                 } else {
                     $currentJson = $this->quotaConfigService->decodeJsonToArray($params['quota_override']) ?? [];
                 }
@@ -728,8 +746,7 @@ $sql = "
             $params['updated_at'] = date('Y-m-d H:i:s');
 
             $sql = 'UPDATE users SET ' . implode(', ', $sets) . ' WHERE id = :id';
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
+            $this->db->statement($sql, $params);
 
             if ($shouldInvalidateTokens) {
                 $this->authService->incrementTokenVersion((int) $userId);
@@ -856,17 +873,14 @@ $sql = "
                 return $this->jsonResponse($response, ['error' => 'Cannot delete current admin user'], 400);
             }
 
-            $stmt = $this->db->prepare(
-                'UPDATE users SET deleted_at = :deleted_at, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL'
-            );
             $timestamp = date('Y-m-d H:i:s');
-            $stmt->execute([
+            $queryAffected = $this->db->affectingStatement('UPDATE users SET deleted_at = :deleted_at, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL', [
                 'deleted_at' => $timestamp,
                 'updated_at' => $timestamp,
                 'id' => $userId,
             ]);
 
-            if ($stmt->rowCount() < 1) {
+            if ($queryAffected < 1) {
                 return $this->jsonResponse($response, ['error' => 'User not found'], 404);
             }
 
@@ -923,16 +937,13 @@ $sql = "
             }
 
             $updatedAt = date('Y-m-d H:i:s');
-            $stmt = $this->db->prepare(
-                'UPDATE users SET points = COALESCE(points, 0) + :delta, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL'
-            );
-            $stmt->execute([
+            $queryAffected = $this->db->affectingStatement('UPDATE users SET points = COALESCE(points, 0) + :delta, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL', [
                 'delta' => $delta,
                 'updated_at' => $updatedAt,
                 'id' => $userId,
             ]);
 
-            if ($stmt->rowCount() < 1) {
+            if ($queryAffected < 1) {
                 return $this->jsonResponse($response, ['error' => 'User not found'], 404);
             }
 
@@ -1075,8 +1086,7 @@ $sql = "
     private function loadUserRowByColumn(Request $request, string $whereClause, array $params): ?array
     {
         $lastLoginSelect = $this->buildLastLoginSelect($request, 'u');
-        $stmt = $this->db->prepare(
-              'SELECT
+        $row = DatabaseRows::one($this->db->selectOne('SELECT
                 u.id,
                 u.uuid,
                 u.username,
@@ -1100,10 +1110,7 @@ $sql = "
                 GROUP BY user_uuid
              ) pk ON pk.user_uuid = u.uuid
              WHERE ' . $whereClause . ' AND u.deleted_at IS NULL
-             LIMIT 1'
-        );
-        $stmt->execute($params);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+             LIMIT 1', $params));
         if (!$row) {
             return null;
         }
@@ -1124,18 +1131,14 @@ $sql = "
      */
     private function getUserPasskeySummary(string $userUuid): array
     {
-        $stmt = $this->db->prepare(
-            'SELECT
+        $row = DatabaseRows::one($this->db->selectOne('SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN backup_state = 1 THEN 1 ELSE 0 END) AS backup_enabled,
                 SUM(CASE WHEN backup_eligible = 1 THEN 1 ELSE 0 END) AS backup_eligible,
                 MAX(last_used_at) AS last_used_at,
                 MAX(created_at) AS last_registered_at
              FROM user_passkeys
-             WHERE user_uuid = :user_uuid AND disabled_at IS NULL'
-        );
-        $stmt->execute(['user_uuid' => strtolower($userUuid)]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+             WHERE user_uuid = :user_uuid AND disabled_at IS NULL', ['user_uuid' => strtolower($userUuid)])) ?: [];
 
         return [
             'total' => (int) ($row['total'] ?? 0),
@@ -1220,39 +1223,31 @@ $sql = "
         }
         $whereSql = implode(' AND ', $where);
 
-        $listStmt = $this->db->prepare(
-            "SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
+        $rows = DatabaseRows::all($this->db->select("SELECT id, action, status, actor_type, ip_address, user_agent, request_id, data, created_at
              FROM audit_logs
              WHERE {$whereSql}
              ORDER BY created_at DESC, id DESC
-             LIMIT ? OFFSET ?"
-        );
-        $listStmt->execute(array_merge($baseParams, [$limit, $offset]));
-        $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+             LIMIT ? OFFSET ?", array_merge($baseParams, [$limit, $offset]))) ?: [];
 
-        $countStmt = $this->db->prepare(
-            "SELECT COUNT(*)
-             FROM audit_logs
-             WHERE {$whereSql}"
-        );
-        $countStmt->execute($baseParams);
 
         return [
             'items' => array_map([$this, 'normalizeSecurityActivityRow'], $rows),
-            'total' => (int) $countStmt->fetchColumn(),
+            'total' => (int) DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*)
+             FROM audit_logs
+             WHERE {$whereSql}", $baseParams)),
         ];
     }
 
     private function buildSecurityActivityPeriodClause(int $days): string
     {
         $safeDays = max(1, $days);
-        $driver = strtolower((string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME));
+        $driver = strtolower((string) $this->db->getDriverName());
 
         if ($driver === 'sqlite') {
             return sprintf("created_at >= datetime('now', '-%d days')", $safeDays);
         }
 
-        return sprintf('created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)', $safeDays);
+        return sprintf('created_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL %d DAY)', $safeDays);
     }
 
     /**
@@ -1342,7 +1337,7 @@ $sql = "
     private function columnExists(Request $request, string $table, string $column): bool
     {
         try {
-            $driver = (string) $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $driver = (string) $this->db->getDriverName();
         } catch (\Throwable $exception) {
             $this->logExceptionWithFallback($exception, $request, 'Failed to detect database driver for user column lookup');
             $driver = null;
@@ -1350,21 +1345,16 @@ $sql = "
 
         try {
             if ($driver === 'sqlite') {
-                $stmt = $this->db->query('PRAGMA table_info(' . $table . ')');
-                if ($stmt) {
-                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                        if (isset($row['name']) && strcasecmp((string) $row['name'], $column) === 0) {
-                            return true;
-                        }
+                foreach ($this->db->cursor('PRAGMA table_info(' . $table . ')') as $row) {
+                    $row = (array) $row;
+                    if (isset($row['name']) && strcasecmp((string) $row['name'], $column) === 0) {
+                        return true;
                     }
                 }
                 return false;
             }
 
-            $stmt = $this->db->prepare(sprintf('SHOW COLUMNS FROM `%s` LIKE ?', $table));
-            if ($stmt && $stmt->execute([$column])) {
-                return (bool) $stmt->fetch(PDO::FETCH_ASSOC);
-            }
+            return (bool) DatabaseRows::one($this->db->selectOne(sprintf('SHOW COLUMNS FROM `%s` LIKE ?', $table), [$column]));
         } catch (\Throwable $exception) {
             $this->logExceptionWithFallback($exception, $request, 'Failed to check database column ' . $column);
         }
@@ -1448,13 +1438,13 @@ $sql = "
                 return;
             } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Use the emergency log if ErrorLogService itself fails.
-                error_log('ErrorLogService failed: ' . $loggingError->getMessage());
+                error_log('ErrorLogService failed: ' . DatabaseService::exceptionMessage($loggingError));
             }
         }
         if ($contextMessage !== '') {
             error_log($contextMessage);
         } else {
-            error_log($exception->getMessage());
+            error_log(DatabaseService::exceptionMessage($exception));
         }
     }
 

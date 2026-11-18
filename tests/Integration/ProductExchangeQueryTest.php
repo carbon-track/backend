@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\ProductController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\MessageService;
-use PDO;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ServerRequestInterface;
 use Slim\Psr7\Response;
@@ -17,17 +18,17 @@ class ProductExchangeQueryTest extends TestCase
 {
     public function testUserCanViewExchangeHistoryAndDetail(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProducts($pdo);
-        $this->seedUserExchanges($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProducts($connection);
+        $this->seedUserExchanges($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $authService = $this->makeUserAuthService(10);
 
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $listRequest = makeRequest('GET', '/me/exchanges', null, ['limit' => 10]);
         $listResponse = new Response();
@@ -68,17 +69,17 @@ class ProductExchangeQueryTest extends TestCase
 
     public function testUserExchangeHistorySupportsSearchStatusAndSort(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProducts($pdo);
-        $this->seedUserExchanges($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProducts($connection);
+        $this->seedUserExchanges($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $authService = $this->makeUserAuthService(10);
 
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $filteredRequest = makeRequest('GET', '/me/exchanges', null, [
             'status' => 'completed',
@@ -109,17 +110,17 @@ class ProductExchangeQueryTest extends TestCase
 
     public function testAdminCanViewExchangeRecordDetail(): void
     {
-        $pdo = $this->createConnection();
-        $this->createSchema($pdo);
-        $this->seedUsers($pdo);
-        $this->seedProducts($pdo);
-        $this->seedAdminExchange($pdo);
+        $connection = $this->createConnection();
+        $this->createSchema($connection);
+        $this->seedUsers($connection);
+        $this->seedProducts($connection);
+        $this->seedAdminExchange($connection);
 
         $messageService = $this->createMock(MessageService::class);
         $auditLog = $this->createMock(AuditLogService::class);
         $authService = $this->makeAdminAuthService();
 
-        $controller = new ProductController($pdo, $messageService, $auditLog, $authService);
+        $controller = new ProductController($connection, $messageService, $auditLog, $authService);
 
         $detailRequest = makeRequest('GET', '/admin/exchanges/ex-admin-1');
         $detailResponse = new Response();
@@ -143,19 +144,15 @@ class ProductExchangeQueryTest extends TestCase
         $this->assertSame('admin@example.com', $data['user_email']);
     }
 
-    private function createConnection(): PDO
+    private function createConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        if (method_exists($pdo, 'sqliteCreateFunction')) {
-            $pdo->sqliteCreateFunction('NOW', static fn() => date('Y-m-d H:i:s'));
-        }
-        return $pdo;
+        $connection = DatabaseFixture::sqlite();
+        return $connection;
     }
 
-    private function createSchema(PDO $pdo): void
+    private function createSchema(Connection $connection): void
     {
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -167,7 +164,7 @@ class ProductExchangeQueryTest extends TestCase
             notification_email_mask INTEGER DEFAULT 0
         )');
 
-        $pdo->exec('CREATE TABLE products (
+        $connection->unprepared('CREATE TABLE products (
             id INTEGER PRIMARY KEY,
             name TEXT,
             images TEXT,
@@ -175,7 +172,7 @@ class ProductExchangeQueryTest extends TestCase
             created_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE point_exchanges (
+        $connection->unprepared('CREATE TABLE point_exchanges (
             id TEXT PRIMARY KEY,
             user_id INTEGER,
             product_id INTEGER,
@@ -195,29 +192,29 @@ class ProductExchangeQueryTest extends TestCase
         )');
     }
 
-    private function seedUsers(PDO $pdo): void
+    private function seedUsers(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO users (id, username, email, points, is_admin, status, created_at) VALUES
+        $connection->unprepared("INSERT INTO users (id, username, email, points, is_admin, status, created_at) VALUES
             (1, 'admin_user', 'admin@example.com', 1000, 1, 'active', '$now'),
             (10, 'user_a', 'user_a@example.com', 300, 0, 'active', '$now'),
             (11, 'user_b', 'user_b@example.com', 120, 0, 'active', '$now')
         ");
     }
 
-    private function seedProducts(PDO $pdo): void
+    private function seedProducts(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO products (id, name, images, image_path, created_at) VALUES
+        $connection->unprepared("INSERT INTO products (id, name, images, image_path, created_at) VALUES
             (100, 'Eco Bottle', '[\"eco-bottle-img\"]', 'eco-bottle-img', '$now'),
             (101, 'Solar Charger', '[\"solar-img\"]', 'solar-img', '$now')
         ");
     }
 
-    private function seedUserExchanges(PDO $pdo): void
+    private function seedUserExchanges(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO point_exchanges (
+        $connection->unprepared("INSERT INTO point_exchanges (
             id, user_id, product_id, quantity, points_used, product_name, product_price,
             status, tracking_number, notes, created_at
         ) VALUES
@@ -227,10 +224,10 @@ class ProductExchangeQueryTest extends TestCase
         ");
     }
 
-    private function seedAdminExchange(PDO $pdo): void
+    private function seedAdminExchange(Connection $connection): void
     {
         $now = date('Y-m-d H:i:s');
-        $pdo->exec("INSERT INTO point_exchanges (
+        $connection->unprepared("INSERT INTO point_exchanges (
             id, user_id, product_id, quantity, points_used, product_name, product_price,
             delivery_address, contact_area_code, contact_phone, notes,
             status, tracking_number, created_at, updated_at

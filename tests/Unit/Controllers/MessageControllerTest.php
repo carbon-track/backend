@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Controllers\MessageController;
 use CarbonTrack\Services\AuthService;
@@ -23,7 +28,7 @@ class MessageControllerTest extends TestCase
     }
 
     private function makeController(
-        \PDO $pdo,
+        Connection $connection,
         MessageService $svc,
         AuditLogService $audit,
         AuthService $auth,
@@ -32,7 +37,7 @@ class MessageControllerTest extends TestCase
         ?ErrorLogService $errorLogService = null
     ): MessageController {
         return new MessageController(
-            $pdo,
+            $connection,
             $svc,
             $audit,
             $auth,
@@ -49,27 +54,36 @@ class MessageControllerTest extends TestCase
 
     public function testGetUserMessagesReturnsPaged(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
 
-        $countStmt = $this->createMock(\PDOStatement::class);
-        $countStmt->method('execute')->willReturn(true);
-        $countStmt->method('fetch')->willReturn(['total' => 2]);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
+        $countStmt->method('bindings')->willReturn(true);
+        $countStmt->method('row')->willReturn(['total' => 2]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
-        $listStmt->method('bindValue')->willReturn(true);
-        $listStmt->method('execute')->willReturn(true);
-        $listStmt->method('fetchAll')->willReturn([
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
+        $listStmt->method('parameter')->willReturn(true);
+        $listStmt->method('bindings')->willReturn(true);
+        $listStmt->method('rows')->willReturn([
             ['id'=>1,'title'=>'t1','content'=>'c1','read_at'=>null],
             ['id'=>2,'title'=>'t2','content'=>'c2','read_at'=>'2025-01-01']
         ]);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($countStmt, $listStmt);
+        $connection->method('responseFor')->willReturnCallback(static function (string $sql) use ($countStmt, $listStmt): ?DatabaseQueryResponse {
+            if (str_starts_with($sql, 'SHOW COLUMNS')) {
+                return null;
+            }
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+            return str_contains($sql, 'COUNT(*)') ? $countStmt : $listStmt;
+        });
+
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUserMessages($request, $response);
@@ -82,45 +96,50 @@ class MessageControllerTest extends TestCase
 
     public function testGetUserMessagesUsesDistinctSearchBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1]);
         $listBound = [];
 
-        $countStmt = $this->createMock(\PDOStatement::class);
+        $countStmt = $this->createMock(DatabaseQueryResponse::class);
+        $countStmt->shape = 'row';
         $countStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([
                 'user_id' => 1,
                 'search_title' => '%eco%',
                 'search_content' => '%eco%',
             ])
             ->willReturn(true);
-        $countStmt->expects($this->once())->method('fetch')->willReturn(['total' => 0]);
+        $countStmt->expects($this->once())->method('row')->willReturn(['total' => 0]);
 
-        $listStmt = $this->createMock(\PDOStatement::class);
+        $listStmt = $this->createMock(DatabaseQueryResponse::class);
+        $listStmt->shape = 'rows';
+        $listStmt->checkParameters = true;
         $listStmt->expects($this->exactly(5))
-            ->method('bindValue')
-            ->willReturnCallback(function (string $key, $value, ?int $type = null) use (&$listBound) {
+            ->method('parameter')
+            ->willReturnCallback(function (string $key, $value, ?string $type = null) use (&$listBound) {
                 $listBound[$key] = [$value, $type];
                 return true;
             });
-        $listStmt->expects($this->once())->method('execute')->willReturn(true);
-        $listStmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $listStmt->expects($this->once())->method('bindings')->willReturn(true);
+        $listStmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(3))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use ($countStmt, $listStmt) {
-                static $prepareCalls = 0;
-                $prepareCalls++;
+                if (str_starts_with($sql, 'SHOW COLUMNS')) {
+                    return null;
+                }
+
                 $this->assertStringContainsString('m.title LIKE :search_title', $sql);
                 $this->assertStringContainsString('m.content LIKE :search_content', $sql);
-                return $prepareCalls === 1 ? $countStmt : $listStmt;
+                return str_contains($sql, 'COUNT(*)') ? $countStmt : $listStmt;
             });
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages', null, ['search' => 'eco']);
         $response = new \Slim\Psr7\Response();
 
@@ -135,25 +154,36 @@ class MessageControllerTest extends TestCase
 
     public function testGetMessageDetailMarksRead(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool =>
+                $entry['user_id'] === 9
+                && $entry['action'] === 'messages_marked_read'
+                && $entry['affected_table'] === 'messages'
+                && $entry['data']['scope'] === 'single'
+                && $entry['data']['requested_message_ids'] === [100]
+                && $entry['data']['affected_rows'] === 1
+        ));
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 9]);
 
         // select message
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn([
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn([
             'id' => 100, 'is_read' => false
         ]);
         // update read_at
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
+        $update->method('affected')->willReturn(1);
         
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages/100');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getMessageDetail($request, $response, ['id'=>100]);
@@ -165,20 +195,21 @@ class MessageControllerTest extends TestCase
 
     public function testGetUnreadCount(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 3]);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn([
             'total_unread'=>7,'urgent_unread'=>1,'high_unread'=>2,'system_unread'=>3,'notification_unread'=>4
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('GET', '/messages/unread-count');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getUnreadCount($request, $response);
@@ -190,18 +221,27 @@ class MessageControllerTest extends TestCase
 
     public function testMarkAllAsReadMarksWhenEmptyIds(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool =>
+                $entry['user_id'] === 10
+                && $entry['action'] === 'messages_marked_read'
+                && $entry['affected_table'] === 'messages'
+                && $entry['data']['scope'] === 'all'
+                && $entry['data']['requested_message_ids'] === []
+                && $entry['data']['affected_rows'] === 5
+        ));
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 10]);
 
-        $updateStmt = $this->createMock(\PDOStatement::class);
-        $updateStmt->method('execute')->willReturn(true);
-        $updateStmt->method('rowCount')->willReturn(5);
-        $pdo->method('prepare')->willReturn($updateStmt);
+        $updateStmt = $this->createMock(DatabaseQueryResponse::class);
+        $updateStmt->method('bindings')->willReturn(true);
+        $updateStmt->method('affected')->willReturn(5);
+        $connection->method('responseFor')->willReturn($updateStmt);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/mark-all-read', []);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAllAsRead($request, $response);
@@ -213,18 +253,27 @@ class MessageControllerTest extends TestCase
 
     public function testMarkAllAsReadWithIds(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool =>
+                $entry['user_id'] === 10
+                && $entry['action'] === 'messages_marked_read'
+                && $entry['affected_table'] === 'messages'
+                && $entry['data']['scope'] === 'selected'
+                && $entry['data']['requested_message_ids'] === [1, 2]
+                && $entry['data']['affected_rows'] === 2
+        ));
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 10]);
 
-        $updateStmt = $this->createMock(\PDOStatement::class);
-        $updateStmt->method('execute')->willReturn(true);
-        $updateStmt->method('rowCount')->willReturn(2);
-        $pdo->method('prepare')->willReturn($updateStmt);
+        $updateStmt = $this->createMock(DatabaseQueryResponse::class);
+        $updateStmt->method('bindings')->willReturn(true);
+        $updateStmt->method('affected')->willReturn(2);
+        $connection->method('responseFor')->willReturn($updateStmt);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/mark-all-read', ['message_ids' => [1,2]]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAllAsRead($request, $response);
@@ -234,20 +283,52 @@ class MessageControllerTest extends TestCase
         $this->assertEquals(2, $json['affected_rows']);
     }
 
+    public function testMarkSelectedMessagesAuditsOnlyChangedRows(): void
+    {
+        $connection = DatabaseFixture::sqlite();
+        $connection->statement('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, is_read INTEGER, updated_at DATETIME, deleted_at DATETIME)');
+        $connection->table('messages')->insert([
+            ['id' => 1, 'receiver_id' => 10, 'is_read' => 0, 'deleted_at' => null],
+            ['id' => 2, 'receiver_id' => 11, 'is_read' => 0, 'deleted_at' => null],
+            ['id' => 3, 'receiver_id' => 10, 'is_read' => 0, 'deleted_at' => '2025-01-01'],
+        ]);
+        $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool =>
+                $entry['data']['scope'] === 'selected'
+                && $entry['data']['requested_message_ids'] === [1, 2, 3]
+                && $entry['data']['affected_rows'] === 1
+        ));
+        $auth = $this->createMock(AuthService::class);
+        $auth->method('getCurrentUser')->willReturn(['id' => 10]);
+        $controller = $this->makeController($connection, $this->createMock(MessageService::class), $audit, $auth);
+        $request = makeRequest('PUT', '/api/v1/messages/mark-all-read', ['message_ids' => [1, 2, 3]]);
+
+        $first = $controller->markAllAsRead($request, new \Slim\Psr7\Response());
+        $retry = $controller->markAllAsRead($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(200, $first->getStatusCode());
+        $this->assertSame(1, json_decode((string) $first->getBody(), true)['affected_rows']);
+        $this->assertSame(0, json_decode((string) $retry->getBody(), true)['affected_rows']);
+        $this->assertSame([1, 0, 0], array_map('intval', $connection->table('messages')->orderBy('id')->pluck('is_read')->all()));
+    }
+
     public function testMarkAsReadNotOwnedReturns404(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->never())->method('log');
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 20]);
 
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(false);
-        $pdo->method('prepare')->willReturn($select);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(false);
+        $connection->method('responseFor')->willReturn($select);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/9/read');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAsRead($request, $response, ['id' => 9]);
@@ -256,22 +337,33 @@ class MessageControllerTest extends TestCase
 
     public function testMarkAsReadSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
+        $audit->expects($this->once())->method('log')->with($this->callback(
+            static fn (array $entry): bool =>
+                $entry['user_id'] === 21
+                && $entry['action'] === 'messages_marked_read'
+                && $entry['affected_table'] === 'messages'
+                && $entry['data']['scope'] === 'single'
+                && $entry['data']['requested_message_ids'] === [300]
+                && $entry['data']['affected_rows'] === 1
+        ));
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 21]);
 
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id' => 300]);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id' => 300]);
 
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
+        $update->method('affected')->willReturn(1);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('PUT', '/messages/300/read');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->markAsRead($request, $response, ['id' => 300]);
@@ -282,18 +374,19 @@ class MessageControllerTest extends TestCase
 
     public function testDeleteMessageNotOwned(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 22]);
 
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(false);
-        $pdo->method('prepare')->willReturn($select);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(false);
+        $connection->method('responseFor')->willReturn($select);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('DELETE', '/messages/12');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteMessage($request, $response, ['id' => 12]);
@@ -302,22 +395,23 @@ class MessageControllerTest extends TestCase
 
     public function testDeleteMessageSuccess(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 23]);
 
-        $select = $this->createMock(\PDOStatement::class);
-        $select->method('execute')->willReturn(true);
-        $select->method('fetch')->willReturn(['id' => 77]);
+        $select = $this->createMock(DatabaseQueryResponse::class);
+        $select->shape = 'row';
+        $select->method('bindings')->willReturn(true);
+        $select->method('row')->willReturn(['id' => 77]);
 
-        $update = $this->createMock(\PDOStatement::class);
-        $update->method('execute')->willReturn(true);
+        $update = $this->createMock(DatabaseQueryResponse::class);
+        $update->method('bindings')->willReturn(true);
 
-        $pdo->method('prepare')->willReturnOnConsecutiveCalls($select, $update);
+        $connection->method('responseFor')->willReturnOnConsecutiveCalls($select, $update);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('DELETE', '/messages/77');
         $response = new \Slim\Psr7\Response();
         $resp = $controller->deleteMessage($request, $response, ['id' => 77]);
@@ -326,42 +420,16 @@ class MessageControllerTest extends TestCase
         $this->assertTrue($json['success']);
     }
 
-    public function testGetMessageStatsAggregates(): void
-    {
-        $pdo = $this->createMock(\PDO::class);
-        $svc = $this->createMock(MessageService::class);
-        $audit = $this->createMock(AuditLogService::class);
-        $auth = $this->createMock(AuthService::class);
-        $auth->method('getCurrentUser')->willReturn(['id' => 30]);
-
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
-            ['type' => 'system', 'priority' => 'high', 'count' => 2, 'unread_count' => 1],
-            ['type' => 'notification', 'priority' => 'low', 'count' => 3, 'unread_count' => 0],
-        ]);
-        $pdo->method('prepare')->willReturn($stmt);
-
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
-        $request = makeRequest('GET', '/messages/stats');
-        $response = new \Slim\Psr7\Response();
-        $resp = $controller->getMessageStats($request, $response);
-        $this->assertEquals(200, $resp->getStatusCode());
-        $json = json_decode((string)$resp->getBody(), true);
-        $this->assertTrue($json['success']);
-        $this->assertEquals(5, $json['data']['by_type']['system']['total'] + $json['data']['by_type']['notification']['total']);
-    }
-
     public function testBroadcastRequiresAdmin(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 5, 'is_admin' => false]);
         $auth->method('isAdminUser')->willReturn(false);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', ['title' => 'Hello', 'content' => 'World']);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->sendSystemMessage($request, $response);
@@ -370,14 +438,14 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastValidatesPriority(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 6, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Test',
             'content' => 'Payload',
@@ -392,10 +460,9 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastSendsMessagesAndReportsInvalidIds(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -405,17 +472,17 @@ class MessageControllerTest extends TestCase
             status TEXT,
             deleted_at TEXT
         )');
-        $pdo->exec('CREATE TABLE schools (
+        $connection->unprepared('CREATE TABLE schools (
             id INTEGER PRIMARY KEY,
             name TEXT
         )');
 
-        $pdo->exec('CREATE TABLE system_logs (
+        $connection->unprepared('CREATE TABLE system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT
         )');
 
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT,
             audit_log_id INTEGER,
@@ -441,9 +508,9 @@ class MessageControllerTest extends TestCase
             updated_at TEXT
         )');
 
-        $insertUser = $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)');
-        $insertUser->execute([1, 'User One', 'one@example.com', 0, 'active', null]);
-        $insertUser->execute([3, 'User Three', 'three@example.com', 0, 'active', null]);
+        $insertUserSql = 'INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)';
+        $connection->statement($insertUserSql, [1, 'User One', 'one@example.com', 0, 'active', null]);
+        $connection->statement($insertUserSql, [3, 'User Three', 'three@example.com', 0, 'active', null]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -469,7 +536,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Announcement',
             'content' => 'Broadcast body',
@@ -495,10 +562,9 @@ class MessageControllerTest extends TestCase
 
     public function testHighPriorityBroadcastTriggersEmailBcc(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -508,17 +574,17 @@ class MessageControllerTest extends TestCase
             status TEXT,
             deleted_at TEXT
         )');
-        $pdo->exec('CREATE TABLE schools (
+        $connection->unprepared('CREATE TABLE schools (
             id INTEGER PRIMARY KEY,
             name TEXT
         )');
 
-        $pdo->exec('CREATE TABLE system_logs (
+        $connection->unprepared('CREATE TABLE system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT
         )');
 
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT,
             audit_log_id INTEGER,
@@ -544,8 +610,7 @@ class MessageControllerTest extends TestCase
             updated_at TEXT
         )');
 
-        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
-            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+        $connection->statement('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)', [5, 'User Five', 'user@example.com', 0, 'active', null]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -565,7 +630,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => 'System high priority',
@@ -587,10 +652,9 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastSupportsHtmlContentFormatMetadata(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -600,17 +664,17 @@ class MessageControllerTest extends TestCase
             status TEXT,
             deleted_at TEXT
         )');
-        $pdo->exec('CREATE TABLE schools (
+        $connection->unprepared('CREATE TABLE schools (
             id INTEGER PRIMARY KEY,
             name TEXT
         )');
 
-        $pdo->exec('CREATE TABLE system_logs (
+        $connection->unprepared('CREATE TABLE system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT
         )');
 
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT,
             audit_log_id INTEGER,
@@ -636,8 +700,7 @@ class MessageControllerTest extends TestCase
             updated_at TEXT
         )');
 
-        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
-            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+        $connection->statement('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)', [5, 'User Five', 'user@example.com', 0, 'active', null]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -679,7 +742,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => '<h1>Headline</h1><script>alert(1)</script><p>Body</p>',
@@ -699,7 +762,7 @@ class MessageControllerTest extends TestCase
         $this->assertSame(1, $json['render_version']);
         $this->assertSame('admin_broadcast', $json['source_kind']);
 
-        $metaRow = $pdo->query('SELECT meta FROM message_broadcasts ORDER BY id DESC LIMIT 1')->fetchColumn();
+        $metaRow = DatabaseRows::scalar($connection->selectOne('SELECT meta FROM message_broadcasts ORDER BY id DESC LIMIT 1'));
         $this->assertNotFalse($metaRow);
         $meta = json_decode((string)$metaRow, true);
         $this->assertSame('html', $meta['content_format']);
@@ -710,10 +773,9 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastSanitizerRemovesBlockedTagsNestedInsideUnsupportedWrappers(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             username TEXT,
             email TEXT,
@@ -723,17 +785,17 @@ class MessageControllerTest extends TestCase
             status TEXT,
             deleted_at TEXT
         )');
-        $pdo->exec('CREATE TABLE schools (
+        $connection->unprepared('CREATE TABLE schools (
             id INTEGER PRIMARY KEY,
             name TEXT
         )');
 
-        $pdo->exec('CREATE TABLE system_logs (
+        $connection->unprepared('CREATE TABLE system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT
         )');
 
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT,
             audit_log_id INTEGER,
@@ -759,8 +821,7 @@ class MessageControllerTest extends TestCase
             updated_at TEXT
         )');
 
-        $pdo->prepare('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)')
-            ->execute([5, 'User Five', 'user@example.com', 0, 'active', null]);
+        $connection->statement('INSERT INTO users (id, username, email, is_admin, status, deleted_at) VALUES (?,?,?,?,?,?)', [5, 'User Five', 'user@example.com', 0, 'active', null]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -810,7 +871,7 @@ class MessageControllerTest extends TestCase
 
         $audit->expects($this->once())->method('log');
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcast', [
             'title' => 'Alert',
             'content' => '<span><script>alert(1)</script></span><svg><script>alert(1)</script></svg><p>Safe body</p>',
@@ -828,7 +889,7 @@ class MessageControllerTest extends TestCase
         $this->assertSame('html', $json['content_format']);
         $this->assertSame(1, $json['render_version']);
 
-        $row = $pdo->query('SELECT content, meta FROM message_broadcasts ORDER BY id DESC LIMIT 1')->fetch(\PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($connection->selectOne('SELECT content, meta FROM message_broadcasts ORDER BY id DESC LIMIT 1'));
         $this->assertIsArray($row);
         $this->assertStringContainsString('<p>Safe body</p>', (string)$row['content']);
         $this->assertStringNotContainsString('<script', (string)$row['content']);
@@ -843,7 +904,7 @@ class MessageControllerTest extends TestCase
 
     public function testSearchBroadcastRecipientsReturnsData(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
@@ -851,15 +912,17 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('bindValue')->willReturn(true);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->checkParameters = true;
+        $stmt->method('parameter')->willReturn(true);
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('rows')->willReturn([
             ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school_id' => 1, 'school_name' => 'Canonical Green', 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
             ['id' => 11, 'username' => 'Bob', 'email' => 'bob@example.com', 'school_id' => 2, 'school_name' => 'Harbor Green', 'region_code' => null, 'is_admin' => 0, 'status' => 'active'],
         ]);
 
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
 
         $region = $this->createMock(RegionService::class);
         $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
@@ -877,8 +940,15 @@ class MessageControllerTest extends TestCase
             ];
         });
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
+        $controller = $this->makeController($connection, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
         $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, ['search' => 'example', 'limit' => 1]);
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request,
+            'admin_broadcast_recipients_searched',
+            1,
+            'users',
+            ['page' => 1, 'limit' => 1, 'recipient_ids' => [10]]
+        )->willReturn(true);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->searchBroadcastRecipients($request, $response);
 
@@ -894,7 +964,7 @@ class MessageControllerTest extends TestCase
 
     public function testSearchBroadcastRecipientsUsesNamedSearchAndIdBindings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
@@ -903,18 +973,20 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $stmt = $this->createMock(\PDOStatement::class);
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->checkParameters = true;
         $stmt->expects($this->exactly(6))
-            ->method('bindValue')
-            ->willReturnCallback(function ($key, $value, ?int $type = null) use (&$bound) {
+            ->method('parameter')
+            ->willReturnCallback(function ($key, $value, ?string $type = null) use (&$bound) {
                 $bound[$key] = [$value, $type];
                 return true;
             });
-        $stmt->expects($this->once())->method('execute')->willReturn(true);
-        $stmt->expects($this->once())->method('fetchAll')->willReturn([]);
+        $stmt->expects($this->once())->method('bindings')->willReturn(true);
+        $stmt->expects($this->once())->method('rows')->willReturn([]);
 
-        $pdo->expects($this->once())
-            ->method('prepare')
+        $connection->expects($this->once())
+            ->method('responseFor')
             ->with($this->callback(static function (string $sql): bool {
                 return str_contains($sql, 'u.username LIKE :search_0')
                     && str_contains($sql, 'u.email LIKE :search_1')
@@ -922,7 +994,7 @@ class MessageControllerTest extends TestCase
             }))
             ->willReturn($stmt);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('GET', '/admin/messages/broadcast/recipients', null, [
             'search' => 'alice',
             'fields' => 'username,email',
@@ -943,17 +1015,18 @@ class MessageControllerTest extends TestCase
 
     public function testResolveExplicitRecipientsUsesDisplayAliasesFromCanonicalFields(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
         $auth = $this->createMock(AuthService::class);
 
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('rows')->willReturn([
             ['id' => 10, 'username' => 'Alice', 'email' => 'alice@example.com', 'school_id' => 1, 'school_name' => 'Canonical Green', 'region_code' => 'US-UM-81', 'is_admin' => 0, 'status' => 'active'],
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
 
         $region = $this->createMock(RegionService::class);
         $region->method('getRegionContext')->willReturnCallback(static function (?string $value): ?array {
@@ -971,7 +1044,7 @@ class MessageControllerTest extends TestCase
             ];
         });
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
+        $controller = $this->makeController($connection, $svc, $audit, $auth, null, $this->makeUserProfileViewService($region));
 
         $method = new \ReflectionMethod($controller, 'resolveExplicitRecipients');
         $method->setAccessible(true);
@@ -984,9 +1057,11 @@ class MessageControllerTest extends TestCase
 
     public function testBroadcastHistoryReportsQueryFailuresWithHistoryAction(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $pdo->expects($this->once())->method('query')->willThrowException(new \PDOException('count failed'));
-        $pdo->expects($this->once())->method('prepare')->willThrowException(new \PDOException('list failed'));
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $connection->expects($this->exactly(2))->method('responseFor')
+            ->willReturnCallback(static function (string $sql): never {
+                throw new \RuntimeException(str_contains($sql, 'COUNT(*)') ? 'count failed' : 'list failed');
+            });
         $auth = $this->createMock(AuthService::class);
         $auth->method('getCurrentUser')->willReturn(['id' => 1, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
@@ -1000,7 +1075,7 @@ class MessageControllerTest extends TestCase
             }
         );
         $controller = $this->makeController(
-            $pdo,
+            $connection,
             $this->createMock(MessageService::class),
             $this->createMock(AuditLogService::class),
             $auth,
@@ -1018,10 +1093,9 @@ class MessageControllerTest extends TestCase
     /** @dataProvider broadcastRecipientQueryOutcomes */
     public function testGetBroadcastHistoryReturnsAggregatedData(bool $recipientLookupFails): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id TEXT,
             audit_log_id INTEGER,
@@ -1047,7 +1121,7 @@ class MessageControllerTest extends TestCase
             updated_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE messages (
+        $connection->unprepared('CREATE TABLE messages (
             id INTEGER PRIMARY KEY,
             receiver_id INTEGER,
             title TEXT,
@@ -1057,7 +1131,7 @@ class MessageControllerTest extends TestCase
             deleted_at TEXT
         )');
 
-        $pdo->exec('CREATE TABLE users (
+        $connection->unprepared('CREATE TABLE users (
             id INTEGER PRIMARY KEY,
             uuid TEXT,
             username TEXT,
@@ -1081,8 +1155,7 @@ class MessageControllerTest extends TestCase
             'errors' => [],
         ];
 
-        $insertBroadcast = $pdo->prepare('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-        $insertBroadcast->execute([
+        $connection->statement('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
             'abc-123',
             321,
             654,
@@ -1112,14 +1185,14 @@ class MessageControllerTest extends TestCase
             $createdAt,
         ]);
 
-        $msgStmt = $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at, deleted_at) VALUES (?,?,?,?,?,?,?)');
-        $msgStmt->execute([900, 1, $title, $content, 1, $createdAt, null]);
-        $msgStmt->execute([901, 2, $title, $content, 0, $createdAt, null]);
+        $msgSql = 'INSERT INTO messages (id, receiver_id, title, content, is_read, created_at, deleted_at) VALUES (?,?,?,?,?,?,?)';
+        $connection->statement($msgSql, [900, 1, $title, $content, 1, $createdAt, null]);
+        $connection->statement($msgSql, [901, 2, $title, $content, 0, $createdAt, null]);
 
-        $userStmt = $pdo->prepare('INSERT INTO users (id, uuid, username, email, status, is_admin) VALUES (?,?,?,?,?,?)');
-        $userStmt->execute([42, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'AdminUser', 'admin@example.com', 'active', 1]);
-        $userStmt->execute([1, '11111111-1111-4111-8111-111111111111', 'Alice', 'alice@example.com', 'active', 0]);
-        $userStmt->execute([2, '22222222-2222-4222-8222-222222222222', 'Bob', 'bob@example.com', 'inactive', 0]);
+        $userSql = 'INSERT INTO users (id, uuid, username, email, status, is_admin) VALUES (?,?,?,?,?,?)';
+        $connection->statement($userSql, [42, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'AdminUser', 'admin@example.com', 'active', 1]);
+        $connection->statement($userSql, [1, '11111111-1111-4111-8111-111111111111', 'Alice', 'alice@example.com', 'active', 0]);
+        $connection->statement($userSql, [2, '22222222-2222-4222-8222-222222222222', 'Bob', 'bob@example.com', 'inactive', 0]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -1128,11 +1201,18 @@ class MessageControllerTest extends TestCase
         $auth->method('isAdminUser')->willReturn(true);
 
         $request = makeRequest('GET', '/admin/messages/broadcasts');
+        $audit->expects($this->once())->method('logAdminRead')->with(
+            $request,
+            'admin_broadcast_history_viewed',
+            99,
+            'message_broadcasts',
+            ['page' => 1, 'limit' => 10, 'broadcast_ids' => [1]]
+        )->willReturn(true);
         $errorLog = $this->createMock(ErrorLogService::class);
         if ($recipientLookupFails) {
-            $pdo->exec('ALTER TABLE messages RENAME TO archived_messages');
+            $connection->unprepared('ALTER TABLE messages RENAME TO archived_messages');
             $errorLog->expects($this->once())->method('logException')->with(
-                $this->isInstanceOf(\PDOException::class),
+                $this->isInstanceOf(\Illuminate\Database\QueryException::class),
                 $request,
                 [
                     'controller' => 'MessageController',
@@ -1143,7 +1223,7 @@ class MessageControllerTest extends TestCase
         } else {
             $errorLog->expects($this->never())->method('logException');
         }
-        $controller = $this->makeController($pdo, $svc, $audit, $auth, errorLogService: $errorLog);
+        $controller = $this->makeController($connection, $svc, $audit, $auth, errorLogService: $errorLog);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->getBroadcastHistory($request, $response);
 
@@ -1196,13 +1276,11 @@ class MessageControllerTest extends TestCase
 
     public function testFlushBroadcastQueueMarksQueuedAsSentWithoutForce(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->sqliteCreateFunction('NOW', fn(): string => date('Y-m-d H:i:s'));
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
-        $pdo->exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
+        $connection->unprepared('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT,
             content TEXT,
@@ -1220,11 +1298,9 @@ class MessageControllerTest extends TestCase
         $createdAt = '2025-01-01 10:00:00';
         $hash = hash('sha256', $title . '||' . $content);
 
-        $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)')
-            ->execute([10, 'QueueUser', 'queue@example.com']);
+        $connection->statement('INSERT INTO users (id, username, email) VALUES (?,?,?)', [10, 'QueueUser', 'queue@example.com']);
 
-        $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)')
-            ->execute([501, 10, $title, $content, 0, $createdAt]);
+        $connection->statement('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)', [501, 10, $title, $content, 0, $createdAt]);
 
         $snapshot = json_encode([
             'triggered' => true,
@@ -1238,8 +1314,7 @@ class MessageControllerTest extends TestCase
             'completed_at' => null,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        $pdo->prepare('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)')
-            ->execute([1, $title, $content, $priority, $createdAt, $snapshot, json_encode([501]), $hash]);
+        $connection->statement('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)', [1, $title, $content, $priority, $createdAt, $snapshot, json_encode([501]), $hash]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -1248,7 +1323,7 @@ class MessageControllerTest extends TestCase
         $auth->method('getCurrentUser')->willReturn(['id' => 88, 'is_admin' => true]);
         $auth->method('isAdminUser')->willReturn(true);
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth);
+        $controller = $this->makeController($connection, $svc, $audit, $auth);
         $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->flushBroadcastEmailQueue($request, $response);
@@ -1259,7 +1334,7 @@ class MessageControllerTest extends TestCase
         $this->assertSame(1, $json['count']);
         $this->assertSame('sent', $json['processed'][0]['status']);
 
-        $snapshotRow = $pdo->query('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 1')->fetchColumn();
+        $snapshotRow = DatabaseRows::scalar($connection->selectOne('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 1'));
         $this->assertNotFalse($snapshotRow);
         $decoded = json_decode((string)$snapshotRow, true);
         $this->assertSame('sent', $decoded['status']);
@@ -1268,13 +1343,11 @@ class MessageControllerTest extends TestCase
 
     public function testFlushBroadcastQueueForceSendFailure(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->sqliteCreateFunction('NOW', fn(): string => date('Y-m-d H:i:s'));
+        $connection = DatabaseFixture::sqlite();
 
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
-        $pdo->exec('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
-        $pdo->exec('CREATE TABLE message_broadcasts (
+        $connection->unprepared('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT, deleted_at TEXT)');
+        $connection->unprepared('CREATE TABLE messages (id INTEGER PRIMARY KEY, receiver_id INTEGER, title TEXT, content TEXT, is_read INTEGER DEFAULT 0, created_at TEXT, deleted_at TEXT)');
+        $connection->unprepared('CREATE TABLE message_broadcasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT,
             content TEXT,
@@ -1292,11 +1365,9 @@ class MessageControllerTest extends TestCase
         $createdAt = '2025-02-02 09:00:00';
         $hash = hash('sha256', $title . '||' . $content);
 
-        $pdo->prepare('INSERT INTO users (id, username, email) VALUES (?,?,?)')
-            ->execute([20, 'ForceUser', 'force@example.com']);
+        $connection->statement('INSERT INTO users (id, username, email) VALUES (?,?,?)', [20, 'ForceUser', 'force@example.com']);
 
-        $pdo->prepare('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)')
-            ->execute([701, 20, $title, $content, 0, $createdAt]);
+        $connection->statement('INSERT INTO messages (id, receiver_id, title, content, is_read, created_at) VALUES (?,?,?,?,?,?)', [701, 20, $title, $content, 0, $createdAt]);
 
         $snapshot = json_encode([
             'triggered' => true,
@@ -1310,8 +1381,7 @@ class MessageControllerTest extends TestCase
             'completed_at' => null,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-        $pdo->prepare('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)')
-            ->execute([2, $title, $content, $priority, $createdAt, $snapshot, json_encode([701]), $hash]);
+        $connection->statement('INSERT INTO message_broadcasts (id, title, content, priority, created_at, email_delivery_snapshot, message_ids_snapshot, content_hash) VALUES (?,?,?,?,?,?,?,?)', [2, $title, $content, $priority, $createdAt, $snapshot, json_encode([701]), $hash]);
 
         $svc = $this->createMock(MessageService::class);
         $audit = $this->createMock(AuditLogService::class);
@@ -1326,7 +1396,7 @@ class MessageControllerTest extends TestCase
             ->willReturn(false);
         $emailService->method('getLastError')->willReturn('mailer down');
 
-        $controller = $this->makeController($pdo, $svc, $audit, $auth, $emailService);
+        $controller = $this->makeController($connection, $svc, $audit, $auth, $emailService);
         $request = makeRequest('POST', '/admin/messages/broadcasts/flush', ['limit' => 5, 'force' => 1]);
         $response = new \Slim\Psr7\Response();
         $resp = $controller->flushBroadcastEmailQueue($request, $response);
@@ -1337,7 +1407,7 @@ class MessageControllerTest extends TestCase
         $this->assertSame('failed', $json['processed'][0]['status']);
         $this->assertContains('mailer down', $json['processed'][0]['errors']);
 
-        $snapshotRow = $pdo->query('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 2')->fetchColumn();
+        $snapshotRow = DatabaseRows::scalar($connection->selectOne('SELECT email_delivery_snapshot FROM message_broadcasts WHERE id = 2'));
         $this->assertNotFalse($snapshotRow);
         $decoded = json_decode((string)$snapshotRow, true);
         $this->assertSame('failed', $decoded['status']);

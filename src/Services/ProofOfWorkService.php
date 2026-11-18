@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Monolog\Logger;
-use PDO;
 
 class ProofOfWorkService
 {
@@ -32,7 +33,7 @@ class ProofOfWorkService
     private ?ErrorLogService $errorLogService;
     private int $difficulty;
     private int $ttlSeconds;
-    private ?PDO $db;
+    private ?Connection $db;
     private \DateTimeZone $clockTimezone;
 
     public function __construct(
@@ -42,7 +43,7 @@ class ProofOfWorkService
         ?ErrorLogService $errorLogService = null,
         int $difficulty = 16,
         int $ttlSeconds = 120,
-        ?PDO $db = null
+        ?Connection $db = null
     ) {
         $secret = trim($secret);
         if ($secret === '') {
@@ -206,12 +207,9 @@ class ProofOfWorkService
         }
 
         try {
-            $stmt = $this->db->prepare(
-                'INSERT INTO proof_of_work_challenges (challenge_id, challenge_hash, scope, difficulty, expires_at, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ? , ?)'
-            );
             $now = $this->formatSql($this->now());
-            $stmt->execute([
+            $this->db->statement('INSERT INTO proof_of_work_challenges (challenge_id, challenge_hash, scope, difficulty, expires_at, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ? , ?)', [
                 (string)$payload['id'],
                 hash('sha256', $challenge),
                 (string)$payload['scope'],
@@ -234,25 +232,21 @@ class ProofOfWorkService
 
         try {
             $now = $this->formatSql($this->now());
-            $stmt = $this->db->prepare(
-                'UPDATE proof_of_work_challenges
+
+            return $this->db->affectingStatement('UPDATE proof_of_work_challenges
                  SET used_at = ?, updated_at = ?
                  WHERE challenge_id = ?
                    AND challenge_hash = ?
                    AND scope = ?
                    AND used_at IS NULL
-                   AND expires_at >= ?'
-            );
-            $stmt->execute([
+                   AND expires_at >= ?', [
                 $now,
                 $now,
                 $challengeId,
                 hash('sha256', $challenge),
                 $scope,
                 $now,
-            ]);
-
-            return $stmt->rowCount() === 1;
+            ]) === 1;
         } catch (\Throwable $e) {
             $this->logFailure('pow_challenge_consume_failed', $e, ['scope' => $scope]);
             return false;
@@ -266,11 +260,7 @@ class ProofOfWorkService
         }
 
         try {
-            $stmt = $this->db->prepare(
-                'SELECT COUNT(*) FROM pow_attempts WHERE ip_address = ? AND attempted_at >= ' . $this->sqlNowMinusSeconds(self::RATE_LIMIT_WINDOW_SECONDS)
-            );
-            $stmt->execute([$clientIp]);
-            $count = (int) $stmt->fetchColumn();
+            $count = (int) DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*) FROM pow_attempts WHERE ip_address = ? AND attempted_at >= ' . $this->sqlNowMinusSeconds(self::RATE_LIMIT_WINDOW_SECONDS), [$clientIp]));
             return $count >= self::ISSUANCE_RATE_LIMIT_PER_MINUTE;
         } catch (\Throwable $e) {
             // Fail-open on infra issues so a flaky DB does not lock all clients out
@@ -287,10 +277,7 @@ class ProofOfWorkService
         }
 
         try {
-            $stmt = $this->db->prepare(
-                'INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)'
-            );
-            $stmt->execute([$clientIp, $scope, $this->formatSql($this->now())]);
+            $this->db->statement('INSERT INTO pow_attempts (ip_address, scope, attempted_at) VALUES (?, ?, ?)', [$clientIp, $scope, $this->formatSql($this->now())]);
         } catch (\Throwable $e) {
             $this->logFailure('pow_attempt_record_failed', $e, ['ip_address' => $clientIp]);
         }
@@ -302,20 +289,16 @@ class ProofOfWorkService
             return 0;
         }
 
-        $stmt = $this->db->prepare(
-            'DELETE FROM pow_attempts WHERE attempted_at < ' . $this->sqlNowMinusSeconds(self::ATTEMPT_RETENTION_SECONDS)
-        );
-        $stmt->execute();
-        return $stmt->rowCount();
+        return $this->db->affectingStatement('DELETE FROM pow_attempts WHERE attempted_at < ' . $this->sqlNowMinusSeconds(self::ATTEMPT_RETENTION_SECONDS));
     }
 
     private function sqlNowMinusSeconds(int $seconds): string
     {
-        if ($this->db?->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        if ($this->db?->getDriverName() === 'sqlite') {
             return sprintf("datetime('now', '-%d seconds')", $seconds);
         }
 
-        return sprintf('NOW() - INTERVAL %d SECOND', $seconds);
+        return sprintf('CURRENT_TIMESTAMP - INTERVAL %d SECOND', $seconds);
     }
 
     public function cleanupExpiredChallenges(): array
@@ -326,20 +309,13 @@ class ProofOfWorkService
 
         try {
             $threshold = $this->formatSql($this->now()->modify('-600 seconds'));
-            $countStmt = $this->db->prepare(
-                'SELECT COUNT(*)
+            $deleted = (int)DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*)
                  FROM proof_of_work_challenges
                  WHERE expires_at < ?
-                    OR (used_at IS NOT NULL AND used_at < ?)'
-            );
-            $countStmt->execute([$threshold, $threshold]);
-            $deleted = (int)$countStmt->fetchColumn();
-            $stmt = $this->db->prepare(
-                'DELETE FROM proof_of_work_challenges
+                    OR (used_at IS NOT NULL AND used_at < ?)', [$threshold, $threshold]));
+            $this->db->statement('DELETE FROM proof_of_work_challenges
                  WHERE expires_at < ?
-                    OR (used_at IS NOT NULL AND used_at < ?)'
-            );
-            $stmt->execute([$threshold, $threshold]);
+                    OR (used_at IS NOT NULL AND used_at < ?)', [$threshold, $threshold]);
             $attemptsDeleted = $this->cleanupStaleIssuanceAttempts();
             return ['deleted' => $deleted, 'attempts_deleted' => $attemptsDeleted];
         } catch (\Throwable $e) {
@@ -419,7 +395,7 @@ class ProofOfWorkService
             $this->logger->warning('pow_audit_log_failed', [
                 'action' => $action,
                 'status' => $status,
-                'error' => $auditError->getMessage(),
+                'error' => DatabaseService::exceptionMessage($auditError),
             ] + $context);
         }
     }
@@ -427,7 +403,7 @@ class ProofOfWorkService
     private function logFailure(string $action, \Throwable $e, array $context): void
     {
         $this->logAudit($action, $context, 'failed');
-        $this->logger->warning($action, ['error' => $e->getMessage()] + $context);
+        $this->logger->warning($action, ['error' => DatabaseService::exceptionMessage($e)] + $context);
 
         if ($this->errorLogService === null) {
             return;
@@ -439,8 +415,8 @@ class ProofOfWorkService
         } catch (\Throwable $errorLogError) {
             $this->logger->warning('pow_error_log_failed', [
                 'action' => $action,
-                'error' => $errorLogError->getMessage(),
-                'original_error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($errorLogError),
+                'original_error' => DatabaseService::exceptionMessage($e),
             ] + $context);
         }
     }

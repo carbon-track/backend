@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AdminAiReadModelService;
 use CarbonTrack\Services\AdminAiWriteActionService;
 use CarbonTrack\Services\AuditLogService;
@@ -29,7 +30,7 @@ class AdminAiCronActionsTest extends TestCase
             ]);
 
         $service = new AdminAiReadModelService(
-            new \PDO('sqlite::memory:'),
+            DatabaseFixture::sqlite(),
             null,
             $scheduler
         );
@@ -68,7 +69,7 @@ class AdminAiCronActionsTest extends TestCase
         $audit->expects($this->exactly(2))->method('logAdminOperation');
 
         $service = new AdminAiWriteActionService(
-            new \PDO('sqlite::memory:'),
+            DatabaseFixture::sqlite(),
             $audit,
             $this->createMock(MessageService::class),
             $this->createMock(BadgeService::class),
@@ -115,7 +116,7 @@ class AdminAiCronActionsTest extends TestCase
         $audit->expects($this->once())->method('logAdminOperation');
 
         $service = new AdminAiWriteActionService(
-            new \PDO('sqlite::memory:'),
+            DatabaseFixture::sqlite(),
             $audit,
             $this->createMock(MessageService::class),
             $this->createMock(BadgeService::class),
@@ -140,7 +141,7 @@ class AdminAiCronActionsTest extends TestCase
         $scheduler->expects($this->never())->method('updateTask');
 
         $service = new AdminAiWriteActionService(
-            new \PDO('sqlite::memory:'),
+            DatabaseFixture::sqlite(),
             $this->createMock(AuditLogService::class),
             $this->createMock(MessageService::class),
             $this->createMock(BadgeService::class),
@@ -169,7 +170,7 @@ class AdminAiCronActionsTest extends TestCase
         $scheduler->expects($this->never())->method('runTaskNow');
 
         $service = new AdminAiWriteActionService(
-            new \PDO('sqlite::memory:'),
+            DatabaseFixture::sqlite(),
             $this->createMock(AuditLogService::class),
             $this->createMock(MessageService::class),
             $this->createMock(BadgeService::class),

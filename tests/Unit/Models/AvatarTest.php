@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Models;
 
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
 use PHPUnit\Framework\TestCase;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Services\ErrorLogService;
@@ -13,17 +15,18 @@ class AvatarTest extends TestCase
 {
     public function testGetAvailableAvatarsFiltersAndOrders(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('rows')->willReturn([
             ['id'=>1,'category'=>'c1','is_default'=>0],
             ['id'=>2,'category'=>'c1','is_default'=>1]
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $list = $model->getAvailableAvatars('c1');
         $this->assertCount(2, $list);
         $this->assertEquals('c1', $list[0]['category']);
@@ -31,15 +34,16 @@ class AvatarTest extends TestCase
 
     public function testGetAvailableAvatarsCanIncludeInactive(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->with(['c1'])->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
+        $stmt->method('bindings')->with(['c1'])->willReturn(true);
+        $stmt->method('rows')->willReturn([
             ['id' => 1, 'category' => 'c1', 'is_active' => 1],
             ['id' => 2, 'category' => 'c1', 'is_active' => 0],
         ]);
-        $pdo->expects($this->once())
-            ->method('prepare')
+        $connection->expects($this->once())
+            ->method('responseFor')
             ->with($this->callback(function (string $sql): bool {
                 $this->assertStringContainsString('WHERE deleted_at IS NULL', $sql);
                 $this->assertStringNotContainsString('AND is_active = 1', $sql);
@@ -48,7 +52,7 @@ class AvatarTest extends TestCase
             ->willReturn($stmt);
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $list = $model->getAvailableAvatars('c1', true);
         $this->assertCount(2, $list);
         $this->assertSame(0, $list[1]['is_active']);
@@ -56,24 +60,25 @@ class AvatarTest extends TestCase
 
     public function testGetAvatarByIdReturnsNullWhenNotFound(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willReturn(true);
-        $stmt->method('fetch')->willReturn(false);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'row';
+        $stmt->method('bindings')->willReturn(true);
+        $stmt->method('row')->willReturn(false);
+        $connection->method('responseFor')->willReturn($stmt);
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $res = $model->getAvatarById(999);
         $this->assertNull($res);
     }
 
     public function testGetAvailableAvatarsLogsViaLoggerWhenErrorLogServiceFails(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
-        $stmt->method('execute')->willThrowException(new \PDOException('db down'));
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->method('bindings')->willThrowException(new \RuntimeException('db down'));
+        $connection->method('responseFor')->willReturn($stmt);
 
         $errorLogService = $this->createMock(ErrorLogService::class);
         $errorLogService->method('logException')->willThrowException(new \RuntimeException('logger down'));
@@ -87,7 +92,7 @@ class AvatarTest extends TestCase
                 $loggedMessages[] = $message;
             });
 
-        $model = new Avatar($pdo, $logger, $errorLogService);
+        $model = new Avatar($connection, $logger, $errorLogService);
         $list = $model->getAvailableAvatars('c1');
 
         $this->assertSame([], $list);
@@ -99,10 +104,10 @@ class AvatarTest extends TestCase
 
     public function testCreateAvatarNormalizesEmptyStringNumericFields(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['generatedKey', 'responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
         $stmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with($this->callback(function (array $params): bool {
                 $this->assertCount(9, $params);
                 $this->assertIsString($params[0]);
@@ -114,11 +119,11 @@ class AvatarTest extends TestCase
                 return true;
             }))
             ->willReturn(true);
-        $pdo->method('prepare')->willReturn($stmt);
-        $pdo->method('lastInsertId')->willReturn('12');
+        $connection->method('responseFor')->willReturn($stmt);
+        $connection->method('generatedKey')->willReturn('12');
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $avatarId = $model->createAvatar([
             'name' => 'Demo Avatar',
             'file_path' => '/avatars/demo.png',
@@ -132,38 +137,38 @@ class AvatarTest extends TestCase
 
     public function testCreateAvatarClearsOtherDefaultsWhenNewAvatarIsDefault(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $resetStmt = $this->createMock(\PDOStatement::class);
-        $insertStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'generatedKey', 'responseFor', 'rollBack'])->getMock();
+        $resetStmt = $this->createMock(DatabaseQueryResponse::class);
+        $insertStmt = $this->createMock(DatabaseQueryResponse::class);
         $prepareCalls = [];
 
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->once())->method('commit')->willReturn(true);
-        $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->once())->method('commit')->willReturn(true);
+        $connection->expects($this->never())->method('rollBack');
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $resetStmt, $insertStmt) {
                 $prepareCalls[] = $sql;
                 return count($prepareCalls) === 1 ? $resetStmt : $insertStmt;
             });
 
         $resetStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([])
             ->willReturn(true);
 
         $insertStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with($this->callback(function (array $params): bool {
                 $this->assertSame(1, $params[8]);
                 return true;
             }))
             ->willReturn(true);
 
-        $pdo->method('lastInsertId')->willReturn('18');
+        $connection->method('generatedKey')->willReturn('18');
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $avatarId = $model->createAvatar([
             'name' => 'Default Avatar',
             'file_path' => '/avatars/default.png',
@@ -178,16 +183,16 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarNormalizesEmptyStringNumericFields(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
         $stmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([0, 0, 0, 7])
             ->willReturn(true);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $result = $model->updateAvatar(7, [
             'sort_order' => '',
             'is_active' => '',
@@ -199,34 +204,34 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarClearsOtherDefaultsWhenAvatarBecomesDefault(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $resetStmt = $this->createMock(\PDOStatement::class);
-        $updateStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'responseFor', 'rollBack'])->getMock();
+        $resetStmt = $this->createMock(DatabaseQueryResponse::class);
+        $updateStmt = $this->createMock(DatabaseQueryResponse::class);
         $prepareCalls = [];
 
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->once())->method('commit')->willReturn(true);
-        $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->once())->method('commit')->willReturn(true);
+        $connection->expects($this->never())->method('rollBack');
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $resetStmt, $updateStmt) {
                 $prepareCalls[] = $sql;
                 return count($prepareCalls) === 1 ? $resetStmt : $updateStmt;
             });
 
         $resetStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
 
         $updateStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([1, 7])
             ->willReturn(true);
 
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $result = $model->updateAvatar(7, [
             'is_default' => true,
         ]);
@@ -239,20 +244,21 @@ class AvatarTest extends TestCase
 
     public function testGetUsersAssignedToAvatarReturnsRecipients(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $stmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $stmt = $this->createMock(DatabaseQueryResponse::class);
+        $stmt->shape = 'rows';
         $stmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([5])
             ->willReturn(true);
-        $stmt->method('fetchAll')->willReturn([
+        $stmt->method('rows')->willReturn([
             ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
             ['id' => 202, 'username' => 'bob', 'email' => 'bob@example.com'],
         ]);
-        $pdo->method('prepare')->willReturn($stmt);
+        $connection->method('responseFor')->willReturn($stmt);
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $users = $model->getUsersAssignedToAvatar(5);
 
         $this->assertCount(2, $users);
@@ -261,19 +267,21 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarAndReassignUsersWrapsAvatarAndUserUpdatesInTransaction(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $userSelectStmt = $this->createMock(\PDOStatement::class);
-        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
-        $avatarStmt = $this->createMock(\PDOStatement::class);
-        $userUpdateStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'getDriverName', 'responseFor', 'rollBack'])->getMock();
+        $userSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userSelectStmt->shape = 'rows';
+        $fallbackSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackSelectStmt->shape = 'row';
+        $avatarStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userUpdateStmt = $this->createMock(DatabaseQueryResponse::class);
         $prepareCalls = [];
 
-        $pdo->method('getAttribute')->with(\PDO::ATTR_DRIVER_NAME)->willReturn('mysql');
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->once())->method('commit')->willReturn(true);
-        $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(4))
-            ->method('prepare')
+        $connection->method('getDriverName')->willReturn('mysql');
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->once())->method('commit')->willReturn(true);
+        $connection->expects($this->never())->method('rollBack');
+        $connection->expects($this->exactly(4))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt, $avatarStmt, $userUpdateStmt) {
                 $prepareCalls[] = $sql;
                 return match (count($prepareCalls)) {
@@ -285,24 +293,24 @@ class AvatarTest extends TestCase
             });
 
         $userSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
         $userSelectStmt->expects($this->once())
-            ->method('fetchAll')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('rows')
+            ->with()
             ->willReturn([
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
                 ['id' => 202, 'username' => 'bob', 'email' => 'bob@example.com'],
             ]);
 
         $fallbackSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7, 1])
             ->willReturn(true);
         $fallbackSelectStmt->expects($this->once())
-            ->method('fetch')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('row')
+            ->with()
             ->willReturn([
                 'id' => 1,
                 'name' => 'Default Seedling',
@@ -311,19 +319,19 @@ class AvatarTest extends TestCase
             ]);
 
         $avatarStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([0, 7])
             ->willReturn(true);
 
         $userUpdateStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([1, 7])
             ->willReturn(true);
-        $userUpdateStmt->method('rowCount')->willReturn(2);
+        $userUpdateStmt->method('affected')->willReturn(2);
 
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $reassigned = $model->updateAvatarAndReassignUsers(7, ['is_active' => false], 1);
 
         $this->assertSame(2, $reassigned['reassigned_user_count']);
@@ -338,19 +346,21 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarAndReassignUsersOmitsRowLocksForSqlite(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $userSelectStmt = $this->createMock(\PDOStatement::class);
-        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
-        $avatarStmt = $this->createMock(\PDOStatement::class);
-        $userUpdateStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'getDriverName', 'responseFor', 'rollBack'])->getMock();
+        $userSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userSelectStmt->shape = 'rows';
+        $fallbackSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackSelectStmt->shape = 'row';
+        $avatarStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userUpdateStmt = $this->createMock(DatabaseQueryResponse::class);
         $prepareCalls = [];
 
-        $pdo->method('getAttribute')->with(\PDO::ATTR_DRIVER_NAME)->willReturn('sqlite');
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->once())->method('commit')->willReturn(true);
-        $pdo->expects($this->never())->method('rollBack');
-        $pdo->expects($this->exactly(4))
-            ->method('prepare')
+        $connection->method('getDriverName')->willReturn('sqlite');
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->once())->method('commit')->willReturn(true);
+        $connection->expects($this->never())->method('rollBack');
+        $connection->expects($this->exactly(4))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt, $avatarStmt, $userUpdateStmt) {
                 $prepareCalls[] = $sql;
                 return match (count($prepareCalls)) {
@@ -362,23 +372,23 @@ class AvatarTest extends TestCase
             });
 
         $userSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
         $userSelectStmt->expects($this->once())
-            ->method('fetchAll')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('rows')
+            ->with()
             ->willReturn([
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
             ]);
 
         $fallbackSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7, 1])
             ->willReturn(true);
         $fallbackSelectStmt->expects($this->once())
-            ->method('fetch')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('row')
+            ->with()
             ->willReturn([
                 'id' => 1,
                 'name' => 'Default Seedling',
@@ -387,19 +397,19 @@ class AvatarTest extends TestCase
             ]);
 
         $avatarStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([0, 7])
             ->willReturn(true);
 
         $userUpdateStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([1, 7])
             ->willReturn(true);
-        $userUpdateStmt->method('rowCount')->willReturn(1);
+        $userUpdateStmt->method('affected')->willReturn(1);
 
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
         $reassigned = $model->updateAvatarAndReassignUsers(7, ['is_active' => false], 1);
 
         $this->assertSame(1, $reassigned['reassigned_user_count']);
@@ -409,42 +419,44 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarAndReassignUsersRequiresFallbackWhenUsersAreAssigned(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $userSelectStmt = $this->createMock(\PDOStatement::class);
-        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'responseFor', 'rollBack'])->getMock();
+        $userSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userSelectStmt->shape = 'rows';
+        $fallbackSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackSelectStmt->shape = 'row';
 
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->never())->method('commit');
-        $pdo->expects($this->once())->method('rollBack')->willReturn(true);
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->never())->method('commit');
+        $connection->expects($this->once())->method('rollBack')->willReturn(true);
         $prepareCalls = [];
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt) {
                 $prepareCalls[] = $sql;
                 return count($prepareCalls) === 1 ? $userSelectStmt : $fallbackSelectStmt;
             });
 
         $userSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
         $userSelectStmt->expects($this->once())
-            ->method('fetchAll')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('rows')
+            ->with()
             ->willReturn([
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
             ]);
         $fallbackSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
         $fallbackSelectStmt->expects($this->once())
-            ->method('fetch')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('row')
+            ->with()
             ->willReturn(false);
 
         $logger = $this->createMock(LoggerInterface::class);
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
 
         $this->expectException(\CarbonTrack\Models\AvatarFallbackUnavailableException::class);
 
@@ -453,43 +465,45 @@ class AvatarTest extends TestCase
 
     public function testUpdateAvatarAndReassignUsersRejectsStaleFallbackAvatarInsideTransaction(): void
     {
-        $pdo = $this->createMock(\PDO::class);
-        $userSelectStmt = $this->createMock(\PDOStatement::class);
-        $fallbackSelectStmt = $this->createMock(\PDOStatement::class);
+        $connection = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['beginTransaction', 'commit', 'responseFor', 'rollBack'])->getMock();
+        $userSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $userSelectStmt->shape = 'rows';
+        $fallbackSelectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $fallbackSelectStmt->shape = 'row';
         $prepareCalls = [];
 
-        $pdo->expects($this->once())->method('beginTransaction')->willReturn(true);
-        $pdo->expects($this->never())->method('commit');
-        $pdo->expects($this->once())->method('rollBack')->willReturn(true);
-        $pdo->expects($this->exactly(2))
-            ->method('prepare')
+        $connection->expects($this->once())->method('beginTransaction')->willReturn(true);
+        $connection->expects($this->never())->method('commit');
+        $connection->expects($this->once())->method('rollBack')->willReturn(true);
+        $connection->expects($this->exactly(2))
+            ->method('responseFor')
             ->willReturnCallback(function (string $sql) use (&$prepareCalls, $userSelectStmt, $fallbackSelectStmt) {
                 $prepareCalls[] = $sql;
                 return count($prepareCalls) === 1 ? $userSelectStmt : $fallbackSelectStmt;
             });
 
         $userSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7])
             ->willReturn(true);
         $userSelectStmt->expects($this->once())
-            ->method('fetchAll')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('rows')
+            ->with()
             ->willReturn([
                 ['id' => 101, 'username' => 'alice', 'email' => 'alice@example.com'],
             ]);
 
         $fallbackSelectStmt->expects($this->once())
-            ->method('execute')
+            ->method('bindings')
             ->with([7, 1])
             ->willReturn(true);
         $fallbackSelectStmt->expects($this->once())
-            ->method('fetch')
-            ->with(\PDO::FETCH_ASSOC)
+            ->method('row')
+            ->with()
             ->willReturn(false);
 
         $logger = $this->createMock(LoggerInterface::class);
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
 
         $this->expectException(\CarbonTrack\Models\AvatarFallbackUnavailableException::class);
 
@@ -498,10 +512,10 @@ class AvatarTest extends TestCase
 
     public function testCreateAvatarRejectsInvalidNonEmptyNumericStrings(): void
     {
-        $pdo = $this->createMock(\PDO::class);
+        $connection = new DatabaseConnectionStub();
         $logger = $this->createMock(LoggerInterface::class);
 
-        $model = new Avatar($pdo, $logger);
+        $model = new Avatar($connection, $logger);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('sort_order must be an integer');

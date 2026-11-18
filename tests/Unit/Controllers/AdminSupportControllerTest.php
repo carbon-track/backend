@@ -81,7 +81,7 @@ class AdminSupportControllerTest extends TestCase
     ): void {
         $request = makeRequest('PUT', '/api/v1/admin/support/' . $resource . '/42', ['name' => 'Test']);
         $args = ['id' => '42'];
-        $databaseFailure = new \PDOException('database unavailable');
+        $databaseFailure = new \RuntimeException('database unavailable');
         $missingResource = new SupportOperationException('Resource not found');
         $service = $this->createMock(SupportAutomationService::class);
         $service->expects($this->exactly(2))->method($serviceMethod)->willReturnOnConsecutiveCalls(

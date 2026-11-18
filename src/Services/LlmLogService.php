@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
-use PDO;
+use Illuminate\Database\Connection;
 use Monolog\Logger;
 
 /**
@@ -13,7 +13,7 @@ use Monolog\Logger;
  */
 class LlmLogService
 {
-    private PDO $db;
+    private Connection $db;
     private Logger $logger;
 
     private int $maxPromptLength = 8000;
@@ -21,7 +21,7 @@ class LlmLogService
     private int $maxErrorLength = 4000;
     private int $maxContextLength = 8000;
 
-    public function __construct(PDO $db, Logger $logger)
+    public function __construct(Connection $db, Logger $logger)
     {
         $this->db = $db;
         $this->logger = $logger;
@@ -53,12 +53,12 @@ class LlmLogService
 
             $latencyMs = isset($data['latency_ms']) ? (float) $data['latency_ms'] : null;
 
-            $stmt = $this->db->prepare("INSERT INTO llm_logs (
+
+
+            $id = DatabaseService::insertGetId($this->db, "INSERT INTO llm_logs (
                 request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, response_id,
                 status, error_message, prompt_tokens, completion_tokens, total_tokens, latency_ms, usage_json, context_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-
-            $stmt->execute([
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
                 $requestId,
                 $actorType,
                 $actorId,
@@ -78,13 +78,11 @@ class LlmLogService
                 $usageJson,
                 $contextJson,
             ]);
-
-            $id = (int) $this->db->lastInsertId();
             return $id > 0 ? $id : null;
         } catch (\Throwable $e) {
             try {
                 $this->logger->warning('LLM log insert failed', [
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
             } catch (\Throwable $ignore) {
                 // swallow secondary logging failure

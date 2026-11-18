@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
@@ -21,16 +24,15 @@ use Slim\Psr7\Response;
 
 final class AuthRefreshTest extends TestCase
 {
-    private PDO $pdo;
+    private Connection $connection;
     private AuthService $authService;
 
     protected function setUp(): void
     {
-        $this->pdo = new PDO('sqlite::memory:');
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->exec("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT);");
-        $this->pdo->exec("CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT);");
-        $this->pdo->exec("
+        $this->connection = DatabaseFixture::sqlite();
+        $this->connection->unprepared("CREATE TABLE schools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT);");
+        $this->connection->unprepared("CREATE TABLE avatars (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT);");
+        $this->connection->unprepared("
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT,
@@ -79,7 +81,7 @@ final class AuthRefreshTest extends TestCase
             $message,
             $r2,
             $logger,
-            $this->pdo,
+            $this->connection,
             $errorLog,
             $region
         );
@@ -88,10 +90,10 @@ final class AuthRefreshTest extends TestCase
     private function seedUser(): array
     {
         $now = date('Y-m-d H:i:s');
-        $this->pdo->prepare("
+        $this->connection->statement("
             INSERT INTO users (uuid, username, email, password, role, points, region_code, email_verified_at, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ")->execute([
+        ", [
             '11111111-1111-4111-8111-111111111111',
             'refresh_user',
             'refresh@example.com',
@@ -104,8 +106,8 @@ final class AuthRefreshTest extends TestCase
             $now,
         ]);
 
-        $id = (int) $this->pdo->lastInsertId();
-        return $this->pdo->query("SELECT * FROM users WHERE id = {$id}")->fetch(PDO::FETCH_ASSOC);
+        $id = (int) DatabaseRows::scalar($this->connection->selectOne('SELECT last_insert_rowid()'));
+        return DatabaseRows::one($this->connection->selectOne("SELECT * FROM users WHERE id = {$id}"));
     }
 
     private function makeRequest(?string $token, string $path = '/api/v1/auth/refresh'): Request

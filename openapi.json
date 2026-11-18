@@ -1102,6 +1102,33 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by a substring of the class name."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
           }
         ],
         "responses": {
@@ -1441,7 +1468,7 @@
           "Carbon Records"
         ],
         "summary": "获取碳减排记录列表（管理员审核）",
-        "description": "管理员分页获取碳减排记录列表，支持按审核状态、关键字、活动、日期与排序方式筛选，用于审核后台。",
+        "description": "管理员分页获取碳减排记录列表，支持按审核状态、关键字、活动、日期与排序方式筛选，用于审核后台。\n\nSuccessful reads record the effective pagination and returned record IDs in the admin_carbon_records_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -2427,7 +2454,7 @@
         ],
         "responses": {
           "200": {
-            "description": "会话详情获取成功。",
+            "description": "会话详情获取成功，审计动作记录为 admin_ai_conversation_viewed。",
             "content": {
               "application/json": {
                 "schema": {
@@ -2457,7 +2484,7 @@
             }
           },
           "422": {
-            "description": "conversation_id 无效。",
+            "description": "conversation_id 无效，错误码为 INVALID_CONVERSATION_ID，审计动作记录为 admin_ai_conversation_view_failed。",
             "content": {
               "application/json": {
                 "schema": {
@@ -4377,7 +4404,7 @@
           "Carbon Activities"
         ],
         "summary": "待审核碳记录列表 (别名)",
-        "description": "管理员兼容别名接口：获取待审核碳记录列表。\n\nDeprecated alias. Use `/api/v1/admin/activities` as the canonical runtime path.",
+        "description": "管理员兼容别名接口：获取待审核碳记录列表。\n\nDeprecated alias. Use `/api/v1/admin/activities` as the canonical runtime path.\n\nSuccessful reads record the effective pagination and returned record IDs in the admin_carbon_records_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -4676,7 +4703,7 @@
           "Carbon Records"
         ],
         "summary": "待审核碳记录列表 (别名)",
-        "description": "管理员兼容别名接口：获取待审核碳记录列表。\n\nDeprecated alias. Use `/api/v1/admin/activities` as the canonical runtime path.",
+        "description": "管理员兼容别名接口：获取待审核碳记录列表。\n\nDeprecated alias. Use `/api/v1/admin/activities` as the canonical runtime path.\n\nSuccessful reads record the effective pagination and returned record IDs in the admin_carbon_records_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -4883,7 +4910,7 @@
           "Exchange"
         ],
         "summary": "获取兑换记录列表 (管理员)",
-        "description": "管理员分页获取兑换记录列表，可按状态、关键词和排序方式筛选，用于兑换履约与售后处理。",
+        "description": "管理员分页获取兑换记录列表，可按状态、关键词和排序方式筛选，用于兑换履约与售后处理。\n\nSuccessful reads record the effective pagination and returned exchange IDs in the admin_exchange_records_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -5012,7 +5039,7 @@
           "Exchange"
         ],
         "summary": "获取兑换记录详情 (管理员)",
-        "description": "管理员获取单条兑换记录详情，包含用户、商品与履约信息。",
+        "description": "管理员获取单条兑换记录详情，包含用户、商品与履约信息。\n\nSuccessful reads record the returned exchange ID in the admin_exchange_record_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -6344,7 +6371,7 @@
           "Messages"
         ],
         "summary": "搜索广播收件人",
-        "description": "管理员搜索广播收件人，支持按关键字、学校、邮箱后缀、状态与管理员标记筛选。",
+        "description": "管理员搜索广播收件人，支持按关键字、学校、邮箱后缀、状态与管理员标记筛选。\n\nSuccessful reads record the effective pagination and returned user IDs in the admin_broadcast_recipients_searched audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -6465,7 +6492,7 @@
           "Messages"
         ],
         "summary": "获取广播历史 (管理员)",
-        "description": "获取广播历史及其渲染元数据，用于管理端统一预览历史公告内容。",
+        "description": "获取广播历史及其渲染元数据，用于管理端统一预览历史公告内容。\n\nSuccessful reads record the effective pagination and returned broadcast IDs in the admin_broadcast_history_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -8226,7 +8253,7 @@
         "tags": [
           "Admin"
         ],
-        "summary": "获取待审核碳记录 (管理员)",
+        "summary": "获取待审核积分交易 (管理员)",
         "security": [
           {
             "bearerAuth": []
@@ -8258,7 +8285,7 @@
           }
         },
         "operationId": "adminGetPendingTransactions",
-        "description": "获取待审核碳记录 (管理员)详细信息。"
+        "description": "分页获取待审核积分交易。成功时审计记录访问者、页码、每页数量及返回的交易 ID。"
       }
     },
     "/api/v1/admin/users": {
@@ -8629,7 +8656,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回指定用户的徽章列表。",
+            "description": "成功返回指定用户的徽章列表。\n\nSuccessful reads record the target user ID and whether revoked badges were included in the admin_user_badges_viewed audit entry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8678,7 +8705,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。",
+            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。\n\nSuccessful reads record the target user ID in the admin_user_overview_viewed audit entry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9062,7 +9089,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回指定用户的徽章列表。",
+            "description": "成功返回指定用户的徽章列表。\n\nSuccessful reads record the resolved user ID and whether revoked badges were included in the admin_user_badges_viewed audit entry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9112,7 +9139,7 @@
         ],
         "responses": {
           "200": {
-            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。",
+            "description": "成功返回用户概览、Passkey 摘要与最近安全活动。\n\nSuccessful reads record the resolved user ID in the admin_user_overview_viewed audit entry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10330,7 +10357,7 @@
             }
           },
           "501": {
-            "description": "当前部署未接入可用 WebAuthn 校验器。",
+            "description": "运行网站的 PHP 尚未启用 OpenSSL 扩展。",
             "content": {
               "application/json": {
                 "schema": {
@@ -11556,7 +11583,7 @@
           "Carbon Records"
         ],
         "summary": "获取碳记录详情",
-        "description": "获取单条碳记录详情。普通用户仅可查看自己的记录，管理员可查看任意记录。",
+        "description": "获取单条碳记录详情。普通用户仅可查看自己的记录，管理员可查看任意记录。\n\nSuccessful administrator reads record the returned record ID in the admin_carbon_record_viewed audit entry.",
         "security": [
           {
             "bearerAuth": []
@@ -14486,6 +14513,33 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by a substring of the class name."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
           }
         ],
         "responses": {
@@ -15925,7 +15979,7 @@
             }
           },
           "501": {
-            "description": "当前环境尚未安装或接入 WebAuthn PHP 校验库。",
+            "description": "运行网站的 PHP 尚未启用 OpenSSL 扩展。",
             "content": {
               "application/json": {
                 "schema": {
@@ -26696,12 +26750,6 @@
           "available": {
             "type": "boolean"
           },
-          "expected_class": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "reason": {
             "type": [
               "string",
@@ -26712,7 +26760,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "example": "openssl"
           },
           "enabled": {
             "type": "boolean"
@@ -28399,9 +28448,9 @@
               "null"
             ]
           },
-          "type": {
+          "sender_id": {
             "type": [
-              "string",
+              "integer",
               "null"
             ]
           },

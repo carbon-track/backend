@@ -19,7 +19,7 @@ class MessageTest extends TestCase
     public function testCreateSystemMessagePersistsPriorityWhenColumnAvailable(): void
     {
         MessagePriorityStub::$priorityColumnPresent = true;
-        MessagePriorityStub::createSystemMessage(5, 'Broadcast', 'Body', Message::TYPE_SYSTEM, Message::PRIORITY_URGENT);
+        MessagePriorityStub::createSystemMessage(5, 'Broadcast', 'Body', Message::PRIORITY_URGENT);
 
         $this->assertArrayHasKey('priority', MessagePriorityStub::$lastPayload);
         $this->assertSame(Message::PRIORITY_URGENT, MessagePriorityStub::$lastPayload['priority']);
@@ -28,7 +28,7 @@ class MessageTest extends TestCase
     public function testCreateSystemMessageNormalizesInvalidPriority(): void
     {
         MessagePriorityStub::$priorityColumnPresent = true;
-        MessagePriorityStub::createSystemMessage(7, 'Notice', 'Content', Message::TYPE_SYSTEM, 'super-high');
+        MessagePriorityStub::createSystemMessage(7, 'Notice', 'Content', 'super-high');
 
         $this->assertArrayHasKey('priority', MessagePriorityStub::$lastPayload);
         $this->assertSame(Message::PRIORITY_NORMAL, MessagePriorityStub::$lastPayload['priority']);

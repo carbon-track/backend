@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Services\Ai\LlmClientInterface;
 use CarbonTrack\Services\Ai\StreamCapableLlmClientInterface;
 use CarbonTrack\Support\SyntheticRequestFactory;
-use PDO;
 use Psr\Log\LoggerInterface;
 
 class AdminAiAgentService
@@ -56,7 +57,7 @@ class AdminAiAgentService
     private AdminAiRollbackService $rollbackService;
 
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private ?LlmClientInterface $client,
         private LoggerInterface $logger,
         array $config = [],
@@ -193,7 +194,7 @@ class AdminAiAgentService
         }
 
         $outcome = $this->processModelResponse($conversationId, $normalizedMessage, $normalizedContext, $logContext, $rawResponse);
-        $this->updateLlmConversationSnapshot($llmLogId, $normalizedMessage, $outcome, $normalizedContext);
+        $this->updateLlmConversationSnapshot($llmLogId, $normalizedMessage, $outcome, $normalizedContext, $logContext);
 
         if (($outcome['assistant_text'] ?? '') !== '') {
             $this->conversationStoreService->logConversationEvent('admin_ai_assistant_message', $logContext, [
@@ -284,7 +285,7 @@ class AdminAiAgentService
                     'run_id' => $runId,
                 ]));
             } catch (\Throwable $exception) {
-                $this->conversationStoreService->finishRun($runId, 'error', $exception->getMessage(), [
+                $this->conversationStoreService->finishRun($runId, 'error', DatabaseService::exceptionMessage($exception), [
                     'decision' => $decision,
                 ]);
                 throw $exception;
@@ -338,7 +339,7 @@ class AdminAiAgentService
                 $autonomyMode
             );
         } catch (\Throwable $exception) {
-            $this->conversationStoreService->finishRun($runId, 'error', $exception->getMessage(), [
+            $this->conversationStoreService->finishRun($runId, 'error', DatabaseService::exceptionMessage($exception), [
                 'message' => $normalizedMessage,
             ]);
             throw $exception;
@@ -688,7 +689,7 @@ class AdminAiAgentService
                 }
                 $llmLogId = $this->logLlmCall($payload['messages'], $rawResponse, $logContext, $context, $conversationId, $turnNo + $stepIndex, $startedAt);
             } catch (\Throwable $exception) {
-                if ($exception->getMessage() === 'STREAM_CLIENT_DISCONNECTED') {
+                if (DatabaseService::exceptionMessage($exception) === 'STREAM_CLIENT_DISCONNECTED') {
                     throw $exception;
                 }
                 $this->logLlmFailure($payload['messages'], $logContext, $context, $conversationId, $turnNo + $stepIndex, $startedAt, $exception);
@@ -704,7 +705,7 @@ class AdminAiAgentService
                         'conversation_id' => $conversationId,
                         'run_id' => $runId,
                         'step_index' => $stepIndex,
-                        'error' => $exception->getMessage(),
+                        'error' => DatabaseService::exceptionMessage($exception),
                     ]);
                     return $recoveredOutcome;
                 }
@@ -732,7 +733,7 @@ class AdminAiAgentService
                         'assistant_text' => $content !== '' ? $content : ($assistantParts !== [] ? implode("\n\n", $assistantParts) : '我暂时无法完成这项操作，请再具体一些。'),
                         'metadata' => $this->extractMetadata($rawResponse),
                     ];
-                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $outcome, $context);
+                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $outcome, $context, $logContext);
                     return $outcome;
                 }
             }
@@ -770,7 +771,7 @@ class AdminAiAgentService
                     $lastOutcome = $blockingOutcomes !== []
                         ? $this->mergeBlockingToolOutcomes($blockingOutcomes, $assistantParts, $lastOutcome, $runId)
                         : $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_tool_executions', [], $context);
-                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+                    $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context, $logContext);
                     return $lastOutcome;
                 }
 
@@ -804,7 +805,7 @@ class AdminAiAgentService
 
             if ($blockingOutcomes !== []) {
                 $lastOutcome = $this->mergeBlockingToolOutcomes($blockingOutcomes, $assistantParts, $lastOutcome, $runId);
-                $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+                $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context, $logContext);
                 return $lastOutcome;
             }
 
@@ -812,7 +813,7 @@ class AdminAiAgentService
                 $messages[] = $this->buildToolContinuationMessage($context);
             }
 
-            $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context);
+            $this->updateLlmConversationSnapshot($llmLogId, $userMessage, $lastOutcome, $context, $logContext);
         }
 
         return $this->buildAgentLimitOutcome($assistantParts, $runId, 'max_steps', $lastOutcome, $context);
@@ -1303,12 +1304,12 @@ class AdminAiAgentService
                 ],
             };
         } catch (\Throwable $exception) {
-            $this->conversationStoreService->finishRunStep($runId, $stepId, 'error', null, $exception->getMessage());
+            $this->conversationStoreService->finishRunStep($runId, $stepId, 'error', null, DatabaseService::exceptionMessage($exception));
             $emitEvent('tool.error', [
                 'step_id' => $stepId,
                 'model_tool_call_id' => $modelToolCallId !== '' ? $modelToolCallId : null,
                 'tool_name' => $functionName,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
             throw $exception;
         }
@@ -1615,7 +1616,7 @@ class AdminAiAgentService
                 $meta['rollback_available'] = $rollback;
             }
         } catch (\Throwable $exception) {
-            $this->conversationStoreService->updateProposalStatus($proposalId, 'failed', ['decision' => 'confirmed', 'error' => $exception->getMessage()]);
+            $this->conversationStoreService->updateProposalStatus($proposalId, 'failed', ['decision' => 'confirmed', 'error' => DatabaseService::exceptionMessage($exception)]);
             $this->conversationStoreService->logConversationEvent('admin_ai_action_failed', $logContext, [
                 'conversation_id' => $conversationId,
                 'proposal_id' => $proposalId,
@@ -1633,7 +1634,7 @@ class AdminAiAgentService
             $meta = [
                 'decision' => 'confirmed',
                 'proposal_id' => $proposalId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
                 'message_i18n' => $assistantMessageI18n,
             ];
         }
@@ -2023,7 +2024,7 @@ class AdminAiAgentService
             'prompt' => $messages,
             'response_raw' => null,
             'status' => 'failed',
-            'error_message' => $exception->getMessage(),
+            'error_message' => DatabaseService::exceptionMessage($exception),
             'latency_ms' => round((microtime(true) - $startedAt) * 1000, 2),
             'context' => [
                 'conversation_context' => $context,
@@ -2048,8 +2049,8 @@ class AdminAiAgentService
             $this->errorLogService->logException($exception, $request, $extra);
         } catch (\Throwable $loggingError) {
             $this->logger->warning('Failed to persist admin AI error log.', [
-                'error' => $loggingError->getMessage(),
-                'original_error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($loggingError),
+                'original_error' => DatabaseService::exceptionMessage($exception),
             ]);
         }
     }
@@ -2058,16 +2059,19 @@ class AdminAiAgentService
      * @param array<string,mixed> $outcome
      * @param array<string,mixed> $context
      */
-    private function updateLlmConversationSnapshot(?int $llmLogId, string $userMessage, array $outcome, array $context): void
-    {
+    private function updateLlmConversationSnapshot(
+        ?int $llmLogId,
+        string $userMessage,
+        array $outcome,
+        array $context,
+        array $logContext
+    ): void {
         if ($llmLogId === null) {
             return;
         }
 
         try {
-            $stmt = $this->db->prepare('SELECT context_json FROM llm_logs WHERE id = :id LIMIT 1');
-            $stmt->execute([':id' => $llmLogId]);
-            $existing = $this->decodeJson($stmt->fetchColumn() ?: null);
+            $existing = $this->decodeJson(DatabaseRows::scalar($this->db->selectOne('SELECT context_json FROM llm_logs WHERE id = :id LIMIT 1', [':id' => $llmLogId])) ?: null);
             $existing['conversation_context'] = $context;
             $existing['conversation_snapshot'] = array_filter([
                 'user_message' => $userMessage !== '' ? $userMessage : null,
@@ -2081,15 +2085,18 @@ class AdminAiAgentService
                 'metadata' => isset($outcome['metadata']) && is_array($outcome['metadata']) ? $outcome['metadata'] : null,
             ], static fn ($value) => $value !== null && $value !== '');
 
-            $update = $this->db->prepare('UPDATE llm_logs SET context_json = :context_json WHERE id = :id');
-            $update->execute([
+            $this->db->statement('UPDATE llm_logs SET context_json = :context_json WHERE id = :id', [
                 ':context_json' => json_encode($existing, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 ':id' => $llmLogId,
             ]);
         } catch (\Throwable $exception) {
+            $this->logError($exception, $logContext, [
+                'context_message' => 'Failed to update admin AI LLM conversation snapshot',
+                'llm_log_id' => $llmLogId,
+            ]);
             $this->logger->warning('Failed to update admin AI LLM conversation snapshot.', [
                 'llm_log_id' => $llmLogId,
-                'error' => $exception->getMessage(),
+                'error' => DatabaseService::exceptionMessage($exception),
             ]);
         }
     }
@@ -2260,7 +2267,7 @@ class AdminAiAgentService
     {
         $messages = [];
         do {
-            $messages[] = $exception::class . ': ' . $exception->getMessage();
+            $messages[] = $exception::class . ': ' . DatabaseService::exceptionMessage($exception);
             $exception = $exception->getPrevious();
         } while ($exception instanceof \Throwable);
 

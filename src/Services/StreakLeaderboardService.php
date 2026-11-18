@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeZone;
 use Monolog\Logger;
-use PDO;
 
 class StreakLeaderboardService
 {
@@ -17,7 +17,7 @@ class StreakLeaderboardService
     private const REGION_LIMIT = 20;
     private const SCHOOL_LIMIT = 20;
 
-    private PDO $db;
+    private Connection $db;
     private RegionService $regionService;
     private ?Logger $logger;
     private string $cacheFile;
@@ -28,7 +28,7 @@ class StreakLeaderboardService
     private UserProfileViewService $userProfileViewService;
 
     public function __construct(
-        PDO $db,
+        Connection $db,
         RegionService $regionService,
         ?Logger $logger = null,
         ?string $cacheDir = null,
@@ -91,7 +91,7 @@ class StreakLeaderboardService
                 'reason' => $reason,
             ]);
             $this->log('error', 'Failed to rebuild streak leaderboard cache', [
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
                 'reason' => $reason,
             ]);
             return $this->readCache() ?? [
@@ -120,8 +120,6 @@ class StreakLeaderboardService
                 LEFT JOIN avatars a ON u.avatar_id = a.id
                 ORDER BY uc.user_id ASC, uc.checkin_date ASC";
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute();
 
         $today = new DateTimeImmutable('now', $this->timezone);
         $todayStr = $today->format('Y-m-d');
@@ -131,7 +129,8 @@ class StreakLeaderboardService
         $currentUserId = null;
         $current = null;
 
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        foreach ($this->db->cursor($sql) as $row) {
+            $row = (array) $row;
             $userId = isset($row['user_id']) ? (int) $row['user_id'] : 0;
             if ($userId <= 0) {
                 continue;

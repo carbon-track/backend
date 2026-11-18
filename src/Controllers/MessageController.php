@@ -2,6 +2,9 @@
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\MessageService;
@@ -11,7 +14,6 @@ use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\EmailService;
 use CarbonTrack\Services\UserProfileViewService;
 use CarbonTrack\Models\Message;
-use PDO;
 
 class MessageController
 {
@@ -21,7 +23,7 @@ class MessageController
     private const BROADCAST_RENDER_VERSION_HTML = 1;
     private const BROADCAST_SOURCE_KIND_ADMIN = 'admin_broadcast';
 
-    private PDO $db;
+    private Connection $db;
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
@@ -30,7 +32,7 @@ class MessageController
     private UserProfileViewService $userProfileViewService;
 
     public function __construct(
-        PDO $db,
+        Connection $db,
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
@@ -88,15 +90,13 @@ class MessageController
 
             // 计算总数
             $countSql = "SELECT COUNT(*) as total FROM messages m WHERE {$whereClause}";
-            $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute($bindings);
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $bindings))['total'];
 
             // 检查 messages 表是否包含 priority 列（兼容老数据库）
             $hasPriority = false;
             try {
-                $colStmt = $this->db->query("SHOW COLUMNS FROM messages LIKE 'priority'");
-                if ($colStmt && $colStmt->fetch()) {
+                $colRow = $this->db->selectOne("SHOW COLUMNS FROM messages LIKE 'priority'");
+                if ((bool) DatabaseRows::one($colRow)) {
                     $hasPriority = true;
                 }
             } catch (\Throwable $exception) {
@@ -159,15 +159,14 @@ class MessageController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $messages = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             // Cast is_read to boolean
             foreach ($messages as &$msg) {
@@ -211,20 +210,18 @@ class MessageController
                 WHERE m.id = :message_id AND m.receiver_id = :user_id AND m.deleted_at IS NULL
             ";
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
+
+            $message = DatabaseRows::one($this->db->selectOne($sql, [
                 'message_id' => $messageId,
                 'user_id' => $user['id']
-            ]);
-
-            $message = $stmt->fetch(PDO::FETCH_ASSOC);
+            ]));
             if (!$message) {
                 return $this->json($response, ['error' => 'Message not found'], 404);
             }
 
             // 如果消息未读，标记为已读
             if (!($message['is_read'] ?? false)) {
-                $this->markMessageAsRead($messageId);
+                $this->markMessagesAsRead((int) $user['id'], [$messageId], 'single');
                 $message['is_read'] = true;
             }
 
@@ -254,15 +251,14 @@ class MessageController
 
             // 验证消息属于当前用户
             $sql = "SELECT id FROM messages WHERE id = :id AND receiver_id = :user_id AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['id' => $messageId, 'user_id' => $user['id']]);
+            $queryRow = $this->db->selectOne($sql, ['id' => $messageId, 'user_id' => $user['id']]);
             
-            if (!$stmt->fetch()) {
+            if (!DatabaseRows::one($queryRow)) {
                 return $this->json($response, ['error' => 'Message not found'], 404);
             }
 
             // 标记为已读
-            $this->markMessageAsRead($messageId);
+            $this->markMessagesAsRead((int) $user['id'], [$messageId], 'single');
 
             return $this->json($response, [
                 'success' => true,
@@ -287,30 +283,9 @@ class MessageController
             }
 
             $data = $request->getParsedBody();
-            $messageIds = $data['message_ids'] ?? [];
-
-            if (empty($messageIds)) {
-                // 标记所有未读消息为已读
-                $sql = "
-                    UPDATE messages 
-                    SET is_read = 1, updated_at = NOW() 
-                    WHERE receiver_id = :user_id AND is_read = 0 AND deleted_at IS NULL
-                ";
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute(['user_id' => $user['id']]);
-                $affectedRows = $stmt->rowCount();
-            } else {
-                // 标记指定消息为已读
-                $placeholders = str_repeat('?,', count($messageIds) - 1) . '?';
-                $sql = "
-                    UPDATE messages 
-                    SET is_read = 1, updated_at = NOW() 
-                    WHERE receiver_id = ? AND id IN ({$placeholders}) AND is_read = 0 AND deleted_at IS NULL
-                ";
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute(array_merge([$user['id']], $messageIds));
-                $affectedRows = $stmt->rowCount();
-            }
+            $messageIds = ($data['message_ids'] ?? []) ?: [];
+            $scope = $messageIds === [] ? 'all' : 'selected';
+            $affectedRows = $this->markMessagesAsRead((int) $user['id'], $messageIds, $scope);
 
             return $this->json($response, [
                 'success' => true,
@@ -339,17 +314,15 @@ class MessageController
 
             // 验证消息属于当前用户
             $sql = "SELECT id FROM messages WHERE id = :id AND receiver_id = :user_id AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['id' => $messageId, 'user_id' => $user['id']]);
+            $queryRow = $this->db->selectOne($sql, ['id' => $messageId, 'user_id' => $user['id']]);
             
-            if (!$stmt->fetch()) {
+            if (!DatabaseRows::one($queryRow)) {
                 return $this->json($response, ['error' => 'Message not found'], 404);
             }
 
             // 软删除消息
-            $sql = "UPDATE messages SET deleted_at = NOW() WHERE id = :id";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['id' => $messageId]);
+            $sql = "UPDATE messages SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id";
+            $this->db->statement($sql, ['id' => $messageId]);
 
             // 记录审计日志
             $this->auditLog->log([
@@ -398,9 +371,7 @@ class MessageController
                 FROM messages 
                 WHERE receiver_id = ? AND id IN ({$placeholders}) AND deleted_at IS NULL
             ";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(array_merge([$user['id']], $messageIds));
-            $validCount = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+            $validCount = DatabaseRows::one($this->db->selectOne($sql, array_merge([$user['id']], $messageIds)))['count'];
 
             if ($validCount != count($messageIds)) {
                 return $this->json($response, ['error' => 'Some messages not found or not owned by user'], 400);
@@ -409,12 +380,10 @@ class MessageController
             // 批量软删除
             $sql = "
                 UPDATE messages 
-                SET deleted_at = NOW() 
+                SET deleted_at = CURRENT_TIMESTAMP
                 WHERE receiver_id = ? AND id IN ({$placeholders}) AND deleted_at IS NULL
             ";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(array_merge([$user['id']], $messageIds));
-            $affectedRows = $stmt->rowCount();
+            $affectedRows = $this->db->affectingStatement($sql, array_merge([$user['id']], $messageIds));
 
             // 记录审计日志
             $this->auditLog->log([
@@ -457,9 +426,7 @@ class MessageController
                 WHERE receiver_id = :user_id AND is_read = 0 AND deleted_at IS NULL
             ";
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['user_id' => $user['id']]);
-            $counts = $stmt->fetch(PDO::FETCH_ASSOC);
+            $counts = DatabaseRows::one($this->db->selectOne($sql, ['user_id' => $user['id']]));
 
             return $this->json($response, [
                 'success' => true,
@@ -749,7 +716,7 @@ $auditPayload = [
             } else {
                 $requestId = null;
             }
-            $systemLogId = $this->lookupSystemLogId($requestId);
+            $systemLogId = $this->lookupSystemLogId($request, $requestId);
 
             $cleanErrorLogIds = [];
             foreach ($errorLogIds as $candidateId) {
@@ -788,34 +755,31 @@ $auditPayload = [
             }
 
             try {
-                $insert = $this->db->prepare('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-                if ($insert) {
-                    $insert->execute([
-                        $requestId,
-                        $auditLogId,
-                        $systemLogId,
-                        $this->encodeJson($request, __FUNCTION__, $cleanErrorLogIds),
-                        $title,
-                        $content,
-                        $priority,
-                        $scope,
-                        count($targetUserIds),
-                        $sentCount,
-                        $this->encodeJson($request, __FUNCTION__, $invalidTargetIds),
-                        $this->encodeJson($request, __FUNCTION__, $failedUserIds),
-                        $this->encodeJson($request, __FUNCTION__, $messageIdSample),
-                        $this->encodeJson($request, __FUNCTION__, $messageMapSample),
-                        $messageIdCount,
-                        $contentHash,
-                        $this->encodeJson($request, __FUNCTION__, $emailDeliveryForLog),
-                        $this->encodeJson($request, __FUNCTION__, $filtersSnapshot),
-                        $this->encodeJson($request, __FUNCTION__, $metaSnapshot ?: null),
-                        $user['id'] ?? null,
-                    ]);
-                }
+                $this->db->statement('INSERT INTO message_broadcasts (request_id, audit_log_id, system_log_id, error_log_ids, title, content, priority, scope, target_count, sent_count, invalid_user_ids, failed_user_ids, message_ids_snapshot, message_map_snapshot, message_id_count, content_hash, email_delivery_snapshot, filters_snapshot, meta, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+                    $requestId,
+                    $auditLogId,
+                    $systemLogId,
+                    $this->encodeJson($request, __FUNCTION__, $cleanErrorLogIds),
+                    $title,
+                    $content,
+                    $priority,
+                    $scope,
+                    count($targetUserIds),
+                    $sentCount,
+                    $this->encodeJson($request, __FUNCTION__, $invalidTargetIds),
+                    $this->encodeJson($request, __FUNCTION__, $failedUserIds),
+                    $this->encodeJson($request, __FUNCTION__, $messageIdSample),
+                    $this->encodeJson($request, __FUNCTION__, $messageMapSample),
+                    $messageIdCount,
+                    $contentHash,
+                    $this->encodeJson($request, __FUNCTION__, $emailDeliveryForLog),
+                    $this->encodeJson($request, __FUNCTION__, $filtersSnapshot),
+                    $this->encodeJson($request, __FUNCTION__, $metaSnapshot ?: null),
+                    $user['id'] ?? null,
+                ]);
             } catch (\Throwable $persistError) {
                 $this->logBroadcastError($request, 'broadcast_record_persist_failed', [
-                    'message' => $persistError->getMessage(),
+                    'message' => DatabaseService::exceptionMessage($persistError),
                 ]);
             }
 
@@ -848,89 +812,6 @@ $auditPayload = [
         }
     }
 
-
-    /**
-     * 获取消息类型统计
-     */
-    public function getMessageStats(Request $request, Response $response): Response
-    {
-        try {
-            $user = $this->authService->getCurrentUser($request);
-            if (!$user) {
-                return $this->json($response, ['error' => 'Unauthorized'], 401);
-            }
-
-            $overview = ['total' => 0, 'unread' => 0, 'read' => 0];
-            $byType = [];
-            $raw = [];
-
-            // Try rich aggregation first (works with tests' PDO mock); fallback to simple counts
-            try {
-                $aggSql = "
-                    SELECT 
-                        COALESCE(type,'unknown') AS type,
-                        COALESCE(priority,'normal') AS priority,
-                        COUNT(*) AS count,
-                        SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_count
-                    FROM messages
-                    WHERE receiver_id = :user_id AND deleted_at IS NULL
-                    GROUP BY COALESCE(type,'unknown'), COALESCE(priority,'normal')
-                ";
-                $aggStmt = $this->db->prepare($aggSql);
-                $aggStmt->execute(['user_id' => $user['id']]);
-                $raw = $aggStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-
-                $total = 0; $unread = 0;
-                foreach ($raw as $row) {
-                    $t = $row['type'];
-                    $p = $row['priority'];
-                    $c = (int)$row['count'];
-                    $u = (int)$row['unread_count'];
-                    if (!isset($byType[$t])) {
-                        $byType[$t] = ['total' => 0, 'unread' => 0, 'by_priority' => []];
-                    }
-                    $byType[$t]['total'] += $c;
-                    $byType[$t]['unread'] += $u;
-                    $byType[$t]['by_priority'][$p] = [
-                        'total' => $c,
-                        'unread' => $u
-                    ];
-                    $total += $c; $unread += $u;
-                }
-                $overview = [
-                    'total' => $total,
-                    'unread' => $unread,
-                    'read' => max(0, $total - $unread)
-                ];
-            } catch (\Throwable $ignored) {
-                // Fallback simple counts
-                $simple = $this->db->prepare("SELECT COUNT(*) as total, COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread FROM messages WHERE receiver_id = :user_id AND deleted_at IS NULL");
-                $simple->execute(['user_id' => $user['id']]);
-                $row = $simple->fetch(PDO::FETCH_ASSOC) ?: ['total' => 0, 'unread' => 0];
-                $overview = [
-                    'total' => (int)$row['total'],
-                    'unread' => (int)$row['unread'],
-                    'read' => max(0, (int)$row['total'] - (int)$row['unread'])
-                ];
-                $byType = [];
-                $raw = [];
-            }
-
-            return $this->json($response, [
-                'success' => true,
-                'data' => [
-                    'overview' => $overview,
-                    'by_type' => $byType,
-                    'raw_stats' => $raw
-                ]
-            ]);
-
-        } catch (\Exception $e) {
-            try { if ($this->errorLogService) { $this->errorLogService->logException($e, $request); } } catch (\Throwable $ignore) {}
-            return $this->json($response, ['error' => 'Internal server error'], 500);
-        }
-    }
-
     /**
      * 获取广播历史（管理员）
      */
@@ -949,33 +830,24 @@ $auditPayload = [
 
             $total = 0;
             try {
-                $countStmt = $this->db->query('SELECT COUNT(*) FROM message_broadcasts');
-                if ($countStmt !== false) {
-                    $total = (int) $countStmt->fetchColumn();
-                }
+                $total = (int) DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*) FROM message_broadcasts'));
             } catch (\Throwable $e) {
                 $this->logBroadcastError($request, 'Failed to count broadcast history', [
                     'action' => 'getBroadcastHistory',
                     'exception' => get_class($e),
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
                 $total = 0;
             }
 
             $rows = [];
             try {
-                $listStmt = $this->db->prepare('SELECT * FROM message_broadcasts ORDER BY id DESC LIMIT :limit OFFSET :offset');
-                if ($listStmt) {
-                    $listStmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-                    $listStmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-                    $listStmt->execute();
-                    $rows = $listStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                }
+                $rows = DatabaseRows::all($this->db->select('SELECT * FROM message_broadcasts ORDER BY id DESC LIMIT :limit OFFSET :offset', [':limit' => (int) $limit, ':offset' => (int) $offset])) ?: [];
             } catch (\Throwable $e) {
                 $this->logBroadcastError($request, 'Failed to load broadcast history', [
                     'action' => 'getBroadcastHistory',
                     'exception' => get_class($e),
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
                 $rows = [];
             }
@@ -1092,6 +964,14 @@ $auditPayload = [
                 ];
             }
 
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_broadcast_history_viewed',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'message_broadcasts',
+                ['page' => $page, 'limit' => $limit, 'broadcast_ids' => array_column($items, 'id')]
+            );
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $items,
@@ -1156,13 +1036,7 @@ $auditPayload = [
             }
 
             $fetchLimit = max($limit * 3, $limit);
-            $stmt = $this->db->prepare('SELECT * FROM message_broadcasts ORDER BY created_at ASC LIMIT :limit');
-            if (!$stmt) {
-                return $this->json($response, ['error' => 'Failed to inspect broadcast queue'], 500);
-            }
-            $stmt->bindValue(':limit', $fetchLimit, PDO::PARAM_INT);
-            $stmt->execute();
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = DatabaseRows::all($this->db->select('SELECT * FROM message_broadcasts ORDER BY created_at ASC LIMIT :limit', [':limit' => (int) $fetchLimit])) ?: [];
 
             $processed = [];
             $skipped = [];
@@ -1312,13 +1186,10 @@ $auditPayload = [
                     'completed_at' => $now,
                 ];
 
-                $update = $this->db->prepare('UPDATE message_broadcasts SET email_delivery_snapshot = :snapshot, updated_at = NOW() WHERE id = :id');
-                if ($update) {
-                    $update->execute([
-                        ':snapshot' => $this->encodeJson($request, __FUNCTION__, $updatedDelivery),
-                        ':id' => $broadcastId,
-                    ]);
-                }
+                $this->db->statement('UPDATE message_broadcasts SET email_delivery_snapshot = :snapshot, updated_at = CURRENT_TIMESTAMP WHERE id = :id', [
+                    ':snapshot' => $this->encodeJson($request, __FUNCTION__, $updatedDelivery),
+                    ':id' => $broadcastId,
+                ]);
 
                 $processed[] = [
                     'id' => $broadcastId,
@@ -1375,7 +1246,7 @@ $auditPayload = [
             ], $context);
             return $this->errorLogService->logError('broadcast_error', $message, $request, $payload);
         } catch (\Throwable $ignore) {
-            error_log('Could not persist broadcast error ' . $message . '. ' . $ignore->getMessage());
+            error_log('Could not persist broadcast error ' . $message . '. ' . DatabaseService::exceptionMessage($ignore));
             return null;
         }
     }
@@ -1389,25 +1260,23 @@ $auditPayload = [
                 'context_message' => $message,
             ]);
         } catch (\Throwable $ignore) {
-            error_log($message . ': ' . $exception->getMessage() . '. Error log failed: ' . $ignore->getMessage());
+            error_log($message . ': ' . DatabaseService::exceptionMessage($exception) . '. Error log failed: ' . DatabaseService::exceptionMessage($ignore));
         }
     }
 
-    private function lookupSystemLogId(?string $requestId): ?int
+    private function lookupSystemLogId(Request $request, ?string $requestId): ?int
     {
         if ($requestId === null || $requestId === '') {
             return null;
         }
         try {
-            $stmt = $this->db->prepare('SELECT id FROM system_logs WHERE request_id = :request_id ORDER BY id DESC LIMIT 1');
-            if ($stmt && $stmt->execute(['request_id' => $requestId])) {
-                $value = $stmt->fetchColumn();
-                if ($value !== false) {
-                    $id = (int) $value;
-                    return $id > 0 ? $id : null;
-                }
+            $value = DatabaseRows::scalar($this->db->selectOne('SELECT id FROM system_logs WHERE request_id = :request_id ORDER BY id DESC LIMIT 1', ['request_id' => $requestId]));
+            if ($value !== false) {
+                $id = (int) $value;
+                return $id > 0 ? $id : null;
             }
-        } catch (\Throwable $ignored) {
+        } catch (\Throwable $exception) {
+            $this->logException($exception, $request, __FUNCTION__, 'Failed to look up the broadcast system log');
         }
         return null;
     }
@@ -1500,45 +1369,25 @@ $auditPayload = [
             if (!empty($ids)) {
                 $placeholders = implode(',', array_fill(0, count($ids), '?'));
                 $sql = 'SELECT m.id, m.receiver_id, m.is_read, ' . $userColumns . ' FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.id IN (' . $placeholders . ')';
-                $stmt = $this->db->prepare($sql);
-                if (!$stmt) {
-                    return [];
-                }
+                $queryBindings = [];
                 foreach ($ids as $index => $id) {
-                    $stmt->bindValue($index + 1, $id, PDO::PARAM_INT);
+                    $queryBindings[$index] = (int) $id;
                 }
-                $stmt->execute();
-                return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                return DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
             }
 
             $sql = 'SELECT m.id, m.receiver_id, m.is_read, ' . $userColumns . ' FROM messages m LEFT JOIN users u ON u.id = m.receiver_id WHERE m.deleted_at IS NULL AND m.title = :title AND m.created_at >= :start AND m.created_at <= :end';
-            $stmt = $this->db->prepare($sql);
-            if (!$stmt) {
-                return [];
-            }
-            $stmt->bindValue(':title', $title);
-            $stmt->bindValue(':start', $start);
-            $stmt->bindValue(':end', $end);
-            $stmt->execute();
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = DatabaseRows::all($this->db->select($sql, [':title' => $title, ':start' => $start, ':end' => $end])) ?: [];
 
             if ($contentHash !== null && $contentHash !== '' && !empty($rows)) {
                 $filtered = [];
-                $contentStmt = $this->db->prepare('SELECT content FROM messages WHERE id = :id');
                 foreach ($rows as $row) {
                     $messageId = isset($row['id']) ? (int)$row['id'] : 0;
                     if ($messageId <= 0) {
                         continue;
                     }
                     try {
-                        if (!$contentStmt) {
-                            $filtered = $rows;
-                            break;
-                        }
-                        $contentStmt->bindValue(':id', $messageId, PDO::PARAM_INT);
-                        $contentStmt->execute();
-                        $contentRow = $contentStmt->fetch(PDO::FETCH_ASSOC);
-                        $contentStmt->closeCursor();
+                        $contentRow = DatabaseRows::one($this->db->selectOne('SELECT content FROM messages WHERE id = :id', ['id' => $messageId]));
                         $contentValue = is_array($contentRow) ? (string)($contentRow['content'] ?? '') : '';
                         if (hash('sha256', $title . '||' . $contentValue) === $contentHash) {
                             $filtered[] = $row;
@@ -1600,6 +1449,14 @@ $auditPayload = [
                 $data[] = $normalized;
             }
 
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_broadcast_recipients_searched',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'users',
+                ['page' => $page, 'limit' => $limit, 'recipient_ids' => array_column($data, 'id')]
+            );
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $data,
@@ -1649,15 +1506,7 @@ $auditPayload = [
         $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL AND u.id IN (' . $placeholders . ')';
 
         try {
-            $stmt = $this->db->prepare($sql);
-            if (!$stmt) {
-                $result['error'] = 'Failed to resolve target users';
-                $result['status'] = 500;
-                return $result;
-            }
-
-            $stmt->execute(array_values($sanitized));
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = DatabaseRows::all($this->db->select($sql, array_values($sanitized)));
 
             $collectedIds = [];
             foreach ($rows as $row) {
@@ -1686,7 +1535,7 @@ $auditPayload = [
             if ($request !== null) {
                 $this->logBroadcastError($request, 'Failed to resolve target users', [
                     'exception' => get_class($e),
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
             }
             $result['error'] = 'Failed to resolve target users';
@@ -1736,11 +1585,7 @@ $auditPayload = [
 
         try {
             $sql = 'SELECT u.id, u.username, u.email, u.school_id, u.region_code, u.is_admin, u.status, s.name AS school_name FROM users u LEFT JOIN schools s ON s.id = u.school_id WHERE u.deleted_at IS NULL';
-            $stmt = $this->db->query($sql);
-            if (!$stmt) {
-                return $result;
-            }
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = DatabaseRows::all($this->db->select($sql)) ?: [];
             foreach ($rows as $row) {
                 $id = isset($row['id']) ? (int)$row['id'] : 0;
                 if ($id <= 0) {
@@ -1753,7 +1598,7 @@ $auditPayload = [
             if ($request !== null) {
                 $this->logBroadcastError($request, 'Failed to load all broadcast recipients', [
                     'exception' => get_class($e),
-                    'error' => $e->getMessage(),
+                    'error' => DatabaseService::exceptionMessage($e),
                 ]);
             }
             // Return the recipients loaded before this failure.
@@ -1901,24 +1746,18 @@ $auditPayload = [
             . 'LIMIT :limit OFFSET :offset';
 
         try {
-            $stmt = $this->db->prepare($sql);
-            if (!$stmt) {
-                return [];
-            }
+            $queryBindings = [];
 
             foreach ($params as $key => $value) {
-                $type = PDO::PARAM_STR;
                 if ($key === 'school_id' || str_starts_with($key, 'include_id_') || str_starts_with($key, 'exclude_id_')) {
-                    $type = PDO::PARAM_INT;
                     $value = (int)$value;
                 }
-                $stmt->bindValue(':' . $key, $value, $type);
+                $queryBindings[':' . $key] = $value;
             }
 
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $queryBindings[':limit'] = (int) $limit;
+            $queryBindings[':offset'] = (int) $offset;
+            return DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         } catch (\Throwable $exception) {
             $this->logException($exception, $request, $action, 'Failed to search for broadcast recipients');
             return [];
@@ -2340,17 +2179,7 @@ $auditPayload = [
         try {
             $placeholders = implode(',', array_fill(0, count($cleanIds), '?'));
             $sql = 'SELECT id, username, email FROM users WHERE id IN (' . $placeholders . ')';
-            $stmt = $this->db->prepare($sql);
-            if (!$stmt) {
-                return [];
-            }
-            $index = 1;
-            foreach ($cleanIds as $userId) {
-                $stmt->bindValue($index, $userId, PDO::PARAM_INT);
-                $index++;
-            }
-            $stmt->execute();
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $rows = DatabaseRows::all($this->db->select($sql, array_values($cleanIds)));
 
             $result = [];
             foreach ($rows as $row) {
@@ -2373,14 +2202,37 @@ $auditPayload = [
         }
     }
 
-    /**
-     * 标记消息为已读的私有方法
-     */
-    private function markMessageAsRead(string $messageId): void
+    private function markMessagesAsRead(int $userId, array $messageIds, string $scope): int
     {
-        $sql = "UPDATE messages SET is_read = 1, updated_at = NOW() WHERE id = :id AND is_read = 0";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute(['id' => $messageId]);
+        $messages = $this->db->table('messages')
+            ->where('receiver_id', $userId)
+            ->where('is_read', 0)
+            ->whereNull('deleted_at');
+        if ($messageIds !== []) {
+            $messages->whereIn('id', $messageIds);
+        }
+
+        $affected = $messages->update([
+            'is_read' => 1,
+            'updated_at' => $this->db->raw('CURRENT_TIMESTAMP'),
+        ]);
+        if ($affected > 0) {
+            $this->auditLog->log([
+                'user_id' => $userId,
+                'actor_type' => 'user',
+                'action' => 'messages_marked_read',
+                'operation_category' => 'message',
+                'affected_table' => 'messages',
+                'affected_id' => $scope === 'single' ? (int) $messageIds[0] : null,
+                'data' => [
+                    'scope' => $scope,
+                    'requested_message_ids' => array_values(array_map('intval', $messageIds)),
+                    'affected_rows' => $affected,
+                ],
+            ]);
+        }
+
+        return $affected;
     }
     private function json(Response $response, array $data, int $status = 200): Response
     {

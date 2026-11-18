@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\InputValueNormalizer;
-use PDO;
 
 class AdminAiWriteActionService
 {
     public function __construct(
-        private PDO $db,
+        private Connection $db,
         private ?AuditLogService $auditLogService = null,
         private ?MessageService $messageService = null,
         private ?BadgeService $badgeService = null,
@@ -199,12 +200,11 @@ class AdminAiWriteActionService
         $oldPoints = isset($user['points']) ? (int) $user['points'] : 0;
         $updatedAt = gmdate('Y-m-d H:i:s');
 
-        $stmt = $this->db->prepare("UPDATE users
+        $this->db->statement("UPDATE users
             SET points = COALESCE(points, 0) + :delta,
                 updated_at = :updated_at
             WHERE id = :user_id
-              AND deleted_at IS NULL");
-        $stmt->execute([
+              AND deleted_at IS NULL", [
             ':delta' => $delta,
             ':updated_at' => $updatedAt,
             ':user_id' => $userId,
@@ -299,15 +299,13 @@ class AdminAiWriteActionService
         $adminNotes = trim((string) ($payload['admin_notes'] ?? ''));
         $adminNotes = $adminNotes !== '' ? $adminNotes : null;
 
-        $usernameCheck = $this->db->prepare("SELECT id FROM users WHERE LOWER(username) = LOWER(:username) AND deleted_at IS NULL LIMIT 1");
-        $usernameCheck->execute([':username' => $username]);
-        if ($usernameCheck->fetch(PDO::FETCH_ASSOC) !== false) {
+        $usernameCheckRow = $this->db->selectOne("SELECT id FROM users WHERE LOWER(username) = LOWER(:username) AND deleted_at IS NULL LIMIT 1", [':username' => $username]);
+        if (DatabaseRows::one($usernameCheckRow) !== false) {
             throw new \RuntimeException('Username already exists.');
         }
 
-        $emailCheck = $this->db->prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(:email) AND deleted_at IS NULL LIMIT 1");
-        $emailCheck->execute([':email' => $email]);
-        if ($emailCheck->fetch(PDO::FETCH_ASSOC) !== false) {
+        $emailCheckRow = $this->db->selectOne("SELECT id FROM users WHERE LOWER(email) = LOWER(:email) AND deleted_at IS NULL LIMIT 1", [':email' => $email]);
+        if (DatabaseRows::one($emailCheckRow) !== false) {
             throw new \RuntimeException('Email already exists.');
         }
 
@@ -320,11 +318,11 @@ class AdminAiWriteActionService
 
         $uuid = $this->generateEntityUuid();
         $timestamp = gmdate('Y-m-d H:i:s');
-        $stmt = $this->db->prepare("INSERT INTO users
+
+        $userId = DatabaseService::insertGetId($this->db, "INSERT INTO users
             (username, email, password, uuid, school_id, group_id, region_code, admin_notes, status, is_admin, created_at, updated_at)
             VALUES
-            (:username, :email, :password, :uuid, :school_id, :group_id, :region_code, :admin_notes, :status, :is_admin, :created_at, :updated_at)");
-        $stmt->execute([
+            (:username, :email, :password, :uuid, :school_id, :group_id, :region_code, :admin_notes, :status, :is_admin, :created_at, :updated_at)", [
             ':username' => $username,
             ':email' => $email,
             ':password' => $passwordHash,
@@ -338,8 +336,6 @@ class AdminAiWriteActionService
             ':created_at' => $timestamp,
             ':updated_at' => $timestamp,
         ]);
-
-        $userId = (int) $this->db->lastInsertId();
         $freshUser = $this->resolveUserRowFromPayload(['user_id' => $userId]);
         if ($freshUser === null) {
             throw new \RuntimeException('User not found after creation.');
@@ -430,11 +426,10 @@ class AdminAiWriteActionService
             $params[':admin_notes'] = $adminNotes;
         }
 
-        $stmt = $this->db->prepare("UPDATE users
+        $this->db->statement("UPDATE users
             SET " . implode(', ', $sets) . "
             WHERE id = :user_id
-              AND deleted_at IS NULL");
-        $stmt->execute($params);
+              AND deleted_at IS NULL", $params);
 
         $freshUser = $this->resolveUserRowFromPayload(['user_id' => $userId]);
         if ($freshUser === null) {
@@ -683,14 +678,13 @@ class AdminAiWriteActionService
             throw new \RuntimeException('Exchange order not found.');
         }
 
-        $stmt = $this->db->prepare("UPDATE point_exchanges
+        $this->db->statement("UPDATE point_exchanges
             SET status = :status,
                 notes = :notes,
                 tracking_number = :tracking_number,
                 updated_at = :updated_at
             WHERE id = :exchange_id
-              AND deleted_at IS NULL");
-        $stmt->execute([
+              AND deleted_at IS NULL", [
             ':status' => $status,
             ':notes' => $notes,
             ':tracking_number' => $trackingNumber,
@@ -766,12 +760,11 @@ class AdminAiWriteActionService
             throw new \RuntimeException('Product not found.');
         }
 
-        $stmt = $this->db->prepare("UPDATE products
+        $this->db->statement("UPDATE products
             SET status = :status,
                 updated_at = :updated_at
             WHERE id = :product_id
-              AND deleted_at IS NULL");
-        $stmt->execute([
+              AND deleted_at IS NULL", [
             ':status' => $status,
             ':updated_at' => gmdate('Y-m-d H:i:s'),
             ':product_id' => $productId,
@@ -849,12 +842,11 @@ class AdminAiWriteActionService
             $reason = null;
         }
 
-        $stmt = $this->db->prepare("UPDATE products
+        $this->db->statement("UPDATE products
             SET stock = :stock,
                 updated_at = :updated_at
             WHERE id = :product_id
-              AND deleted_at IS NULL");
-        $stmt->execute([
+              AND deleted_at IS NULL", [
             ':stock' => $newStock,
             ':updated_at' => gmdate('Y-m-d H:i:s'),
             ':product_id' => $productId,
@@ -932,10 +924,10 @@ class AdminAiWriteActionService
 
         $this->db->beginTransaction();
         try {
-            $updateStmt = $this->db->prepare("UPDATE carbon_records
+            $updateSql = "UPDATE carbon_records
                 SET status = :status, reviewed_by = :reviewed_by, reviewed_at = :reviewed_at, review_note = :review_note
-                WHERE id = :record_id");
-            $pointsStmt = $this->db->prepare("UPDATE users SET points = COALESCE(points, 0) + :points WHERE id = :user_id");
+                WHERE id = :record_id";
+            $pointsSql = "UPDATE users SET points = COALESCE(points, 0) + :points WHERE id = :user_id";
 
             foreach ($records as $record) {
                 $recordId = (string) ($record['id'] ?? '');
@@ -947,7 +939,7 @@ class AdminAiWriteActionService
                     continue;
                 }
 
-                $updateStmt->execute([
+                $this->db->statement($updateSql, [
                     ':status' => $newStatus,
                     ':reviewed_by' => $adminId,
                     ':reviewed_at' => $reviewedAt,
@@ -959,7 +951,7 @@ class AdminAiWriteActionService
                     $points = (int) ($record['points_earned'] ?? 0);
                     $userId = (int) ($record['user_id'] ?? 0);
                     if ($points !== 0 && $userId > 0) {
-                        $pointsStmt->execute([':points' => $points, ':user_id' => $userId]);
+                        $this->db->statement($pointsSql, [':points' => $points, ':user_id' => $userId]);
                     }
                 }
 
@@ -990,7 +982,7 @@ class AdminAiWriteActionService
 
             $this->db->commit();
         } catch (\Throwable $exception) {
-            if ($this->db->inTransaction()) {
+            if (($this->db->transactionLevel() > 0)) {
                 $this->db->rollBack();
             }
             throw $exception;
@@ -1034,33 +1026,28 @@ class AdminAiWriteActionService
             return null;
         }
 
-        $stmt = $this->db->prepare("SELECT u.*, s.name AS school_name, g.name AS group_name
+        $queryBindings = [];
+        foreach ($params as $key => $value) {
+            $queryBindings[$key] = $value;
+        }
+
+        $row = DatabaseRows::one($this->db->selectOne("SELECT u.*, s.name AS school_name, g.name AS group_name
             FROM users u
             LEFT JOIN schools s ON s.id = u.school_id
             LEFT JOIN user_groups g ON g.id = u.group_id
             WHERE " . implode(' AND ', $where) . "
-            LIMIT 1");
-        foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
-        }
-        $stmt->execute();
-
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", $queryBindings));
         return is_array($row) ? $row : null;
     }
 
     private function schoolExists(int $schoolId): bool
     {
-        $stmt = $this->db->prepare("SELECT id FROM schools WHERE id = :school_id AND deleted_at IS NULL LIMIT 1");
-        $stmt->execute([':school_id' => $schoolId]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) !== false;
+        return DatabaseRows::one($this->db->selectOne("SELECT id FROM schools WHERE id = :school_id AND deleted_at IS NULL LIMIT 1", [':school_id' => $schoolId])) !== false;
     }
 
     private function groupExists(int $groupId): bool
     {
-        $stmt = $this->db->prepare("SELECT id FROM user_groups WHERE id = :group_id LIMIT 1");
-        $stmt->execute([':group_id' => $groupId]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) !== false;
+        return DatabaseRows::one($this->db->selectOne("SELECT id FROM user_groups WHERE id = :group_id LIMIT 1", [':group_id' => $groupId])) !== false;
     }
 
     /**
@@ -1068,13 +1055,11 @@ class AdminAiWriteActionService
      */
     private function fetchBadgeById(int $badgeId): ?array
     {
-        $stmt = $this->db->prepare("SELECT *
+        $row = DatabaseRows::one($this->db->selectOne("SELECT *
             FROM achievement_badges
             WHERE id = :badge_id
               AND deleted_at IS NULL
-            LIMIT 1");
-        $stmt->execute([':badge_id' => $badgeId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", [':badge_id' => $badgeId]));
         return is_array($row) ? $row : null;
     }
 
@@ -1083,17 +1068,15 @@ class AdminAiWriteActionService
      */
     private function fetchUserBadgeAssignment(int $userId, int $badgeId): ?array
     {
-        $stmt = $this->db->prepare("SELECT *
+        $row = DatabaseRows::one($this->db->selectOne("SELECT *
             FROM user_badges
             WHERE user_id = :user_id
               AND badge_id = :badge_id
             ORDER BY id DESC
-            LIMIT 1");
-        $stmt->execute([
+            LIMIT 1", [
             ':user_id' => $userId,
             ':badge_id' => $badgeId,
-        ]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ]));
         return is_array($row) ? $row : null;
     }
 
@@ -1111,13 +1094,11 @@ class AdminAiWriteActionService
      */
     private function fetchProductById(int $productId): ?array
     {
-        $stmt = $this->db->prepare("SELECT *
+        $row = DatabaseRows::one($this->db->selectOne("SELECT *
             FROM products
             WHERE id = :product_id
               AND deleted_at IS NULL
-            LIMIT 1");
-        $stmt->execute([':product_id' => $productId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", [':product_id' => $productId]));
         return is_array($row) ? $row : null;
     }
 
@@ -1130,10 +1111,9 @@ class AdminAiWriteActionService
 
         $resolved = 'user_id';
         try {
-            $driver = (string) ($this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql');
+            $driver = (string) ($this->db->getDriverName() ?: 'mysql');
             if ($driver === 'sqlite') {
-                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
-                $columns = $stmt ? ($stmt->fetchAll(PDO::FETCH_ASSOC) ?: []) : [];
+                $columns = DatabaseRows::all($this->db->select("PRAGMA table_info(point_exchanges)")) ?: [];
                 $names = array_map(static fn (array $column): string => (string) ($column['name'] ?? ''), $columns);
                 if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
                     $resolved = 'uid';
@@ -1151,14 +1131,12 @@ class AdminAiWriteActionService
     private function fetchExchangeRecordById(string $exchangeId): ?array
     {
         $userColumn = $this->resolvePointExchangeUserColumn();
-        $stmt = $this->db->prepare("SELECT e.*, u.username, u.email
+        $row = DatabaseRows::one($this->db->selectOne("SELECT e.*, u.username, u.email
             FROM point_exchanges e
             LEFT JOIN users u ON u.id = e.{$userColumn}
             WHERE e.id = :exchange_id
               AND e.deleted_at IS NULL
-            LIMIT 1");
-        $stmt->execute([':exchange_id' => $exchangeId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            LIMIT 1", [':exchange_id' => $exchangeId]));
         return is_array($row) ? $row : null;
     }
 
@@ -1240,13 +1218,12 @@ class AdminAiWriteActionService
                 LEFT JOIN users u ON u.id = r.user_id
                 LEFT JOIN carbon_activities a ON a.id = r.activity_id
                 WHERE r.id IN (" . implode(',', $placeholders) . ')';
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue($key, $value);
+            $queryBindings[$key] = $value;
         }
-        $stmt->execute();
 
-        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        return DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
     }
 
     /**

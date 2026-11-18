@@ -21,8 +21,6 @@ class Message extends Model
         'content',
         'is_read',
         'priority',
-        // Following columns are not present in localhost.sql schema and must not be mass-assigned:
-        // 'type', 'read_at', 'related_entity_type', 'related_entity_id'
     ];
 
     protected $casts = [
@@ -36,7 +34,7 @@ class Message extends Model
 
     public $timestamps = true;
 
-    // Message types
+    // Notification types used by the delivery service
     const TYPE_SYSTEM = 'system';
     const TYPE_NOTIFICATION = 'notification';
     const TYPE_APPROVAL = 'approval';
@@ -81,15 +79,6 @@ class Message extends Model
     public function scopeRead($query)
     {
         return $query->where('is_read', true);
-    }
-
-    /**
-     * Scope to get messages by type
-     */
-    public function scopeByType($query, string $type)
-    {
-        // 'type' column not available in provided schema; no-op filter for compatibility
-        return $query;
     }
 
     /**
@@ -171,7 +160,6 @@ class Message extends Model
      */
     public function isSystemMessage(): bool
     {
-        // Without 'type' column, treat null sender as system message
         return $this->sender_id === null;
     }
 
@@ -199,13 +187,10 @@ class Message extends Model
         int $receiverId,
         string $title,
         string $content,
-        string $type = self::TYPE_SYSTEM,
         string $priority = self::PRIORITY_NORMAL,
         ?string $relatedEntityType = null,
         ?int $relatedEntityId = null
     ): self {
-        // The provided DB schema (localhost.sql) does not include 'type', 'priority', 'related_entity_*', or 'read_at'.
-        // We store a minimal message compatible with that schema.
         $data = [
             'sender_id' => null, // System message
             'receiver_id' => $receiverId,
@@ -254,7 +239,6 @@ class Message extends Model
             $receiverId,
             $title,
             $content,
-            self::TYPE_NOTIFICATION,
             $priority,
             $relatedEntityType,
             $relatedEntityId
@@ -275,7 +259,6 @@ class Message extends Model
             $receiverId,
             $title,
             $content,
-            self::TYPE_APPROVAL,
             self::PRIORITY_HIGH,
             $relatedEntityType,
             $relatedEntityId
@@ -296,7 +279,6 @@ class Message extends Model
             $receiverId,
             $title,
             $content,
-            self::TYPE_REJECTION,
             self::PRIORITY_HIGH,
             $relatedEntityType,
             $relatedEntityId
@@ -317,7 +299,6 @@ class Message extends Model
             $receiverId,
             $title,
             $content,
-            self::TYPE_EXCHANGE,
             self::PRIORITY_NORMAL,
             $relatedEntityType,
             $relatedEntityId
@@ -349,27 +330,8 @@ class Message extends Model
             $receiverId,
             $title,
             $content,
-            self::TYPE_WELCOME,
             self::PRIORITY_NORMAL
         );
-    }
-
-    /**
-     * Get message statistics for a user
-     */
-    public static function getStatisticsForUser(int $userId): array
-    {
-        $total = static::forUser($userId)->count();
-        $unread = static::forUser($userId)->unread()->count();
-        $read = static::forUser($userId)->read()->count();
-
-        return [
-            'total' => $total,
-            'unread' => $unread,
-            'read' => $read,
-            'by_type' => [],
-            'by_priority' => []
-        ];
     }
 
     /**

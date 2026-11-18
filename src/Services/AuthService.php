@@ -4,20 +4,21 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use CarbonTrack\Support\Environment;
 use CarbonTrack\Support\Uuid;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Psr\Http\Message\ServerRequestInterface as Request;
-use PDO;
 
 class AuthService
 {
     private string $jwtSecret;
     private string $jwtAlgorithm;
     private int $jwtExpiration;
-    private ?PDO $db = null;
+    private ?Connection $db = null;
     private ?AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
 
@@ -36,7 +37,7 @@ class AuthService
         $this->errorLogService = $errorLogService;
     }
 
-    public function setDatabase(PDO $db): void
+    public function setDatabase(Connection $db): void
     {
         $this->db = $db;
     }
@@ -95,11 +96,7 @@ class AuthService
         }
 
         try {
-            $stmt = $this->db->prepare('UPDATE users SET token_version = COALESCE(token_version, 0) + 1, updated_at = :updated_at WHERE id = :id');
-            if (!$stmt) {
-                return;
-            }
-            $stmt->execute([
+            $this->db->statement('UPDATE users SET token_version = COALESCE(token_version, 0) + 1, updated_at = :updated_at WHERE id = :id', [
                 'updated_at' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s'),
                 'id' => $userId,
             ]);
@@ -109,7 +106,7 @@ class AuthService
             // password-change / reset flow stays user-visible-successful.
             $this->logAudit('auth_token_version_bump_failed', [
                 'user_id' => $userId,
-                'error' => $e->getMessage(),
+                'error' => DatabaseService::exceptionMessage($e),
             ], 'failed');
         }
     }
@@ -137,18 +134,14 @@ class AuthService
             return 0;
         }
         try {
-            $stmt = $this->db->prepare('SELECT token_version FROM users WHERE id = :id LIMIT 1');
-            if (!$stmt) {
-                return 0;
-            }
-            $stmt->execute(['id' => $userId]);
-            $value = $stmt->fetchColumn();
+            $value = DatabaseRows::scalar($this->db->selectOne('SELECT token_version FROM users WHERE id = :id LIMIT 1', ['id' => $userId]));
             if ($value === false || $value === null) {
                 return 0;
             }
             return is_numeric($value) ? (int) $value : 0;
         } catch (\Throwable $e) {
-            // Schema may not yet have the column on legacy environments; treat as 0.
+            // Legacy schemas may lack token_version.
+            $this->logError($e, '/internal/auth/token-version', 'Failed to read user token version', ['user_id' => $userId]);
             return 0;
         }
     }
@@ -383,13 +376,8 @@ class AuthService
             $params[] = $excludeUserId;
         }
 
-        $stmt = $this->db->prepare($sql);
-        if (!$stmt) {
-            return true;
-        }
-        $stmt->execute($params);
 
-        return $stmt->fetchColumn() == 0;
+        return DatabaseRows::scalar($this->db->selectOne($sql, $params)) == 0;
     }
 
     /**
@@ -409,13 +397,8 @@ class AuthService
             $params[] = $excludeUserId;
         }
 
-        $stmt = $this->db->prepare($sql);
-        if (!$stmt) {
-            return true;
-        }
-        $stmt->execute($params);
 
-        return $stmt->fetchColumn() == 0;
+        return DatabaseRows::scalar($this->db->selectOne($sql, $params)) == 0;
     }
 
     /**
@@ -554,11 +537,10 @@ class AuthService
         }
 
         try {
-            $stmt = $this->db->prepare("
+            $this->db->statement("
                 INSERT INTO login_attempts (username, ip_address, success, attempted_at) 
-                VALUES (?, ?, ?, NOW())
-            ");
-            $stmt->execute([$username, $ip, $success ? 1 : 0]);
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ", [$username, $ip, $success ? 1 : 0]);
         } catch (\Exception $e) {
             $this->logAudit('auth_login_attempt_record_failed', [
                 'username' => $username,
@@ -585,16 +567,14 @@ class AuthService
 
         try {
             // 检查最近15分钟内的失败尝试次数
-            $stmt = $this->db->prepare("
+
+            $failedAttempts = DatabaseRows::scalar($this->db->selectOne("
                 SELECT COUNT(*) 
                 FROM login_attempts 
                 WHERE (username = ? OR ip_address = ?) 
                 AND success = 0 
-                AND attempted_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)
-            ");
-            $stmt->execute([$username, $ip]);
-            
-            $failedAttempts = $stmt->fetchColumn();
+                AND attempted_at > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 15 MINUTE)
+            ", [$username, $ip]));
             
             // 超过5次失败尝试则锁定
             $isLocked = $failedAttempts >= 5;
@@ -631,12 +611,10 @@ class AuthService
         }
 
         try {
-            $stmt = $this->db->prepare("
+            $deletedCount = $this->db->affectingStatement("
                 DELETE FROM login_attempts 
-                WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                WHERE attempted_at < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 24 HOUR)
             ");
-            $stmt->execute();
-            $deletedCount = $stmt->rowCount();
             if ($deletedCount > 0) {
                 $this->logAudit('auth_login_attempts_cleanup_completed', [
                     'deleted_count' => $deletedCount,
@@ -848,16 +826,13 @@ class AuthService
         $finalUuid = $preferredUuid ?? strtolower($this->generateUUID());
 
         try {
-            $stmt = $this->db->prepare('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL');
-            if (!$stmt) {
-                return null;
-            }
-            $stmt->execute([
+            $this->db->statement('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id AND deleted_at IS NULL', [
                 'uuid' => $finalUuid,
                 'updated_at' => date('Y-m-d H:i:s'),
                 'id' => $userId,
             ]);
         } catch (\Throwable $e) {
+            $this->logError($e, '/internal/auth/user-uuid', 'Failed to persist missing user UUID', ['user_id' => $userId]);
             return null;
         }
 
@@ -885,11 +860,7 @@ class AuthService
                 throw new \RuntimeException('Conflicting UUID for existing local user');
             }
 
-            $stmt = $this->db->prepare('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id');
-            if (!$stmt) {
-                return null;
-            }
-            $stmt->execute([
+            $this->db->statement('UPDATE users SET uuid = :uuid, updated_at = :updated_at WHERE id = :id', [
                 'uuid' => $userUuid,
                 'updated_at' => date('Y-m-d H:i:s'),
                 'id' => $candidateId,
@@ -903,15 +874,10 @@ class AuthService
         $now = date('Y-m-d H:i:s');
         $password = $this->hashPassword(bin2hex(random_bytes(16)));
 
-        $stmt = $this->db->prepare(
-            'INSERT INTO users (uuid, username, email, password, role, status, points, is_admin, created_at, updated_at)
-             VALUES (:uuid, :username, :email, :password, :role, :status, :points, :is_admin, :created_at, :updated_at)'
-        );
-        if (!$stmt) {
-            return null;
-        }
         $normalizedIdentity = $this->normalizeRoleFlags($identity);
-        $stmt->execute([
+
+        return $this->findLocalUserById(DatabaseService::insertGetId($this->db, 'INSERT INTO users (uuid, username, email, password, role, status, points, is_admin, created_at, updated_at)
+             VALUES (:uuid, :username, :email, :password, :role, :status, :points, :is_admin, :created_at, :updated_at)', [
             'uuid' => $userUuid,
             'username' => $username,
             'email' => $email,
@@ -924,9 +890,7 @@ class AuthService
             'is_admin' => !empty($normalizedIdentity['is_admin']) ? 1 : 0,
             'created_at' => $now,
             'updated_at' => $now,
-        ]);
-
-        return $this->findLocalUserById((int) $this->db->lastInsertId());
+        ]));
     }
 
     /**
@@ -1001,12 +965,7 @@ class AuthService
             return null;
         }
 
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1');
-        if (!$stmt) {
-            return null;
-        }
-        $stmt->execute(['id' => $userId]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1', ['id' => $userId]));
         return $row ?: null;
     }
 
@@ -1019,12 +978,7 @@ class AuthService
             return null;
         }
 
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE uuid = :uuid AND deleted_at IS NULL LIMIT 1');
-        if (!$stmt) {
-            return null;
-        }
-        $stmt->execute(['uuid' => $userUuid]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM users WHERE uuid = :uuid AND deleted_at IS NULL LIMIT 1', ['uuid' => $userUuid]));
         return $row ?: null;
     }
 
@@ -1037,12 +991,7 @@ class AuthService
             return null;
         }
 
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE email = :email AND deleted_at IS NULL LIMIT 1');
-        if (!$stmt) {
-            return null;
-        }
-        $stmt->execute(['email' => $email]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM users WHERE email = :email AND deleted_at IS NULL LIMIT 1', ['email' => $email]));
         return $row ?: null;
     }
 
@@ -1055,12 +1004,7 @@ class AuthService
             return null;
         }
 
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE username = :username AND deleted_at IS NULL LIMIT 1');
-        if (!$stmt) {
-            return null;
-        }
-        $stmt->execute(['username' => $username]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM users WHERE username = :username AND deleted_at IS NULL LIMIT 1', ['username' => $username]));
         return $row ?: null;
     }
 

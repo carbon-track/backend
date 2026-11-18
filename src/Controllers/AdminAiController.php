@@ -505,11 +505,7 @@ class AdminAiController
 
             $conversationId = isset($args['conversation_id']) ? trim((string) $args['conversation_id']) : '';
             if ($conversationId === '') {
-                return $this->json($response, [
-                    'success' => false,
-                    'error' => 'conversation_id is required',
-                    'code' => 'INVALID_CONVERSATION_ID',
-                ], 422);
+                throw new \InvalidArgumentException('conversation_id is required');
             }
 
             $detail = $this->agentService->getConversationDetail($conversationId);
@@ -524,7 +520,7 @@ class AdminAiController
             ]);
         } catch (\InvalidArgumentException $exception) {
             $this->logException($exception, $request, 'Admin AI request validation failed');
-            $this->logAdminAudit('admin_ai_conversation_viewed', $user ?? null, $request, [
+            $this->logAdminAudit('admin_ai_conversation_view_failed', $user ?? null, $request, [
                 'data' => ['code' => 'INVALID_CONVERSATION_ID'],
             ], 'failed');
             return $this->json($response, [

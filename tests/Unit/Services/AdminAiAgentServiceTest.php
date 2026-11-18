@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AdminAiAgentService;
 use CarbonTrack\Services\AdminAiConversationStoreService;
 use CarbonTrack\Services\Ai\LlmClientInterface;
@@ -15,23 +18,21 @@ use CarbonTrack\Services\MessageService;
 use CarbonTrack\Tests\Integration\TestSchemaBuilder;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
-use PDO;
 use Psr\Log\NullLogger;
 
 class AdminAiAgentServiceTest extends TestCase
 {
-    private function makePdo(): PDO
+    private function makeConnection(): Connection
     {
-        $pdo = new PDO('sqlite::memory:');
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        TestSchemaBuilder::init($pdo);
-        return $pdo;
+        $connection = DatabaseFixture::sqlite();
+        TestSchemaBuilder::init($connection);
+        return $connection;
     }
 
     public function testEmptyMaxTokensFallsBackToAgentDefault(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model', 'max_tokens' => ''],
@@ -50,7 +51,7 @@ class AdminAiAgentServiceTest extends TestCase
             $this->plainTextResponse('ok'),
         ]);
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             $client,
             new NullLogger(),
             ['model' => 'test-model', 'max_tokens' => 0],
@@ -72,18 +73,18 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testChatCreatesConversationAndRestoresHistoryFromLogs(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
         $activityId = '550e8400-e29b-41d4-a716-446655440001';
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b2')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-1', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b2')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-1', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_pending_carbon_records',
@@ -126,19 +127,19 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertStringContainsString('待处理记录', $result['message']);
         $this->assertSame(1, $result['conversation']['summary']['llm_calls']);
         $this->assertCount(2, array_filter($result['conversation']['messages'], static fn (array $item): bool => ($item['kind'] ?? null) === 'message'));
-        $conversationCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_conversations WHERE conversation_id IS NOT NULL")->fetchColumn();
-        $messageCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id IS NOT NULL")->fetchColumn();
+        $conversationCount = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM admin_ai_conversations WHERE conversation_id IS NOT NULL"));
+        $messageCount = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id IS NOT NULL"));
         $this->assertSame(1, $conversationCount);
         $this->assertSame(3, $messageCount);
 
-        $llmCount = (int) $pdo->query("SELECT COUNT(*) FROM llm_logs WHERE conversation_id IS NOT NULL")->fetchColumn();
+        $llmCount = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM llm_logs WHERE conversation_id IS NOT NULL"));
         $this->assertSame(1, $llmCount);
     }
 
     public function testApplyPayloadTemplateDoesNotInjectCronWriteDefaults(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -176,23 +177,23 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testChatRestoresConversationFromLlmLogsWhenAuditWritesFail(): void
     {
-        $pdo = $this->makePdo();
-        $llmLogService = new LlmLogService($pdo, new Logger('test'));
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $connection = $this->makeConnection();
+        $llmLogService = new LlmLogService($connection, new Logger('test'));
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
         $activityId = '550e8400-e29b-41d4-a716-446655440001';
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b4')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-2', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b4')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-2', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
 
         $auditLogService = $this->getMockBuilder(AuditLogService::class)
-            ->setConstructorArgs([$pdo, new Logger('test')])
+            ->setConstructorArgs([$connection, new Logger('test')])
             ->onlyMethods(['logAdminOperation', 'getLastInsertId'])
             ->getMock();
         $auditLogService->method('logAdminOperation')->willReturn(false);
         $auditLogService->method('getLastInsertId')->willReturn(null);
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_pending_carbon_records',
@@ -241,24 +242,24 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame($result['conversation_id'], $conversations[0]['conversation_id']);
         $this->assertSame(2, $conversations[0]['message_count']);
         $this->assertStringContainsString('待处理记录', (string) $conversations[0]['last_message_preview']);
-        $storedCount = (int) $pdo->query("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id = '{$result['conversation_id']}'")->fetchColumn();
+        $storedCount = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM admin_ai_messages WHERE conversation_id = '{$result['conversation_id']}'"));
         $this->assertSame(3, $storedCount);
     }
 
     public function testChatFallsBackToKeywordMatchedActionWhenModelReturnsNoToolCall(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
         $activityId = '550e8400-e29b-41d4-a716-446655440001';
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b7')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-3', 2, '{$activityId}', 'pending', '2026-03-20', 2.4, 6)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400b7')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-read-3', 2, '{$activityId}', 'pending', '2026-03-20', 2.4, 6)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->plainTextResponse('我先想想。'),
             ]),
@@ -304,15 +305,15 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testWriteActionRequiresConfirmationAndExecutesAfterDecision(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
         $activityId = '550e8400-e29b-41d4-a716-446655440001';
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400b3')");
-        $pdo->exec("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-write-1', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'review_user', 'review@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400b3')");
+        $connection->unprepared("INSERT INTO carbon_records (id, user_id, activity_id, status, date, carbon_saved, points_earned) VALUES ('rec-write-1', 2, '{$activityId}', 'pending', '2026-03-20', 3.5, 8)");
 
         $messageService = $this->getMockBuilder(MessageService::class)
             ->disableOriginalConstructor()
@@ -322,7 +323,7 @@ class AdminAiAgentServiceTest extends TestCase
             ->method('sendCarbonRecordReviewSummary');
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'approve_carbon_records',
@@ -365,7 +366,7 @@ class AdminAiAgentServiceTest extends TestCase
 
         $this->assertTrue($proposalResult['success']);
         $this->assertSame('pending', $proposalResult['conversation']['pending_actions'][0]['status']);
-        $statusBefore = $pdo->query("SELECT status FROM carbon_records WHERE id = 'rec-write-1'")->fetchColumn();
+        $statusBefore = DatabaseRows::scalar($connection->selectOne("SELECT status FROM carbon_records WHERE id = 'rec-write-1'"));
         $this->assertSame('pending', $statusBefore);
 
         $proposalId = $proposalResult['conversation']['pending_actions'][0]['proposal_id'];
@@ -384,10 +385,10 @@ class AdminAiAgentServiceTest extends TestCase
 
         $this->assertTrue($decisionResult['success']);
         $this->assertStringContainsString('已批准', $decisionResult['message']);
-        $statusAfter = $pdo->query("SELECT status FROM carbon_records WHERE id = 'rec-write-1'")->fetchColumn();
+        $statusAfter = DatabaseRows::scalar($connection->selectOne("SELECT status FROM carbon_records WHERE id = 'rec-write-1'"));
         $this->assertSame('approved', $statusAfter);
 
-        $executedCount = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'")->fetchColumn();
+        $executedCount = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'"));
         $this->assertSame(1, $executedCount);
 
         try {
@@ -408,22 +409,22 @@ class AdminAiAgentServiceTest extends TestCase
             $this->assertSame('PROPOSAL_ALREADY_DECIDED', $exception->getMessage());
         }
 
-        $executedCountAfterReplay = (int) $pdo->query("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'")->fetchColumn();
+        $executedCountAfterReplay = (int) DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM audit_logs WHERE action = 'admin_ai_action_executed'"));
         $this->assertSame(1, $executedCountAfterReplay);
     }
 
     public function testRollbackDecisionCreatesInlineConfirmationProposal(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'points_user', 'points@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400c2')");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'points_user', 'points@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400c2')");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'adjust_user_points',
@@ -514,12 +515,12 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testListConversationsSupportsStatusModelDateAndPendingFilters(): void
     {
-        $pdo = $this->makePdo();
-        $auditLogService = new AuditLogService($pdo, new Logger('test'));
-        $llmLogService = new LlmLogService($pdo, new Logger('test'));
+        $connection = $this->makeConnection();
+        $auditLogService = new AuditLogService($connection, new Logger('test'));
+        $llmLogService = new LlmLogService($connection, new Logger('test'));
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -528,20 +529,20 @@ class AdminAiAgentServiceTest extends TestCase
             $auditLogService
         );
 
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO admin_ai_conversations (conversation_id, admin_id, title, last_message_preview, started_at, last_activity_at)
             VALUES
             ('admin-ai-11111111', 7, '会话一', '待确认', '2026-03-20 10:00:00', '2026-03-20 10:05:00'),
             ('admin-ai-22222222', 9, '会话二', '会话二', '2026-03-18 09:00:00', '2026-03-18 09:00:00')
         ");
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO admin_ai_messages (conversation_id, kind, role, action, status, content, meta_json, created_at)
             VALUES
             ('admin-ai-11111111', 'message', 'user', 'admin_ai_user_message', 'success', '会话一', '{\"data\":{\"visible_text\":\"会话一\"}}', '2026-03-20 10:00:00'),
             ('admin-ai-11111111', 'action_proposed', NULL, 'admin_ai_action_proposed', 'pending', '待确认', '{\"data\":{\"action_name\":\"approve_carbon_records\",\"label\":\"Approve\",\"summary\":\"待确认\",\"payload\":{\"record_ids\":[\"rec-1\"]},\"risk_level\":\"write\"}}', '2026-03-20 10:05:00'),
             ('admin-ai-22222222', 'message', 'user', 'admin_ai_user_message', 'success', '会话二', '{\"data\":{\"visible_text\":\"会话二\"}}', '2026-03-18 09:00:00')
         ");
-        $pdo->exec("
+        $connection->unprepared("
             INSERT INTO llm_logs (request_id, actor_type, actor_id, conversation_id, turn_no, source, model, prompt, response_raw, status, total_tokens, created_at)
             VALUES
             ('req-a', 'admin', 7, 'admin-ai-11111111', 1, '/admin/ai/chat', 'gpt-5.4', 'hello', '{\"ok\":true}', 'success', 11, '2026-03-20 10:01:00'),
@@ -567,16 +568,16 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testSearchUsersReadActionReturnsUserMatches(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'alice_admin', 'alice@example.com', 'active', 0, 36, '550e8400-e29b-41d4-a716-4466554400c2')");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'alice_admin', 'alice@example.com', 'active', 0, 36, '550e8400-e29b-41d4-a716-4466554400c2')");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'search_users',
@@ -622,16 +623,16 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testAdjustUserPointsUsesSelectedUserContextAndExecutesAfterConfirmation(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'points_user', 'points@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400c3')");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'points_user', 'points@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400c3')");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'adjust_user_points',
@@ -675,7 +676,7 @@ class AdminAiAgentServiceTest extends TestCase
 
         $this->assertTrue($proposal['success']);
         $this->assertSame('pending', $proposal['conversation']['pending_actions'][0]['status']);
-        $this->assertSame(10, (int) $pdo->query("SELECT points FROM users WHERE id = 2")->fetchColumn());
+        $this->assertSame(10, (int) DatabaseRows::scalar($connection->selectOne("SELECT points FROM users WHERE id = 2")));
 
         $proposalId = $proposal['conversation']['pending_actions'][0]['proposal_id'];
         $decision = $service->chat(
@@ -693,19 +694,19 @@ class AdminAiAgentServiceTest extends TestCase
 
         $this->assertTrue($decision['success']);
         $this->assertStringContainsString('已为用户 points_user 调整积分 25', $decision['message']);
-        $this->assertSame(35, (int) $pdo->query("SELECT points FROM users WHERE id = 2")->fetchColumn());
+        $this->assertSame(35, (int) DatabaseRows::scalar($connection->selectOne("SELECT points FROM users WHERE id = 2")));
     }
 
     public function testBadgeAwardAndRevokeUseBadgeServiceAfterConfirmation(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'badge_user', 'badge@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400d3')");
-        $pdo->exec("INSERT INTO achievement_badges (id, uuid, code, name_zh, name_en, is_active) VALUES (9, '550e8400-e29b-41d4-a716-4466554400e3', 'pioneer', '先锋徽章', 'Pioneer Badge', 1)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid) VALUES (2, 'badge_user', 'badge@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400d3')");
+        $connection->unprepared("INSERT INTO achievement_badges (id, uuid, code, name_zh, name_en, is_active) VALUES (9, '550e8400-e29b-41d4-a716-4466554400e3', 'pioneer', '先锋徽章', 'Pioneer Badge', 1)");
 
         $badgeService = $this->getMockBuilder(BadgeService::class)
             ->disableOriginalConstructor()
@@ -717,8 +718,8 @@ class AdminAiAgentServiceTest extends TestCase
             ->with(
                 9,
                 2,
-                $this->callback(function (array $context) use ($pdo): bool {
-                    $pdo->exec("INSERT INTO user_badges (user_id, badge_id, status, awarded_at, awarded_by, source, notes) VALUES (2, 9, 'awarded', '2026-03-23 08:00:00', 1, 'manual', '季度补发')");
+                $this->callback(function (array $context) use ($connection): bool {
+                    $connection->unprepared("INSERT INTO user_badges (user_id, badge_id, status, awarded_at, awarded_by, source, notes) VALUES (2, 9, 'awarded', '2026-03-23 08:00:00', 1, 'manual', '季度补发')");
                     return ($context['admin_id'] ?? null) === 1
                         && ($context['notes'] ?? null) === '季度补发'
                         && ($context['source'] ?? null) === 'manual';
@@ -728,13 +729,13 @@ class AdminAiAgentServiceTest extends TestCase
         $badgeService->expects($this->once())
             ->method('revokeBadge')
             ->with(9, 2, 1, '误发撤回')
-            ->willReturnCallback(function () use ($pdo): bool {
-                $pdo->exec("UPDATE user_badges SET status = 'revoked', revoked_at = '2026-03-23 08:30:00', revoked_by = 1, notes = '误发撤回' WHERE user_id = 2 AND badge_id = 9");
+            ->willReturnCallback(function () use ($connection): bool {
+                $connection->unprepared("UPDATE user_badges SET status = 'revoked', revoked_at = '2026-03-23 08:30:00', revoked_by = 1, notes = '误发撤回' WHERE user_id = 2 AND badge_id = 9");
                 return true;
             });
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'award_badge_to_user',
@@ -813,7 +814,7 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $this->assertStringContainsString('发放徽章 先锋徽章', $awardDecision['message']);
-        $this->assertSame('awarded', $pdo->query("SELECT status FROM user_badges WHERE user_id = 2 AND badge_id = 9")->fetchColumn());
+        $this->assertSame('awarded', DatabaseRows::scalar($connection->selectOne("SELECT status FROM user_badges WHERE user_id = 2 AND badge_id = 9")));
 
         $revokeProposal = $service->chat(null, '把当前用户的先锋徽章撤掉', ['selectedUserId' => 2], null, [
             'request_id' => 'req-badge-revoke-1',
@@ -836,21 +837,21 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $this->assertStringContainsString('撤销用户 badge_user 的徽章 先锋徽章', $revokeDecision['message']);
-        $this->assertSame('revoked', $pdo->query("SELECT status FROM user_badges WHERE user_id = 2 AND badge_id = 9")->fetchColumn());
+        $this->assertSame('revoked', DatabaseRows::scalar($connection->selectOne("SELECT status FROM user_badges WHERE user_id = 2 AND badge_id = 9")));
     }
 
     public function testUpdateUserStatusUsesSelectedUserContextAndExecutesAfterConfirmation(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, points, uuid, admin_notes) VALUES (2, 'status_user', 'status@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400f3', null)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, points, uuid, admin_notes) VALUES (2, 'status_user', 'status@example.com', 'active', 0, 10, '550e8400-e29b-41d4-a716-4466554400f3', null)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'update_user_status',
@@ -906,20 +907,20 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $this->assertStringContainsString('状态更新为 banned', $decision['message']);
-        $this->assertSame('banned', $pdo->query("SELECT status FROM users WHERE id = 2")->fetchColumn());
-        $this->assertSame('spam reports confirmed', $pdo->query("SELECT admin_notes FROM users WHERE id = 2")->fetchColumn());
+        $this->assertSame('banned', DatabaseRows::scalar($connection->selectOne("SELECT status FROM users WHERE id = 2")));
+        $this->assertSame('spam reports confirmed', DatabaseRows::scalar($connection->selectOne("SELECT admin_notes FROM users WHERE id = 2")));
     }
 
     public function testCreateUserActionRequiresConfirmationAndPersistsHashedPassword(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'create_user',
@@ -978,7 +979,7 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertArrayNotHasKey('password', $pendingAction['payload']);
         $this->assertTrue((bool) ($pendingAction['payload']['password_provided'] ?? false));
 
-        $proposalLogData = (string) $pdo->query("SELECT data FROM audit_logs WHERE action = 'admin_ai_action_proposed' ORDER BY id DESC LIMIT 1")->fetchColumn();
+        $proposalLogData = (string) DatabaseRows::scalar($connection->selectOne("SELECT data FROM audit_logs WHERE action = 'admin_ai_action_proposed' ORDER BY id DESC LIMIT 1"));
         $this->assertStringContainsString('password_hash', $proposalLogData);
         $this->assertStringNotContainsString('TempPass#2026', $proposalLogData);
 
@@ -998,7 +999,7 @@ class AdminAiAgentServiceTest extends TestCase
 
         $this->assertStringContainsString('已创建用户 new_admin_user', $decision['message']);
 
-        $user = $pdo->query("SELECT username, email, password, status, is_admin, admin_notes FROM users WHERE username = 'new_admin_user'")->fetch(PDO::FETCH_ASSOC);
+        $user = DatabaseRows::one($connection->selectOne("SELECT username, email, password, status, is_admin, admin_notes FROM users WHERE username = 'new_admin_user'"));
         $this->assertIsArray($user);
         $this->assertSame('new-admin@example.com', $user['email']);
         $this->assertSame('active', $user['status']);
@@ -1010,16 +1011,16 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testProductStatusAndInventoryActionsExecuteAfterConfirmation(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $logger = new Logger('test');
-        $auditLogService = new AuditLogService($pdo, $logger);
-        $llmLogService = new LlmLogService($pdo, $logger);
-        $errorLogService = new ErrorLogService($pdo, new NullLogger());
+        $auditLogService = new AuditLogService($connection, $logger);
+        $llmLogService = new LlmLogService($connection, $logger);
+        $errorLogService = new ErrorLogService($connection, new NullLogger());
 
-        $pdo->exec("INSERT INTO products (id, name, stock, status, points_required) VALUES (5, 'Eco Bottle', 12, 'inactive', 80)");
+        $connection->unprepared("INSERT INTO products (id, name, stock, status, points_required) VALUES (5, 'Eco Bottle', 12, 'inactive', 80)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'update_product_status',
@@ -1093,7 +1094,7 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $this->assertStringContainsString('Eco Bottle 已更新为 active', $statusDecision['message']);
-        $this->assertSame('active', $pdo->query("SELECT status FROM products WHERE id = 5")->fetchColumn());
+        $this->assertSame('active', DatabaseRows::scalar($connection->selectOne("SELECT status FROM products WHERE id = 5")));
 
         $inventoryProposal = $service->chat(null, '给 5 号商品补货 8 件', [], null, [
             'request_id' => 'req-product-stock-1',
@@ -1116,16 +1117,16 @@ class AdminAiAgentServiceTest extends TestCase
         );
 
         $this->assertStringContainsString('库存已从 12 调整到 20', $inventoryDecision['message']);
-        $this->assertSame(20, (int) $pdo->query("SELECT stock FROM products WHERE id = 5")->fetchColumn());
+        $this->assertSame(20, (int) DatabaseRows::scalar($connection->selectOne("SELECT stock FROM products WHERE id = 5")));
     }
 
     public function testStreamChatEmitsRunToolApprovalAndFinishEvents(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (2, 'stream_user', 'stream@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c1', 10)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (2, 'stream_user', 'stream@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c1', 10)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'adjust_user_points',
@@ -1199,7 +1200,7 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertContains('rollback.available', $decisionEventNames);
         $this->assertSame('adjust_user_points', $decisionResult['metadata']['rollback_available']['action_name']);
         $this->assertSame(-5.0, $decisionResult['metadata']['rollback_available']['payload']['delta']);
-        $this->assertSame(15, (int) $pdo->query("SELECT points FROM users WHERE id = 2")->fetchColumn());
+        $this->assertSame(15, (int) DatabaseRows::scalar($connection->selectOne("SELECT points FROM users WHERE id = 2")));
         $decisionRuns = $decisionResult['conversation']['runs'];
         $decisionRun = end($decisionRuns);
         $this->assertIsArray($decisionRun);
@@ -1208,9 +1209,9 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatRejectsInvalidDecisionBeforePersistingRun(): void
     {
-        $pdo = $this->makePdo();
+        $connection = $this->makeConnection();
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1236,14 +1237,14 @@ class AdminAiAgentServiceTest extends TestCase
                 }
             );
         } finally {
-            $this->assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM admin_ai_runs')->fetchColumn());
+            $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne('SELECT COUNT(*) FROM admin_ai_runs')));
         }
     }
 
     public function testStreamChatRejectsCrossConversationRollbackBeforePersistingRun(): void
     {
-        $pdo = $this->makePdo();
-        $store = new AdminAiConversationStoreService($pdo, new NullLogger());
+        $connection = $this->makeConnection();
+        $store = new AdminAiConversationStoreService($connection, new NullLogger());
         $proposalId = $store->logConversationEvent('admin_ai_action_proposed', [
             'request_id' => 'req-source-proposal',
             'actor_id' => 1,
@@ -1259,7 +1260,7 @@ class AdminAiAgentServiceTest extends TestCase
             ],
         ]);
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1308,17 +1309,17 @@ class AdminAiAgentServiceTest extends TestCase
                 }
             );
         } finally {
-            $this->assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM admin_ai_runs')->fetchColumn());
+            $this->assertSame(0, (int) DatabaseRows::scalar($connection->selectOne('SELECT COUNT(*) FROM admin_ai_runs')));
         }
     }
 
     public function testStreamChatPersistsRunStepsAndContinuesAfterReadTool(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (3, 'multi_user', 'multi@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c3', 42)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (3, 'multi_user', 'multi@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c3', 42)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_user_overview',
@@ -1345,7 +1346,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $events = [];
@@ -1373,7 +1374,7 @@ class AdminAiAgentServiceTest extends TestCase
         $this->assertSame('run.finished', end($eventNames));
 
         $secondService = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_user_overview',
@@ -1400,7 +1401,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $secondResult = $secondService->streamChat($result['conversation_id'], '再查一次', [], null, [
@@ -1418,8 +1419,8 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatReplaysToolResultsAsTextForProviderCompatibility(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (5, 'compat_user', 'compat@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c5', 33)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (5, 'compat_user', 'compat@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c5', 33)");
 
         $client = new QueueLlmClient([
             $this->toolResponse('manage_admin', [
@@ -1432,7 +1433,7 @@ class AdminAiAgentServiceTest extends TestCase
         ]);
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             $client,
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1451,7 +1452,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $result = $service->streamChat(null, '查用户并总结', [], null, [
@@ -1487,11 +1488,11 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatReturnsToolSummaryWhenFollowupLlmFailsAfterReadTool(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (6, 'fallback_user', 'fallback@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c6', 77)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (6, 'fallback_user', 'fallback@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c6', 77)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_user_overview',
@@ -1518,7 +1519,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $events = [];
@@ -1548,8 +1549,8 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatLocalizesTextReplayPrompts(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (8, 'locale_user', 'locale@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c8', 12)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (8, 'locale_user', 'locale@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c8', 12)");
 
         $client = new QueueLlmClient([
             $this->toolResponse('manage_admin', [
@@ -1562,7 +1563,7 @@ class AdminAiAgentServiceTest extends TestCase
         ]);
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             $client,
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1581,7 +1582,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $result = $service->streamChat(null, '查用户并总结', ['locale' => 'zh'], null, [
@@ -1606,7 +1607,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testTextReplayToolOutcomeIsStructurallyTruncatedBeforeModelFollowup(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1652,7 +1653,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testTextReplayToolOutcomeIsNotTruncatedWhenConfiguredUnlimited(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1692,7 +1693,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testTextReplayOversizeFallbackKeepsArraySuggestionStructured(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1742,9 +1743,9 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatConsolidatesTextReplayContinuationForMultiToolCalls(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (9, 'multi_tool_one', 'one@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c9', 12)");
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (10, 'multi_tool_two', 'two@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400ca', 21)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (9, 'multi_tool_one', 'one@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c9', 12)");
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (10, 'multi_tool_two', 'two@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400ca', 21)");
 
         $client = new QueueLlmClient([
             $this->multiToolResponse('manage_admin', [
@@ -1761,7 +1762,7 @@ class AdminAiAgentServiceTest extends TestCase
         ]);
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             $client,
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1780,7 +1781,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $result = $service->streamChat(null, '查两个用户并总结', [], null, [
@@ -1815,7 +1816,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testRecoveredToolOutcomePreservesRepeatedAssistantParts(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1834,7 +1835,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testAgentLimitOutcomeUsesPromptLocale(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new QueueLlmClient([]),
             new NullLogger(),
             ['model' => 'test-model'],
@@ -1863,11 +1864,11 @@ class AdminAiAgentServiceTest extends TestCase
 
     public function testStreamChatUsesUniqueStepIdsWhenProviderRepeatsToolCallIdsInSameRun(): void
     {
-        $pdo = $this->makePdo();
-        $pdo->exec("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (4, 'repeat_user', 'repeat@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c4', 18)");
+        $connection = $this->makeConnection();
+        $connection->unprepared("INSERT INTO users (id, username, email, status, is_admin, uuid, points) VALUES (4, 'repeat_user', 'repeat@example.com', 'active', 0, '550e8400-e29b-41d4-a716-4466554400c4', 18)");
 
         $service = new AdminAiAgentService(
-            $pdo,
+            $connection,
             new QueueLlmClient([
                 $this->toolResponse('manage_admin', [
                     'action' => 'get_user_overview',
@@ -1900,7 +1901,7 @@ class AdminAiAgentServiceTest extends TestCase
                     ],
                 ],
             ],
-            new LlmLogService($pdo, new Logger('test'))
+            new LlmLogService($connection, new Logger('test'))
         );
 
         $result = $service->streamChat(null, '连续查两次用户', [], null, [
@@ -1922,7 +1923,7 @@ class AdminAiAgentServiceTest extends TestCase
     public function testLlmTimeoutIsMappedSeparatelyFromProviderUnavailable(): void
     {
         $service = new AdminAiAgentService(
-            $this->makePdo(),
+            $this->makeConnection(),
             new ThrowingTimeoutLlmClient(),
             new NullLogger(),
             ['model' => 'test-model'],

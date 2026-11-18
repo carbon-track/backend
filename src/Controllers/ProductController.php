@@ -2,6 +2,10 @@
 
 namespace CarbonTrack\Controllers;
 
+use Illuminate\Database\QueryException;
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\MessageService;
@@ -9,12 +13,10 @@ use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\CloudflareR2Service;
 use CarbonTrack\Services\ErrorLogService;
-use PDO;
-use PDOException;
 
 class ProductController
 {
-    private PDO $db;
+    private Connection $db;
     private MessageService $messageService;
     private AuditLogService $auditLog;
     private AuthService $authService;
@@ -31,7 +33,7 @@ class ProductController
     private ?bool $pointExchangeHasAreaCode = null;
 
     public function __construct(
-        PDO $db,
+        Connection $db,
         MessageService $messageService,
         AuditLogService $auditLog,
         AuthService $authService,
@@ -153,9 +155,7 @@ class ProductController
 
             // 获取总数
             $countSql = "SELECT COUNT(*) as total FROM products p WHERE {$whereClause}";
-            $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute($bindings);
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $bindings))['total'];
 
             $orderByClause = $this->buildProductOrderByClause($params['sort'] ?? null);
 
@@ -176,15 +176,14 @@ class ProductController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $products = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             $productIds = array_map(static function ($item) {
                 return isset($item['id']) ? (int)$item['id'] : null;
@@ -218,7 +217,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getProducts error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getProducts error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -249,9 +248,7 @@ class ProductController
                 WHERE p.id = :product_id AND p.deleted_at IS NULL
             ";
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['product_id' => $productId]);
-            $product = $stmt->fetch(PDO::FETCH_ASSOC);
+            $product = DatabaseRows::one($this->db->selectOne($sql, ['product_id' => $productId]));
 
             if (!$product) {
                 return $this->json($response, ['error' => 'Product not found'], 404);
@@ -268,7 +265,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getProductDetail error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getProductDetail error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -319,7 +316,7 @@ class ProductController
                 // 获取商品信息并锁定
                 $sql = "SELECT * FROM products WHERE id = :id AND deleted_at IS NULL";
                 try {
-                    $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    $driver = $this->db->getDriverName();
                 } catch (\Throwable $exception) {
                     $this->logControllerException($exception, $request, 'Failed to detect database driver during product exchange');
                     $driver = null;
@@ -327,9 +324,7 @@ class ProductController
                 if ($driver !== 'sqlite') {
                     $sql .= ' FOR UPDATE';
                 }
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute(['id' => $productId]);
-                $product = $stmt->fetch(PDO::FETCH_ASSOC);
+                $product = DatabaseRows::one($this->db->selectOne($sql, ['id' => $productId]));
 
                 if (!$product) {
                     throw new \Exception('Product not found');
@@ -353,14 +348,12 @@ class ProductController
 
                 // 扣除用户积分
                 $sql = "UPDATE users SET points = points - :points WHERE id = :user_id";
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute(['points' => $totalPoints, 'user_id' => $user['id']]);
+                $this->db->statement($sql, ['points' => $totalPoints, 'user_id' => $user['id']]);
 
                 // 更新商品库存
                 if ($product['stock'] !== -1) {
                     $sql = "UPDATE products SET stock = stock - :quantity WHERE id = :product_id";
-                    $stmt = $this->db->prepare($sql);
-                    $stmt->execute(['quantity' => $quantity, 'product_id' => $productId]);
+                    $this->db->statement($sql, ['quantity' => $quantity, 'product_id' => $productId]);
                 }
 
                 // 创建兑换记录
@@ -439,11 +432,11 @@ class ProductController
             }
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::exchangeProduct error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::exchangeProduct error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, [
                 'success' => false,
-                'message' => $e->getMessage(),
-                'error' => $e->getMessage(),
+                'message' => DatabaseService::exceptionMessage($e),
+                'error' => DatabaseService::exceptionMessage($e),
                 'code' => 'EXCHANGE_FAILED'
             ], 400);
         }
@@ -470,15 +463,13 @@ class ProductController
             $exchangeId = $args['id'];
             $userColumn = $this->pointExchangeUserColumn($request);
             $sql = "SELECT * FROM point_exchanges WHERE id = :id AND {$userColumn} = :uid AND deleted_at IS NULL";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['id' => $exchangeId, 'uid' => $user['id']]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            $row = DatabaseRows::one($this->db->selectOne($sql, ['id' => $exchangeId, 'uid' => $user['id']]));
             if (!$row) {
                 return $this->json($response, ['error' => 'Exchange not found'], 404);
             }
             return $this->json($response, ['success' => true, 'data' => $row]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getExchangeTransaction error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getExchangeTransaction error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -545,9 +536,7 @@ class ProductController
                 FROM point_exchanges e
                 WHERE {$whereClause}
             ";
-            $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute($bindings);
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $bindings))['total'];
 
             // 获取兑换记录
             $sql = "
@@ -562,15 +551,14 @@ class ProductController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $exchanges = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $exchanges = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             // 处理图片字段
             foreach ($exchanges as &$exchange) {
@@ -595,7 +583,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getUserExchanges error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getUserExchanges error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -655,9 +643,7 @@ class ProductController
                 {$userJoinSql}
                 WHERE {$whereClause}
             ";
-            $countStmt = $this->db->prepare($countSql);
-            $countStmt->execute($bindings);
-            $total = $countStmt->fetch(PDO::FETCH_ASSOC)['total'];
+            $total = DatabaseRows::one($this->db->selectOne($countSql, $bindings))['total'];
 
             // 获取兑换记录
             $sql = "
@@ -676,15 +662,14 @@ class ProductController
                 LIMIT :limit OFFSET :offset
             ";
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->bindValue('offset', $offset, PDO::PARAM_INT);
-            $stmt->execute();
+            $queryBindings['limit'] = (int) $limit;
+            $queryBindings['offset'] = (int) $offset;
 
-            $exchanges = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $exchanges = DatabaseRows::all($this->db->select($sql, $queryBindings));
 
             // 映射前端期望字段
             foreach ($exchanges as &$ex) {
@@ -723,6 +708,14 @@ class ProductController
             }
 
             $pages = (int)ceil($total / $limit);
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_exchange_records_viewed',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'point_exchanges',
+                ['page' => $page, 'limit' => $limit, 'exchange_ids' => array_column($exchanges, 'id')]
+            );
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $exchanges,
@@ -740,7 +733,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getExchangeRecords error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getExchangeRecords error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -770,9 +763,7 @@ class ProductController
                 LEFT JOIN products p ON e.product_id = p.id
                 WHERE e.id = :id AND e.deleted_at IS NULL
             ";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute(['id' => $exchangeId]);
-            $exchange = $stmt->fetch(PDO::FETCH_ASSOC);
+            $exchange = DatabaseRows::one($this->db->selectOne($sql, ['id' => $exchangeId]));
 
             if (!$exchange) {
                 return $this->json($response, ['error' => 'Exchange not found'], 404);
@@ -808,12 +799,20 @@ class ProductController
             }
             $exchange['product_image_url'] = $exchange['product_image_url'] ?? $imgUrl;
 
+            $this->auditLog->logAdminRead(
+                $request,
+                'admin_exchange_record_viewed',
+                isset($user['id']) ? (int) $user['id'] : null,
+                'point_exchanges',
+                ['exchange_id' => $exchange['id']]
+            );
+
             return $this->json($response, [
                 'success' => true,
                 'data' => $exchange
             ]);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getExchangeRecordDetail error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getExchangeRecordDetail error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -846,12 +845,11 @@ class ProductController
                 SET status = :status, 
                     notes = :notes,
                     tracking_number = :tracking_number,
-                    updated_at = NOW()
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = :exchange_id
             ";
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute([
+            $this->db->statement($sql, [
                 'status' => $status,
                 'notes' => $notes,
                 'tracking_number' => $trackingNumber,
@@ -880,7 +878,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::updateExchangeStatus error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::updateExchangeStatus error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -921,13 +919,12 @@ class ProductController
 
             $sql .= ' ORDER BY pc.name ASC LIMIT :limit';
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            $categoryRows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $queryBindings['limit'] = (int) $limit;
+            $categoryRows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
 
             $map = [];
             foreach ($categoryRows as $row) {
@@ -957,10 +954,7 @@ class ProductController
                 LIMIT :fallback_limit
             ";
 
-            $fallbackStmt = $this->db->prepare($fallbackSql);
-            $fallbackStmt->bindValue('fallback_limit', $fallbackLimit, PDO::PARAM_INT);
-            $fallbackStmt->execute();
-            $fallbackRows = $fallbackStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $fallbackRows = DatabaseRows::all($this->db->select($fallbackSql, ['fallback_limit' => (int) $fallbackLimit])) ?: [];
 
             $searchLower = strtolower($search);
             foreach ($fallbackRows as $row) {
@@ -1020,7 +1014,7 @@ class ProductController
             ]);
 
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::getCategories error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::getCategories error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1068,12 +1062,12 @@ class ProductController
                         stock, status, sort_order, created_at
                     ) VALUES (
                         :name, :category, :category_slug, :points_required, :description, :image_path, :images,
-                        :stock, :status, :sort_order, NOW()
+                        :stock, :status, :sort_order, CURRENT_TIMESTAMP
                     )
                 ";
 
-                $stmt = $this->db->prepare($sql);
-                $stmt->execute([
+
+                $newId = DatabaseService::insertGetId($this->db, $sql, [
                     'name' => $data['name'],
                     'category' => $categoryName,
                     'category_slug' => $categorySlug,
@@ -1085,8 +1079,6 @@ class ProductController
                     'status' => $status,
                     'sort_order' => (int)($data['sort_order'] ?? 0),
                 ]);
-
-                $newId = (int)$this->db->lastInsertId();
 
                 $normalizedTags = $this->resolveTagsFromPayload($request, $tagPayload);
                 $this->syncProductTags($newId, $normalizedTags);
@@ -1108,7 +1100,7 @@ class ProductController
                 throw $txError;
             }
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::createProduct error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::createProduct error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1189,9 +1181,8 @@ class ProductController
             $this->db->beginTransaction();
             try {
                 if (!empty($fields)) {
-                    $sql = 'UPDATE products SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id AND deleted_at IS NULL';
-                    $stmt = $this->db->prepare($sql);
-                    $stmt->execute($params);
+                    $sql = 'UPDATE products SET ' . implode(', ', $fields) . ', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND deleted_at IS NULL';
+                    $this->db->statement($sql, $params);
                 }
 
                 if ($shouldUpdateTags) {
@@ -1214,7 +1205,7 @@ class ProductController
                 throw $txError;
             }
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::updateProduct error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::updateProduct error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1240,13 +1231,12 @@ class ProductController
             }
             $sql .= ' ORDER BY name ASC LIMIT :limit';
 
-            $stmt = $this->db->prepare($sql);
+            $queryBindings = [];
             foreach ($bindings as $key => $value) {
-                $stmt->bindValue($key, $value);
+                $queryBindings[$key] = $value;
             }
-            $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $queryBindings['limit'] = (int) $limit;
+            $rows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
 
             return $this->json($response, [
                 'success' => true,
@@ -1262,7 +1252,7 @@ class ProductController
                 ]
             );
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::searchProductTags error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::searchProductTags error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -1462,10 +1452,10 @@ class ProductController
                 return;
             } catch (\Throwable $loggingError) { // nosemgrep: semgrep.enforce-errorlogservice-in-catch
                 // Use the emergency log if ErrorLogService itself fails.
-                error_log(self::ERRLOG_PREFIX . $loggingError->getMessage());
+                error_log(self::ERRLOG_PREFIX . DatabaseService::exceptionMessage($loggingError));
             }
         }
-        $fallbackMessage = $contextMessage !== '' ? $contextMessage : $exception->getMessage();
+        $fallbackMessage = $contextMessage !== '' ? $contextMessage : DatabaseService::exceptionMessage($exception);
         error_log($fallbackMessage);
     }
 
@@ -1636,11 +1626,10 @@ class ProductController
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $sql = 'SELECT id, name, slug FROM product_categories WHERE id IN (' . $placeholders . ')';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($ids);
 
         $result = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        foreach ($this->db->cursor($sql, $ids) as $row) {
+            $row = (array) $row;
             if (!isset($row['id'])) {
                 continue;
             }
@@ -1664,19 +1653,17 @@ class ProductController
 
         while ($attempts < 5) {
             try {
-                $stmt = $this->db->prepare('INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, NOW())');
-                $stmt->execute([
+                $id = DatabaseService::insertGetId($this->db, 'INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, CURRENT_TIMESTAMP)', [
                     'name' => $name,
                     'slug' => $normalizedSlug,
                 ]);
-                $id = (int)$this->db->lastInsertId();
 
                 return [
                     'id' => $id,
                     'name' => $name,
                     'slug' => $normalizedSlug,
                 ];
-            } catch (PDOException $e) {
+            } catch (QueryException $e) {
                 if ($e->getCode() !== '23000') {
                     throw $e;
                 }
@@ -1693,12 +1680,10 @@ class ProductController
         }
 
         $normalizedSlug = $baseSlug . '-' . substr(md5((string)microtime(true)), 0, 6);
-        $stmt = $this->db->prepare('INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, NOW())');
-        $stmt->execute([
+        $id = DatabaseService::insertGetId($this->db, 'INSERT INTO product_categories (name, slug, created_at) VALUES (:name, :slug, CURRENT_TIMESTAMP)', [
             'name' => $name,
             'slug' => $normalizedSlug,
         ]);
-        $id = (int)$this->db->lastInsertId();
 
         return [
             'id' => $id,
@@ -1834,9 +1819,7 @@ class ProductController
         $desiredIds = array_map(static fn($tag) => (int)$tag['id'], $tags);
         $desiredIds = array_values(array_unique(array_filter($desiredIds, static fn($id) => $id > 0)));
 
-        $stmt = $this->db->prepare('SELECT tag_id FROM product_tag_map WHERE product_id = :product_id');
-        $stmt->execute(['product_id' => $productId]);
-        $existingIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []);
+        $existingIds = array_map('intval', DatabaseRows::column($this->db->select('SELECT tag_id FROM product_tag_map WHERE product_id = :product_id', ['product_id' => $productId])) ?: []);
 
         $toDelete = array_diff($existingIds, $desiredIds);
         $toInsert = array_diff($desiredIds, $existingIds);
@@ -1844,15 +1827,13 @@ class ProductController
         if (!empty($toDelete)) {
             $placeholders = implode(',', array_fill(0, count($toDelete), '?'));
             $sql = 'DELETE FROM product_tag_map WHERE product_id = ? AND tag_id IN (' . $placeholders . ')';
-            $delStmt = $this->db->prepare($sql);
-            $delStmt->execute(array_merge([$productId], array_values($toDelete)));
+            $this->db->statement($sql, array_merge([$productId], array_values($toDelete)));
         }
 
         if (!empty($toInsert)) {
-            $insertSql = 'INSERT INTO product_tag_map (product_id, tag_id, created_at) VALUES (:product_id, :tag_id, NOW())';
-            $insStmt = $this->db->prepare($insertSql);
+            $insertSql = 'INSERT INTO product_tag_map (product_id, tag_id, created_at) VALUES (:product_id, :tag_id, CURRENT_TIMESTAMP)';
             foreach ($toInsert as $tagId) {
-                $insStmt->execute([
+                $this->db->statement($insertSql, [
                     'product_id' => $productId,
                     'tag_id' => $tagId,
                 ]);
@@ -1874,10 +1855,8 @@ class ProductController
                 WHERE ptm.product_id IN (' . $placeholders . ')
                 ORDER BY pt.name ASC';
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($productIds);
 
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $rows = DatabaseRows::all($this->db->select($sql, $productIds)) ?: [];
         $map = [];
         foreach ($rows as $row) {
             $productId = isset($row['product_id']) ? (int)$row['product_id'] : null;
@@ -1904,11 +1883,10 @@ class ProductController
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
         $sql = 'SELECT id, name, slug FROM product_tags WHERE id IN (' . $placeholders . ')';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($ids);
 
         $result = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        foreach ($this->db->cursor($sql, $ids) as $row) {
+            $row = (array) $row;
             $id = isset($row['id']) ? (int)$row['id'] : null;
             if ($id === null) {
                 continue;
@@ -1932,11 +1910,10 @@ class ProductController
 
         $placeholders = implode(',', array_fill(0, count($slugs), '?'));
         $sql = 'SELECT id, name, slug FROM product_tags WHERE slug IN (' . $placeholders . ')';
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($slugs);
 
         $result = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        foreach ($this->db->cursor($sql, $slugs) as $row) {
+            $row = (array) $row;
             if (!isset($row['slug'])) {
                 continue;
             }
@@ -1962,15 +1939,11 @@ class ProductController
         $sql = 'SELECT id, name, slug FROM product_categories WHERE slug IN (' . $placeholders . ')';
 
         try {
-            $stmt = $this->db->prepare($sql);
-            if (!$stmt) {
-                return [];
-            }
 
-            $stmt->execute($slugs);
 
             $result = [];
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            foreach ($this->db->cursor($sql, $slugs) as $row) {
+                $row = (array) $row;
                 if (!isset($row['slug'])) {
                     continue;
                 }
@@ -2006,19 +1979,17 @@ class ProductController
 
         while ($attempts < 5) {
             try {
-                $stmt = $this->db->prepare('INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, NOW(), NOW())');
-                $stmt->execute([
+                $id = DatabaseService::insertGetId($this->db, 'INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', [
                     'name' => $name,
                     'slug' => $slug,
                 ]);
-                $id = (int)$this->db->lastInsertId();
 
                 return [
                     'id' => $id,
                     'name' => $name,
                     'slug' => $slug,
                 ];
-            } catch (PDOException $e) {
+            } catch (QueryException $e) {
                 if ($e->getCode() !== '23000') {
                     throw $e;
                 }
@@ -2035,12 +2006,10 @@ class ProductController
         }
 
         $slug = $baseSlug . '-' . substr(md5((string)microtime(true)), 0, 6);
-        $stmt = $this->db->prepare('INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, NOW(), NOW())');
-        $stmt->execute([
+        $id = DatabaseService::insertGetId($this->db, 'INSERT INTO product_tags (name, slug, created_at, updated_at) VALUES (:name, :slug, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', [
             'name' => $name,
             'slug' => $slug,
         ]);
-        $id = (int)$this->db->lastInsertId();
 
         return [
             'id' => $id,
@@ -2088,14 +2057,13 @@ class ProductController
                 return $this->json($response, ['error' => 'Invalid product id'], 400);
             }
 
-            $stmt = $this->db->prepare('UPDATE products SET deleted_at = NOW() WHERE id = :id AND deleted_at IS NULL');
-            $stmt->execute(['id' => $id]);
+            $this->db->statement('UPDATE products SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id AND deleted_at IS NULL', ['id' => $id]);
 
             $this->auditLog->log($user['id'], 'product_deleted', 'products', (string)$id, []);
 
             return $this->json($response, ['success' => true, 'message' => 'Product deleted successfully']);
         } catch (\Exception $e) {
-            $this->logControllerException($e, $request, 'ProductController::deleteProduct error: ' . $e->getMessage());
+            $this->logControllerException($e, $request, 'ProductController::deleteProduct error: ' . DatabaseService::exceptionMessage($e));
             return $this->json($response, ['error' => self::ERR_INTERNAL], 500);
         }
     }
@@ -2145,7 +2113,7 @@ class ProductController
             ':contact_phone',
             ':notes',
             "'pending'",
-            'NOW()',
+            'CURRENT_TIMESTAMP',
         ]);
 
         $sql = sprintf(
@@ -2155,7 +2123,6 @@ class ProductController
         );
 
         $exchangeId = $this->generateUuid();
-        $stmt = $this->db->prepare($sql);
 
         $params = [
             'id' => $exchangeId,
@@ -2174,7 +2141,7 @@ class ProductController
             $params['contact_area_code'] = $data['contact_area_code'] ?? null;
         }
 
-        $stmt->execute($params);
+        $this->db->statement($sql, $params);
 
         return $exchangeId;
     }
@@ -2188,28 +2155,20 @@ class ProductController
         $hasColumn = false;
 
         try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: null;
+            $driver = $this->db->getDriverName() ?: null;
 
             if ($driver === 'sqlite') {
-                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
-                if ($stmt) {
-                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                        if (isset($row['name']) && strcasecmp((string) $row['name'], 'contact_area_code') === 0) {
-                            $hasColumn = true;
-                            break;
-                        }
+                foreach ($this->db->cursor("PRAGMA table_info(point_exchanges)") as $row) {
+                    $row = (array) $row;
+                    if (isset($row['name']) && strcasecmp((string) $row['name'], 'contact_area_code') === 0) {
+                        $hasColumn = true;
+                        break;
                     }
                 }
             } elseif ($driver === 'mysql') {
-                $stmt = $this->db->prepare('SHOW COLUMNS FROM point_exchanges LIKE ?');
-                if ($stmt && $stmt->execute(['contact_area_code'])) {
-                    $hasColumn = (bool) $stmt->fetch(PDO::FETCH_ASSOC);
-                }
+                $hasColumn = (bool) DatabaseRows::one($this->db->selectOne('SHOW COLUMNS FROM point_exchanges LIKE ?', ['contact_area_code']));
             } elseif ($driver === 'pgsql') {
-                $stmt = $this->db->prepare('SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?');
-                if ($stmt && $stmt->execute(['point_exchanges', 'contact_area_code'])) {
-                    $hasColumn = (bool) $stmt->fetch(PDO::FETCH_ASSOC);
-                }
+                $hasColumn = (bool) DatabaseRows::one($this->db->selectOne('SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?', ['point_exchanges', 'contact_area_code']));
             }
         } catch (\Throwable $exception) {
             $this->logControllerException($exception, $request, 'Failed to check for exchange area code column');
@@ -2241,20 +2200,18 @@ class ProductController
 
         if (!$username || !$email) {
             try {
-                $stmt = $this->db->prepare('SELECT username, email FROM users WHERE id = :id');
-                $stmt->execute(['id' => $userId]);
-                $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $row = DatabaseRows::one($this->db->selectOne('SELECT username, email FROM users WHERE id = :id', ['id' => $userId])) ?: [];
                 $username = $username ?: ($row['username'] ?? null);
                 $email = $email ?: ($row['email'] ?? null);
-            } catch (\Throwable $ignore) {
-                // 忽略补充信息失败，继续以已有数据写入
+            } catch (\Throwable $exception) {
+                $this->logControllerException($exception, $request, 'Failed to load user details for points transaction');
             }
         }
 
         $email = $email ?? '';
         $username = $username ?? '';
 
-        $columns = $this->getPointsTransactionColumns();
+        $columns = $this->getPointsTransactionColumns($request);
         $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
         $normalizedType = $points < 0 ? 'spend' : 'earn';
         $absolutePoints = abs($points);
@@ -2338,8 +2295,7 @@ class ProductController
             $placeholdersSql = implode(', ', array_map(static fn(string $param) => ':' . $param, array_values($columnMap)));
             $sql = sprintf('INSERT INTO points_transactions (%s) VALUES (%s)', $columnsSql, $placeholdersSql);
 
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
+            $this->db->statement($sql, $params);
 
             return;
         }
@@ -2456,11 +2412,10 @@ class ProductController
         $placeholdersSql = implode(', ', array_map(static fn(string $param) => ':' . $param, array_values($columnMap)));
         $sql = sprintf('INSERT INTO points_transactions (%s) VALUES (%s)', $columnsSql, $placeholdersSql);
 
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute($params);
+        $this->db->statement($sql, $params);
     }
 
-    private function getPointsTransactionColumns(): array
+    private function getPointsTransactionColumns(Request $request): array
     {
         if ($this->pointsTransactionColumns !== null) {
             return $this->pointsTransactionColumns;
@@ -2469,41 +2424,35 @@ class ProductController
         $columns = [];
 
         try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+            $driver = $this->db->getDriverName() ?: 'mysql';
 
             if ($driver === 'sqlite') {
-                $stmt = $this->db->query('PRAGMA table_info(points_transactions)');
-                if ($stmt) {
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                        $name = $row['name'] ?? null;
-                        if ($name) {
-                            $columns[strtolower((string)$name)] = (string)$name;
-                        }
+                $queryRows = $this->db->select('PRAGMA table_info(points_transactions)');
+                foreach (DatabaseRows::all($queryRows) as $row) {
+                    $name = $row['name'] ?? null;
+                    if ($name) {
+                        $columns[strtolower((string)$name)] = (string)$name;
                     }
                 }
             } elseif ($driver === 'pgsql') {
-                $stmt = $this->db->prepare('SELECT column_name FROM information_schema.columns WHERE table_name = :table');
-                if ($stmt && $stmt->execute(['table' => 'points_transactions'])) {
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                        $name = $row['column_name'] ?? null;
-                        if ($name) {
-                            $columns[strtolower((string)$name)] = (string)$name;
-                        }
+                $queryRows = $this->db->select('SELECT column_name FROM information_schema.columns WHERE table_name = :table', ['table' => 'points_transactions']);
+                foreach (DatabaseRows::all($queryRows) as $row) {
+                    $name = $row['column_name'] ?? null;
+                    if ($name) {
+                        $columns[strtolower((string)$name)] = (string)$name;
                     }
                 }
             } else {
-                $stmt = $this->db->query('SHOW COLUMNS FROM points_transactions');
-                if ($stmt) {
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                        $field = $row['Field'] ?? $row['field'] ?? null;
-                        if ($field) {
-                            $columns[strtolower((string)$field)] = (string)$field;
-                        }
+                $queryRows = $this->db->select('SHOW COLUMNS FROM points_transactions');
+                foreach (DatabaseRows::all($queryRows) as $row) {
+                    $field = $row['Field'] ?? $row['field'] ?? null;
+                    if ($field) {
+                        $columns[strtolower((string)$field)] = (string)$field;
                     }
                 }
             }
-        } catch (\Throwable $ignore) {
-            // 读取表结构失败时按空集合处理，后续逻辑会走“现代”路径
+        } catch (\Throwable $exception) {
+            $this->logControllerException($exception, $request, 'Failed to read points transaction columns');
         }
 
         return $this->pointsTransactionColumns = $columns;
@@ -2528,39 +2477,26 @@ class ProductController
         $detected = 'user_id';
 
         try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+            $driver = $this->db->getDriverName() ?: 'mysql';
 
             if ($driver === 'mysql') {
-                $stmt = $this->db->query("SHOW COLUMNS FROM point_exchanges LIKE 'user_id'");
-                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                $hasUserId = (bool) DatabaseRows::one($this->db->selectOne("SHOW COLUMNS FROM point_exchanges LIKE 'user_id'"));
                 if (!$hasUserId) {
-                    $stmtUid = $this->db->query("SHOW COLUMNS FROM point_exchanges LIKE 'uid'");
-                    if ($stmtUid && $stmtUid->fetch(PDO::FETCH_ASSOC)) {
+                    $stmtUidRow = $this->db->selectOne("SHOW COLUMNS FROM point_exchanges LIKE 'uid'");
+                    if ((bool) DatabaseRows::one($stmtUidRow)) {
                         $detected = 'uid';
                     }
                 }
             } elseif ($driver === 'sqlite') {
-                $stmt = $this->db->query("PRAGMA table_info(point_exchanges)");
-                $columns = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $columns = DatabaseRows::all($this->db->select("PRAGMA table_info(point_exchanges)"));
                 $names = array_map(static fn($col) => $col['name'] ?? '', $columns);
                 if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
                     $detected = 'uid';
                 }
             } else {
-                $stmt = $this->db->query("SELECT * FROM point_exchanges LIMIT 0");
-                if ($stmt) {
-                    $count = $stmt->columnCount();
-                    for ($i = 0; $i < $count; $i++) {
-                        $meta = $stmt->getColumnMeta($i);
-                        $name = $meta['name'] ?? '';
-                        if ($name === 'user_id') {
-                            $detected = 'user_id';
-                            break;
-                        }
-                        if ($name === 'uid') {
-                            $detected = 'uid';
-                        }
-                    }
+                $columns = $this->db->getSchemaBuilder()->getColumnListing('point_exchanges');
+                if (!in_array('user_id', $columns, true) && in_array('uid', $columns, true)) {
+                    $detected = 'uid';
                 }
             }
         } catch (\Throwable $exception) {
@@ -2579,39 +2515,26 @@ class ProductController
         $detected = 'user_id';
 
         try {
-            $driver = $this->db->getAttribute(PDO::ATTR_DRIVER_NAME) ?: 'mysql';
+            $driver = $this->db->getDriverName() ?: 'mysql';
 
             if ($driver === 'mysql') {
-                $stmt = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'user_id'");
-                $hasUserId = $stmt && $stmt->fetch(PDO::FETCH_ASSOC);
+                $hasUserId = (bool) DatabaseRows::one($this->db->selectOne("SHOW COLUMNS FROM points_transactions LIKE 'user_id'"));
                 if (!$hasUserId) {
-                    $stmtUid = $this->db->query("SHOW COLUMNS FROM points_transactions LIKE 'uid'");
-                    if ($stmtUid && $stmtUid->fetch(PDO::FETCH_ASSOC)) {
+                    $stmtUidRow = $this->db->selectOne("SHOW COLUMNS FROM points_transactions LIKE 'uid'");
+                    if ((bool) DatabaseRows::one($stmtUidRow)) {
                         $detected = 'uid';
                     }
                 }
             } elseif ($driver === 'sqlite') {
-                $stmt = $this->db->query("PRAGMA table_info(points_transactions)");
-                $columns = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
+                $columns = DatabaseRows::all($this->db->select("PRAGMA table_info(points_transactions)"));
                 $names = array_map(static fn($col) => $col['name'] ?? '', $columns);
                 if (!in_array('user_id', $names, true) && in_array('uid', $names, true)) {
                     $detected = 'uid';
                 }
             } else {
-                $stmt = $this->db->query("SELECT * FROM points_transactions LIMIT 0");
-                if ($stmt) {
-                    $count = $stmt->columnCount();
-                    for ($i = 0; $i < $count; $i++) {
-                        $meta = $stmt->getColumnMeta($i);
-                        $name = $meta['name'] ?? '';
-                        if ($name === 'user_id') {
-                            $detected = 'user_id';
-                            break;
-                        }
-                        if ($name === 'uid') {
-                            $detected = 'uid';
-                        }
-                    }
+                $columns = $this->db->getSchemaBuilder()->getColumnListing('points_transactions');
+                if (!in_array('user_id', $columns, true) && in_array('uid', $columns, true)) {
+                    $detected = 'uid';
                 }
             }
         } catch (\Throwable $exception) {
@@ -2692,9 +2615,7 @@ class ProductController
             LEFT JOIN users u ON " . $this->pointExchangeUserColumn($request, 'e') . " = u.id
             WHERE e.id = :id AND e.deleted_at IS NULL
         ";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute(['id' => $exchangeId]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        return DatabaseRows::one($this->db->selectOne($sql, ['id' => $exchangeId])) ?: null;
     }
 
     /**
@@ -2704,9 +2625,7 @@ class ProductController
     {
         // 获取管理员
         $sql = "SELECT id, email, username FROM users WHERE is_admin = 1 AND deleted_at IS NULL";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute();
-        $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $admins = DatabaseRows::all($this->db->select($sql));
 
         if (empty($admins)) {
             return;

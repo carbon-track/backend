@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Services;
 
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
+use CarbonTrack\Tests\Support\DatabaseFixture;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\RegionService;
 use CarbonTrack\Services\StreakLeaderboardService;
@@ -38,7 +40,7 @@ class StreakLeaderboardServiceTest extends TestCase
             ->willReturn(true);
 
         $service = new StreakLeaderboardService(
-            $this->createMock(\PDO::class),
+            new DatabaseConnectionStub(),
             $this->createMock(RegionService::class),
             null,
             $cacheDir,
@@ -56,21 +58,20 @@ class StreakLeaderboardServiceTest extends TestCase
 
     public function testRebuildCacheUsesCompatibleSchoolAndRegionFields(): void
     {
-        $pdo = new \PDO('sqlite::memory:');
-        $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, region_code TEXT, school_id INTEGER, avatar_id INTEGER, deleted_at TEXT)');
-        $pdo->exec('CREATE TABLE schools (id INTEGER PRIMARY KEY, name TEXT)');
-        $pdo->exec('CREATE TABLE avatars (id INTEGER PRIMARY KEY, file_path TEXT)');
-        $pdo->exec('CREATE TABLE user_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, checkin_date TEXT)');
+        $connection = DatabaseFixture::sqlite();
+        $connection->unprepared('CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, region_code TEXT, school_id INTEGER, avatar_id INTEGER, deleted_at TEXT)');
+        $connection->unprepared('CREATE TABLE schools (id INTEGER PRIMARY KEY, name TEXT)');
+        $connection->unprepared('CREATE TABLE avatars (id INTEGER PRIMARY KEY, file_path TEXT)');
+        $connection->unprepared('CREATE TABLE user_checkins (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, checkin_date TEXT)');
 
         $today = new \DateTimeImmutable('now');
         $todayStr = $today->format('Y-m-d');
         $yesterdayStr = $today->modify('-1 day')->format('Y-m-d');
 
-        $pdo->exec("INSERT INTO schools (id, name) VALUES (7, 'Canonical Academy')");
-        $pdo->exec("INSERT INTO users (id, username, region_code, school_id, avatar_id, deleted_at) VALUES (1, 'alice', 'US-UM-81', 7, NULL, NULL)");
-        $pdo->exec("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$yesterdayStr}')");
-        $pdo->exec("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$todayStr}')");
+        $connection->unprepared("INSERT INTO schools (id, name) VALUES (7, 'Canonical Academy')");
+        $connection->unprepared("INSERT INTO users (id, username, region_code, school_id, avatar_id, deleted_at) VALUES (1, 'alice', 'US-UM-81', 7, NULL, NULL)");
+        $connection->unprepared("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$yesterdayStr}')");
+        $connection->unprepared("INSERT INTO user_checkins (user_id, checkin_date) VALUES (1, '{$todayStr}')");
 
         $regionService = $this->createMock(RegionService::class);
         $regionService->method('getRegionContext')
@@ -94,7 +95,7 @@ class StreakLeaderboardServiceTest extends TestCase
 
         try {
             $service = new StreakLeaderboardService(
-                $pdo,
+                $connection,
                 $regionService,
                 null,
                 $cacheDir,

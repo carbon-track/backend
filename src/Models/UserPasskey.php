@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Models;
 
-use PDO;
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
+
 
 class UserPasskey
 {
-    public function __construct(private PDO $db)
+    public function __construct(private Connection $db)
     {
     }
 
@@ -17,17 +20,13 @@ class UserPasskey
      */
     public function listActiveByUserUuid(string $userUuid): array
     {
-        $stmt = $this->db->prepare(
-            'SELECT id, user_uuid, credential_id, label, rp_id, user_handle, transports, aaguid, sign_count,
+
+        $rows = DatabaseRows::all($this->db->select('SELECT id, user_uuid, credential_id, label, rp_id, user_handle, transports, aaguid, sign_count,
                     last_used_at, attested_at, credential_type, attestation_format, backup_eligible, backup_state,
                     created_at, updated_at
              FROM user_passkeys
              WHERE user_uuid = :user_uuid AND disabled_at IS NULL
-             ORDER BY created_at ASC, id ASC'
-        );
-        $stmt->execute(['user_uuid' => strtolower($userUuid)]);
-
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+             ORDER BY created_at ASC, id ASC', ['user_uuid' => strtolower($userUuid)])) ?: [];
         return array_map([$this, 'hydratePasskeyRow'], $rows);
     }
 
@@ -36,16 +35,12 @@ class UserPasskey
      */
     public function findActiveByCredentialId(string $credentialId): ?array
     {
-        $stmt = $this->db->prepare(
-            'SELECT * FROM user_passkeys
-             WHERE credential_id_hash = :credential_id_hash AND disabled_at IS NULL
-             LIMIT 1'
-        );
-        $stmt->execute([
-            'credential_id_hash' => hash('sha256', $credentialId),
-        ]);
 
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM user_passkeys
+             WHERE credential_id_hash = :credential_id_hash AND disabled_at IS NULL
+             LIMIT 1', [
+            'credential_id_hash' => hash('sha256', $credentialId),
+        ]));
         if (!$row) {
             return null;
         }
@@ -60,8 +55,9 @@ class UserPasskey
     public function create(array $record): array
     {
         $now = gmdate('Y-m-d H:i:s');
-        $stmt = $this->db->prepare(
-            'INSERT INTO user_passkeys (
+
+
+        $id = DatabaseService::insertGetId($this->db, 'INSERT INTO user_passkeys (
                 user_uuid, credential_id, credential_id_hash, credential_type, label, public_key, rp_id, user_handle,
                 transports, aaguid, sign_count, attestation_format, backup_eligible, backup_state, meta_json,
                 last_used_at, attested_at, created_at, updated_at
@@ -69,10 +65,7 @@ class UserPasskey
                 :user_uuid, :credential_id, :credential_id_hash, :credential_type, :label, :public_key, :rp_id, :user_handle,
                 :transports, :aaguid, :sign_count, :attestation_format, :backup_eligible, :backup_state, :meta_json,
                 :last_used_at, :attested_at, :created_at, :updated_at
-            )'
-        );
-
-        $stmt->execute([
+            )', [
             'user_uuid' => strtolower((string) $record['user_uuid']),
             'credential_id' => (string) $record['credential_id'],
             'credential_id_hash' => hash('sha256', (string) $record['credential_id']),
@@ -93,8 +86,6 @@ class UserPasskey
             'created_at' => $record['created_at'] ?? $now,
             'updated_at' => $record['updated_at'] ?? $now,
         ]);
-
-        $id = (int) $this->db->lastInsertId();
         $created = $this->findById($id);
         return $created ?? [];
     }
@@ -104,17 +95,13 @@ class UserPasskey
      */
     public function findActiveByIdForUserUuid(int $passkeyId, string $userUuid): ?array
     {
-        $stmt = $this->db->prepare(
-            'SELECT * FROM user_passkeys
+
+        $row = DatabaseRows::one($this->db->selectOne('SELECT * FROM user_passkeys
              WHERE id = :id AND user_uuid = :user_uuid AND disabled_at IS NULL
-             LIMIT 1'
-        );
-        $stmt->execute([
+             LIMIT 1', [
             'id' => $passkeyId,
             'user_uuid' => strtolower($userUuid),
-        ]);
-
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        ]));
         if (!$row) {
             return null;
         }
@@ -124,17 +111,14 @@ class UserPasskey
 
     public function touchAuthentication(int $passkeyId, int $signCount, bool $backupState, ?string $lastUsedAt = null): bool
     {
-        $stmt = $this->db->prepare(
-            'UPDATE user_passkeys
+        $now = gmdate('Y-m-d H:i:s');
+
+        return $this->db->statement('UPDATE user_passkeys
              SET sign_count = :sign_count,
                  backup_state = :backup_state,
                  last_used_at = :last_used_at,
                  updated_at = :updated_at
-             WHERE id = :id AND disabled_at IS NULL'
-        );
-
-        $now = gmdate('Y-m-d H:i:s');
-        return $stmt->execute([
+             WHERE id = :id AND disabled_at IS NULL', [
             'sign_count' => $signCount,
             'backup_state' => $backupState ? 1 : 0,
             'last_used_at' => $lastUsedAt ?? $now,
@@ -145,21 +129,17 @@ class UserPasskey
 
     public function disable(int $passkeyId, string $userUuid): bool
     {
-        $stmt = $this->db->prepare(
-            'UPDATE user_passkeys
-             SET disabled_at = :disabled_at, updated_at = :updated_at
-             WHERE id = :id AND user_uuid = :user_uuid AND disabled_at IS NULL'
-        );
 
         $now = gmdate('Y-m-d H:i:s');
-        $stmt->execute([
+
+        return $this->db->affectingStatement('UPDATE user_passkeys
+             SET disabled_at = :disabled_at, updated_at = :updated_at
+             WHERE id = :id AND user_uuid = :user_uuid AND disabled_at IS NULL', [
             'disabled_at' => $now,
             'updated_at' => $now,
             'id' => $passkeyId,
             'user_uuid' => strtolower($userUuid),
-        ]);
-
-        return $stmt->rowCount() > 0;
+        ]) > 0;
     }
 
     /**
@@ -167,21 +147,18 @@ class UserPasskey
      */
     public function updateLabel(int $passkeyId, string $userUuid, ?string $label): ?array
     {
-        $stmt = $this->db->prepare(
-            'UPDATE user_passkeys
-             SET label = :label, updated_at = :updated_at
-             WHERE id = :id AND user_uuid = :user_uuid AND disabled_at IS NULL'
-        );
 
         $now = gmdate('Y-m-d H:i:s');
-        $stmt->execute([
+        $queryAffected = $this->db->affectingStatement('UPDATE user_passkeys
+             SET label = :label, updated_at = :updated_at
+             WHERE id = :id AND user_uuid = :user_uuid AND disabled_at IS NULL', [
             'label' => $label,
             'updated_at' => $now,
             'id' => $passkeyId,
             'user_uuid' => strtolower($userUuid),
         ]);
 
-        if ($stmt->rowCount() === 0) {
+        if ($queryAffected === 0) {
             $existing = $this->findActiveByIdForUserUuid($passkeyId, $userUuid);
             if ($existing === null) {
                 return null;
@@ -241,14 +218,13 @@ class UserPasskey
             ORDER BY {$orderBy}
             LIMIT :limit OFFSET :offset
         ";
-        $stmt = $this->db->prepare($sql);
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue(':' . $key, $value);
+            $queryBindings[':' . $key] = $value;
         }
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $items = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $queryBindings[':limit'] = (int) $limit;
+        $queryBindings[':offset'] = (int) $offset;
+        $items = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
 
         $countSql = "
             SELECT COUNT(*)
@@ -256,12 +232,11 @@ class UserPasskey
             INNER JOIN users u ON u.uuid = up.user_uuid
             WHERE {$whereSql}
         ";
-        $countStmt = $this->db->prepare($countSql);
+        $countBindings = [];
         foreach ($params as $key => $value) {
-            $countStmt->bindValue(':' . $key, $value);
+            $countBindings[':' . $key] = $value;
         }
-        $countStmt->execute();
-        $total = (int) $countStmt->fetchColumn();
+        $total = (int) DatabaseRows::scalar($this->db->selectOne($countSql, $countBindings));
 
         return [
             'items' => array_map(function (array $row): array {
@@ -297,22 +272,17 @@ class UserPasskey
             WHERE up.disabled_at IS NULL
               AND u.deleted_at IS NULL
         ';
-        $baseStmt = $this->db->query($baseSql);
-        $baseRow = $baseStmt ? ($baseStmt->fetch(PDO::FETCH_ASSOC) ?: []) : [];
+        $baseRow = DatabaseRows::one($this->db->selectOne($baseSql)) ?: [];
         $stats['users_with_passkeys'] = (int) ($baseRow['users_with_passkeys'] ?? 0);
         $stats['total_active_passkeys'] = (int) ($baseRow['total_active_passkeys'] ?? 0);
 
         if ($since30Days !== null) {
-            $newStmt = $this->db->prepare(
-                'SELECT COUNT(*)
+            $stats['new_passkeys_30d'] = (int) DatabaseRows::scalar($this->db->selectOne('SELECT COUNT(*)
                  FROM user_passkeys up
                  INNER JOIN users u ON u.uuid = up.user_uuid
                  WHERE up.disabled_at IS NULL
                    AND u.deleted_at IS NULL
-                   AND up.created_at >= :since_30_days'
-            );
-            $newStmt->execute(['since_30_days' => $since30Days]);
-            $stats['new_passkeys_30d'] = (int) $newStmt->fetchColumn();
+                   AND up.created_at >= :since_30_days', ['since_30_days' => $since30Days]));
         }
 
         return $stats;
@@ -323,18 +293,14 @@ class UserPasskey
      */
     public function getUserPasskeySummary(string $userUuid): array
     {
-        $stmt = $this->db->prepare(
-            'SELECT
+        $row = DatabaseRows::one($this->db->selectOne('SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN backup_state = 1 THEN 1 ELSE 0 END) AS backup_enabled,
                 SUM(CASE WHEN backup_eligible = 1 THEN 1 ELSE 0 END) AS backup_eligible,
                 MAX(last_used_at) AS last_used_at,
                 MAX(created_at) AS last_registered_at
              FROM user_passkeys
-             WHERE user_uuid = :user_uuid AND disabled_at IS NULL'
-        );
-        $stmt->execute(['user_uuid' => strtolower($userUuid)]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+             WHERE user_uuid = :user_uuid AND disabled_at IS NULL', ['user_uuid' => strtolower($userUuid)])) ?: [];
 
         return [
             'total' => (int) ($row['total'] ?? 0),
@@ -350,17 +316,13 @@ class UserPasskey
      */
     private function findById(int $id): ?array
     {
-        $stmt = $this->db->prepare(
-            'SELECT id, user_uuid, credential_id, label, rp_id, user_handle, transports, aaguid, sign_count,
+
+        $row = DatabaseRows::one($this->db->selectOne('SELECT id, user_uuid, credential_id, label, rp_id, user_handle, transports, aaguid, sign_count,
                     last_used_at, attested_at, credential_type, attestation_format, backup_eligible, backup_state,
                     created_at, updated_at
              FROM user_passkeys
              WHERE id = :id
-             LIMIT 1'
-        );
-        $stmt->execute(['id' => $id]);
-
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+             LIMIT 1', ['id' => $id]));
         if (!$row) {
             return null;
         }

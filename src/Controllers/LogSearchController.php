@@ -3,13 +3,15 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Controllers;
 
+use CarbonTrack\Services\DatabaseService;
+use CarbonTrack\Support\DatabaseRows;
+use Illuminate\Database\Connection;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Message\ResponseInterface as Response;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\RequestIdNormalizer;
-use PDO;
 
 /**
  * LogSearchController
@@ -24,7 +26,7 @@ use PDO;
  */
 class LogSearchController
 {
-    private PDO $db;
+    private Connection $db;
     private AuthService $authService;
     private AuditLogService $auditLogService;
     private ?ErrorLogService $errorLogService;
@@ -33,7 +35,7 @@ class LogSearchController
     private const LIMIT_PARAM = ':limit';
     private const OFFSET_PARAM = ':offset';
 
-    public function __construct(PDO $db, AuthService $authService, AuditLogService $auditLogService, ErrorLogService $errorLogService = null)
+    public function __construct(Connection $db, AuthService $authService, AuditLogService $auditLogService, ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->authService = $authService;
@@ -127,7 +129,7 @@ class LogSearchController
         } catch (\Exception $e) {
             try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
             $this->logAudit('admin_logs_search_failed', null, $request, [
-                'data' => ['error' => $e->getMessage()],
+                'data' => ['error' => DatabaseService::exceptionMessage($e)],
             ], 'failed');
             return $this->json($response, ['error' => 'Internal server error'], 500);
         }
@@ -262,7 +264,7 @@ class LogSearchController
             } catch (\Throwable $e) {
                 try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
                 $this->logAudit('admin_logs_export_failed', null, $request, [
-                    'data' => ['error' => $e->getMessage()],
+                    'data' => ['error' => DatabaseService::exceptionMessage($e)],
                 ], 'failed');
                 return $this->json($response, ['error' => 'Internal server error'], 500);
             }
@@ -303,7 +305,7 @@ class LogSearchController
             } catch (\Throwable $e) {
                 try { $this->errorLogService?->logException($e, $request); } catch (\Throwable $ignore) { /* swallow secondary */ }
                 $this->logAudit('admin_logs_related_failed', null, $request, [
-                    'data' => ['error' => $e->getMessage()],
+                    'data' => ['error' => DatabaseService::exceptionMessage($e)],
                 ], 'failed');
                 return $this->json($response, ['error' => 'Internal server error'], 500);
             }
@@ -329,10 +331,7 @@ class LogSearchController
         {
             $cols = implode(',', $columns);
             $sql = "SELECT $cols FROM {$table} WHERE request_id = :rid ORDER BY id DESC LIMIT 200"; // 安全上限
-            $stmt = $this->db->prepare($sql);
-            $stmt->bindValue(':rid', $rid);
-            $stmt->execute();
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            return DatabaseRows::all($this->db->select($sql, [':rid' => $rid])) ?: [];
         }
 
         private function exportFetch(string $type, string $kw, ?string $from, ?string $to, int $limit, array $filters = []): array
@@ -405,11 +404,10 @@ class LogSearchController
             $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
             $cols = implode(',', $selectCols);
             $sql = "SELECT $cols FROM {$table} $where ORDER BY id DESC LIMIT :limit";
-            $stmt = $this->db->prepare($sql);
-            foreach ($params as $k=>$v) { $stmt->bindValue(':'.$k, $v); }
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
-            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $queryBindings = [];
+            foreach ($params as $k=>$v) { $queryBindings[':'.$k] = $v; }
+            $queryBindings[':limit'] = (int) $limit;
+            return DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         }
 
     private function searchSystem(string $kw, int $limit, ?string $from, ?string $to, int $page, array $filters = []): array
@@ -450,12 +448,11 @@ class LogSearchController
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
         $sql = "SELECT id, request_id, method, path, status_code, user_id, duration_ms, created_at FROM system_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
-        $stmt = $this->db->prepare($sql);
-        foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
-        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $queryBindings = [];
+        foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
+        $queryBindings[self::LIMIT_PARAM] = (int) $limit;
+        $queryBindings[self::OFFSET_PARAM] = (int) $offset;
+        $rows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         $total = $this->countRows('system_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
@@ -490,12 +487,11 @@ class LogSearchController
         $offset = ($page - 1) * $limit;
     // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
     $sql = "SELECT id, user_id, conversation_id, request_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
-        $stmt = $this->db->prepare($sql);
-        foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
-        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $queryBindings = [];
+        foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
+        $queryBindings[self::LIMIT_PARAM] = (int) $limit;
+        $queryBindings[self::OFFSET_PARAM] = (int) $offset;
+        $rows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         $total = $this->countRows('audit_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
@@ -533,12 +529,11 @@ class LogSearchController
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
         $sql = "SELECT id, request_id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
-        $stmt = $this->db->prepare($sql);
-        foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
-        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $queryBindings = [];
+        foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
+        $queryBindings[self::LIMIT_PARAM] = (int) $limit;
+        $queryBindings[self::OFFSET_PARAM] = (int) $offset;
+        $rows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         $total = $this->countRows('error_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
@@ -580,12 +575,11 @@ class LogSearchController
         $sql = "SELECT id, conversation_id, turn_no, request_id, actor_type, actor_id, source, model, status, response_id, total_tokens, latency_ms, created_at, prompt, error_message
                 FROM llm_logs {$where}
                 ORDER BY id DESC LIMIT :limit OFFSET :offset";
-        $stmt = $this->db->prepare($sql);
-        foreach ($params as $k=>$v) { $stmt->bindValue(':' . $k, $v); }
-        $stmt->bindValue(self::LIMIT_PARAM, $limit, PDO::PARAM_INT);
-        $stmt->bindValue(self::OFFSET_PARAM, $offset, PDO::PARAM_INT);
-        $stmt->execute();
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $queryBindings = [];
+        foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
+        $queryBindings[self::LIMIT_PARAM] = (int) $limit;
+        $queryBindings[self::OFFSET_PARAM] = (int) $offset;
+        $rows = DatabaseRows::all($this->db->select($sql, $queryBindings)) ?: [];
         $total = $this->countRows('llm_logs', $where, $params);
         return [ 'items' => $rows, 'count' => (int)$total, 'page' => $page, 'pages' => (int)ceil($total / $limit), 'limit' => $limit ];
     }
@@ -609,7 +603,9 @@ class LogSearchController
      */
     private function findRequestIdsByConversation(string $conversationId): array
     {
-        $stmt = $this->db->prepare("
+        return array_values(array_filter(array_map(
+            static fn ($value): ?string => is_string($value) && trim($value) !== '' ? trim($value) : null,
+            DatabaseRows::column($this->db->select("
             SELECT DISTINCT request_id
             FROM (
                 SELECT request_id FROM audit_logs WHERE conversation_id = :conversation_id_audit
@@ -617,14 +613,10 @@ class LogSearchController
                 SELECT request_id FROM llm_logs WHERE conversation_id = :conversation_id_llm
             ) requests
             WHERE request_id IS NOT NULL AND request_id <> ''
-        ");
-        $stmt->execute([
+        ", [
             ':conversation_id_audit' => $conversationId,
             ':conversation_id_llm' => $conversationId,
-        ]);
-        return array_values(array_filter(array_map(
-            static fn ($value): ?string => is_string($value) && trim($value) !== '' ? trim($value) : null,
-            $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []
+        ])) ?: []
         )));
     }
 
@@ -738,12 +730,11 @@ class LogSearchController
      */
     private function countRows(string $table, string $whereClause, array $params): int
     {
-        $stmt = $this->db->prepare("SELECT COUNT(*) FROM {$table} {$whereClause}");
+        $queryBindings = [];
         foreach ($params as $key => $value) {
-            $stmt->bindValue(':' . $key, $value);
+            $queryBindings[':' . $key] = $value;
         }
-        $stmt->execute();
-        return (int) ($stmt->fetchColumn() ?: 0);
+        return (int) (DatabaseRows::scalar($this->db->selectOne("SELECT COUNT(*) FROM {$table} {$whereClause}", $queryBindings)) ?: 0);
     }
 
     private function normalizeStart(string $d): string

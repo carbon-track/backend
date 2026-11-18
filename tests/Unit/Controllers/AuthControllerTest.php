@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Unit\Controllers;
 
+use CarbonTrack\Tests\Support\DatabaseQueryResponse;
+use CarbonTrack\Tests\Support\DatabaseConnectionStub;
 use CarbonTrack\Controllers\AuthController;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\EmailService;
@@ -30,7 +32,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $authController = new AuthController(
@@ -103,9 +105,10 @@ class AuthControllerTest extends TestCase
                 'state_name' => null,
             ]);
 
-        $selectStmt = $this->createMock(\PDOStatement::class);
-        $selectStmt->method('execute')->willReturn(true);
-        $selectStmt->method('fetch')->willReturn([
+        $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $selectStmt->shape = 'row';
+        $selectStmt->method('bindings')->willReturn(true);
+        $selectStmt->method('row')->willReturn([
             'id' => 5,
             'uuid' => 'u-5',
             'username' => 'legacy-user',
@@ -122,12 +125,13 @@ class AuthControllerTest extends TestCase
             'created_at' => '2025-01-01 00:00:00',
         ]);
 
-        $unreadStmt = $this->createMock(\PDOStatement::class);
-        $unreadStmt->method('execute')->willReturn(true);
-        $unreadStmt->method('fetchColumn')->willReturn(3);
+        $unreadStmt = $this->createMock(DatabaseQueryResponse::class);
+        $unreadStmt->shape = 'value';
+        $unreadStmt->method('bindings')->willReturn(true);
+        $unreadStmt->method('value')->willReturn(3);
 
-        $mockPdo = $this->createMock(\PDO::class);
-        $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $unreadStmt);
+        $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $mockPdo->method('responseFor')->willReturnOnConsecutiveCalls($selectStmt, $unreadStmt);
 
         $mockAuthService->method('getCurrentUser')->willReturn(['id' => 5]);
 
@@ -174,7 +178,7 @@ class AuthControllerTest extends TestCase
             'CarbonTrack\Services\MessageService',
             'CarbonTrack\Services\CloudflareR2Service',
             'Monolog\Logger',
-            'PDO',
+            \Illuminate\Database\Connection::class,
             'CarbonTrack\Services\ErrorLogService',
             'CarbonTrack\Services\RegionService',
             'CarbonTrack\Services\CheckinService',
@@ -210,10 +214,11 @@ class AuthControllerTest extends TestCase
         $mockLogger = $this->createMock(\Monolog\Logger::class);
         $mockRegion = $this->createMock(RegionService::class);
 
-        // mock PDO for selecting user and updating last login
-        $selectStmt = $this->createMock(\PDOStatement::class);
-        $selectStmt->method('execute')->willReturn(true);
-        $selectStmt->method('fetch')->willReturn([
+        // mock connection for selecting user and updating last login
+        $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $selectStmt->shape = 'row';
+        $selectStmt->method('bindings')->willReturn(true);
+        $selectStmt->method('row')->willReturn([
             'id' => 1,
             'uuid' => 'u-1',
             'username' => 'john',
@@ -231,12 +236,12 @@ class AuthControllerTest extends TestCase
             'verification_send_count' => 0,
             'verification_last_sent_at' => null
         ]);
-        $updateStmt = $this->createMock(\PDOStatement::class);
-        $updateStmt->method('execute')->willReturn(true);
-        $verificationStmt = $this->createMock(\PDOStatement::class);
-        $verificationStmt->method('execute')->willReturn(true);
-        $mockPdo = $this->createMock(\PDO::class);
-        $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt, $verificationStmt);
+        $updateStmt = $this->createMock(DatabaseQueryResponse::class);
+        $updateStmt->method('bindings')->willReturn(true);
+        $verificationStmt = $this->createMock(DatabaseQueryResponse::class);
+        $verificationStmt->method('bindings')->willReturn(true);
+        $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $mockPdo->method('responseFor')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt, $verificationStmt);
 
         $request = makeRequest('POST', '/login', [
             'username' => 'john',
@@ -307,7 +312,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockAuthService->expects($this->never())->method('isAccountLocked');
@@ -359,9 +364,10 @@ class AuthControllerTest extends TestCase
         $lastSentAt = $now->modify('-30 minutes')->format('Y-m-d H:i:s');
         $resendAvailableAt = (new \DateTimeImmutable($lastSentAt))->modify('+1 hour')->format('Y-m-d H:i:s');
 
-        $selectStmt = $this->createMock(\PDOStatement::class);
-        $selectStmt->method('execute')->willReturn(true);
-        $selectStmt->method('fetch')->willReturn([
+        $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $selectStmt->shape = 'row';
+        $selectStmt->method('bindings')->willReturn(true);
+        $selectStmt->method('row')->willReturn([
             'id' => 2,
             'uuid' => 'u-2',
             'username' => 'alice',
@@ -379,10 +385,10 @@ class AuthControllerTest extends TestCase
             'verification_send_count' => 1,
             'verification_last_sent_at' => $lastSentAt
         ]);
-        $updateStmt = $this->createMock(\PDOStatement::class);
-        $updateStmt->method('execute')->willReturn(true);
-        $mockPdo = $this->createMock(\PDO::class);
-        $mockPdo->method('prepare')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt);
+        $updateStmt = $this->createMock(DatabaseQueryResponse::class);
+        $updateStmt->method('bindings')->willReturn(true);
+        $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $mockPdo->method('responseFor')->willReturnOnConsecutiveCalls($selectStmt, $updateStmt);
 
         $mockTurnstileService->method('verify')->with('test-turnstile')->willReturn(['success' => true]);
         $mockAuthService->method('generateToken')->willReturn('fake.jwt.token');
@@ -431,7 +437,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockR2Service->expects($this->once())
@@ -461,6 +467,51 @@ class AuthControllerTest extends TestCase
         $this->assertSame('https://r2-dev.carbontrackapp.com/avatars/default/avatar_01.png', $result['avatar_url']);
     }
 
+    public function testResetPasswordQueryFailureLogsDriverMessageWithoutBoundToken(): void
+    {
+        $resetToken = 'fixture-reset-token';
+        $request = makeRequest('POST', '/api/v1/auth/reset-password', [
+            'token' => $resetToken,
+            'password' => 'fixture password',
+            'confirm_password' => 'fixture password',
+        ]);
+        $failure = new \Illuminate\Database\QueryException(
+            'sqlite',
+            'SELECT * FROM users WHERE reset_token = ?',
+            [$resetToken],
+            new \RuntimeException('Fixture database unavailable')
+        );
+        $db = $this->createMock(\Illuminate\Database\Connection::class);
+        $db->expects($this->once())
+            ->method('selectOne')
+            ->with($this->stringContains('reset_token = ?'), [$resetToken])
+            ->willThrowException($failure);
+        $logger = $this->createMock(\Monolog\Logger::class);
+        $logger->expects($this->once())
+            ->method('error')
+            ->with('Password reset failed', ['error' => 'Fixture database unavailable']);
+        $errorLog = $this->createMock(ErrorLogService::class);
+        $errorLog->expects($this->once())->method('logException')->with($failure, $request);
+
+        $controller = new AuthController(
+            $this->createMock(AuthService::class),
+            $this->createMock(EmailService::class),
+            $this->createMock(TurnstileService::class),
+            $this->createMock(AuditLogService::class),
+            $this->createMock(MessageService::class),
+            null,
+            $logger,
+            $db,
+            $errorLog,
+            $this->createMock(RegionService::class)
+        );
+
+        $response = $controller->resetPassword($request, new \Slim\Psr7\Response());
+
+        $this->assertSame(500, $response->getStatusCode());
+        $this->assertStringNotContainsString($resetToken, (string) $response->getBody());
+    }
+
     public function testForgotPasswordRequiresTurnstile(): void
     {
         $mockAuthService = $this->createMock(AuthService::class);
@@ -470,7 +521,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockTurnstileService->expects($this->never())->method('verify');
@@ -507,7 +558,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockTurnstileService->expects($this->never())->method('verify');
@@ -544,7 +595,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockTurnstileService->expects($this->once())
@@ -590,7 +641,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockTurnstileService->expects($this->once())
@@ -634,7 +685,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockTurnstileService->expects($this->never())->method('verify');
@@ -674,7 +725,7 @@ class AuthControllerTest extends TestCase
         $mockMessageService = $this->createMock(MessageService::class);
         $mockR2Service = $this->createMock(CloudflareR2Service::class);
         $mockLogger = $this->createMock(\Monolog\Logger::class);
-        $mockPdo = $this->createMock(\PDO::class);
+        $mockPdo = new DatabaseConnectionStub();
         $mockRegion = $this->createMock(RegionService::class);
 
         $mockAuthService->expects($this->once())
@@ -736,9 +787,10 @@ class AuthControllerTest extends TestCase
             ->with('john', $this->isType('string'), false);
         $mockTurnstileService->method('verify')->with('tk')->willReturn(['success' => true]);
 
-        $selectStmt = $this->createMock(\PDOStatement::class);
-        $selectStmt->method('execute')->willReturn(true);
-        $selectStmt->method('fetch')->willReturn([
+        $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+        $selectStmt->shape = 'row';
+        $selectStmt->method('bindings')->willReturn(true);
+        $selectStmt->method('row')->willReturn([
             'id' => 11,
             'uuid' => 'u-11',
             'username' => 'john',
@@ -751,8 +803,8 @@ class AuthControllerTest extends TestCase
             'lastlgn' => null,
             'email_verified_at' => '2026-01-01 00:00:00',
         ]);
-        $mockPdo = $this->createMock(\PDO::class);
-        $mockPdo->method('prepare')->willReturn($selectStmt);
+        $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+        $mockPdo->method('responseFor')->willReturn($selectStmt);
 
         $controller = new AuthController(
             $mockAuthService,
@@ -803,11 +855,12 @@ class AuthControllerTest extends TestCase
             $mockLogger = $this->createMock(\Monolog\Logger::class);
             $mockRegion = $this->createMock(RegionService::class);
 
-            $selectStmt = $this->createMock(\PDOStatement::class);
-            $selectStmt->method('execute')->willReturn(true);
-            $selectStmt->method('fetch')->willReturn(false);
-            $mockPdo = $this->createMock(\PDO::class);
-            $mockPdo->method('prepare')->willReturn($selectStmt);
+            $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+            $selectStmt->shape = 'row';
+            $selectStmt->method('bindings')->willReturn(true);
+            $selectStmt->method('row')->willReturn(false);
+            $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+            $mockPdo->method('responseFor')->willReturn($selectStmt);
 
             $controller = new AuthController(
                 $mockAuthService,
@@ -872,7 +925,7 @@ class AuthControllerTest extends TestCase
                 $this->createMock(MessageService::class),
                 $this->createMock(CloudflareR2Service::class),
                 $this->createMock(\Monolog\Logger::class),
-                $this->createMock(\PDO::class),
+                new DatabaseConnectionStub(),
                 $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
                 $this->createMock(RegionService::class),
                 null,
@@ -917,11 +970,12 @@ class AuthControllerTest extends TestCase
                 ->with('challenge', '12345', 'auth.login')
                 ->willReturn(['success' => true]);
 
-            $selectStmt = $this->createMock(\PDOStatement::class);
-            $selectStmt->method('execute')->willReturn(true);
-            $selectStmt->method('fetch')->willReturn(false);
-            $mockPdo = $this->createMock(\PDO::class);
-            $mockPdo->method('prepare')->willReturn($selectStmt);
+            $selectStmt = $this->createMock(DatabaseQueryResponse::class);
+            $selectStmt->shape = 'row';
+            $selectStmt->method('bindings')->willReturn(true);
+            $selectStmt->method('row')->willReturn(false);
+            $mockPdo = $this->getMockBuilder(DatabaseConnectionStub::class)->onlyMethods(['responseFor'])->getMock();
+            $mockPdo->method('responseFor')->willReturn($selectStmt);
 
             $controller = new AuthController(
                 $mockAuthService,
@@ -951,7 +1005,7 @@ class AuthControllerTest extends TestCase
             ]);
 
             $resp = $controller->login($request, new \Slim\Psr7\Response());
-            // Identifier won't be found in our stubbed PDO, so we expect a 401 from the
+            // Identifier won't be found in our stubbed connection, so we expect a 401 from the
             // existing INVALID_CREDENTIALS branch - but reaching it proves PoW path ran.
             $this->assertSame(401, $resp->getStatusCode());
         } finally {
@@ -980,7 +1034,7 @@ class AuthControllerTest extends TestCase
             $this->createMock(MessageService::class),
             $this->createMock(CloudflareR2Service::class),
             $this->createMock(\Monolog\Logger::class),
-            $this->createMock(\PDO::class),
+            new DatabaseConnectionStub(),
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
             $this->createMock(RegionService::class),
             null,
@@ -1023,7 +1077,7 @@ class AuthControllerTest extends TestCase
             $this->createMock(MessageService::class),
             $this->createMock(CloudflareR2Service::class),
             $this->createMock(\Monolog\Logger::class),
-            $this->createMock(\PDO::class),
+            new DatabaseConnectionStub(),
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
             $this->createMock(RegionService::class),
             null,
@@ -1080,7 +1134,7 @@ class AuthControllerTest extends TestCase
             $this->createMock(MessageService::class),
             $this->createMock(CloudflareR2Service::class),
             $this->createMock(\Monolog\Logger::class),
-            $this->createMock(\PDO::class),
+            new DatabaseConnectionStub(),
             $this->createMock(\CarbonTrack\Services\ErrorLogService::class),
             $this->createMock(RegionService::class),
             null,
@@ -1122,7 +1176,7 @@ class AuthControllerTest extends TestCase
             $mockMessageService = $this->createMock(MessageService::class);
             $mockR2Service = $this->createMock(CloudflareR2Service::class);
             $mockLogger = $this->createMock(\Monolog\Logger::class);
-            $mockPdo = $this->createMock(\PDO::class);
+            $mockPdo = new DatabaseConnectionStub();
             $mockRegion = $this->createMock(RegionService::class);
             $mockPowService = $this->createMock(ProofOfWorkService::class);
 

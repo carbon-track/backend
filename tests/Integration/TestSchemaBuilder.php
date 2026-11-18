@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Tests\Integration;
 
-use PDO;
+use Illuminate\Database\Connection;
+use CarbonTrack\Support\DatabaseRows;
+
 
 /**
  * Lightweight SQLite schema + minimal seed for integration tests.
@@ -12,15 +14,12 @@ use PDO;
  */
 class TestSchemaBuilder
 {
-    public static function init(PDO $pdo): void
+    public static function init(Connection $connection): void
     {
         // Enable foreign keys (safe even if not used extensively)
-        try { $pdo->exec('PRAGMA foreign_keys = ON'); } catch (\Throwable $e) {}
-        // Provide MySQL NOW() compatibility for SQLite
+        try { $connection->unprepared('PRAGMA foreign_keys = ON'); } catch (\Throwable $e) {}
+        // Provide MySQL CURRENT_TIMESTAMP compatibility for SQLite
         try {
-            if (method_exists($pdo, 'sqliteCreateFunction')) {
-                $pdo->sqliteCreateFunction('NOW', function() { return date('Y-m-d H:i:s'); });
-            }
         } catch (\Throwable $e) { /* ignore */ }
 
         $tables = [
@@ -115,11 +114,11 @@ class TestSchemaBuilder
         ];
 
         foreach ($tables as $sql) {
-            try { $pdo->exec($sql); } catch (\Throwable $e) { /* ignore */ }
+            try { $connection->unprepared($sql); } catch (\Throwable $e) { /* ignore */ }
         }
 
         // Perform lightweight schema upgrades for existing SQLite file (idempotent)
-        self::ensureColumns($pdo, 'users', [
+        self::ensureColumns($connection, 'users', [
             'avatar_id INTEGER',
             'group_id INTEGER',
             'region_code TEXT',
@@ -136,38 +135,38 @@ class TestSchemaBuilder
             'verification_send_count INTEGER DEFAULT 0',
             'verification_last_sent_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'products', ['category_slug TEXT']);
-        self::ensureColumns($pdo, 'user_passkeys', ['user_uuid TEXT']);
-        self::ensureColumns($pdo, 'webauthn_challenges', ['user_uuid TEXT']);
-        self::ensureColumns($pdo, 'audit_logs', [
+        self::ensureColumns($connection, 'products', ['category_slug TEXT']);
+        self::ensureColumns($connection, 'user_passkeys', ['user_uuid TEXT']);
+        self::ensureColumns($connection, 'webauthn_challenges', ['user_uuid TEXT']);
+        self::ensureColumns($connection, 'audit_logs', [
             'user_uuid TEXT', 'conversation_id TEXT', 'actor_type TEXT', 'data TEXT', 'request_method TEXT', 'endpoint TEXT', 'old_data TEXT', 'new_data TEXT',
             'affected_table TEXT', 'affected_id INTEGER', 'status TEXT', 'response_code INTEGER', 'session_id TEXT', 'request_id TEXT',
             'referrer TEXT', 'operation_category TEXT', 'operation_subtype TEXT', 'change_type TEXT'
         ]);
-        self::ensureColumns($pdo, 'admin_ai_conversations', [
+        self::ensureColumns($connection, 'admin_ai_conversations', [
             'admin_id INTEGER', 'title TEXT', 'last_message_preview TEXT', 'started_at TEXT', 'last_activity_at TEXT', 'created_at TEXT', 'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'admin_ai_messages', [
+        self::ensureColumns($connection, 'admin_ai_messages', [
             'kind TEXT', 'role TEXT', 'action TEXT', 'status TEXT', 'content TEXT', 'request_id TEXT', 'response_code INTEGER', 'meta_json TEXT', 'created_at TEXT', 'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'admin_ai_runs', [
+        self::ensureColumns($connection, 'admin_ai_runs', [
             'run_id TEXT', 'conversation_id TEXT', 'admin_id INTEGER', 'autonomy_mode TEXT', 'status TEXT', 'source TEXT', 'request_id TEXT',
             'error_message TEXT', 'meta_json TEXT', 'started_at TEXT', 'finished_at TEXT', 'created_at TEXT', 'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'admin_ai_steps', [
+        self::ensureColumns($connection, 'admin_ai_steps', [
             'run_id TEXT', 'step_id TEXT', 'sequence_no INTEGER', 'type TEXT', 'tool_name TEXT', 'status TEXT',
             'approval_state TEXT', 'rollback_state TEXT', 'input_json TEXT', 'output_json TEXT', 'error_message TEXT',
             'started_at TEXT', 'finished_at TEXT', 'duration_ms REAL', 'created_at TEXT', 'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'system_logs', ['user_uuid TEXT', 'server_meta TEXT']);
-        self::ensureColumns($pdo, 'error_logs', ['request_id TEXT']);
-        self::ensureColumns($pdo, 'llm_logs', ['conversation_id TEXT', 'turn_no INTEGER', 'context_json TEXT']);
-        self::ensureColumns($pdo, 'points_transactions', [
+        self::ensureColumns($connection, 'system_logs', ['user_uuid TEXT', 'server_meta TEXT']);
+        self::ensureColumns($connection, 'error_logs', ['request_id TEXT']);
+        self::ensureColumns($connection, 'llm_logs', ['conversation_id TEXT', 'turn_no INTEGER', 'context_json TEXT']);
+        self::ensureColumns($connection, 'points_transactions', [
             'uid INTEGER', 'raw REAL', 'act TEXT', 'description TEXT', 'status TEXT', 'img TEXT', 'notes TEXT', 'activity_id TEXT',
             'approved_by INTEGER', 'approved_at TEXT', 'updated_at TEXT', 'deleted_at TEXT', 'activity_date TEXT',
             'auth TEXT'
         ]);
-        self::ensureColumns($pdo, 'support_tickets', [
+        self::ensureColumns($connection, 'support_tickets', [
             'assigned_to INTEGER',
             'last_replied_at TEXT',
             'last_reply_by_role TEXT',
@@ -176,7 +175,7 @@ class TestSchemaBuilder
             'created_at TEXT',
             'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'support_ticket_messages', [
+        self::ensureColumns($connection, 'support_ticket_messages', [
             'sender_id INTEGER',
             'sender_role TEXT',
             'sender_name TEXT',
@@ -184,7 +183,7 @@ class TestSchemaBuilder
             'created_at TEXT',
             'updated_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'support_ticket_attachments', [
+        self::ensureColumns($connection, 'support_ticket_attachments', [
             'file_id INTEGER',
             'original_name TEXT',
             'mime_type TEXT',
@@ -192,7 +191,7 @@ class TestSchemaBuilder
             "entity_type TEXT DEFAULT 'support_ticket_message'",
             'created_at TEXT'
         ]);
-        self::ensureColumns($pdo, 'support_ticket_feedback', [
+        self::ensureColumns($connection, 'support_ticket_feedback', [
             'ticket_id INTEGER',
             'user_id INTEGER',
             'rated_user_id INTEGER',
@@ -203,7 +202,7 @@ class TestSchemaBuilder
         ]);
 
         try {
-            $pdo->exec("
+            $connection->unprepared("
                 UPDATE user_passkeys
                 SET user_uuid = LOWER((
                     SELECT uuid FROM users WHERE users.id = user_passkeys.user_id
@@ -213,7 +212,7 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         try {
-            $pdo->exec("
+            $connection->unprepared("
                 UPDATE webauthn_challenges
                 SET user_uuid = LOWER((
                     SELECT uuid FROM users WHERE users.id = webauthn_challenges.user_id
@@ -223,7 +222,7 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         try {
-            $pdo->exec("
+            $connection->unprepared("
                 UPDATE audit_logs
                 SET user_uuid = LOWER((
                     SELECT uuid FROM users WHERE users.id = audit_logs.user_id
@@ -233,7 +232,7 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         try {
-            $pdo->exec("
+            $connection->unprepared("
                 UPDATE system_logs
                 SET user_uuid = LOWER((
                     SELECT uuid FROM users WHERE users.id = system_logs.user_id
@@ -243,7 +242,7 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         try {
-            $pdo->exec("
+            $connection->unprepared("
                 UPDATE users
                 SET role = CASE
                     WHEN is_admin = 1 THEN 'admin'
@@ -254,61 +253,58 @@ class TestSchemaBuilder
         } catch (\Throwable $e) { /* ignore */ }
 
         // Seed minimal reference data if absent
-        self::seed($pdo);
+        self::seed($connection);
     }
 
-    private static function ensureColumns(PDO $pdo, string $table, array $definitions): void
+    private static function ensureColumns(Connection $connection, string $table, array $definitions): void
     {
         try {
             $existing = [];
-            $res = $pdo->query("PRAGMA table_info($table)");
-            if ($res) {
-                foreach ($res->fetchAll(PDO::FETCH_ASSOC) as $col) {
-                    $existing[strtolower($col['name'])] = true;
-                }
+            foreach ($connection->getSchemaBuilder()->getColumnListing($table) as $column) {
+                $existing[strtolower($column)] = true;
             }
             foreach ($definitions as $def) {
                 [$name] = explode(' ', $def, 2);
                 if (!isset($existing[strtolower($name)])) {
-                    try { $pdo->exec("ALTER TABLE $table ADD COLUMN $def"); } catch (\Throwable $e) { /* ignore */ }
+                    try { $connection->unprepared("ALTER TABLE $table ADD COLUMN $def"); } catch (\Throwable $e) { /* ignore */ }
                 }
             }
         } catch (\Throwable $e) { /* ignore */ }
     }
 
-    private static function seed(PDO $pdo): void
+    private static function seed(Connection $connection): void
     {
         // Carbon activities (ensure at least one)
-        $count = (int)$pdo->query("SELECT COUNT(*) FROM carbon_activities")->fetchColumn();
+        $count = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM carbon_activities"));
         if ($count === 0) {
-            $pdo->exec("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit,is_active) VALUES \n                ('550e8400-e29b-41d4-a716-446655440001','购物时自带袋子','Bring your own bag when shopping','daily',0.019,'times',1),\n                ('550e8400-e29b-41d4-a716-446655440002','步行 / 骑行代替开车','Walk or cycle instead of driving','transport',0.27,'km',1)");
+            $connection->unprepared("INSERT INTO carbon_activities (id,name_zh,name_en,category,carbon_factor,unit,is_active) VALUES \n                ('550e8400-e29b-41d4-a716-446655440001','购物时自带袋子','Bring your own bag when shopping','daily',0.019,'times',1),\n                ('550e8400-e29b-41d4-a716-446655440002','步行 / 骑行代替开车','Walk or cycle instead of driving','transport',0.27,'km',1)");
         }
         // Avatars
-        $ac = (int)$pdo->query("SELECT COUNT(*) FROM avatars")->fetchColumn();
+        $ac = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM avatars"));
         if ($ac === 0) {
-            $pdo->exec("INSERT INTO avatars (uuid,name,file_path,category,is_active) VALUES \n                ('550e8400-e29b-41d4-a716-446655440001','默认头像1','/avatars/default/avatar_01.png','default',1)");
+            $connection->unprepared("INSERT INTO avatars (uuid,name,file_path,category,is_active) VALUES \n                ('550e8400-e29b-41d4-a716-446655440001','默认头像1','/avatars/default/avatar_01.png','default',1)");
         }
         // Schools
-        $sc = (int)$pdo->query("SELECT COUNT(*) FROM schools")->fetchColumn();
+        $sc = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM schools"));
         if ($sc === 0) {
-            $pdo->exec("INSERT INTO schools (id,name,status) VALUES (1,'示例学校', 'active')");
+            $connection->unprepared("INSERT INTO schools (id,name,status) VALUES (1,'示例学校', 'active')");
         }
         // Product categories
-        $cat = (int)$pdo->query("SELECT COUNT(*) FROM product_categories")->fetchColumn();
+        $cat = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM product_categories"));
         if ($cat === 0) {
-            $pdo->exec("INSERT INTO product_categories (name, slug) VALUES \n                ('每日用品','daily'),\n                ('绿色出行','transport')");
+            $connection->unprepared("INSERT INTO product_categories (name, slug) VALUES \n                ('每日用品','daily'),\n                ('绿色出行','transport')");
         }
 
         // Products
-        $pc = (int)$pdo->query("SELECT COUNT(*) FROM products")->fetchColumn();
+        $pc = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM products"));
         if ($pc === 0) {
-            $pdo->exec("INSERT INTO products (name,description,category,category_slug,images,image_path,stock,points_required,status,sort_order) VALUES \n                ('可重复使用水杯','环保材质500ml水杯','daily','daily','[\"/images/products/eco_bottle_1.jpg\"]','/images/products/eco_bottle_1.jpg',100,100,'active',1),\n                ('竹制餐具套装','可降解竹制餐具三件套','daily','daily','[\"/images/products/bamboo_utensils.jpg\"]','/images/products/bamboo_utensils.jpg',50,150,'active',2)");
+            $connection->unprepared("INSERT INTO products (name,description,category,category_slug,images,image_path,stock,points_required,status,sort_order) VALUES \n                ('可重复使用水杯','环保材质500ml水杯','daily','daily','[\"/images/products/eco_bottle_1.jpg\"]','/images/products/eco_bottle_1.jpg',100,100,'active',1),\n                ('竹制餐具套装','可降解竹制餐具三件套','daily','daily','[\"/images/products/bamboo_utensils.jpg\"]','/images/products/bamboo_utensils.jpg',50,150,'active',2)");
         }
         // Admin user (optional convenience)
-        $uc = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+        $uc = (int)DatabaseRows::scalar($connection->selectOne("SELECT COUNT(*) FROM users"));
         if ($uc === 0) {
             $password = password_hash('password123', PASSWORD_BCRYPT);
-            $pdo->exec("INSERT INTO users (username,email,password,school_id,status,points,is_admin,role,uuid) VALUES \n                ('admin_user','admin@testdomain.com','{$password}',1,'active',1000,1,'admin','550e8400-e29b-41d4-a716-4466554400aa')");
+            $connection->unprepared("INSERT INTO users (username,email,password,school_id,status,points,is_admin,role,uuid) VALUES \n                ('admin_user','admin@testdomain.com','{$password}',1,'active',1000,1,'admin','550e8400-e29b-41d4-a716-4466554400aa')");
         }
     }
 }
