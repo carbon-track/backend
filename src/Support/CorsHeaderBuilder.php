@@ -15,6 +15,9 @@ final class CorsHeaderBuilder
         $allowedHeadersDefault = $_ENV['CORS_ALLOWED_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID,X-Requested-With,X-Turnstile-Token';
         $exposeHeaders = $_ENV['CORS_EXPOSE_HEADERS'] ?? 'Content-Type,Authorization,X-Request-ID';
         $allowCredentials = filter_var($_ENV['CORS_ALLOW_CREDENTIALS'] ?? 'false', FILTER_VALIDATE_BOOLEAN);
+        if (LogDiagnosticRequest::path($request->getUri()->getPath()) !== null) {
+            $exposeHeaders .= ',WWW-Authenticate,Retry-After,MCP-Protocol-Version';
+        }
 
         $allowedOrigins = array_values(array_filter(array_map(
             static fn (string $origin): string => self::normalizeOrigin($origin),

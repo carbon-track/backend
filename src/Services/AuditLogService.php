@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarbonTrack\Services;
 
 use CarbonTrack\Support\DatabaseRows;
+use CarbonTrack\Support\LogDiagnosticRequest;
 use Illuminate\Database\Connection;
 use CarbonTrack\Support\SensitiveDataRedactor;
 use Monolog\Logger;
@@ -127,6 +128,14 @@ class AuditLogService
             return false;
         }
 
+        $endpoint = $logData['endpoint'] ?? ($_SERVER['REQUEST_URI'] ?? '');
+        $diagnosticPath = is_string($endpoint) ? LogDiagnosticRequest::path(explode('?', $endpoint, 2)[0]) : null;
+        if ($diagnosticPath !== null) {
+            $logData['endpoint'] = $diagnosticPath;
+            $logData['referrer'] = '';
+            $logData['session_id'] = '';
+            $logData['user_agent'] = '';
+        }
         try {
             foreach (['action','operation_category'] as $req) {
                 if (empty($logData[$req])) {
@@ -178,10 +187,10 @@ class AuditLogService
             $this->lastInsertId = $insertId > 0 ? $insertId : null;
             return true;
         } catch (\Throwable $e) {
-            $this->logger->error('Audit logging exception', [
+            $this->logger->error('Audit logging exception', $diagnosticPath === null ? [
                 'message' => DatabaseService::exceptionMessage($e),
                 'trace' => $e->getTraceAsString(),
-            ]);
+            ] : ['route' => $diagnosticPath]);
             return false;
         }
     }
@@ -494,11 +503,13 @@ class AuditLogService
 
     private function getRequestData(): array
     {
+        $uri = $_SERVER['REQUEST_URI'] ?? null;
+        $diagnosticPath = is_string($uri) ? LogDiagnosticRequest::path(explode('?', $uri, 2)[0]) : null;
         return [
             'method' => $_SERVER['REQUEST_METHOD'] ?? null,
-            'uri' => $_SERVER['REQUEST_URI'] ?? null,
-            'query' => $_GET,
-            'headers' => function_exists('getallheaders') ? (getallheaders() ?: []) : [],
+            'uri' => $diagnosticPath ?? $uri,
+            'query' => $diagnosticPath === null ? $_GET : [],
+            'headers' => $diagnosticPath === null && function_exists('getallheaders') ? (getallheaders() ?: []) : [],
             'timestamp' => date('Y-m-d H:i:s')
         ];
     }

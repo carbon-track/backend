@@ -93,9 +93,19 @@ final class OpenApiContractChecker
                 $issues['request_body_content_missing_schema'][] = $signature . ' ' . $mediaType;
             }
 
+            $hasRedirect = false;
+            $hasMethodDeclaration = false;
             foreach (($operation['responses'] ?? []) as $status => $response) {
                 if (!is_array($response)) {
                     continue;
+                }
+                $headers = is_array($response['headers'] ?? null) ? array_change_key_case($response['headers']) : [];
+                if (in_array((string) $status, ['301', '302', '303', '307', '308'], true) && isset($headers['location'])) {
+                    $hasRedirect = true;
+                }
+                // Protocol endpoints can explicitly reject an optional HTTP method.
+                if ((string) $status === '405' && isset($headers['allow'])) {
+                    $hasMethodDeclaration = true;
                 }
 
                 foreach (self::contentEntriesMissingSchema($response['content'] ?? null) as $mediaType) {
@@ -104,7 +114,7 @@ final class OpenApiContractChecker
             }
 
             $responseCodes = array_keys(is_array($operation['responses'] ?? null) ? $operation['responses'] : []);
-            if (!self::hasResponseCodeMatching($responseCodes, '/^2\d\d$/')) {
+            if (!self::hasResponseCodeMatching($responseCodes, '/^2\d\d$/') && !$hasRedirect && !$hasMethodDeclaration) {
                 $issues['missing_success_response'][] = $signature;
             }
             if (!self::hasResponseCodeMatching($responseCodes, '/^[45]\d\d$/') && !in_array('default', $responseCodes, true)) {

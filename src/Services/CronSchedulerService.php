@@ -7,6 +7,7 @@ namespace CarbonTrack\Services;
 use Illuminate\Database\Connection;
 use CarbonTrack\Models\CronRun;
 use CarbonTrack\Models\CronTask;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuth;
 use CarbonTrack\Support\SyntheticRequestFactory;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -19,6 +20,7 @@ class CronSchedulerService
     public const TASK_LEADERBOARD_REFRESH = 'leaderboard_refresh';
     public const TASK_STREAK_LEADERBOARD_REFRESH = 'streak_leaderboard_refresh';
     public const TASK_POW_CHALLENGE_CLEANUP = 'pow_challenge_cleanup';
+    public const TASK_LOG_DIAGNOSTIC_CLEANUP = 'log_diagnostic_cleanup';
 
     private const LOCK_TIMEOUT_SECONDS = 600;
     private const RUN_STATUS_SUCCESS = 'success';
@@ -52,7 +54,8 @@ class CronSchedulerService
         private LeaderboardService $leaderboardService,
         private StreakLeaderboardService $streakLeaderboardService,
         private bool $cronEndpointAuditLogsEnabled = true,
-        private ?ProofOfWorkService $proofOfWorkService = null
+        private ?ProofOfWorkService $proofOfWorkService = null,
+        private ?DiagnosticOAuth $diagnosticOAuth = null
     ) {
     }
 
@@ -612,6 +615,8 @@ class CronSchedulerService
             self::TASK_STREAK_LEADERBOARD_REFRESH => $this->streakLeaderboardService->rebuildCache($this->reasonForTrigger($triggerSource)),
             self::TASK_POW_CHALLENGE_CLEANUP => $this->proofOfWorkService?->cleanupExpiredChallenges()
                 ?? throw new \RuntimeException('Proof-of-work service not available'),
+            self::TASK_LOG_DIAGNOSTIC_CLEANUP => $this->diagnosticOAuth?->cleanup()
+                ?? throw new \RuntimeException('Log diagnostics service not available'),
             default => throw new \RuntimeException('Unsupported cron task'),
         };
     }
@@ -853,6 +858,10 @@ class CronSchedulerService
             self::TASK_POW_CHALLENGE_CLEANUP => [
                 'task_name' => 'Proof-of-Work Challenge Cleanup',
                 'description' => 'Delete expired or already consumed proof-of-work challenges outside anonymous request handling.',
+            ],
+            self::TASK_LOG_DIAGNOSTIC_CLEANUP => [
+                'task_name' => 'Log Diagnostic Cleanup',
+                'description' => 'Delete expired diagnostic OAuth transactions and query leases.',
             ],
         ];
     }

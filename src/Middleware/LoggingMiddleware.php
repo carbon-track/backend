@@ -11,6 +11,7 @@ use Psr\Http\Server\RequestHandlerInterface as RequestHandler;
 use Psr\Log\LoggerInterface;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\LogDiagnosticRequest;
 
 class LoggingMiddleware implements MiddlewareInterface
 {
@@ -26,14 +27,16 @@ class LoggingMiddleware implements MiddlewareInterface
     public function process(Request $request, RequestHandler $handler): Response
     {
         $start = microtime(true);
+        $diagnosticPath = LogDiagnosticRequest::path($request->getUri()->getPath());
+        $loggedUri = $diagnosticPath ?? (string) $request->getUri();
         
         // Log request with error handling
         try {
             $this->logger->info('Request received', [
                 'method' => $request->getMethod(),
-                'uri' => (string) $request->getUri(),
+                'uri' => $loggedUri,
                 'ip' => $this->getClientIp($request),
-                'user_agent' => $request->getHeaderLine('User-Agent')
+                'user_agent' => $diagnosticPath === null ? $request->getHeaderLine('User-Agent') : ''
             ]);
         } catch (\Exception $e) {
             // 如果日志记录失败，不要中断请求处理
@@ -49,7 +52,7 @@ class LoggingMiddleware implements MiddlewareInterface
             try {
                 $this->logger->info('Request completed', [
                     'method' => $request->getMethod(),
-                    'uri' => (string) $request->getUri(),
+                    'uri' => $loggedUri,
                     'status' => $response->getStatusCode(),
                     'duration' => round($duration * 1000, 2) . 'ms'
                 ]);
@@ -67,13 +70,15 @@ class LoggingMiddleware implements MiddlewareInterface
             try {
                 $this->logger->error('Request failed', [
                     'method' => $request->getMethod(),
-                    'uri' => (string) $request->getUri(),
-                    'error' => $e->getMessage(),
+                    'uri' => $loggedUri,
+                    'error' => $diagnosticPath === null ? $e->getMessage() : 'Diagnostic request failed.',
                     'duration' => round($duration * 1000, 2) . 'ms'
                 ]);
             } catch (\Exception $logError) {
                 // 如果日志记录失败，至少记录到error_log
-                $this->logExceptionWithFallback($logError, $request, 'LoggingMiddleware error logging failed: ' . $logError->getMessage() . ' | Original error: ' . $e->getMessage());
+                $this->logExceptionWithFallback($logError, $request, $diagnosticPath === null
+                    ? 'LoggingMiddleware error logging failed: ' . $logError->getMessage() . ' | Original error: ' . $e->getMessage()
+                    : 'Diagnostic request logging failed.');
             }
             
             throw $e;

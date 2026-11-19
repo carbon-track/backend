@@ -145,6 +145,39 @@ final class OpenApiContractCheckerTest extends TestCase
         );
     }
 
+    public function testRedirectOnlyOperationRequiresDocumentedLocation(): void
+    {
+        $path = '/api/v1/oauth/authorize';
+        $operation = $this->operation('authorizeOAuth');
+        $operation['responses'] = [
+            '303' => ['description' => 'Consent redirect', 'headers' => ['Location' => ['schema' => ['type' => 'string']]]],
+            '400' => ['description' => 'Invalid request'],
+        ];
+        $runtime = ['GET ' . $path => ['path' => $path, 'handler' => 'closure', 'handler_exists' => true]];
+        $spec = ['paths' => [$path => ['get' => $operation]]];
+        self::assertTrue(OpenApiContractChecker::checkDocuments($spec, $runtime)['ok']);
+
+        unset($spec['paths'][$path]['get']['responses']['303']['headers']);
+        $result = OpenApiContractChecker::checkDocuments($spec, $runtime);
+        self::assertSame(['GET ' . $path], $result['issues']['missing_success_response']);
+    }
+
+    public function testMethodRejectionRequiresDocumentedAllowHeader(): void
+    {
+        $path = '/api/v1/mcp';
+        $operation = $this->operation('mcpStream');
+        $operation['responses'] = [
+            '405' => ['description' => 'SSE unavailable', 'headers' => ['Allow' => ['schema' => ['type' => 'string']]]],
+        ];
+        $runtime = ['GET ' . $path => ['path' => $path, 'handler' => 'closure', 'handler_exists' => true]];
+        $spec = ['paths' => [$path => ['get' => $operation]]];
+        self::assertTrue(OpenApiContractChecker::checkDocuments($spec, $runtime)['ok']);
+
+        unset($spec['paths'][$path]['get']['responses']['405']['headers']);
+        $result = OpenApiContractChecker::checkDocuments($spec, $runtime);
+        self::assertSame(['GET ' . $path], $result['issues']['missing_success_response']);
+    }
+
     public function testReportsAdminAiHttpTargetsMissingFromTheContract(): void
     {
         $spec = [

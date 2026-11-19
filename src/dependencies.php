@@ -34,6 +34,14 @@ use CarbonTrack\Services\SupportTicketService;
 use CarbonTrack\Support\Environment;
 use CarbonTrack\Controllers\SystemLogController;
 use CarbonTrack\Controllers\LogSearchController;
+use CarbonTrack\Controllers\LogDiagnosticController;
+use CarbonTrack\Controllers\LogDiagnosticMcpController;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticAccess;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticConfig;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuth;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuthClients;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticProjection;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticQueries;
 use CarbonTrack\Services\FileMetadataService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
@@ -602,6 +610,37 @@ $__deps_initializer = function (Container $container) {
         );
     });
 
+    $container->set(DiagnosticConfig::class, static fn (): DiagnosticConfig => DiagnosticConfig::fromEnvironment());
+    $container->set(DiagnosticAccess::class, static fn (ContainerInterface $c): DiagnosticAccess => new DiagnosticAccess(
+        $c->get(Connection::class),
+        $c->get(DiagnosticConfig::class),
+        $c->get(AuditLogService::class),
+        $c->get(ErrorLogService::class)
+    ));
+    $container->set(DiagnosticQueries::class, static fn (ContainerInterface $c): DiagnosticQueries => new DiagnosticQueries(
+        $c->get(Connection::class),
+        $c->get(DiagnosticConfig::class),
+        new DiagnosticProjection($c->get(DiagnosticConfig::class))
+    ));
+    $container->set(DiagnosticOAuth::class, static fn (ContainerInterface $c): DiagnosticOAuth => new DiagnosticOAuth(
+        $c->get(Connection::class),
+        $c->get(DiagnosticConfig::class),
+        $c->get(DiagnosticAccess::class),
+        new DiagnosticOAuthClients($c->get(DiagnosticConfig::class), new GuzzleClient())
+    ));
+    $container->set(LogDiagnosticController::class, static fn (ContainerInterface $c): LogDiagnosticController => new LogDiagnosticController(
+        $c->get(DiagnosticConfig::class),
+        $c->get(DiagnosticAccess::class),
+        $c->get(DiagnosticQueries::class),
+        $c->get(DiagnosticOAuth::class),
+        $c->get(ErrorLogService::class)
+    ));
+    $container->set(LogDiagnosticMcpController::class, static fn (ContainerInterface $c): LogDiagnosticMcpController => new LogDiagnosticMcpController(
+        $c->get(DiagnosticConfig::class),
+        $c->get(DiagnosticAccess::class),
+        $c->get(DiagnosticQueries::class),
+        $c->get(ErrorLogService::class)
+    ));
 
 
     $container->set(QuotaService::class, function (ContainerInterface $c) {
@@ -730,7 +769,8 @@ $__deps_initializer = function (Container $container) {
             $c->get(LeaderboardService::class),
             $c->get(StreakLeaderboardService::class),
             $envBool('CRON_ENDPOINT_AUDIT_LOGS_ENABLED', true),
-            $c->get(ProofOfWorkService::class)
+            $c->get(ProofOfWorkService::class),
+            $c->get(DiagnosticOAuth::class)
         );
     });
 

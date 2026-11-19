@@ -22,6 +22,9 @@ use CarbonTrack\Controllers\AdminAiController;
 use CarbonTrack\Controllers\UserAiController;
 use CarbonTrack\Controllers\AdminUserGroupController;
 use CarbonTrack\Controllers\LogSearchController;
+use CarbonTrack\Controllers\LogDiagnosticController;
+use CarbonTrack\Controllers\LogDiagnosticMcpController;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticConfig;
 use CarbonTrack\Controllers\AdminLlmUsageController;
 use CarbonTrack\Controllers\StatsController;
 use CarbonTrack\Controllers\CheckinController;
@@ -55,6 +58,17 @@ defined('PATH_USERS') || define('PATH_USERS', '/users');
 return function (App $app) {
     // 全局请求日志中间件（放在最前，捕获所有请求）
     try { $app->add(RequestLoggingMiddleware::class); } catch (\Throwable $e) { /* ignore if not resolvable */ }
+    $app->get(DiagnosticConfig::RESOURCE_METADATA, [LogDiagnosticController::class, 'resourceMetadata']);
+    $app->get(DiagnosticConfig::ISSUER_METADATA, [LogDiagnosticController::class, 'issuerMetadata']);
+    $app->group(DiagnosticConfig::API, function (RouteCollectorProxy $diagnostics): void {
+        $diagnostics->post('/summary', [LogDiagnosticController::class, 'summary']);
+        $diagnostics->post('/search', [LogDiagnosticController::class, 'search']);
+        $diagnostics->post('/context', [LogDiagnosticController::class, 'context']);
+        $diagnostics->map(['GET', 'POST', 'DELETE'], '/mcp', [LogDiagnosticMcpController::class, 'handle']);
+        $diagnostics->get('/oauth/authorize', [LogDiagnosticController::class, 'authorize']);
+        $diagnostics->map(['GET', 'POST'], '/oauth/consent', [LogDiagnosticController::class, 'consent']);
+        $diagnostics->post('/oauth/token', [LogDiagnosticController::class, 'token']);
+    });
     // 所有 helper 函数仅在闭包内部声明，避免全局污染
     $registerHealthCheck = function (App $app) {
         $app->get('/', function ($request, $response) {
@@ -309,6 +323,19 @@ return function (App $app) {
             // Unified logs export & related (previously missing, causing 404 in frontend)
             $admin->get('/logs/export', [LogSearchController::class, 'export']);
             $admin->get('/logs/related', [LogSearchController::class, 'related']);
+            $admin->group('/log-diagnostics', function (RouteCollectorProxy $diagnostics): void {
+                $diagnostics->get('/settings', [LogDiagnosticController::class, 'settings']);
+                $diagnostics->get('/sessions', [LogDiagnosticController::class, 'sessions']);
+                $diagnostics->post('/sessions', [LogDiagnosticController::class, 'create']);
+                $session = '/sessions/{id:[0-9]+}';
+                $diagnostics->get($session, [LogDiagnosticController::class, 'detail']);
+                $diagnostics->get($session . '/access-audits', [LogDiagnosticController::class, 'history']);
+                $diagnostics->post($session . '/credentials', [LogDiagnosticController::class, 'issue']);
+                $diagnostics->post($session . '/revoke', [LogDiagnosticController::class, 'revoke']);
+                $diagnostics->post($session . '/credentials/{credential_id:[0-9]+}/revoke', [LogDiagnosticController::class, 'revoke']);
+                $diagnostics->get('/oauth-requests/{id}', [LogDiagnosticController::class, 'oauthRequest']);
+                $diagnostics->post('/oauth-requests/{id}/decision', [LogDiagnosticController::class, 'decision']);
+            });
             $admin->put('/activities/review', [CarbonTrackController::class, 'reviewRecordsBulk']);
             $admin->put('/activities/{id:[0-9a-fA-F\-]+}/review', [CarbonTrackController::class, 'reviewRecord']);
             $admin->get('/exchanges', [ProductController::class, 'getExchangeRecords']);

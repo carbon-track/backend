@@ -12,6 +12,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\Environment;
+use CarbonTrack\Support\LogDiagnosticRequest;
 use Slim\Psr7\Response;
 
 class AuthMiddleware implements MiddlewareInterface
@@ -39,6 +40,7 @@ class AuthMiddleware implements MiddlewareInterface
         }
         
         $token = substr($authHeader, 7); // Remove 'Bearer ' prefix
+        $diagnosticPath = LogDiagnosticRequest::path($request->getUri()->getPath());
         
         try {
             $payload = $request->getAttribute('token_payload');
@@ -67,11 +69,11 @@ class AuthMiddleware implements MiddlewareInterface
                 'actor_type' => in_array(($payload['role'] ?? 'user'), ['admin', 'support'], true) ? ($payload['role'] ?? 'user') : 'user',
                 'status' => 'success',
                 'ip_address' => $this->getClientIp($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
+                'user_agent' => $diagnosticPath === null ? $request->getHeaderLine('User-Agent') : '',
                 'data' => [
                     'message' => 'Token authentication successful',
                 ],
-            ]);
+            ] + ($diagnosticPath === null ? [] : ['endpoint' => $diagnosticPath]));
             
             return $handler->handle($request);
             
@@ -83,11 +85,12 @@ class AuthMiddleware implements MiddlewareInterface
                 'actor_type' => 'system',
                 'status' => 'failed',
                 'ip_address' => $this->getClientIp($request),
-                'user_agent' => $request->getHeaderLine('User-Agent'),
+                'user_agent' => $diagnosticPath === null ? $request->getHeaderLine('User-Agent') : '',
                 'data' => [
-                    'message' => 'Token authentication failed: ' . $e->getMessage(),
+                    'message' => $diagnosticPath === null ? 'Token authentication failed: ' . $e->getMessage()
+                        : 'Diagnostic administrator authentication failed.',
                 ],
-            ]);
+            ] + ($diagnosticPath === null ? [] : ['endpoint' => $diagnosticPath]));
 
             if ($isVersionMismatch) {
                 return $this->unauthorizedResponse('Token has been revoked. Please sign in again.', 'TOKEN_VERSION_MISMATCH');

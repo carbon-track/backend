@@ -6,6 +6,7 @@ namespace CarbonTrack\Services;
 
 use Illuminate\Database\Connection;
 use CarbonTrack\Support\RequestIdNormalizer;
+use CarbonTrack\Support\LogDiagnosticRequest;
 use CarbonTrack\Support\SensitiveDataRedactor;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Monolog\Handler\ErrorLogHandler;
@@ -33,6 +34,9 @@ class ErrorLogService
         if ($this->isWriteDisabled()) {
             return null;
         }
+        if (LogDiagnosticRequest::path($request->getUri()->getPath()) !== null) {
+            return $this->logDiagnosticError($request, 'request_failed');
+        }
 
         return $this->insertLog([
             'error_type' => get_class($e),
@@ -59,6 +63,11 @@ class ErrorLogService
         if ($this->isWriteDisabled()) {
             return null;
         }
+        if (LogDiagnosticRequest::path($request->getUri()->getPath()) !== null) {
+            $reason = $type === 'LogDiagnosticFailure' && preg_match('/^[a-z_]{1,60}$/D', $message) === 1
+                ? $message : 'request_failed';
+            return $this->logDiagnosticError($request, $reason);
+        }
 
         return $this->insertLog([
             'error_type' => $type,
@@ -74,6 +83,17 @@ class ErrorLogService
             'client_session' => $this->safeJson(SensitiveDataRedactor::redact($_SESSION ?? [])),
             'client_server' => $this->safeJson($this->filterServer($request->getServerParams(), $context)),
             'request_id' => $this->resolveRequestId($request, $context),
+        ]);
+    }
+
+    private function logDiagnosticError(Request $request, string $reason): ?int
+    {
+        return $this->insertLog([
+            'error_type' => 'LogDiagnosticFailure',
+            'error_message' => $reason,
+            'error_time' => date(self::DATE_FMT),
+            'script_name' => LogDiagnosticRequest::path($request->getUri()->getPath()),
+            'request_id' => LogDiagnosticRequest::requestId($request),
         ]);
     }
 

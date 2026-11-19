@@ -23,6 +23,7 @@ use CarbonTrack\Services\AuthService;
 use CarbonTrack\Services\DatabaseService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Support\ErrorResponseBuilder;
+use CarbonTrack\Support\LogDiagnosticRequest;
 use Slim\Middleware\ErrorMiddleware;
 use Slim\Exception\HttpException;
 
@@ -134,7 +135,7 @@ $errorMiddleware->setErrorHandler(
             'success' => false,
             'error' => 'Not Found',
             'message' => 'The requested resource was not found',
-            'path' => $request->getUri()->getPath(),
+            'path' => LogDiagnosticRequest::path($request->getUri()->getPath()) ?? $request->getUri()->getPath(),
             'method' => $request->getMethod(),
             'timestamp' => date(APP_DATE_FMT)
         ]));
@@ -154,16 +155,19 @@ $errorMiddleware->setDefaultErrorHandler(
         bool $logErrors,
         bool $logErrorDetails
     ) use ($container, $resolvedAppEnv) {
+        $diagnosticPath = LogDiagnosticRequest::path($request->getUri()->getPath());
         try {
             $els = $container->get(ErrorLogService::class);
             $els->logException($exception, $request);
         } catch (Throwable $e) {
-            error_log('Failed to persist unhandled exception: ' . DatabaseService::exceptionMessage($e));
+            error_log($diagnosticPath === null
+                ? 'Failed to persist unhandled exception: ' . DatabaseService::exceptionMessage($e)
+                : 'Failed to persist unhandled diagnostic exception.');
         }
 
         try {
             if ($container->has(LoggerInterface::class)) {
-                $container->get(LoggerInterface::class)->error('Unhandled application exception', [
+                $container->get(LoggerInterface::class)->error('Unhandled application exception', $diagnosticPath === null ? [
                     'exception_type' => get_class($exception),
                     'error' => DatabaseService::exceptionMessage($exception),
                     'file' => $exception->getFile(),
@@ -172,10 +176,12 @@ $errorMiddleware->setDefaultErrorHandler(
                     'display_error_details' => $displayErrorDetails,
                     'log_errors' => $logErrors,
                     'log_error_details' => $logErrorDetails,
-                ]);
+                ] : ['route' => $diagnosticPath, 'request_id' => LogDiagnosticRequest::requestId($request)]);
             }
         } catch (Throwable $loggerEx) {
-            error_log('Failed to log exception via logger: ' . DatabaseService::exceptionMessage($loggerEx));
+            error_log($diagnosticPath === null
+                ? 'Failed to log exception via logger: ' . DatabaseService::exceptionMessage($loggerEx)
+                : 'Failed to log unhandled diagnostic exception.');
         }
 
         $response = new \Slim\Psr7\Response();
@@ -203,7 +209,14 @@ $errorMiddleware->setDefaultErrorHandler(
         if ($derivedStatus >= 400 && $derivedStatus <= 599) {
             $status = $derivedStatus;
         }
-        $payload = ErrorResponseBuilder::build($exception, $request, $resolvedAppEnv, $status);
+        $payload = $diagnosticPath === null ? ErrorResponseBuilder::build($exception, $request, $resolvedAppEnv, $status) : [
+            'error' => 'diagnostic_request_failed',
+            'message' => 'The diagnostic request failed.',
+            'request_id' => LogDiagnosticRequest::requestId($request),
+        ];
+        if ($diagnosticPath !== null) {
+            $response = $response->withHeader('Cache-Control', 'no-store');
+        }
         $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         return $response
             ->withStatus($status)

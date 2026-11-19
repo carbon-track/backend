@@ -11,11 +11,17 @@ use CarbonTrack\Services\BadgeService;
 use CarbonTrack\Services\CronSchedulerService;
 use CarbonTrack\Services\ErrorLogService;
 use CarbonTrack\Services\LeaderboardService;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticAccess;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticConfig;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuth;
+use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuthClients;
 use CarbonTrack\Services\ProofOfWorkService;
 use CarbonTrack\Services\StreakLeaderboardService;
 use CarbonTrack\Services\SupportRoutingEngineService;
+use GuzzleHttp\Client;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Illuminate\Database\Schema\Blueprint;
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 
@@ -885,6 +891,55 @@ class CronSchedulerServiceTest extends TestCase
         $this->assertSame('failed', $result['status']);
         $this->assertSame('task_lock_lost', $result['error_message']);
         $this->assertSame('failed', CronRun::query()->where('task_key', CronSchedulerService::TASK_SUPPORT_SLA_SWEEP)->value('status'));
+    }
+
+    public function testLogDiagnosticCleanupIsScheduledAndRecordsItsResult(): void
+    {
+        $task = CronSchedulerService::TASK_LOG_DIAGNOSTIC_CLEANUP;
+        $this->seedTask($task, 'Log Diagnostic Cleanup', 15, true, $this->now());
+        $db = self::$capsule->getConnection();
+        $schema = $db->getSchemaBuilder();
+        $tables = ['log_diagnostic_oauth_requests' => 'id', 'log_diagnostic_query_leases' => 'request_id'];
+        foreach ($tables as $table => $key) {
+            $schema->create($table, static function (Blueprint $t) use ($key): void {
+                $t->string($key)->primary();
+                $t->bigInteger('expires_at');
+            });
+            $db->table($table)->insert([
+                [$key => 'expired', 'expires_at' => time() - 1],
+                [$key => 'active', 'expires_at' => time() + 120],
+            ]);
+        }
+        try {
+            $logger = new Logger('diagnostic-cleanup-test');
+            $audit = $this->createMock(AuditLogService::class);
+            $audit->method('logSystemEvent')->willReturn(true);
+            $errors = $this->createMock(ErrorLogService::class);
+            $config = DiagnosticConfig::fromEnvironment();
+            $oauth = new DiagnosticOAuth($db, $config, new DiagnosticAccess($db, $config, $audit, $errors),
+                new DiagnosticOAuthClients($config, new Client()));
+            $scheduler = new CronSchedulerService(
+                $db, $logger, $audit, $errors,
+                $this->createMock(SupportRoutingEngineService::class),
+                $this->createMock(BadgeService::class),
+                $this->createMock(LeaderboardService::class),
+                $this->createMock(StreakLeaderboardService::class),
+                diagnosticOAuth: $oauth
+            );
+            $result = $scheduler->runTaskNow($task);
+            self::assertSame('success', $result['status']);
+            $run = CronRun::query()->where('task_key', $task)->sole();
+            self::assertSame('success', $run->status);
+            self::assertSame(['deleted_oauth_requests' => 1, 'deleted_query_leases' => 1],
+                json_decode($run->result_json, true, 512, JSON_THROW_ON_ERROR));
+            foreach ($tables as $table => $key) {
+                self::assertSame(['active'], $db->table($table)->pluck($key)->all());
+            }
+        } finally {
+            foreach (array_keys($tables) as $table) {
+                $schema->drop($table);
+            }
+        }
     }
 
     private function seedTask(string $taskKey, string $taskName, int $intervalMinutes, bool $enabled, ?string $nextRunAt, array $overrides = []): void

@@ -11,6 +11,7 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 use CarbonTrack\Services\SystemLogService;
 use CarbonTrack\Services\AuthService;
 use CarbonTrack\Support\ClientIpResolver;
+use CarbonTrack\Support\LogDiagnosticRequest;
 use CarbonTrack\Support\SensitiveDataRedactor;
 use CarbonTrack\Support\Uuid;
 use Monolog\Logger;
@@ -64,12 +65,28 @@ class RequestLoggingMiddleware implements MiddlewareInterface
     public function process(Request $request, RequestHandler $handler): Response
     {
         $start = microtime(true);
-        $requestId = $this->resolveRequestId($request->getHeaderLine('X-Request-ID'));
+        $diagnosticPath = LogDiagnosticRequest::path($request->getUri()->getPath());
+        $requestId = $diagnosticPath === null
+            ? $this->resolveRequestId($request->getHeaderLine('X-Request-ID'))
+            : Uuid::generateV4();
         $request = $request
             ->withHeader('X-Request-ID', $requestId)
             ->withAttribute('request_id', $requestId);
         // Allow legacy listeners that rely on $_SERVER to access the request id
         $_SERVER['HTTP_X_REQUEST_ID'] = $requestId;
+
+        if ($diagnosticPath !== null) {
+            $response = $handler->handle($request);
+            $this->systemLogService->log([
+                'request_id' => $requestId,
+                'method' => $request->getMethod(),
+                'path' => $diagnosticPath,
+                'server_params' => ['REQUEST_URI' => $diagnosticPath],
+                'status_code' => $response->getStatusCode(),
+                'duration_ms' => round((microtime(true) - $start) * 1000, 2),
+            ]);
+            return $response->withHeader('X-Request-ID', $requestId)->withHeader('Cache-Control', 'no-store');
+        }
 
         $path = $request->getUri()->getPath();
         $method = $request->getMethod();
