@@ -34,4 +34,9 @@ final class DiagnosticProblem extends \RuntimeException
     {
         return new self(503, 'diagnostics_unavailable', 'Diagnostics are temporarily unavailable.');
     }
+
+    public static function queryTimeout(): self
+    {
+        return new self(504, 'query_timeout', 'The diagnostic query timed out.');
+    }
 }

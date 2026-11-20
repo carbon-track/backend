@@ -450,6 +450,49 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertSame(0, (int) $this->db->table('log_diagnostic_sessions')->value('query_count'));
     }
 
+    public function testLegacyMysqlTimeoutCancelsTheQueryAndReleasesTheLease(): void
+    {
+        if (!$this->db instanceof MySqlConnection || $this->db->isMaria()
+            || version_compare($this->db->getServerVersion(), '5.7.8', '>=')) {
+            self::markTestSkipped('Requires an isolated MySQL 5.6 server.');
+        }
+
+        $utc = new DateTimeZone('UTC');
+        $this->container->set(DiagnosticConfig::class, new DiagnosticConfig(
+            true, self::API_ORIGIN, self::FRONTEND_ORIGIN, str_repeat('k', 32), $utc, $utc, timeoutMs: 350
+        ));
+        $this->db->table('llm_logs')->insert(['created_at' => gmdate('Y-m-d H:i:s', time() - 60)]);
+        $this->db->statement('RENAME TABLE llm_logs TO fixture_llm_logs');
+        $this->db->statement('CREATE VIEW llm_logs AS SELECT * FROM fixture_llm_logs WHERE SLEEP(3) = 0');
+        $token = $this->grant(['llm', 'system'])['issued']['access_token'];
+
+        $start = hrtime(true);
+        $response = $this->http('POST', self::REST . '/summary', ['types' => ['llm']], $token);
+        self::assertSame(504, $response->getStatusCode(), (string) $response->getBody());
+        self::assertSame('query_timeout', $this->json($response)['error']);
+        self::assertLessThan(2000, (hrtime(true) - $start) / 1000000);
+        self::assertSame(0, $this->db->table('log_diagnostic_query_leases')->count());
+        self::assertSame(0, (int) $this->db->table('log_diagnostic_sessions')->value('query_count'));
+        self::assertTrue($this->db->table('audit_logs')->where('action', 'log_diagnostic_query')
+            ->where('response_code', 504)->exists());
+        self::assertTrue($this->db->table('error_logs')->where('error_type', 'LogDiagnosticFailure')
+            ->where('error_message', 'query_timeout')->exists());
+
+        $waitUntil = hrtime(true) + 500000000;
+        do {
+            $remaining = (int) $this->db->selectOne(
+                'SELECT COUNT(*) AS active FROM information_schema.PROCESSLIST WHERE DB = ? AND ID <> CONNECTION_ID()',
+                [$this->testDatabase]
+            )->active;
+            if ($remaining === 0) {
+                break;
+            }
+            usleep(10000);
+        } while (hrtime(true) < $waitUntil);
+        self::assertSame(0, $remaining, 'The timed-out MySQL connection is still running.');
+        self::assertSame(200, $this->http('POST', self::REST . '/summary', ['types' => ['system']], $token)->getStatusCode());
+    }
+
     public function testAuditFailureBlocksOutputAndReleasesTheLease(): void
     {
         $token = $this->grant(['system'])['issued']['access_token'];
@@ -502,7 +545,14 @@ final class LogDiagnosticIntegrationTest extends TestCase
         $this->mysql->exec('CREATE DATABASE ' . $this->testDatabase . ' CHARACTER SET utf8mb4');
         $pdo = new PDO($dsn . ';dbname=' . $this->testDatabase, 'root', '');
         $pdo->exec("SET time_zone = '+00:00'");
-        return new MySqlConnection($pdo, $this->testDatabase, config: ['driver' => 'mysql']);
+        return new MySqlConnection($pdo, $this->testDatabase, config: [
+            'driver' => 'mysql',
+            'host' => '127.0.0.1',
+            'port' => (int) $port,
+            'database' => $this->testDatabase,
+            'username' => 'root',
+            'password' => '',
+        ]);
     }
 
     private function installSchema(): void
@@ -523,7 +573,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
             foreach (['user_uuid', 'conversation_id', 'actor_type', 'action', 'ip_address', 'user_agent', 'request_method',
                 'endpoint', 'affected_table', 'status', 'session_id', 'referrer', 'operation_category', 'operation_subtype',
                 'change_type', 'request_id'] as $column) {
-                $t->string($column)->nullable();
+                $t->string($column, $column === 'operation_category' ? 100 : 255)->nullable();
             }
             foreach (['old_data', 'new_data', 'data'] as $column) {
                 $t->longText($column)->nullable();
@@ -571,7 +621,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
         $migration = file_get_contents(__DIR__ . '/../../database/migrations/20261119_add_log_diagnostics.sql');
         if ($this->mysql !== null) {
             $schema->create('cron_tasks', static function (Blueprint $t): void {
-                $t->string('task_key')->primary();
+                $t->string('task_key', 64)->primary();
                 $t->string('task_name');
                 $t->string('description');
                 $t->integer('interval_minutes');

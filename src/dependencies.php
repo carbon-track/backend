@@ -42,6 +42,7 @@ use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuth;
 use CarbonTrack\Services\LogDiagnostics\DiagnosticOAuthClients;
 use CarbonTrack\Services\LogDiagnostics\DiagnosticProjection;
 use CarbonTrack\Services\LogDiagnostics\DiagnosticQueries;
+use CarbonTrack\Services\LogDiagnostics\LegacyMysqlDiagnosticReader;
 use CarbonTrack\Services\FileMetadataService;
 use CarbonTrack\Models\Avatar;
 use CarbonTrack\Controllers\AvatarController;
@@ -620,7 +621,8 @@ $__deps_initializer = function (Container $container) {
     $container->set(DiagnosticQueries::class, static fn (ContainerInterface $c): DiagnosticQueries => new DiagnosticQueries(
         $c->get(Connection::class),
         $c->get(DiagnosticConfig::class),
-        new DiagnosticProjection($c->get(DiagnosticConfig::class))
+        new DiagnosticProjection($c->get(DiagnosticConfig::class)),
+        new LegacyMysqlDiagnosticReader($c->get(Connection::class))
     ));
     $container->set(DiagnosticOAuth::class, static fn (ContainerInterface $c): DiagnosticOAuth => new DiagnosticOAuth(
         $c->get(Connection::class),

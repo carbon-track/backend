@@ -253,7 +253,7 @@ final class DiagnosticAccess
             $this->db->transaction(function () use ($sessionId, $credentialId, $requestId, $identity, $request, $result, $size, $started, $deadline): void {
                 $this->lockIdentity($sessionId, $credentialId);
                 if (hrtime(true) >= $deadline) {
-                    throw new DiagnosticProblem(504, 'query_timeout', 'The diagnostic query timed out.');
+                    throw DiagnosticProblem::queryTimeout();
                 }
                 $this->record($request, 'query', $sessionId, $identity + [
                     'log_count' => $result['log_count'],

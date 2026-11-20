@@ -25,11 +25,21 @@ final class DiagnosticQueries
     public function __construct(
         private readonly Connection $db,
         private readonly DiagnosticConfig $config,
-        private readonly DiagnosticProjection $projection
+        private readonly DiagnosticProjection $projection,
+        private readonly LegacyMysqlDiagnosticReader $legacyReader
     ) {
     }
 
     public function find(string $tool, object $grant, array $input, int $deadline): array
+    {
+        try {
+            return $this->findInScope($tool, $grant, $input, $deadline);
+        } finally {
+            $this->legacyReader->close();
+        }
+    }
+
+    private function findInScope(string $tool, object $grant, array $input, int $deadline): array
     {
         $permitted = explode(',', $grant->log_types);
         $from = array_key_exists('from', $input) ? DiagnosticConfig::timestamp($input['from'], 'from') : (int) $grant->log_from;
@@ -336,7 +346,7 @@ final class DiagnosticQueries
     {
         $remaining = (int) floor(($deadline - hrtime(true)) / 1000000);
         if ($remaining < 1) {
-            throw self::timeout();
+            throw DiagnosticProblem::queryTimeout();
         }
         $sql = $query->toSql();
         if ($this->db instanceof MySqlConnection) {
@@ -346,22 +356,22 @@ final class DiagnosticQueries
             } elseif (version_compare($this->serverVersion ??= $this->db->getServerVersion(), '5.7.8', '>=')) {
                 $sql = 'select /*+ MAX_EXECUTION_TIME(' . $remaining . ') */ ' . substr($sql, 7);
             } else {
-                throw DiagnosticProblem::unavailable();
+                // Materialize the rows before sending them so the client can poll the execution.
+                return $this->legacyReader->select(
+                    'select SQL_BUFFER_RESULT ' . substr($sql, 7),
+                    $query->getBindings(),
+                    $deadline
+                );
             }
         }
         try {
             return $this->db->select($sql, $query->getBindings(), false);
         } catch (QueryException $e) {
             if (in_array((int) ($e->errorInfo[1] ?? 0), [1969, 3024], true)) {
-                throw self::timeout();
+                throw DiagnosticProblem::queryTimeout();
             }
             throw $e;
         }
-    }
-
-    private static function timeout(): DiagnosticProblem
-    {
-        return new DiagnosticProblem(504, 'query_timeout', 'The diagnostic query timed out.');
     }
 
     private function requestId(mixed $value): string
