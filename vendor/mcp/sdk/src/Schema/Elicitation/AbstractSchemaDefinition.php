@@ -1,0 +1,72 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Schema\Elicitation;
+
+use Mcp\Schema\Exception\InvalidArgumentException;
+
+/**
+ * Base class for schema definitions in elicitation requests.
+ *
+ * @author Johannes Wachter <johannes@sulu.io>
+ */
+abstract class AbstractSchemaDefinition implements \JsonSerializable
+{
+    public function __construct(
+        public readonly ?string $title = null,
+        public readonly ?string $description = null,
+    ) {
+    }
+
+    /**
+     * Reject a title that is present but not a string.
+     *
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidArgumentException
+     */
+    protected static function validateTitle(array $data, string $schemaType): void
+    {
+        if (\array_key_exists('title', $data) && null !== $data['title'] && !\is_string($data['title'])) {
+            throw new InvalidArgumentException(\sprintf('Invalid "title" for %s schema definition.', $schemaType));
+        }
+    }
+
+    /**
+     * Build the base JSON structure with type, optional title and description.
+     *
+     * @return array{type: string, title?: string, description?: string}
+     */
+    protected function buildBaseJson(string $type): array
+    {
+        $data = ['type' => $type];
+
+        if (null !== $this->title) {
+            $data['title'] = $this->title;
+        }
+
+        if (null !== $this->description) {
+            $data['description'] = $this->description;
+        }
+
+        return $data;
+    }
+
+    /**
+     * The value the field is pre-filled with, or null when it declares none.
+     */
+    abstract public function getDefault(): mixed;
+
+    /**
+     * @return array<string, mixed>
+     */
+    abstract public function jsonSerialize(): array;
+}

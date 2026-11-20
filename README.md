@@ -1,5 +1,17 @@
 # backend
 
+## 部署与 Composer 依赖
+
+`vendor/` 随 Git 提交交付 Composer 锁定的生产依赖。后端镜像同步使用提交里的文件。服务器拉取部署分支后可直接加载 `vendor/autoload.php`，PHP 版本和扩展仍须满足项目要求。
+
+更新 `composer.lock` 后，在该版本的独立工作目录中进入后端目录，重新生成并提交生产依赖。CI 用提交中的生产包验证部署，并在镜像同步前核对锁文件。测试依赖由 CI 单独安装。
+
+```sh
+composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+php check_vendored_dependencies.php
+git add -f -- vendor/
+```
+
 ## 本地开发连接远程 API 的 CORS 配置
 
 为了方便本地前端（如 `http://localhost:5173`）调试已部署的远程后端 API（如 `https://dev-api.carbontrackapp.com`），后端 CORS 中间件已做特殊处理：

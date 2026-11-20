@@ -1,0 +1,1509 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Server;
+
+use Mcp\Schema\Exception\InvalidInputMessageException;
+use Mcp\Schema\JsonRpc\Error;
+use Mcp\Schema\JsonRpc\MessageInterface;
+use Mcp\Schema\JsonRpc\Notification;
+use Mcp\Schema\JsonRpc\Request;
+use Mcp\Schema\JsonRpc\Response;
+use Mcp\Schema\JsonRpc\ResultInterface;
+use Mcp\Schema\MessageFactory;
+use Mcp\Schema\Request\InitializeRequest;
+use Mcp\Schema\Request\ResourceSubscribeRequest;
+use Mcp\Schema\Request\ResourceUnsubscribeRequest;
+use Mcp\Schema\Request\SetLogLevelRequest;
+use Mcp\Server\Authorization\AccessToken;
+use Mcp\Server\Event\ClientResponseEvent;
+use Mcp\Server\Event\ErrorEvent;
+use Mcp\Server\Event\NotificationEvent;
+use Mcp\Server\Event\RequestEvent;
+use Mcp\Server\Event\ResponseEvent;
+use Mcp\Server\Event\ServerRequestEvent;
+use Mcp\Server\Exception\ConfigurationException;
+use Mcp\Server\Exception\RuntimeException;
+use Mcp\Server\Exception\SessionLockException;
+use Mcp\Server\Exception\SessionLockTimeoutException;
+use Mcp\Server\Exception\SessionRequiredException;
+use Mcp\Server\Exception\SessionStoreException;
+use Mcp\Server\Fiber\EventLoopSessionLock;
+use Mcp\Server\Fiber\FiberContextInterface;
+use Mcp\Server\Fiber\FiberSchedulerInterface;
+use Mcp\Server\Fiber\HandlerFibers;
+use Mcp\Server\Handler\Notification\NotificationHandlerInterface;
+use Mcp\Server\Handler\Request\RequestHandlerInterface;
+use Mcp\Server\Session\EphemeralSession;
+use Mcp\Server\Session\EphemeralSessionInterface;
+use Mcp\Server\Session\SessionInterface;
+use Mcp\Server\Session\SessionLockInterface;
+use Mcp\Server\Session\SessionManagerInterface;
+use Mcp\Server\Stateless\InputContext;
+use Mcp\Server\Stateless\RequestStateCodec;
+use Mcp\Server\Suspension\NotificationSuspension;
+use Mcp\Server\Suspension\RequestSuspension;
+use Mcp\Server\Transport\StreamableHttpTransport;
+use Mcp\Server\Transport\TransportInterface;
+use Psr\EventDispatcher\EventDispatcherInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use Symfony\Component\Uid\Uuid;
+
+/**
+ * @final
+ *
+ * @phpstan-import-type McpFiber from TransportInterface
+ * @phpstan-import-type FiberSuspend from TransportInterface
+ *
+ * @author Christopher Hertel <mail@christopher-hertel.de>
+ * @author Kyrian Obikwelu <koshnawaza@gmail.com>
+ */
+class Protocol
+{
+    /** Session key for pending outgoing requests */
+    private const SESSION_PENDING_REQUESTS = '_mcp.pending_requests';
+
+    /** Session key for incoming client responses */
+    private const SESSION_RESPONSES = '_mcp.responses';
+
+    /** Session key for outgoing message queue */
+    private const SESSION_OUTGOING_QUEUE = '_mcp.outgoing_queue';
+
+    /** Session key for active request meta */
+    public const SESSION_ACTIVE_REQUEST_META = '_mcp.active_request_meta';
+
+    public const SESSION_LOGGING_LEVEL = '_mcp.logging_level';
+
+    private const SESSION_NOT_FOUND_MESSAGE = 'Session not found or has expired.';
+
+    /** Session key for the fingerprint of the principal that opened the session, null when it was opened without one */
+    private const SESSION_PRINCIPAL = '_mcp.principal';
+
+    /** Requests whose effect has to outlast them, which a server without sessions cannot keep. */
+    private const SESSION_SCOPED_REQUESTS = [
+        ResourceSubscribeRequest::class,
+        ResourceUnsubscribeRequest::class,
+        SetLogLevelRequest::class,
+    ];
+
+    /**
+     * Deliberately generic: unexpected throwables carry internal details such as file paths, class
+     * names and argument types, which must not be handed to the peer. The full exception is logged.
+     */
+    private const INTERNAL_ERROR_MESSAGE = 'Internal server error.';
+
+    /** Answer to a request that could not get its session's lock in time, see {@see SessionLockInterface}. */
+    private const SESSION_BUSY_MESSAGE = 'Another request of this session is still being processed.';
+
+    /**
+     * Seconds past its timeout after which a pending client request counts as abandoned by its stream.
+     * Until then, the stream that sent it expires it itself and reports the timeout.
+     */
+    private const ABANDONED_REQUEST_GRACE = 60;
+
+    /**
+     * The client request each suspended fiber waits on. Pending requests are stored in the session,
+     * which concurrent calls share, so a fiber must only be resumed with the answer to the one it sent.
+     *
+     * @var \WeakMap<McpFiber, Uuid>
+     */
+    private \WeakMap $awaitedRequestIds;
+
+    /**
+     * What each transport's fiber sends the client, kept out of the session for the same reason:
+     * a request or notification must go out on the stream of the call that produced it.
+     *
+     * @var \WeakMap<TransportInterface<mixed>, list<array{message: string, context: array<string, mixed>}>>
+     */
+    private \WeakMap $fiberOutgoingMessages;
+
+    /**
+     * Awaited requests another worker dropped as abandoned, e.g. while this one could not get the session
+     * lock to expire them: their fiber is still owed the timeout.
+     *
+     * @var array<string, true>
+     */
+    private array $droppedAwaitedRequestIds = [];
+
+    private readonly ?SessionLockInterface $sessionLock;
+
+    /**
+     * @param array<int, RequestHandlerInterface<ResultInterface|array<string, mixed>>> $requestHandlers
+     * @param array<int, NotificationHandlerInterface>                                  $notificationHandlers
+     * @param bool                                                                      $sessionless          serve each handshake-era request over Streamable HTTP
+     *                                                                                                        on a session of its own, without a `Mcp-Session-Id`
+     */
+    public function __construct(
+        private readonly array $requestHandlers,
+        private readonly array $notificationHandlers,
+        private readonly MessageFactory $messageFactory,
+        private readonly SessionManagerInterface $sessionManager,
+        private readonly LoggerInterface $logger = new NullLogger(),
+        private readonly ?EventDispatcherInterface $eventDispatcher = null,
+        private readonly ?InputRequiredShim $inputRequiredShim = null,
+        private readonly ?RequestStateCodec $requestStateCodec = null,
+        ?SessionLockInterface $sessionLock = null,
+        private readonly ?FiberSchedulerInterface $fiberScheduler = null,
+        private readonly ?FiberContextInterface $fiberContext = null,
+        private readonly bool $sessionless = false,
+    ) {
+        $this->sessionLock = null !== $sessionLock && null !== $fiberScheduler ? new EventLoopSessionLock($sessionLock, $fiberScheduler) : $sessionLock;
+        $this->awaitedRequestIds = new \WeakMap();
+        $this->fiberOutgoingMessages = new \WeakMap();
+    }
+
+    /**
+     * Connect this protocol to transport.
+     *
+     * The protocol takes ownership of the transport and sets up all callbacks.
+     *
+     * @param TransportInterface<mixed> $transport
+     */
+    public function connect(TransportInterface $transport): void
+    {
+        $transport->onMessage($this->processInput(...));
+
+        if ($this->isSessionless($transport)) {
+            $transport->setSessionless(true);
+        }
+
+        $transport->onSessionEnd($this->endSession(...));
+
+        // The transport keeps these callbacks, so they reference it weakly to not keep it alive.
+        $transportRef = \WeakReference::create($transport);
+
+        $transport->setOutgoingMessagesProvider(fn (Uuid $sessionId): array => [
+            ...$this->takeFiberOutgoingMessages($transportRef->get()),
+            ...($this->isSessionless($transportRef->get()) ? [] : $this->consumeOutgoingMessages($sessionId)),
+        ]);
+
+        $transport->setPendingRequestsProvider(fn (Uuid $sessionId, \Fiber $fiber): array => $this->getAwaitedPendingRequests($fiber, $sessionId));
+
+        $transport->setResponseFinder($this->checkResponse(...));
+
+        $transport->setFiberYieldHandler(function (mixed $yieldedValue, ?Uuid $sessionId, \Fiber $fiber) use ($transportRef): void {
+            $this->trackAwaitedRequest($fiber, $this->handleFiberYield($yieldedValue, $sessionId, $transportRef->get()));
+        });
+
+        $this->logger->info('Protocol connected to transport', ['transport' => $transport::class]);
+    }
+
+    /**
+     * Handle an incoming message from the transport.
+     *
+     * This is called by the transport whenever ANY message arrives.
+     *
+     * @param TransportInterface<mixed> $transport
+     * @param AccessToken|null          $accessToken the token the input was authorized with, if the transport authorizes
+     * @param string|null               $principal   who the input was authenticated as, if the transport authenticates
+     */
+    public function processInput(TransportInterface $transport, string $input, ?Uuid $sessionId, ?AccessToken $accessToken = null, ?string $principal = null): void
+    {
+        // Last line of defense: a malformed message must never escape as a PHP error and take the
+        // server process down.
+        try {
+            $this->doProcessInput($transport, $input, $sessionId, $accessToken, $principal);
+        } catch (\Throwable $e) {
+            $this->logger->error(\sprintf('Uncaught exception while processing input: %s', $e->getMessage()), ['exception' => $e]);
+
+            // Only a request may be answered. Replying to a notification would violate JSON-RPC,
+            // and the failure has already been logged.
+            if (null === $id = self::findResponseId($input)) {
+                return;
+            }
+
+            try {
+                $this->sendResponse($transport, Error::forInternalError(self::INTERNAL_ERROR_MESSAGE, $id), null, ['status_code' => 500]);
+            } catch (\Throwable $e) {
+                $this->logger->error(\sprintf('Failed to send internal error response: %s', $e->getMessage()), ['exception' => $e]);
+            }
+        }
+    }
+
+    /**
+     * Determines the id an unprocessable input has to be answered under.
+     *
+     * Returns null when the input carries no request at all, in which case it consists of
+     * notifications and client responses only, and JSON-RPC forbids answering it: an error
+     * under a response's id would read as the answer to the client's own request of that id.
+     */
+    private static function findResponseId(string $input): string|int|null
+    {
+        try {
+            $data = json_decode($input, true, flags: \JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        if (!\is_array($data)) {
+            return null;
+        }
+
+        $id = $data['id'] ?? null;
+
+        return isset($data['method']) && (\is_string($id) || \is_int($id)) ? $id : null;
+    }
+
+    /**
+     * @param TransportInterface<mixed> $transport
+     */
+    private function doProcessInput(TransportInterface $transport, string $input, ?Uuid $sessionId, ?AccessToken $accessToken, ?string $principal): void
+    {
+        $this->logger->info('Received message to process.');
+        $this->logger->debug('Received message payload.', ['message' => $input]);
+
+        $this->sessionManager->gc();
+
+        try {
+            $message = $this->messageFactory->create($input);
+        } catch (\JsonException $e) {
+            $this->logger->warning('Failed to decode json message.', ['exception' => $e]);
+            $error = Error::forParseError($e->getMessage());
+            // The status keeps a refusal from carrying the queue of a session nobody checked yet, here and below.
+            $this->sendResponse($transport, $error, null, ['status_code' => 400]);
+
+            return;
+        } catch (InvalidInputMessageException $e) {
+            // Answered within the session like any other message, after it was resolved.
+            $message = $e;
+        }
+
+        // Taken before the session is read and held until it is saved, so no other request of
+        // the session reads a state this one is about to replace. An `initialize` never reads an
+        // existing session and an unknown session id is refused by resolveSession(), so neither
+        // needs the lock. The session is looked up again under the lock, as it may have ended
+        // while this request waited.
+        $takesLock = null !== $sessionId && null !== $this->sessionLock && !$message instanceof InitializeRequest && $this->sessionManager->exists($sessionId);
+
+        if ($takesLock) {
+            // Who opened the session is checked before waiting for the lock too, so that another
+            // principal can neither tell the session is busy nor keep it busy.
+            try {
+                $session = $this->sessionManager->createWithId($sessionId);
+                $serves = $this->servesPrincipal($session, $principal);
+            } catch (SessionStoreException $e) {
+                $this->refuseUnavailableStore($transport, $sessionId, self::findResponseId($input), $e);
+
+                return;
+            }
+
+            if (!$serves) {
+                $this->refuseOtherPrincipal($transport, $session);
+
+                return;
+            }
+
+            try {
+                $refusal = $this->acquireSessionLock($sessionId) ? null : Error::forServerError(self::SESSION_BUSY_MESSAGE, self::findResponseId($input));
+            } catch (SessionLockException) {
+                $refusal = Error::forInternalError('Session lock is unavailable.', self::findResponseId($input));
+            }
+
+            if (null !== $refusal) {
+                $this->sendResponse($transport, $refusal, null, ['status_code' => 503]);
+
+                return;
+            }
+        }
+
+        try {
+            $this->handleMessage($transport, $sessionId, $message, $accessToken, $principal);
+        } finally {
+            if ($takesLock) {
+                $this->releaseSessionLock($sessionId);
+            }
+        }
+    }
+
+    /**
+     * @param TransportInterface<mixed> $transport
+     */
+    private function handleMessage(TransportInterface $transport, ?Uuid $sessionId, MessageInterface|InvalidInputMessageException $message, ?AccessToken $accessToken, ?string $principal): void
+    {
+        $session = $this->resolveSession($transport, $sessionId, $message, $principal);
+        if (null === $session) {
+            return;
+        }
+
+        try {
+            if ($message instanceof InvalidInputMessageException) {
+                $this->handleInvalidMessage($transport, $message, $session);
+            } elseif ($message instanceof Request) {
+                $this->handleRequest($transport, $message, $session, $accessToken);
+            } elseif ($message instanceof Response || $message instanceof Error) {
+                $this->handleResponse($message, $session);
+            } elseif ($message instanceof Notification) {
+                $this->handleNotification($message, $session);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error(\sprintf('Uncaught exception while handling message: %s', $e->getMessage()), ['exception' => $e]);
+
+            // Only a request may be answered; a notification or a response must not produce one.
+            if ($message instanceof Request) {
+                $error = Error::forInternalError(self::INTERNAL_ERROR_MESSAGE, $message->getId());
+                $this->sendResponse($transport, $error, $session);
+            }
+        }
+
+        if ($session instanceof EphemeralSessionInterface) {
+            return;
+        }
+
+        try {
+            $session->save();
+        } catch (\Throwable $e) {
+            // The responses already reached the transport: an error for the same requests would contradict them.
+            $this->logger->error(\sprintf('Failed to save session: %s', $e->getMessage()), ['exception' => $e]);
+        }
+    }
+
+    /**
+     * Handle an invalid message from the transport.
+     *
+     * @param TransportInterface<mixed> $transport
+     * @param array<string, mixed>      $context
+     */
+    private function handleInvalidMessage(TransportInterface $transport, InvalidInputMessageException $exception, ?SessionInterface $session, array $context = []): void
+    {
+        $this->logger->warning('Failed to create message.', ['exception' => $exception]);
+
+        $error = $exception->isInvalidParams()
+            ? Error::forInvalidParams($exception->getMessage(), $exception->getRequestId())
+            : Error::forInvalidRequest($exception->getMessage(), $exception->getRequestId());
+        $this->sendResponse($transport, $error, $session, $context);
+    }
+
+    /**
+     * Dispatches an event through the event dispatcher if available.
+     *
+     * @template T of object
+     *
+     * @param T $event
+     *
+     * @return T
+     */
+    private function dispatchEvent(object $event): object
+    {
+        if (null === $this->eventDispatcher) {
+            return $event;
+        }
+
+        $dispatched = $this->eventDispatcher->dispatch($event);
+
+        // PSR-14 dispatchers return the event they were given; a dispatcher that
+        // swaps it for something else is not what the caller asked to dispatch.
+        if (!$dispatched instanceof $event) {
+            $this->logger->debug('Event dispatcher returned a different object than it was given; keeping the original.', [
+                'event' => $event::class,
+                'returned' => $dispatched::class,
+            ]);
+
+            return $event;
+        }
+
+        return $dispatched;
+    }
+
+    /**
+     * Handle a request from the transport.
+     *
+     * @param TransportInterface<mixed> $transport
+     */
+    private function handleRequest(TransportInterface $transport, Request $request, SessionInterface $session, ?AccessToken $accessToken): void
+    {
+        $this->logger->info('Handling request.', ['method' => $request::getMethod(), 'request_id' => $request->getId()]);
+
+        $session->set(self::SESSION_ACTIVE_REQUEST_META, $request->getMeta());
+
+        // Overwritten on every request, so a token never carries over to a later
+        // request of the same session; AccessToken serializes to null.
+        $session->set(AccessToken::class, $accessToken);
+
+        // A request starts with nothing behind it: the shim fills this in as it
+        // collects answers, and clearing it here is what keeps one request's
+        // round from being read as another's.
+        $session->set(InputContext::class, null);
+
+        if (null !== $this->requestStateCodec) {
+            $session->set(RequestStateCodec::class, $this->requestStateCodec);
+        }
+
+        $event = $this->dispatchEvent(new RequestEvent($request, $session));
+        $request = $event->getRequest();
+
+        if ($session instanceof EphemeralSessionInterface && \in_array($request::class, self::SESSION_SCOPED_REQUESTS, true)) {
+            $error = Error::forInternalError(\sprintf('"%s" needs a session, and this server runs without sessions.', $request::getMethod()), $request->getId());
+            $this->sendResponse($transport, $this->dispatchEvent(new ErrorEvent($error, $request, $session, null))->getError(), $session);
+
+            return;
+        }
+
+        $handlerFound = false;
+
+        foreach ($this->requestHandlers as $handler) {
+            if (!$handler->supports($request)) {
+                continue;
+            }
+
+            $handlerFound = true;
+
+            try {
+                $shim = $this->inputRequiredShim;
+                $codec = $this->requestStateCodec;
+                $dispatchResult = $this->dispatchResult(...);
+                $errorForThrowable = $this->errorForThrowable(...);
+                $saveResumedSession = $this->saveResumedSession(...);
+                // Weak: the fiber's state keeping this protocol alive segfaults PHP 8.1 when both are freed.
+                $protocol = \WeakReference::create($this);
+                /** @var bool $suspended set by reference once the fiber first suspended */
+                $suspended = false;
+
+                // One fiber for the whole exchange: with the shim, the handler
+                // re-enters inside it each round rather than needing a new one.
+                // Handled in the fiber, as the transport resumes it outside the catch below.
+                /** @var McpFiber $fiber */
+                $fiber = HandlerFibers::create(static function () use ($handler, $request, $session, $shim, $codec, $dispatchResult, $errorForThrowable, $saveResumedSession, &$suspended): Response|Error {
+                    try {
+                        $result = $handler->handle($request, $session);
+                        $result = $shim?->fulfill($result, $handler, $request, $session, $codec) ?? $result;
+
+                        if (HandlerFibers::isAbandoned()) {
+                            return $result;
+                        }
+
+                        $result = $dispatchResult($result, $request, $session);
+                    } catch (\Throwable $e) {
+                        if (HandlerFibers::isAbandoned()) {
+                            throw $e;
+                        }
+
+                        $result = $errorForThrowable($e, $request, $session);
+                    }
+
+                    // A fiber that never suspended is saved by doProcessInput(); after a resume nothing else saves it.
+                    if ($suspended) {
+                        $saveResumedSession($session);
+                    }
+
+                    return $result;
+                }, $this->fiberScheduler, static fn (\Throwable $e): ?Error => $protocol->get()?->errorForThrowable($e, $request, $session), $this->logger, $this->fiberContext);
+
+                $result = HandlerFibers::start($fiber);
+
+                if ($fiber->isSuspended()) {
+                    $beforeSuspension = $session->all();
+
+                    $awaitedRequestId = null;
+                    $outgoing = null;
+                    if ($result instanceof NotificationSuspension) {
+                        $outgoing = $result->notification;
+                    } elseif ($result instanceof RequestSuspension) {
+                        if ($session instanceof EphemeralSessionInterface) {
+                            throw new SessionRequiredException('Requests to the client need a session; configure one with Builder::setSession().');
+                        }
+
+                        $awaitedRequestId = $this->registerRequest($result->request, $result->timeout, $session);
+                        $outgoing = $result->request->withId($awaitedRequestId->toRfc4122());
+                    }
+
+                    // The transport resumes the fiber from what the session holds: it must
+                    // not get the fiber if the request the fiber awaits was not stored. A
+                    // later save must not store that request either, nobody would resume it.
+                    if (!$session instanceof EphemeralSessionInterface) {
+                        try {
+                            $saved = $session->save();
+                        } catch (\Throwable $e) {
+                            $session->hydrate($beforeSuspension);
+
+                            throw $e;
+                        }
+
+                        if (!$saved) {
+                            $session->hydrate($beforeSuspension);
+
+                            throw new RuntimeException('Failed to save the session of a suspended request.');
+                        }
+                    }
+
+                    $suspended = true;
+
+                    $this->trackAwaitedRequest($fiber, $awaitedRequestId);
+                    $transport->attachFiberToSession($fiber, $session->getId());
+
+                    if (null !== $outgoing) {
+                        $this->queueFiberOutgoing($transport, $outgoing);
+                    }
+
+                    return;
+                }
+
+                $this->sendResponse($transport, $fiber->getReturn(), $session);
+            } catch (\Throwable $e) {
+                $this->sendResponse($transport, $this->errorForThrowable($e, $request, $session), $session);
+            }
+
+            break;
+        }
+
+        if (!$handlerFound) {
+            $error = Error::forMethodNotFound(\sprintf('No handler found for method "%s".', $request::getMethod()), $request->getId());
+            $errorEvent = $this->dispatchEvent(new ErrorEvent($error, $request, $session, null));
+            $error = $errorEvent->getError();
+
+            $this->sendResponse($transport, $error, $session);
+        }
+    }
+
+    /**
+     * @param Response<array<string, mixed>>|Error $response
+     */
+    private function handleResponse(Response|Error $response, SessionInterface $session): void
+    {
+        $this->logger->info('Handling response from client.', ['message_id' => $response->getId()]);
+
+        $messageId = $response->getId();
+
+        if (null === $messageId) {
+            $this->logger->warning('Received an id-less error response from client; cannot correlate it to a pending request.', ['response' => $response->jsonSerialize()]);
+
+            return;
+        }
+
+        // Request IDs are UUIDs: any other ID cannot be one the server sent.
+        $pending = \is_string($messageId) && Uuid::isValid($messageId) ? $session->get(self::SESSION_PENDING_REQUESTS, [])[$messageId] ?? null : null;
+        if (!\is_array($pending) || $this->hasTimedOut($pending)) {
+            $this->logger->warning('Received a client response for an unknown or timed out request ID.', ['message_id' => $messageId]);
+
+            return;
+        }
+
+        $this->dispatchEvent(new ClientResponseEvent($response, $session));
+
+        $session->set(self::SESSION_RESPONSES.".{$messageId}", $response->jsonSerialize());
+        $session->forget(self::SESSION_ACTIVE_REQUEST_META);
+
+        $this->logger->info('Client response stored in session', [
+            'message_id' => $messageId,
+        ]);
+    }
+
+    private function handleNotification(Notification $notification, SessionInterface $session): void
+    {
+        $this->logger->info('Handling notification.', ['method' => $notification::getMethod()]);
+
+        $event = $this->dispatchEvent(new NotificationEvent($notification, $session));
+        $notification = $event->getNotification();
+
+        foreach ($this->notificationHandlers as $handler) {
+            if (!$handler->supports($notification)) {
+                continue;
+            }
+
+            try {
+                $handler->handle($notification, $session);
+            } catch (\Throwable $e) {
+                $this->logger->error(\sprintf('Error while handling notification: %s', $e->getMessage()), ['exception' => $e]);
+            }
+        }
+    }
+
+    /**
+     * Sends a request to the client and returns the request ID.
+     */
+    public function sendRequest(Request $request, int $timeout, SessionInterface $session): Uuid
+    {
+        self::assertQueueable($session);
+
+        $requestId = $this->registerRequest($request, $timeout, $session);
+
+        $this->queueOutgoing($request->withId($requestId->toRfc4122()), ['type' => 'request'], $session);
+
+        return $requestId;
+    }
+
+    /**
+     * Picks the id of a request to the client and stores the request as pending in the session.
+     *
+     * The id is a UUID, not counted in the session: concurrent requests of a client load
+     * the session at the same time and would count up to the same id.
+     */
+    private function registerRequest(Request $request, int $timeout, SessionInterface $session): Uuid
+    {
+        $requestId = Uuid::v4();
+        $id = $requestId->toRfc4122();
+
+        $this->dispatchEvent(new ServerRequestEvent($request->withId($id), $timeout, $session));
+
+        $this->logger->info('Queueing server request to client', [
+            'request_id' => $id,
+            'method' => $request::getMethod(),
+        ]);
+
+        $this->dropAbandonedRequests($session);
+
+        // Per entry, so saving does not write back what other streams changed in the others.
+        $session->set(self::SESSION_PENDING_REQUESTS.".{$id}", [
+            'request_id' => $id,
+            'timeout' => $timeout,
+            'timestamp' => time(),
+        ]);
+
+        return $requestId;
+    }
+
+    /**
+     * Queues a notification for later delivery.
+     */
+    public function sendNotification(Notification $notification, SessionInterface $session): void
+    {
+        self::assertQueueable($session);
+
+        $this->logger->info('Queueing server notification to client', [
+            'method' => $notification::getMethod(),
+        ]);
+
+        $this->queueOutgoing($notification, ['type' => 'notification'], $session);
+    }
+
+    /**
+     * @throws SessionRequiredException for the session of a server without sessions, which has no stream to deliver queued messages on
+     */
+    private static function assertQueueable(SessionInterface $session): void
+    {
+        if ($session instanceof EphemeralSessionInterface) {
+            throw new SessionRequiredException('Messages sent outside a request need a session; configure one with Builder::setSession().');
+        }
+    }
+
+    /**
+     * Sends a response through the transport, on the exchange that carried its request.
+     *
+     * Responses never go through the session's outgoing queue: the session is shared by
+     * the concurrent requests of a client and written back whole, so a queued response
+     * could be overwritten by another request, or taken by it.
+     *
+     * @param TransportInterface<mixed>                            $transport
+     * @param Response<ResultInterface|array<string, mixed>>|Error $response
+     * @param array<string, mixed>                                 $context
+     */
+    private function sendResponse(TransportInterface $transport, Response|Error $response, ?SessionInterface $session, array $context = []): void
+    {
+        $this->logger->debug('Sending response', [
+            'response_id' => $response->getId(),
+        ]);
+
+        try {
+            $encoded = json_encode($response, \JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            $this->logger->error('Failed to encode response to JSON.', [
+                'message_id' => $response->getId(),
+                'exception' => $e,
+            ]);
+
+            $fallbackError = new Error(
+                id: $response->getId(),
+                code: Error::INTERNAL_ERROR,
+                message: 'Response could not be encoded to JSON'
+            );
+
+            $encoded = json_encode($fallbackError, \JSON_THROW_ON_ERROR);
+        }
+
+        $context['type'] = 'response';
+        if (null !== $session) {
+            $context['session_id'] = $session->getId();
+        }
+
+        $transport->send($encoded, $context);
+    }
+
+    /**
+     * Helper to queue outgoing messages in session.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function queueOutgoing(Request|Notification $message, array $context, SessionInterface $session): void
+    {
+        if (null === $outgoing = $this->encodeOutgoing($message, $context)) {
+            return;
+        }
+
+        $queue = $session->get(self::SESSION_OUTGOING_QUEUE, []);
+        $queue[] = $outgoing;
+        $session->set(self::SESSION_OUTGOING_QUEUE, $queue);
+    }
+
+    /**
+     * Queues what a transport's fiber sends the client, for that transport alone.
+     *
+     * @param TransportInterface<mixed> $transport
+     */
+    private function queueFiberOutgoing(TransportInterface $transport, Request|Notification $message): void
+    {
+        if (null === $outgoing = $this->encodeOutgoing($message, ['type' => $message instanceof Request ? 'request' : 'notification'])) {
+            return;
+        }
+
+        $queue = $this->fiberOutgoingMessages[$transport] ?? [];
+        $queue[] = $outgoing;
+        $this->fiberOutgoingMessages[$transport] = $queue;
+    }
+
+    /**
+     * @param TransportInterface<mixed>|null $transport
+     *
+     * @return list<array{message: string, context: array<string, mixed>}>
+     */
+    private function takeFiberOutgoingMessages(?TransportInterface $transport): array
+    {
+        if (null === $transport || !isset($this->fiberOutgoingMessages[$transport])) {
+            return [];
+        }
+
+        $queue = $this->fiberOutgoingMessages[$transport];
+        unset($this->fiberOutgoingMessages[$transport]);
+
+        return $queue;
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     *
+     * @return array{message: string, context: array<string, mixed>}|null
+     */
+    private function encodeOutgoing(Request|Notification $message, array $context): ?array
+    {
+        try {
+            $encoded = json_encode($message, \JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            $this->logger->error('Failed to encode message to JSON.', [
+                'exception' => $e,
+            ]);
+
+            return null;
+        }
+
+        return [
+            'message' => $encoded,
+            'context' => $context,
+        ];
+    }
+
+    /**
+     * Consume (get and clear) all outgoing messages for a session.
+     *
+     * @return array<int, array{message: string, context: array<string, mixed>}>
+     */
+    public function consumeOutgoingMessages(Uuid $sessionId): array
+    {
+        if (!$this->tryAcquireSessionLockForPoll($sessionId)) {
+            return [];
+        }
+
+        try {
+            $session = $this->sessionManager->createWithId($sessionId);
+            $queue = $session->get(self::SESSION_OUTGOING_QUEUE, []);
+
+            // Saving an unchanged session would only overwrite what a concurrent request saved in the meantime.
+            if ([] !== $queue) {
+                $session->set(self::SESSION_OUTGOING_QUEUE, []);
+                $session->save();
+            }
+
+            return $queue;
+        } finally {
+            $this->releaseSessionLock($sessionId);
+        }
+    }
+
+    /**
+     * Check for a response to a specific request ID.
+     *
+     * When a response is found, it is removed from the session, and the
+     * corresponding pending request is also cleared. A request that got no
+     * answer within its timeout is cleared the same way and reported as an
+     * internal error, so its pending entry does not outlive the wait.
+     *
+     * @return Response<array<string, mixed>>|Error|null
+     */
+    public function checkResponse(Uuid $requestId, Uuid $sessionId): Response|Error|null
+    {
+        $id = $requestId->toRfc4122();
+
+        if (isset($this->droppedAwaitedRequestIds[$id])) {
+            unset($this->droppedAwaitedRequestIds[$id]);
+            $this->settleAwaitedRequest($id);
+            $this->logger->warning('Client request timed out.', [
+                'request_id' => $id,
+                'session_id' => $sessionId->toRfc4122(),
+            ]);
+
+            return Error::forInternalError('Request timed out', $id);
+        }
+
+        if (!$this->tryAcquireSessionLockForPoll($sessionId)) {
+            return null;
+        }
+
+        try {
+            $session = $this->sessionManager->createWithId($sessionId);
+            $responseData = $session->get(self::SESSION_RESPONSES.".{$id}");
+
+            if (null === $responseData) {
+                $pending = $session->get(self::SESSION_PENDING_REQUESTS, [])[$id] ?? null;
+
+                return \is_array($pending) && $this->hasTimedOut($pending) ? $this->expireRequest($requestId, $sessionId) : null;
+            }
+
+            $this->logger->debug('Found and consuming client response.', [
+                'request_id' => $id,
+                'session_id' => $sessionId->toRfc4122(),
+            ]);
+
+            $session->set(self::SESSION_RESPONSES.".{$id}", null);
+            $session->forget(self::SESSION_PENDING_REQUESTS.".{$id}");
+            $session->save();
+            $this->settleAwaitedRequest($id);
+        } finally {
+            $this->releaseSessionLock($sessionId);
+        }
+
+        try {
+            if (isset($responseData['error'])) {
+                return Error::fromArray($responseData);
+            }
+
+            return Response::fromArray($responseData);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to reconstruct client response from session.', [
+                'request_id' => $id,
+                'exception' => $e,
+                'response_data' => $responseData,
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Drops a timed out request from the pending ones and reports the timeout.
+     *
+     * The session is loaded again as the caller's copy may be as old as the last
+     * poll, and saving it back would undo what other streams stored since.
+     */
+    private function expireRequest(Uuid $requestId, Uuid $sessionId): ?Error
+    {
+        $id = $requestId->toRfc4122();
+        $session = $this->sessionManager->createWithId($sessionId);
+        $pending = $session->get(self::SESSION_PENDING_REQUESTS, []);
+
+        // Answered or expired by another stream in the meantime: the next poll sorts it out.
+        if (!isset($pending[$id]) || null !== $session->get(self::SESSION_RESPONSES.".{$id}")) {
+            return null;
+        }
+
+        $this->logger->warning('Client request timed out.', [
+            'request_id' => $id,
+            'session_id' => $sessionId->toRfc4122(),
+        ]);
+
+        $session->forget(self::SESSION_PENDING_REQUESTS.".{$id}");
+        $session->save();
+        $this->settleAwaitedRequest($id);
+
+        return Error::forInternalError('Request timed out', $id);
+    }
+
+    /**
+     * Drops the pending client requests, and their unconsumed answers, that no stream waits for anymore.
+     *
+     * Only the stream that sent a request clears it, so one whose stream is gone, through a client
+     * disconnect or a dead worker, would stay until the session expires.
+     */
+    private function dropAbandonedRequests(SessionInterface $session): void
+    {
+        // A fiber of this process still waits on these, e.g. on stdio while another handler blocked the loop.
+        $awaited = [];
+        foreach ($this->awaitedRequestIds as $requestId) {
+            $awaited[$requestId->toRfc4122()] = true;
+        }
+
+        foreach ($session->get(self::SESSION_PENDING_REQUESTS, []) as $id => $pending) {
+            if (isset($awaited[$id]) || !\is_array($pending) || time() < (int) ($pending['timestamp'] ?? 0) + (int) ($pending['timeout'] ?? 120) + self::ABANDONED_REQUEST_GRACE) {
+                continue;
+            }
+
+            $this->logger->debug('Dropping abandoned client request.', [
+                'request_id' => $id,
+                'session_id' => $session->getId()->toRfc4122(),
+            ]);
+
+            // Per entry, so saving does not write back what other streams changed in the others. The answer
+            // may have been stored after this session was loaded: set() makes forget() record its removal.
+            $session->forget(self::SESSION_PENDING_REQUESTS.".{$id}");
+            $session->set(self::SESSION_RESPONSES.".{$id}", null);
+            $session->forget(self::SESSION_RESPONSES.".{$id}");
+        }
+    }
+
+    /**
+     * @param array<mixed> $pending
+     */
+    private function hasTimedOut(array $pending): bool
+    {
+        return time() - (int) ($pending['timestamp'] ?? 0) >= (int) ($pending['timeout'] ?? 120);
+    }
+
+    /**
+     * Get pending requests for a session.
+     *
+     * @return array<string, mixed> The pending requests
+     */
+    public function getPendingRequests(Uuid $sessionId): array
+    {
+        $session = $this->sessionManager->createWithId($sessionId);
+
+        return $session->get(self::SESSION_PENDING_REQUESTS, []);
+    }
+
+    /**
+     * Handle values yielded by Fibers during transport-managed resumes.
+     *
+     * With the transport the fiber runs on, what it sends goes out on that transport alone;
+     * without one, it is queued for whichever stream of the session asks first.
+     *
+     * @param FiberSuspend|null              $yieldedValue
+     * @param TransportInterface<mixed>|null $transport
+     *
+     * @return Uuid|null the ID of the request sent to the client, which the fiber now waits on
+     */
+    public function handleFiberYield(mixed $yieldedValue, ?Uuid $sessionId, ?TransportInterface $transport = null): ?Uuid
+    {
+        if (!$sessionId) {
+            $this->logger->warning('Fiber yielded value without associated session context.');
+
+            return null;
+        }
+
+        if (!$yieldedValue instanceof NotificationSuspension && !$yieldedValue instanceof RequestSuspension) {
+            $this->logger->warning('Fiber yielded unexpected payload.', [
+                'payload' => $yieldedValue,
+                'session_id' => $sessionId->toRfc4122(),
+            ]);
+
+            return null;
+        }
+
+        if ($yieldedValue->sessionId !== $sessionId->toRfc4122()) {
+            $this->logger->warning('Fiber yielded payload with mismatched session ID.', [
+                'payload_session_id' => $yieldedValue->sessionId,
+                'expected_session_id' => $sessionId->toRfc4122(),
+            ]);
+        }
+
+        // The fiber holds the only copy of its session, which is never stored.
+        if ($this->isSessionless($transport)) {
+            if ($yieldedValue instanceof RequestSuspension) {
+                throw new SessionRequiredException('Requests to the client need a session; configure one with Builder::setSession().');
+            }
+
+            $this->queueFiberOutgoing($transport, $yieldedValue->notification);
+
+            return null;
+        }
+
+        // The message the fiber suspended on must be stored, so this waits for the lock; when it
+        // cannot be had, the exception makes the transport resume the fiber with an error.
+        $this->sessionLock?->acquire($sessionId);
+
+        $requestId = null;
+
+        try {
+            // A session destroyed while the request ran, e.g. by a DELETE, must not be saved back.
+            if (!$this->sessionManager->exists($sessionId)) {
+                $this->logger->warning('Fiber yielded for a session that no longer exists.', [
+                    'session_id' => $sessionId->toRfc4122(),
+                ]);
+
+                return null;
+            }
+
+            $session = $this->sessionManager->createWithId($sessionId);
+
+            try {
+                if ($yieldedValue instanceof RequestSuspension) {
+                    $requestId = $this->registerRequest($yieldedValue->request, $yieldedValue->timeout, $session);
+                    $outgoing = $yieldedValue->request->withId($requestId->toRfc4122());
+                } else {
+                    $outgoing = $yieldedValue->notification;
+                }
+
+                if (null === $transport) {
+                    $this->queueOutgoing($outgoing, ['type' => null === $requestId ? 'notification' : 'request'], $session);
+                }
+            } finally {
+                $saved = $session->save();
+            }
+        } finally {
+            $this->releaseSessionLock($sessionId);
+        }
+
+        // As on the first suspension: a request the session does not hold would never be answered.
+        if (!$saved) {
+            $this->logger->warning('Failed to save the session of a suspended request.', [
+                'session_id' => $sessionId->toRfc4122(),
+            ]);
+
+            return null;
+        }
+
+        if (null !== $transport) {
+            $this->queueFiberOutgoing($transport, $outgoing);
+        }
+
+        return $requestId;
+    }
+
+    /**
+     * @param McpFiber $fiber
+     */
+    private function trackAwaitedRequest(\Fiber $fiber, ?Uuid $requestId): void
+    {
+        if (null === $requestId) {
+            unset($this->awaitedRequestIds[$fiber]);
+
+            return;
+        }
+
+        $this->awaitedRequestIds[$fiber] = $requestId;
+    }
+
+    /**
+     * The fiber that awaited this request gets its answer now, so a later poll must not take it for one dropped elsewhere.
+     */
+    private function settleAwaitedRequest(string $id): void
+    {
+        foreach ($this->awaitedRequestIds as $fiber => $requestId) {
+            if ($requestId->toRfc4122() === $id) {
+                unset($this->awaitedRequestIds[$fiber]);
+            }
+        }
+    }
+
+    /**
+     * @param McpFiber $fiber
+     *
+     * @return array<string, mixed>
+     */
+    private function getAwaitedPendingRequests(\Fiber $fiber, Uuid $sessionId): array
+    {
+        $requestId = $this->awaitedRequestIds[$fiber] ?? null;
+        if (null === $requestId) {
+            return [];
+        }
+
+        $id = $requestId->toRfc4122();
+        $pending = $this->getPendingRequests($sessionId)[$id] ?? null;
+
+        if (null === $pending) {
+            $this->droppedAwaitedRequestIds[$id] = true;
+
+            return [$id => ['request_id' => $id]];
+        }
+
+        return [$id => $pending];
+    }
+
+    /**
+     * @param Response<mixed>|Error $result
+     *
+     * @return Response<mixed>|Error
+     */
+    private function dispatchResult(Response|Error $result, Request $request, SessionInterface $session): Response|Error
+    {
+        // A resumed fiber runs this outside handleRequest()'s catch.
+        try {
+            if ($result instanceof Response) {
+                return $this->dispatchEvent(new ResponseEvent($result, $request, $session))->getResponse();
+            }
+
+            return $this->dispatchEvent(new ErrorEvent($result, $request, $session, null))->getError();
+        } catch (\Throwable $e) {
+            if (HandlerFibers::isAbandoned()) {
+                throw $e;
+            }
+
+            return $this->errorForThrowable($e, $request, $session);
+        }
+    }
+
+    /**
+     * The code after a resume runs without the lock, so the session's changes since it suspended are saved under it.
+     */
+    private function saveResumedSession(SessionInterface $session): void
+    {
+        if ($session instanceof EphemeralSessionInterface) {
+            return;
+        }
+
+        $sessionId = $session->getId();
+        $locked = false;
+
+        try {
+            if (!$locked = $this->acquireSessionLock($sessionId)) {
+                $this->logger->error('Lost the session writes of a resumed request, its session stayed locked.', ['session_id' => $sessionId->toRfc4122()]);
+
+                return;
+            }
+
+            // A session the client ended while the handler waited is not saved back, and that is no failure.
+            if ($this->sessionManager->exists($sessionId) && !$session->save()) {
+                $this->logger->error('Failed to save the session of a resumed request.', ['session_id' => $sessionId->toRfc4122()]);
+            }
+        } catch (\Throwable $e) {
+            // The response is already decided: an error for the same request would contradict it.
+            $this->logger->error(\sprintf('Failed to save the session of a resumed request: %s', $e->getMessage()), ['exception' => $e]);
+        } finally {
+            if ($locked) {
+                $this->releaseSessionLock($sessionId);
+            }
+        }
+    }
+
+    private function errorForThrowable(\Throwable $e, Request $request, SessionInterface $session): Error
+    {
+        if ($e instanceof \InvalidArgumentException && !$e instanceof ConfigurationException) {
+            $this->logger->warning(\sprintf('Invalid argument: %s', $e->getMessage()), ['exception' => $e]);
+            $error = Error::forInvalidParams($e->getMessage(), $request->getId());
+        } elseif ($e instanceof SessionRequiredException) {
+            $this->logger->error($e->getMessage(), ['exception' => $e]);
+            $error = Error::forInternalError($e->getMessage(), $request->getId());
+        } else {
+            $this->logger->error(\sprintf('Uncaught exception: %s', $e->getMessage()), ['exception' => $e]);
+            $error = Error::forInternalError(self::INTERNAL_ERROR_MESSAGE, $request->getId());
+        }
+
+        try {
+            return $this->dispatchEvent(new ErrorEvent($error, $request, $session, $e))->getError();
+        } catch (\Throwable $listenerError) {
+            // Last resort: the error still has to reach the client.
+            $this->logger->error('Error event listener failed.', ['exception' => $listenerError]);
+
+            return $error;
+        }
+    }
+
+    /**
+     * Resolves and validates the session based on the request context.
+     *
+     * @param TransportInterface<mixed> $transport
+     * @param Uuid|null                 $sessionId The session ID from the transport
+     * @param string|null               $principal Who the messages were authenticated as
+     */
+    private function resolveSession(TransportInterface $transport, ?Uuid $sessionId, MessageInterface|InvalidInputMessageException $message, ?string $principal): ?SessionInterface
+    {
+        if ($message instanceof InitializeRequest) {
+            // Spec: An initialize request must not have a session ID.
+            if ($sessionId) {
+                $error = Error::forInvalidRequest('A session ID MUST NOT be sent with an "initialize" request.');
+                $this->sendResponse($transport, $error, null, ['status_code' => 400]);
+
+                return null;
+            }
+
+            if ($this->isSessionless($transport)) {
+                return $this->createEphemeralSession($transport);
+            }
+
+            $session = $this->sessionManager->create();
+            $session->set(self::SESSION_PRINCIPAL, self::fingerprint($principal));
+
+            $this->logger->debug('Created new session for initialize', [
+                'session_id' => $session->getId()->toRfc4122(),
+            ]);
+
+            $transport->setSessionId($session->getId());
+
+            return $session;
+        }
+
+        if ($this->isSessionless($transport)) {
+            return $this->createEphemeralSession($transport);
+        }
+
+        if (!$sessionId) {
+            if ($message instanceof InvalidInputMessageException && $message->isInvalidParamsOf(InitializeRequest::getMethod())) {
+                $this->handleInvalidMessage($transport, $message, null, ['status_code' => 400]);
+
+                return null;
+            }
+
+            // Echo the id so a client probing with `server/discover` can correlate the refusal.
+            $error = Error::forInvalidRequest('A valid session id is REQUIRED for non-initialize requests.', self::findRequestId($message));
+            $this->sendResponse($transport, $error, null, ['status_code' => 400]);
+
+            return null;
+        }
+
+        try {
+            $exists = $this->sessionManager->exists($sessionId);
+        } catch (SessionStoreException $e) {
+            $this->refuseUnavailableStore($transport, $sessionId, self::findRequestId($message), $e);
+
+            return null;
+        }
+
+        if (!$exists) {
+            $error = Error::forInvalidRequest(self::SESSION_NOT_FOUND_MESSAGE);
+            $this->sendResponse($transport, $error, null, ['status_code' => 404]);
+
+            return null;
+        }
+
+        $session = $this->sessionManager->createWithId($sessionId);
+
+        try {
+            $serves = $this->servesPrincipal($session, $principal);
+        } catch (SessionStoreException $e) {
+            $this->refuseUnavailableStore($transport, $sessionId, self::findRequestId($message), $e);
+
+            return null;
+        }
+
+        if (!$serves) {
+            $this->refuseOtherPrincipal($transport, $session);
+
+            return null;
+        }
+
+        return $session;
+    }
+
+    /**
+     * Without sessions, every handshake-era request over Streamable HTTP is served on a session of its own.
+     *
+     * @param TransportInterface<mixed>|null $transport
+     *
+     * @phpstan-assert-if-true StreamableHttpTransport $transport
+     */
+    private function isSessionless(?TransportInterface $transport): bool
+    {
+        return $this->sessionless && $transport instanceof StreamableHttpTransport;
+    }
+
+    private function createEphemeralSession(StreamableHttpTransport $transport): EphemeralSession
+    {
+        $session = new EphemeralSession();
+        // The revision the client negotiated on its `initialize`, as no session kept it.
+        $session->set('protocol_version', $transport->getHeaderProtocolVersion()->value);
+
+        return $session;
+    }
+
+    /**
+     * Whether the session serves the principal: the one that opened it, or no principal for a session opened without one.
+     *
+     * A session that does not record who opened it serves no one.
+     *
+     * @throws SessionStoreException when the store holds the session but fails to return it
+     */
+    private function servesPrincipal(SessionInterface $session, ?string $principal): bool
+    {
+        if ($session->get(self::SESSION_PRINCIPAL, false) === self::fingerprint($principal)) {
+            return true;
+        }
+
+        if ($session->isUnreadable()) {
+            throw new SessionStoreException(\sprintf('Session "%s" could not be read.', $session->getId()->toRfc4122()));
+        }
+
+        return false;
+    }
+
+    /**
+     * Not a 404: the session may well exist, so the client should retry instead of re-initializing.
+     *
+     * @param TransportInterface<mixed> $transport
+     */
+    private function refuseUnavailableStore(TransportInterface $transport, Uuid $sessionId, string|int|null $requestId, SessionStoreException $exception): void
+    {
+        $this->logger->error('Session store is unavailable.', [
+            'session_id' => $sessionId->toRfc4122(),
+            'exception' => $exception,
+        ]);
+        $this->sendResponse($transport, Error::forInternalError('Session store is unavailable.', $requestId), null, ['status_code' => 503]);
+    }
+
+    /**
+     * @param TransportInterface<mixed> $transport
+     */
+    private function refuseOtherPrincipal(TransportInterface $transport, SessionInterface $session): void
+    {
+        $this->logRefusal('a request', $session);
+
+        // Answered like an unknown session, so that another principal cannot tell the session exists.
+        $error = Error::forInvalidRequest(self::SESSION_NOT_FOUND_MESSAGE);
+        $this->sendResponse($transport, $error, null, ['status_code' => 404]);
+    }
+
+    private function logRefusal(string $what, SessionInterface $session): void
+    {
+        $reason = $session->has(self::SESSION_PRINCIPAL)
+            ? 'the session was opened by another principal.'
+            : 'the session does not record who opened it, so it was cleared, is corrupt or predates the principal binding.';
+
+        $this->logger->warning(\sprintf('Refused %s: %s', $what, $reason), [
+            'session_id' => $session->getId()->toRfc4122(),
+        ]);
+    }
+
+    private static function fingerprint(?string $principal): ?string
+    {
+        return null === $principal ? null : hash('sha256', $principal);
+    }
+
+    /**
+     * The id of a request, so a refusal of the input can be correlated with it.
+     */
+    private static function findRequestId(MessageInterface|InvalidInputMessageException $message): string|int|null
+    {
+        return match (true) {
+            $message instanceof Request => $message->getId(),
+            $message instanceof InvalidInputMessageException => $message->getRequestId(),
+            default => null,
+        };
+    }
+
+    /**
+     * Ends a session at the request of a client, which must be the principal that opened it.
+     *
+     * @return bool false when the session does not exist, or is another principal's
+     *
+     * @throws SessionStoreException when who opened the session cannot be established; the session is not ended
+     */
+    private function endSession(Uuid $sessionId, ?string $principal = null): bool
+    {
+        $session = $this->sessionManager->createWithId($sessionId);
+
+        if ($this->sessionManager->exists($sessionId) && !$this->servesPrincipal($session, $principal)) {
+            $this->logRefusal('a DELETE', $session);
+
+            return false;
+        }
+
+        return $this->destroySession($sessionId);
+    }
+
+    /**
+     * Destroy a specific session.
+     *
+     * @return bool false when the session does not exist
+     */
+    public function destroySession(Uuid $sessionId): bool
+    {
+        try {
+            $exists = $this->sessionManager->exists($sessionId);
+        } catch (SessionStoreException) {
+            // The session may well exist, so it is not reported as unknown.
+            $exists = true;
+        }
+
+        // Destroyed even when a request of the session holds the lock past the timeout, or the
+        // lock is unavailable: the client ended the session, and Session::save() does not write
+        // back a session that was destroyed since it was read. An unknown session id has nothing to lock.
+        try {
+            $locked = null !== $this->sessionLock && $exists && $this->acquireSessionLock($sessionId);
+        } catch (SessionLockException) {
+            $locked = false;
+        }
+
+        try {
+            $this->sessionManager->destroy($sessionId);
+        } finally {
+            if ($locked) {
+                $this->releaseSessionLock($sessionId);
+            }
+        }
+
+        $this->logger->info('Session destroyed.', ['session_id' => $sessionId->toRfc4122()]);
+
+        return $exists;
+    }
+
+    /**
+     * Returns false when another request holds the lock past the timeout, or right now when not waiting;
+     * true when it was acquired, or there is no lock.
+     *
+     * @param bool $wait false to only take a lock that is free right now
+     *
+     * @throws SessionLockException when the lock backend failed
+     */
+    private function acquireSessionLock(Uuid $sessionId, bool $wait = true): bool
+    {
+        if (null === $this->sessionLock) {
+            return true;
+        }
+
+        try {
+            if (!$wait) {
+                return $this->sessionLock->tryAcquire($sessionId);
+            }
+
+            $this->sessionLock->acquire($sessionId);
+        } catch (SessionLockTimeoutException $e) {
+            $this->logger->warning(\sprintf('Failed to acquire session lock: %s', $e->getMessage()), [
+                'session_id' => $sessionId->toRfc4122(),
+                'exception' => $e,
+            ]);
+
+            return false;
+        } catch (SessionLockException $e) {
+            $this->logger->error(\sprintf('Session lock is unavailable: %s', $e->getMessage()), [
+                'session_id' => $sessionId->toRfc4122(),
+                'exception' => $e,
+            ]);
+
+            throw $e;
+        }
+
+        return true;
+    }
+
+    /**
+     * A stream polls again on its next turn, so neither a busy lock nor a failing backend is waited on here.
+     */
+    private function tryAcquireSessionLockForPoll(Uuid $sessionId): bool
+    {
+        try {
+            return $this->acquireSessionLock($sessionId, wait: false);
+        } catch (SessionLockException) {
+            return false;
+        }
+    }
+
+    private function releaseSessionLock(Uuid $sessionId): void
+    {
+        if (null === $this->sessionLock) {
+            return;
+        }
+
+        try {
+            $this->sessionLock->release($sessionId);
+        } catch (SessionLockException $e) {
+            // The work is done; a stuck lock is logged for the operator and expires or times out for the next request.
+            $this->logger->error(\sprintf('Failed to release session lock: %s', $e->getMessage()), [
+                'session_id' => $sessionId->toRfc4122(),
+                'exception' => $e,
+            ]);
+        }
+    }
+}

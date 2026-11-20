@@ -1,0 +1,156 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Server\Transport\Http\OAuth;
+
+use Mcp\Server\Authorization\AccessToken;
+use Mcp\Server\Exception\InvalidArgumentException;
+
+/**
+ * Describes the outcome of an authorization decision.
+ *
+ * Use the static factory methods to create instances:
+ * - allow() - Access is granted
+ * - unauthorized() - No valid credentials provided (401)
+ * - forbidden() - Valid credentials but insufficient permissions (403)
+ * - badRequest() - Malformed request (400)
+ * - unavailable() - Token validation temporarily unavailable (503)
+ *
+ * @author Volodymyr Panivko <sveneld300@gmail.com>
+ */
+final class AuthorizationResult
+{
+    /**
+     * @param list<string>|null $scopes Scopes to include in WWW-Authenticate challenge
+     */
+    private function __construct(
+        private readonly bool $allowed,
+        private readonly int $statusCode,
+        private readonly ?string $error,
+        private readonly ?string $errorDescription,
+        private readonly ?array $scopes,
+        private readonly ?AccessToken $accessToken,
+        private readonly ?int $retryAfter = null,
+    ) {
+    }
+
+    /**
+     * Creates a result indicating access is allowed.
+     */
+    public static function allow(AccessToken $accessToken): self
+    {
+        return new self(true, 200, null, null, null, $accessToken);
+    }
+
+    /**
+     * Creates a result indicating the request is unauthorized (401).
+     *
+     * Use when no valid credentials are provided or the token is invalid.
+     *
+     * @param string|null       $error            OAuth error code (e.g., "invalid_token")
+     * @param string|null       $errorDescription Human-readable error description
+     * @param list<string>|null $scopes           Required scopes to include in challenge
+     */
+    public static function unauthorized(
+        ?string $error = null,
+        ?string $errorDescription = null,
+        ?array $scopes = null,
+    ): self {
+        return new self(false, 401, $error, $errorDescription, $scopes, null);
+    }
+
+    /**
+     * Creates a result indicating the request is forbidden (403).
+     *
+     * Use when the token is valid but lacks required permissions/scopes.
+     *
+     * @param string|null       $error            OAuth error code (defaults to "insufficient_scope")
+     * @param string|null       $errorDescription Human-readable error description
+     * @param list<string>|null $scopes           Required scopes to include in challenge
+     */
+    public static function forbidden(
+        ?string $error = 'insufficient_scope',
+        ?string $errorDescription = null,
+        ?array $scopes = null,
+    ): self {
+        return new self(false, 403, $error ?? 'insufficient_scope', $errorDescription, $scopes, null);
+    }
+
+    /**
+     * Creates a result indicating a bad request (400).
+     *
+     * Use when the Authorization header is malformed.
+     *
+     * @param string|null $error            OAuth error code (defaults to "invalid_request")
+     * @param string|null $errorDescription Human-readable error description
+     */
+    public static function badRequest(
+        ?string $error = 'invalid_request',
+        ?string $errorDescription = null,
+    ): self {
+        return new self(false, 400, $error ?? 'invalid_request', $errorDescription, null, null);
+    }
+
+    /**
+     * @param int|null $retryAfter Suggested delay before retrying, in seconds
+     *
+     * @throws InvalidArgumentException if the delay is negative
+     */
+    public static function unavailable(?int $retryAfter = null): self
+    {
+        if (null !== $retryAfter && $retryAfter < 0) {
+            throw new InvalidArgumentException('The Retry-After delay must not be negative.');
+        }
+
+        return new self(false, 503, null, null, null, null, $retryAfter);
+    }
+
+    public function isAllowed(): bool
+    {
+        return $this->allowed;
+    }
+
+    public function getStatusCode(): int
+    {
+        return $this->statusCode;
+    }
+
+    public function getRetryAfter(): ?int
+    {
+        return $this->retryAfter;
+    }
+
+    public function getError(): ?string
+    {
+        return $this->error;
+    }
+
+    public function getErrorDescription(): ?string
+    {
+        return $this->errorDescription;
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    public function getScopes(): ?array
+    {
+        return $this->scopes;
+    }
+
+    /**
+     * The validated token; set only on an allowed result.
+     */
+    public function getAccessToken(): ?AccessToken
+    {
+        return $this->accessToken;
+    }
+}

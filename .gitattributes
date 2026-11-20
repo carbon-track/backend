@@ -1,0 +1,2 @@
+# Keep Composer distribution files byte-for-byte and collapse them in reviews.
+/vendor/** -text linguist-vendored linguist-generated

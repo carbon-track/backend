@@ -1,0 +1,27 @@
+.phpunit.cache
+.php-cs-fixer.cache
+.deptrac.cache
+composer.lock
+coverage
+vendor
+examples/**/dev.log
+examples/**/cache
+examples/**/sessions
+examples/client/.oauth-credentials.json
+examples/client/..oauth-credentials.json.lock
+examples/client/..oauth-credentials.json.refresh.lock
+tests/Conformance/client-conformance*.json
+tests/Conformance/server-conformance*.json
+tests/Conformance/results*
+tests/Conformance/sessions
+tests/Conformance/logs/*.log
+tests/E2E/sessions
+
+# phpDocumentor
+.phpdoc/build/
+.phpdoc/cache/
+
+# Documentation site (make docs)
+/site/
+/.cache/
+tests/Interop/node_modules

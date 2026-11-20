@@ -1,0 +1,159 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Schema\JsonRpc;
+
+use Mcp\Schema\Exception\InvalidArgumentException;
+use Mcp\Schema\Exception\InvalidParamsException;
+use Mcp\Schema\Json;
+
+/**
+ * @phpstan-type RequestData array{
+ *     jsonrpc: string,
+ *     id: string|int,
+ *     method: string,
+ *     params?: array<string, mixed>|\stdClass,
+ * }
+ *
+ * @author Kyrian Obikwelu <koshnawaza@gmail.com>
+ */
+abstract class Request implements HasMethodInterface, MessageInterface
+{
+    protected string|int $id;
+    /**
+     * @var array<string, mixed>|null
+     */
+    protected ?array $meta = null;
+
+    abstract public static function getMethod(): string;
+
+    /**
+     * @param RequestData $data
+     */
+    public static function fromArray(array $data): static
+    {
+        if (($data['jsonrpc'] ?? null) !== MessageInterface::JSONRPC_VERSION) {
+            throw new InvalidArgumentException('Invalid or missing "jsonrpc" version for Request.');
+        }
+        if (!isset($data['id']) || !\is_string($data['id']) && !\is_int($data['id'])) {
+            throw new InvalidArgumentException('Invalid or missing "id" for Request.');
+        }
+        if (!isset($data['method']) || !\is_string($data['method'])) {
+            throw new InvalidArgumentException('Invalid or missing "method" for Request.');
+        }
+        $params = $data['params'] ?? null;
+        if ($params instanceof \stdClass) {
+            $params = static::paramsToArray($params);
+        }
+        if (null !== $params && !\is_array($params)) {
+            throw new InvalidArgumentException('"params" for Request must be an array/object or null.');
+        }
+
+        try {
+            $request = static::fromParams($params);
+        } catch (InvalidArgumentException $e) {
+            throw new InvalidParamsException($e->getMessage(), $e->getCode(), $e);
+        }
+        $request->id = $data['id'];
+
+        if (isset($params['_meta'])) {
+            $meta = $params['_meta'];
+            if ($meta instanceof \stdClass) {
+                $meta = (array) $meta;
+            }
+            if (\is_array($meta)) {
+                $request->meta = $meta;
+            }
+        }
+
+        return $request;
+    }
+
+    /**
+     * Whether the request cannot be served from params that lost the difference between `{}` and `[]`.
+     */
+    public static function requiresJsonTypes(): bool
+    {
+        return false;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected static function paramsToArray(\stdClass $params): array
+    {
+        /* @var array<string, mixed> */
+        return Json::objectsToArrays($params);
+    }
+
+    /**
+     * @param array<string, mixed>|null $params
+     */
+    abstract protected static function fromParams(?array $params): static;
+
+    public function getId(): string|int
+    {
+        return $this->id;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function getMeta(): ?array
+    {
+        return $this->meta;
+    }
+
+    public function withId(string|int $id): static
+    {
+        $clone = clone $this;
+        $clone->id = $id;
+
+        return $clone;
+    }
+
+    /**
+     * @param array<string, mixed>|null $meta
+     */
+    public function withMeta(?array $meta): static
+    {
+        $clone = clone $this;
+        $clone->meta = $meta;
+
+        return $clone;
+    }
+
+    /**
+     * @return RequestData
+     */
+    public function jsonSerialize(): array
+    {
+        $array = [
+            'jsonrpc' => MessageInterface::JSONRPC_VERSION,
+            'id' => $this->id,
+            'method' => static::getMethod(),
+        ];
+        if (null !== $params = $this->getParams()) {
+            $array['params'] = $params;
+        }
+
+        if (null !== $this->meta && !isset($params['_meta'])) {
+            $array['params']['_meta'] = $this->meta;
+        }
+
+        return $array;
+    }
+
+    /**
+     * @return array<non-empty-string, mixed>|null
+     */
+    abstract protected function getParams(): ?array;
+}

@@ -1,0 +1,296 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Schema;
+
+/**
+ * Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed
+ * set: any server can define its own, additional capabilities.
+ *
+ * @author Kyrian Obikwelu <koshnawaza@gmail.com>
+ */
+class ServerCapabilities implements \JsonSerializable
+{
+    /**
+     * @param ?bool                 $tools                server exposes callable tools
+     * @param ?bool                 $toolsListChanged     server supports list changed notifications for tools
+     * @param ?bool                 $resources            server provides readable resources
+     * @param ?bool                 $resourcesSubscribe   server supports subscribing to changes in the list of resources
+     * @param ?bool                 $resourcesListChanged server supports list changed notifications for resources
+     * @param ?bool                 $prompts              server provides prompts templates
+     * @param ?bool                 $promptsListChanged   server supports list changed notifications for prompts
+     * @param ?bool                 $logging              server emits structured log messages
+     * @param ?bool                 $completions          Server supports argument autocompletion
+     * @param ?array<string, mixed> $experimental         experimental, non-standard features that the server supports
+     * @param ?array<string, mixed> $extensions           protocol extensions the server supports (e.g. io.modelcontextprotocol/ui)
+     * @param ?array<string, mixed> $tasks                task-augmented requests the server supports, as the
+     *                                                    spec's nested object, e.g. `['list' => [], 'requests' => ['tools' => ['call' => []]]]`
+     */
+    public function __construct(
+        public readonly ?bool $tools = true,
+        public readonly ?bool $toolsListChanged = false,
+        public readonly ?bool $resources = true,
+        public readonly ?bool $resourcesSubscribe = false,
+        public readonly ?bool $resourcesListChanged = false,
+        public readonly ?bool $prompts = true,
+        public readonly ?bool $promptsListChanged = false,
+        public readonly ?bool $logging = false,
+        public readonly ?bool $completions = false,
+        public readonly ?array $experimental = null,
+        public readonly ?array $extensions = null,
+        public readonly ?array $tasks = null,
+    ) {
+    }
+
+    /**
+     * @param array{
+     *     logging?: mixed,
+     *     completions?: mixed,
+     *     prompts?: array{listChanged?: bool}|object,
+     *     resources?: array{listChanged?: bool, subscribe?: bool}|object,
+     *     tools?: object|array{listChanged?: bool},
+     *     experimental?: array<string, mixed>,
+     *     extensions?: array<string, mixed>,
+     *     tasks?: array<string, mixed>,
+     * } $data
+     */
+    public static function fromArray(array $data): self
+    {
+        $loggingEnabled = isset($data['logging']);
+        $completionsEnabled = isset($data['completions']);
+        $toolsEnabled = isset($data['tools']);
+        $promptsEnabled = isset($data['prompts']);
+        $resourcesEnabled = isset($data['resources']);
+
+        $promptsListChanged = null;
+        if (isset($data['prompts'])) {
+            if (\is_array($data['prompts']) && \array_key_exists('listChanged', $data['prompts'])) {
+                $promptsListChanged = (bool) $data['prompts']['listChanged'];
+            } elseif (\is_object($data['prompts']) && property_exists($data['prompts'], 'listChanged')) {
+                $promptsListChanged = (bool) $data['prompts']->listChanged;
+            }
+        }
+
+        $resourcesSubscribe = null;
+        $resourcesListChanged = null;
+        if (isset($data['resources'])) {
+            if (\is_array($data['resources']) && \array_key_exists('subscribe', $data['resources'])) {
+                $resourcesSubscribe = (bool) $data['resources']['subscribe'];
+            } elseif (\is_object($data['resources']) && property_exists($data['resources'], 'subscribe')) {
+                $resourcesSubscribe = (bool) $data['resources']->subscribe;
+            }
+            if (\is_array($data['resources']) && \array_key_exists('listChanged', $data['resources'])) {
+                $resourcesListChanged = (bool) $data['resources']['listChanged'];
+            } elseif (\is_object($data['resources']) && property_exists($data['resources'], 'listChanged')) {
+                $resourcesListChanged = (bool) $data['resources']->listChanged;
+            }
+        }
+
+        $toolsListChanged = null;
+        if (isset($data['tools'])) {
+            if (\is_array($data['tools']) && \array_key_exists('listChanged', $data['tools'])) {
+                $toolsListChanged = (bool) $data['tools']['listChanged'];
+            } elseif (\is_object($data['tools']) && property_exists($data['tools'], 'listChanged')) {
+                $toolsListChanged = (bool) $data['tools']->listChanged;
+            }
+        }
+
+        return new self(
+            tools: $toolsEnabled,
+            toolsListChanged: $toolsListChanged,
+            resources: $resourcesEnabled,
+            resourcesSubscribe: $resourcesSubscribe,
+            resourcesListChanged: $resourcesListChanged,
+            prompts: $promptsEnabled,
+            promptsListChanged: $promptsListChanged,
+            logging: $loggingEnabled,
+            completions: $completionsEnabled,
+            experimental: \is_array($data['experimental'] ?? null) ? $data['experimental'] : null,
+            extensions: \is_array($data['extensions'] ?? null) ? $data['extensions'] : null,
+            tasks: \is_array($data['tasks'] ?? null) ? $data['tasks'] : null,
+        );
+    }
+
+    /**
+     * Returns a copy with the given protocol extensions merged into the existing ones.
+     *
+     * Entries in $extensions override existing ones sharing the same id.
+     *
+     * @param array<string, array<string, mixed>> $extensions
+     */
+    public function withExtensions(array $extensions): self
+    {
+        return new self(
+            $this->tools,
+            $this->toolsListChanged,
+            $this->resources,
+            $this->resourcesSubscribe,
+            $this->resourcesListChanged,
+            $this->prompts,
+            $this->promptsListChanged,
+            $this->logging,
+            $this->completions,
+            $this->experimental,
+            [...$this->extensions ?? [], ...$extensions],
+            $this->tasks,
+        );
+    }
+
+    /**
+     * Returns a copy that announces no list-changed notifications.
+     *
+     * A kind announced only through its `listChanged` flag stays announced.
+     */
+    public function withoutListChanged(): self
+    {
+        return new self(
+            $this->tools || $this->toolsListChanged,
+            false,
+            $this->resources || $this->resourcesListChanged,
+            $this->resourcesSubscribe,
+            false,
+            $this->prompts || $this->promptsListChanged,
+            false,
+            $this->logging,
+            $this->completions,
+            $this->experimental,
+            $this->extensions,
+            $this->tasks,
+        );
+    }
+
+    /**
+     * Returns a copy that does not announce resource subscriptions.
+     *
+     * Resources announced only through the `subscribe` flag stay announced.
+     */
+    public function withoutResourcesSubscribe(): self
+    {
+        return new self(
+            $this->tools,
+            $this->toolsListChanged,
+            $this->resources || $this->resourcesSubscribe,
+            false,
+            $this->resourcesListChanged,
+            $this->prompts,
+            $this->promptsListChanged,
+            $this->logging,
+            $this->completions,
+            $this->experimental,
+            $this->extensions,
+            $this->tasks,
+        );
+    }
+
+    /**
+     * Returns a copy without what a server cannot offer without sessions: resource subscriptions and logging.
+     *
+     * Resources announced only through the `subscribe` flag stay announced.
+     */
+    public function withoutSessionFeatures(): self
+    {
+        return new self(
+            $this->tools,
+            $this->toolsListChanged,
+            $this->resources || $this->resourcesSubscribe,
+            false,
+            $this->resourcesListChanged,
+            $this->prompts,
+            $this->promptsListChanged,
+            false,
+            $this->completions,
+            $this->experimental,
+            $this->extensions,
+            $this->tasks,
+        );
+    }
+
+    /**
+     * @return array{
+     *     logging?: \stdClass,
+     *     completions?: \stdClass,
+     *     prompts?: \stdClass,
+     *     resources?: \stdClass,
+     *     tools?: \stdClass,
+     *     experimental?: \stdClass,
+     *     extensions?: \stdClass,
+     *     tasks?: \stdClass,
+     * }
+     */
+    public function jsonSerialize(): array
+    {
+        $data = [];
+
+        if ($this->logging) {
+            $data['logging'] = new \stdClass();
+        }
+        if ($this->completions) {
+            $data['completions'] = new \stdClass();
+        }
+
+        if ($this->prompts || $this->promptsListChanged) {
+            $data['prompts'] = new \stdClass();
+            if ($this->promptsListChanged) {
+                $data['prompts']->listChanged = $this->promptsListChanged;
+            }
+        }
+
+        if ($this->resources || $this->resourcesSubscribe || $this->resourcesListChanged) {
+            $data['resources'] = new \stdClass();
+            if ($this->resourcesSubscribe) {
+                $data['resources']->subscribe = $this->resourcesSubscribe;
+            }
+            if ($this->resourcesListChanged) {
+                $data['resources']->listChanged = $this->resourcesListChanged;
+            }
+        }
+
+        if ($this->tools || $this->toolsListChanged) {
+            $data['tools'] = new \stdClass();
+            if ($this->toolsListChanged) {
+                $data['tools']->listChanged = $this->toolsListChanged;
+            }
+        }
+
+        if ($this->experimental) {
+            $data['experimental'] = (object) $this->experimental;
+        }
+
+        if ($this->extensions) {
+            // Each entry is a settings *object*; an extension with no settings
+            // declares `{}`, and an empty PHP array would serialize as `[]`.
+            $data['extensions'] = (object) array_map(
+                static fn (mixed $settings): mixed => \is_array($settings) ? (object) $settings : $settings,
+                $this->extensions,
+            );
+        }
+
+        if (null !== $this->tasks) {
+            $data['tasks'] = self::toObject($this->tasks);
+        }
+
+        return $data;
+    }
+
+    /**
+     * Every node of the `tasks` capability is an object, most of them empty,
+     * which a PHP array would encode as `[]`.
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function toObject(array $data): \stdClass
+    {
+        return (object) array_map(
+            static fn (mixed $value): mixed => \is_array($value) ? self::toObject($value) : $value,
+            $data,
+        );
+    }
+}

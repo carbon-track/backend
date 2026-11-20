@@ -1,0 +1,628 @@
+<?php
+
+/*
+ * This file is part of the official PHP MCP SDK.
+ *
+ * A collaboration between Symfony and the PHP Foundation.
+ *
+ * For the full copyright and license information, please view the LICENSE
+ * file that was distributed with this source code.
+ */
+
+namespace Mcp\Server\Transport;
+
+use Http\Discovery\Psr17FactoryDiscovery;
+use Mcp\Schema\Enum\ProtocolVersion;
+use Mcp\Schema\JsonRpc\Error;
+use Mcp\Server\Authorization\AccessToken;
+use Mcp\Server\Exception\InvalidArgumentException;
+use Mcp\Server\Exception\SessionStoreException;
+use Mcp\Server\Stateless\StatelessProtocol;
+use Mcp\Server\Transport\Http\Middleware\CorsMiddleware;
+use Mcp\Server\Transport\Http\Middleware\DnsRebindingProtectionMiddleware;
+use Mcp\Server\Transport\Http\Middleware\ProtocolVersionMiddleware;
+use Mcp\Server\Transport\Http\MiddlewareRequestHandler;
+use Mcp\Server\Transport\Http\StatelessResponder;
+use Mcp\Server\Wire\InboundClassifier;
+use Psr\Http\Message\ResponseFactoryInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\ServerRequestInterface;
+use Psr\Http\Message\StreamFactoryInterface;
+use Psr\Http\Message\StreamInterface;
+use Psr\Http\Server\MiddlewareInterface;
+use Psr\Log\LoggerInterface;
+use Symfony\Component\Uid\Uuid;
+
+/**
+ * Carries MCP over HTTP, in either protocol era.
+ *
+ * Every request is classified once, before anything else looks at it, and
+ * routed to the lifecycle it belongs to: a per-request envelope claiming a
+ * modern revision goes to {@see StatelessProtocol}, everything else — the
+ * `initialize` handshake, its session's later requests, its `DELETE` teardown —
+ * goes to the session machinery below. One endpoint, both eras, nothing for the
+ * client to pick.
+ *
+ * A server run without a modern-era dispatcher (see
+ * {@see \Mcp\Server\Builder::withoutModernEra()}) serves the handshake era
+ * alone and refuses modern claims, naming the revisions it does serve.
+ *
+ * @extends BaseTransport<ResponseInterface>
+ *
+ * @phpstan-import-type McpFiber from TransportInterface
+ *
+ * @author Kyrian Obikwelu <koshnawaza@gmail.com>
+ */
+class StreamableHttpTransport extends BaseTransport implements StatelessAwareTransportInterface
+{
+    use ReadsBoundedBody;
+
+    public const SESSION_HEADER = 'Mcp-Session-Id';
+    public const PROTOCOL_VERSION_HEADER = 'Mcp-Protocol-Version';
+
+    /**
+     * PSR-7 request attribute holding a non-empty string that identifies the authenticated principal.
+     *
+     * A session only serves the principal that opened it. Without this attribute, the principal is
+     * the one of the request's {@see AccessToken}; set it to identify users another way.
+     */
+    public const PRINCIPAL_ATTRIBUTE = 'mcp.principal';
+
+    /**
+     * Upper bound on the request body read for a POST, guarding against memory
+     * exhaustion from an oversized (or unbounded chunked) payload.
+     */
+    public const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+    private ResponseFactoryInterface $responseFactory;
+    private StreamFactoryInterface $streamFactory;
+    private StatelessResponder $responder;
+    private InboundClassifier $classifier;
+
+    private ?StatelessProtocol $stateless = null;
+
+    /** @var non-empty-list<ProtocolVersion>|null null names every handshake revision */
+    private ?array $handshakeVersions = null;
+
+    private bool $sessionless = false;
+
+    private ProtocolVersion $headerProtocolVersion = ProtocolVersion::DEFAULT_HEADER_VERSION;
+
+    private ?string $immediateResponse = null;
+    private ?int $immediateStatusCode = null;
+
+    private ?string $jsonRpcResponse = null;
+
+    /** @var list<MiddlewareInterface>|null null until {@see self::listen()} resolves the defaults */
+    private ?array $middleware;
+
+    /**
+     * A non-null `$middleware` list replaces {@see self::defaultMiddleware()}.
+     * An empty list is treated as a likely mistake and logs a warning on every
+     * request. When the host application already handles CORS and host
+     * validation, opt out explicitly with `[new PassthroughMiddleware()]`.
+     *
+     * @param iterable<MiddlewareInterface>|null $middleware `null` installs {@see self::defaultMiddleware()}; `[]` disables them and logs a warning
+     */
+    public function __construct(
+        private readonly ServerRequestInterface $request,
+        ?ResponseFactoryInterface $responseFactory = null,
+        ?StreamFactoryInterface $streamFactory = null,
+        ?LoggerInterface $logger = null,
+        ?iterable $middleware = null,
+        private readonly int $maxBodyBytes = self::DEFAULT_MAX_BODY_BYTES,
+    ) {
+        parent::__construct($logger);
+
+        if ($this->maxBodyBytes < 1) {
+            throw new InvalidArgumentException('maxBodyBytes must be at least 1.');
+        }
+
+        $this->responseFactory = $responseFactory ?? Psr17FactoryDiscovery::findResponseFactory();
+        $this->streamFactory = $streamFactory ?? Psr17FactoryDiscovery::findStreamFactory();
+        $this->responder = new StatelessResponder($this->responseFactory, $this->streamFactory, $this->logger);
+        $this->classifier = new InboundClassifier();
+
+        if (null === $middleware) {
+            // Left unresolved: the default stack's version middleware has to
+            // know which revisions this endpoint serves, and the modern
+            // dispatcher arrives after the constructor.
+            $this->middleware = null;
+        } else {
+            $this->middleware = self::normalizeMiddleware($middleware);
+            if ([] === $this->middleware) {
+                $this->logger->warning('Streamable HTTP transport started with an empty middleware list, so the default CORS and DNS rebinding protections are disabled. Pass null (or omit the argument) to use them, or include them via [...StreamableHttpTransport::defaultMiddleware(), $yourMiddleware]. If the host application already provides them, pass [new PassthroughMiddleware()] to opt out without this warning.');
+            }
+
+            // Custom middleware runs before the request's era is classified, so a
+            // ProtocolVersionMiddleware here rejects every modern-era request by
+            // default — it only accepts the handshake versions it was built for.
+            foreach ($this->middleware as $entry) {
+                if ($entry instanceof ProtocolVersionMiddleware) {
+                    $this->logger->warning('A custom middleware list includes ProtocolVersionMiddleware. It runs before the modern (2026-07-28) era is classified and rejects that era\'s requests by default, since it only recognises handshake revisions. Remove it from the custom list — the transport already applies it to handshake-era traffic on its own via self::handshakeMiddleware().');
+
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Secure default middleware stack applied when no `$middleware` is provided to the constructor.
+     *
+     * These run at the edge, before the request's era is known, because what
+     * they enforce — origin policy, DNS rebinding — is true of both eras. The
+     * `MCP-Protocol-Version` header rule is not: it belongs to the handshake
+     * era, so {@see self::handshakeMiddleware()} carries it instead and the
+     * modern leg answers for its own revisions.
+     *
+     * @return list<MiddlewareInterface>
+     */
+    public static function defaultMiddleware(): array
+    {
+        return [
+            new CorsMiddleware(),
+            new DnsRebindingProtectionMiddleware(),
+        ];
+    }
+
+    /**
+     * Middleware applied only to requests classified as handshake-era traffic.
+     *
+     * @return list<MiddlewareInterface>
+     */
+    public static function handshakeMiddleware(): array
+    {
+        return [
+            new ProtocolVersionMiddleware(),
+        ];
+    }
+
+    public function connectStateless(StatelessProtocol $protocol): void
+    {
+        $this->stateless = $protocol;
+    }
+
+    public function setHandshakeVersions(array $versions): void
+    {
+        $this->handshakeVersions = $versions;
+    }
+
+    /**
+     * Serves the handshake era without sessions: no `Mcp-Session-Id` is read or
+     * sent, and `DELETE`, like `GET`, is answered with `405`.
+     *
+     * @internal called by {@see \Mcp\Server\Protocol::connect()} for a server built without {@see \Mcp\Server\Builder::setSession()}
+     */
+    public function setSessionless(bool $sessionless): void
+    {
+        $this->sessionless = $sessionless;
+    }
+
+    /**
+     * The revision the `Mcp-Protocol-Version` header of the handshake-era request names, or the one the spec assumes without it.
+     *
+     * @internal read by {@see \Mcp\Server\Protocol} for a server built without {@see \Mcp\Server\Builder::setSession()}
+     */
+    public function getHeaderProtocolVersion(): ProtocolVersion
+    {
+        return $this->headerProtocolVersion;
+    }
+
+    public function send(string $data, array $context): void
+    {
+        // An error with its own HTTP status rejects the whole POST and is its only answer.
+        if (isset($context['status_code'])) {
+            $this->immediateResponse = $data;
+            $this->immediateStatusCode = $context['status_code'];
+
+            return;
+        }
+
+        $this->jsonRpcResponse = $data;
+    }
+
+    public function listen(): ResponseInterface
+    {
+        $handler = new MiddlewareRequestHandler(
+            $this->middleware ??= self::defaultMiddleware(),
+            \Closure::fromCallable([$this, 'handleRequest']),
+        );
+
+        return $handler->handle($this->request);
+    }
+
+    protected function handleOptionsRequest(): ResponseInterface
+    {
+        return $this->responseFactory->createResponse(204);
+    }
+
+    /**
+     * @param string           $body        the request body, already read and bounded by {@see self::handleRequest()}
+     * @param AccessToken|null $accessToken the token the request was authorized with, see {@see self::accessToken()}
+     * @param string|null      $principal   the principal the request was authenticated as, see {@see self::PRINCIPAL_ATTRIBUTE}
+     */
+    protected function handlePostRequest(string $body, ?AccessToken $accessToken = null, ?string $principal = null): ResponseInterface
+    {
+        $this->handleMessage($body, $this->sessionId, $accessToken, $principal);
+
+        // Consume the immediate response exactly once, so a transport instance
+        // reused for a later POST does not replay it.
+        $immediateResponse = $this->immediateResponse;
+        $immediateStatusCode = $this->immediateStatusCode;
+        $this->immediateResponse = null;
+        $this->immediateStatusCode = null;
+
+        if (null !== $immediateResponse) {
+            $this->jsonRpcResponse = null;
+
+            return $this->responseFactory->createResponse($immediateStatusCode ?? 200)
+                ->withHeader('Content-Type', 'application/json')
+                ->withBody($this->streamFactory->createStream($immediateResponse));
+        }
+
+        if (null !== $this->sessionFiber) {
+            $this->logger->info('Fiber suspended, handling via SSE.');
+
+            return $this->createStreamedResponse();
+        }
+
+        return $this->createJsonResponse();
+    }
+
+    /**
+     * @param string|null $principal the principal the request was authenticated as, see {@see self::PRINCIPAL_ATTRIBUTE}
+     */
+    protected function handleDeleteRequest(?string $principal = null): ResponseInterface
+    {
+        if (!$this->sessionId) {
+            return $this->createErrorResponse(Error::forInvalidRequest(self::SESSION_HEADER.' header is required.'), 400);
+        }
+
+        try {
+            $ended = $this->handleSessionEnd($this->sessionId, $principal);
+        } catch (SessionStoreException $e) {
+            $this->logger->error('Session store is unavailable.', ['session_id' => $this->sessionId->toRfc4122(), 'exception' => $e]);
+
+            return $this->createErrorResponse(Error::forInternalError('Session store is unavailable.'), 503);
+        }
+
+        if (!$ended) {
+            return $this->createErrorResponse(Error::forInvalidRequest('Session not found or has expired.'), 404);
+        }
+
+        return $this->responseFactory->createResponse(200);
+    }
+
+    protected function createJsonResponse(): ResponseInterface
+    {
+        // A POST without a request (a response or a notification) is accepted
+        // without a body, so the session's queued messages stay for a later answer.
+        if (null === $this->jsonRpcResponse) {
+            return $this->responseFactory->createResponse(202);
+        }
+
+        $jsonRpcResponse = $this->jsonRpcResponse;
+        $this->jsonRpcResponse = null;
+
+        // A JSON answer holds the response alone, so messages queued for the
+        // session make it a stream that carries them ahead of the response.
+        $queued = array_column($this->getOutgoingMessages($this->sessionId), 'message');
+
+        if ([] === $queued) {
+            $response = $this->responseFactory->createResponse(200)
+                ->withHeader('Content-Type', 'application/json')
+                ->withBody($this->streamFactory->createStream($jsonRpcResponse));
+        } else {
+            $events = array_map(static fn (string $message): string => "event: message\ndata: {$message}\n\n", [...$queued, $jsonRpcResponse]);
+
+            $response = $this->responseFactory->createResponse(200)
+                ->withHeader('Content-Type', 'text/event-stream')
+                ->withHeader('Cache-Control', 'no-cache')
+                ->withBody($this->streamFactory->createStream(implode('', $events)));
+        }
+
+        if ($this->sessionId && !$this->sessionless) {
+            $response = $response->withHeader(self::SESSION_HEADER, $this->sessionId->toRfc4122());
+        }
+
+        return $response;
+    }
+
+    protected function createStreamedResponse(): ResponseInterface
+    {
+        $fiber = $this->sessionFiber;
+
+        $chunks = function () use ($fiber): \Generator {
+            if (null === $fiber) {
+                return;
+            }
+
+            try {
+                $this->logger->info('SSE: Starting request processing loop');
+
+                while ($fiber->isSuspended()) {
+                    yield from $this->outgoingFrames();
+
+                    $pendingRequests = $this->getPendingRequests($this->sessionId, $fiber);
+
+                    if (empty($pendingRequests)) {
+                        if (null !== $error = $this->resumeHandlerFiber($fiber, $this->sessionId)) {
+                            yield from $this->outgoingFrames();
+                            yield from $this->finalFrame($error);
+
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    $resumed = false;
+                    foreach ($pendingRequests as $pending) {
+                        $requestId = Uuid::fromString($pending['request_id']);
+
+                        $response = $this->checkForResponse($requestId, $this->sessionId);
+
+                        if (null !== $response) {
+                            if (null !== $error = $this->resumeHandlerFiber($fiber, $this->sessionId, $response)) {
+                                yield from $this->outgoingFrames();
+                                yield from $this->finalFrame($error);
+
+                                return;
+                            }
+
+                            $resumed = true;
+                            break;
+                        }
+                    }
+
+                    if (!$resumed) {
+                        // An idle turn: the consumer paces it and keeps it alive.
+                        yield '';
+                    }
+                }
+
+                yield from $this->finalFrame($fiber->getReturn());
+            } finally {
+                $this->sessionFiber = null;
+            }
+        };
+
+        $callback = function () use ($chunks): void {
+            $lastKeepAlive = null;
+
+            foreach ($chunks() as $chunk) {
+                if ('' !== $chunk) {
+                    echo $chunk;
+                    @ob_flush();
+                    flush();
+
+                    continue;
+                }
+
+                // PHP spots a dropped peer only by writing, so an idle turn writes a keep-alive, at most every 0.25s.
+                $now = microtime(true);
+                if (null === $lastKeepAlive || $now - $lastKeepAlive >= 0.25) {
+                    $lastKeepAlive = $now;
+                    echo ": keep-alive\n\n";
+                    @ob_flush();
+                    flush();
+                }
+
+                if ($this->isConnectionAborted()) {
+                    $this->logger->info('SSE: Client disconnected, dropping the suspended request.');
+
+                    return;
+                }
+
+                usleep(100000);
+            }
+        };
+
+        $stream = new CallbackStream($callback, $this->logger, $chunks);
+        $response = $this->responseFactory->createResponse(200)
+            ->withHeader('Content-Type', 'text/event-stream')
+            ->withHeader('Cache-Control', 'no-cache')
+            ->withHeader('Connection', 'keep-alive')
+            ->withHeader('X-Accel-Buffering', 'no')
+            ->withBody($stream);
+
+        if ($this->sessionId && !$this->sessionless) {
+            $response = $response->withHeader(self::SESSION_HEADER, $this->sessionId->toRfc4122());
+        }
+
+        return $response;
+    }
+
+    protected function isConnectionAborted(): bool
+    {
+        return 1 === connection_aborted();
+    }
+
+    /**
+     * @return \Generator<int, string>
+     */
+    private function finalFrame(mixed $finalResult): \Generator
+    {
+        if (null === $finalResult) {
+            return;
+        }
+
+        try {
+            yield "event: message\ndata: ".json_encode($finalResult, \JSON_THROW_ON_ERROR)."\n\n";
+        } catch (\JsonException $e) {
+            $this->logger->error('SSE: Failed to encode final Fiber result.', ['exception' => $e]);
+        }
+    }
+
+    /**
+     * @return \Generator<int, string>
+     */
+    private function outgoingFrames(): \Generator
+    {
+        foreach ($this->getOutgoingMessages($this->sessionId) as $message) {
+            yield "event: message\ndata: {$message['message']}\n\n";
+        }
+    }
+
+    protected function createErrorResponse(Error $jsonRpcError, int $statusCode): ResponseInterface
+    {
+        $payload = json_encode($jsonRpcError, \JSON_THROW_ON_ERROR);
+        $response = $this->responseFactory->createResponse($statusCode)
+            ->withHeader('Content-Type', 'application/json')
+            ->withBody($this->streamFactory->createStream($payload));
+
+        if (405 === $statusCode) {
+            $response = $response->withHeader('Allow', $this->sessionless ? 'POST, OPTIONS' : 'POST, DELETE, OPTIONS');
+        }
+
+        return $response;
+    }
+
+    /**
+     * Reads the request body, bounded by {@see self::$maxBodyBytes}.
+     */
+    private function readBody(StreamInterface $body): ?string
+    {
+        return $this->readBoundedBody($body, $this->maxBodyBytes);
+    }
+
+    /**
+     * @param iterable<MiddlewareInterface> $middleware
+     *
+     * @return list<MiddlewareInterface>
+     */
+    private static function normalizeMiddleware(iterable $middleware): array
+    {
+        $normalized = [];
+        foreach ($middleware as $m) {
+            if (!$m instanceof MiddlewareInterface) {
+                throw new InvalidArgumentException('Streamable HTTP middleware must implement Psr\\Http\\Server\\MiddlewareInterface.');
+            }
+            $normalized[] = $m;
+        }
+
+        return $normalized;
+    }
+
+    private function handleRequest(ServerRequestInterface $request): ResponseInterface
+    {
+        if ('OPTIONS' === $request->getMethod()) {
+            return $this->handleOptionsRequest();
+        }
+
+        // Read once, here: the era decision needs the body, and so does
+        // whichever leg it routes to. A PSR-7 stream over `php://input` cannot
+        // be read twice.
+        $body = null;
+        if ('POST' === $request->getMethod()) {
+            $body = $this->readBody($request->getBody());
+
+            if (null === $body) {
+                $this->logger->warning('Rejected POST body exceeding the maximum allowed size.', ['limit' => $this->maxBodyBytes]);
+
+                return $this->createErrorResponse(Error::forBodyTooLarge($this->maxBodyBytes), 413);
+            }
+        }
+
+        $classification = $this->classifier->classify($request->getMethod(), $body, self::headers($request));
+
+        if ($classification->isRejected()) {
+            \assert(null !== $classification->error);
+
+            return $this->responder->error($classification->error, $classification->httpStatus);
+        }
+
+        if ($classification->modern) {
+            return $this->handleModernRequest($request, $body ?? '', $classification->claimedVersion ?? '');
+        }
+
+        // The version-header rule only reaches the traffic it is about. Running
+        // it at the edge would let it answer a modern claim with the handshake
+        // era's revision list, ahead of the leg that knows better.
+        return (new MiddlewareRequestHandler(
+            self::handshakeMiddleware(),
+            fn (ServerRequestInterface $handshake): ResponseInterface => $this->handleHandshakeRequest($handshake, $body),
+        ))->handle($request);
+    }
+
+    private function handleHandshakeRequest(ServerRequestInterface $request, ?string $body): ResponseInterface
+    {
+        // Already validated by ProtocolVersionMiddleware.
+        $this->headerProtocolVersion = ProtocolVersion::tryFrom($request->getHeaderLine(self::PROTOCOL_VERSION_HEADER)) ?? ProtocolVersion::DEFAULT_HEADER_VERSION;
+
+        if ($this->sessionless) {
+            return match ($request->getMethod()) {
+                'POST' => $this->handlePostRequest($body ?? '', self::accessToken($request)),
+                default => $this->createErrorResponse(Error::forInvalidRequest('Method Not Allowed'), 405),
+            };
+        }
+
+        $sessionIdHeaders = $request->getHeader(self::SESSION_HEADER);
+        if (\count($sessionIdHeaders) > 1) {
+            return $this->createErrorResponse(Error::forInvalidRequest(self::SESSION_HEADER.' header must not be repeated.'), 400);
+        }
+
+        $sessionIdString = $sessionIdHeaders[0] ?? '';
+
+        try {
+            $this->sessionId = $sessionIdString ? Uuid::fromString($sessionIdString) : null;
+            // Symfony UID 5.4/6.4 throw the global parent; newer versions throw a namespaced subclass.
+        } catch (\InvalidArgumentException) {
+            return $this->createErrorResponse(Error::forInvalidRequest(self::SESSION_HEADER.' header must be a valid UUID.'), 400);
+        }
+
+        $principal = $request->getAttribute(self::PRINCIPAL_ATTRIBUTE) ?? self::accessToken($request)?->getPrincipal();
+
+        if (null !== $principal && (!\is_string($principal) || '' === $principal)) {
+            $this->logger->error(\sprintf('The "%s" request attribute must be a non-empty string, got "%s".', self::PRINCIPAL_ATTRIBUTE, get_debug_type($principal)));
+
+            return $this->createErrorResponse(Error::forInternalError('Internal error'), 500);
+        }
+
+        return match ($request->getMethod()) {
+            'POST' => $this->handlePostRequest($body ?? '', self::accessToken($request), $principal),
+            'DELETE' => $this->handleDeleteRequest($principal),
+            default => $this->createErrorResponse(Error::forInvalidRequest('Method Not Allowed'), 405),
+        };
+    }
+
+    /**
+     * Answers a request that claimed the modern era's per-request envelope.
+     */
+    private function handleModernRequest(ServerRequestInterface $request, string $body, string $claimedVersion): ResponseInterface
+    {
+        if (null === $this->stateless) {
+            return $this->responder->error(
+                Error::forUnsupportedProtocolVersion($claimedVersion, $this->handshakeVersions ?? ProtocolVersion::handshakeVersions()),
+                400,
+            );
+        }
+
+        return $this->responder->respond($this->stateless->handle($body, self::headers($request), self::accessToken($request)));
+    }
+
+    /**
+     * The token an authorization middleware validated, see {@see Http\Middleware\AuthorizationMiddleware}.
+     */
+    private static function accessToken(ServerRequestInterface $request): ?AccessToken
+    {
+        $accessToken = $request->getAttribute(AccessToken::class);
+
+        return $accessToken instanceof AccessToken ? $accessToken : null;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function headers(ServerRequestInterface $request): array
+    {
+        $headers = [];
+
+        foreach ($request->getHeaders() as $name => $values) {
+            $headers[$name] = implode(', ', $values);
+        }
+
+        return $headers;
+    }
+}
