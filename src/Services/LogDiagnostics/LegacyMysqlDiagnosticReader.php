@@ -21,8 +21,10 @@ final class LegacyMysqlDiagnosticReader
 
     public function select(string $sql, array $bindings, int $deadline): array
     {
+        $component = 'legacy_mysql_connect';
         try {
             $reader = $this->reader ??= $this->connect($deadline);
+            $component = 'legacy_mysql_bindings';
             $values = [$sql];
             $variables = [];
             $types = 's';
@@ -41,23 +43,26 @@ final class LegacyMysqlDiagnosticReader
             $setupSql = implode(', ', array_merge(['@ct_diag_sql = ?'], $assignments));
             $statement = $reader->prepare('SET ' . $setupSql);
             if ($statement === false) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable($component);
             }
             try {
                 if (!$statement->bind_param($types, ...$values) || !$statement->execute()) {
-                    throw DiagnosticProblem::unavailable();
+                    throw DiagnosticProblem::unavailable($component);
                 }
             } finally {
                 $statement->close();
             }
 
-            $this->executeUntil($reader, 'PREPARE ct_diagnostic FROM @ct_diag_sql', $deadline);
+            $component = 'legacy_mysql_prepare';
+            $this->executeUntil($reader, 'PREPARE ct_diagnostic FROM @ct_diag_sql', $deadline, $component);
+            $component = 'legacy_mysql_execute';
             $execute = $variables === []
                 ? 'EXECUTE ct_diagnostic'
                 : 'EXECUTE ct_diagnostic USING ' . implode(', ', $variables);
-            $result = $this->executeUntil($reader, $execute, $deadline);
+            $result = $this->executeUntil($reader, $execute, $deadline, $component);
+            $component = 'legacy_mysql_result';
             if (!$result instanceof mysqli_result) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable($component);
             }
 
             $rows = [];
@@ -66,7 +71,7 @@ final class LegacyMysqlDiagnosticReader
                     $rows[] = $row;
                 }
                 if ($row === false) {
-                    throw DiagnosticProblem::unavailable();
+                    throw DiagnosticProblem::unavailable($component);
                 }
             } finally {
                 $result->free();
@@ -74,10 +79,13 @@ final class LegacyMysqlDiagnosticReader
             $this->remainingMicroseconds($deadline);
             return $rows;
         } catch (Throwable $failure) {
-            if (!$failure instanceof DiagnosticProblem && hrtime(true) >= $deadline) {
+            if ($failure instanceof DiagnosticProblem) {
+                throw $failure;
+            }
+            if (hrtime(true) >= $deadline) {
                 throw DiagnosticProblem::queryTimeout();
             }
-            throw $failure;
+            throw DiagnosticProblem::unavailable($component, $failure);
         }
     }
 
@@ -93,56 +101,76 @@ final class LegacyMysqlDiagnosticReader
     {
         $timeoutSeconds = (int) ceil($this->remainingMicroseconds($deadline) / 1000000);
         if (!function_exists('mysqli_poll') || !defined('MYSQLI_ASYNC')) {
-            throw DiagnosticProblem::unavailable();
+            throw DiagnosticProblem::unavailable('legacy_mysql_driver');
         }
 
         $config = $this->db->getConfig();
         $host = $config['host'] ?? 'localhost';
+        $socket = (string) ($config['unix_socket'] ?? '');
+        if (DIRECTORY_SEPARATOR === '/') {
+            if ($socket === '' && $host === 'localhost') {
+                $socket = (string) ini_get('pdo_mysql.default_socket');
+            }
+            if ($socket !== '' && !str_starts_with($host, 'p:')) {
+                $host = 'localhost';
+            }
+        }
         $reader = mysqli_init();
         if (str_starts_with($host, 'p:') || $reader === false
             || !$reader->options(MYSQLI_OPT_CONNECT_TIMEOUT, $timeoutSeconds)
             || !$reader->options(MYSQLI_OPT_READ_TIMEOUT, $timeoutSeconds)
             || !$reader->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, true)
             || !$reader->real_connect($host, $config['username'], $config['password'], $config['database'],
-                (int) ($config['port'] ?? 3306), $config['unix_socket'] ?? null)) {
-            throw DiagnosticProblem::unavailable();
+                (int) ($config['port'] ?? 3306), $socket !== '' ? $socket : null)) {
+            throw DiagnosticProblem::unavailable('legacy_mysql_connect');
         }
 
         // Verify the connection is cancellable by the same account on the same server.
         $identitySql = 'SELECT @@server_uuid AS server_uuid, CURRENT_USER() AS account';
         $marker = bin2hex(random_bytes(16));
-        $session = $this->db->selectOne(
-            $identitySql . ', @@character_set_connection AS charset, @@collation_connection AS collation_name, '
-                . '@@time_zone AS time_zone, @@sql_mode AS sql_mode, (@ct_diag_cancel_guard := ?) AS cancel_guard',
-            [$marker],
-            false
-        );
-        $identity = $reader->query($identitySql);
+        try {
+            $session = $this->db->selectOne(
+                $identitySql . ', @@character_set_connection AS charset, @@collation_connection AS collation_name, '
+                    . '@@time_zone AS time_zone, @@sql_mode AS sql_mode, (@ct_diag_cancel_guard := ?) AS cancel_guard',
+                [$marker],
+                false
+            );
+            $identity = $reader->query($identitySql);
+        } catch (Throwable $failure) {
+            throw DiagnosticProblem::unavailable('legacy_mysql_identity', $failure);
+        }
         if (!$identity instanceof mysqli_result) {
-            throw DiagnosticProblem::unavailable();
+            throw DiagnosticProblem::unavailable('legacy_mysql_identity');
         }
         $actual = $identity->fetch_assoc();
         $identity->free();
         if ($session === null || !$actual
             || $session->cancel_guard !== $marker
             || $session->server_uuid !== $actual['server_uuid']
-            || $session->account !== $actual['account']
-            || !$reader->set_charset($session->charset)
-            || !$reader->execute_query('SET SESSION collation_connection = ?, SESSION time_zone = ?, SESSION sql_mode = ?',
-                [$session->collation_name, $session->time_zone, $session->sql_mode])) {
-            throw DiagnosticProblem::unavailable();
+            || $session->account !== $actual['account']) {
+            throw DiagnosticProblem::unavailable('legacy_mysql_identity');
+        }
+        try {
+            $configured = $reader->set_charset($session->charset)
+                && $reader->execute_query('SET SESSION collation_connection = ?, SESSION time_zone = ?, SESSION sql_mode = ?',
+                    [$session->collation_name, $session->time_zone, $session->sql_mode]);
+        } catch (Throwable $failure) {
+            throw DiagnosticProblem::unavailable('legacy_mysql_session', $failure);
+        }
+        if (!$configured) {
+            throw DiagnosticProblem::unavailable('legacy_mysql_session');
         }
         $this->remainingMicroseconds($deadline);
         $this->controlMarker = $marker;
         return $reader;
     }
 
-    private function executeUntil(mysqli $reader, string $sql, int $deadline): mysqli_result|true
+    private function executeUntil(mysqli $reader, string $sql, int $deadline, string $component): mysqli_result|true
     {
         $this->remainingMicroseconds($deadline);
         try {
             if ($reader->query($sql, MYSQLI_ASYNC) !== true) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable($component);
             }
             $remaining = $this->remainingMicroseconds($deadline);
             $read = $errors = [$reader];
@@ -152,12 +180,12 @@ final class LegacyMysqlDiagnosticReader
                 throw DiagnosticProblem::queryTimeout();
             }
             if ($ready === false || $read === []) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable($component);
             }
             $this->remainingMicroseconds($deadline);
             $result = $reader->reap_async_query();
             if ($result === false) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable($component);
             }
             return $result;
         } catch (Throwable $failure) {
@@ -171,7 +199,7 @@ final class LegacyMysqlDiagnosticReader
     {
         $threadId = (int) $reader->thread_id;
         if ($threadId < 1 || $this->controlMarker === null) {
-            throw DiagnosticProblem::unavailable();
+            throw DiagnosticProblem::unavailable('legacy_mysql_cancel');
         }
         try {
             // The marker detects a replaced connection. The transaction prevents retrying KILL on a new connection.
@@ -179,13 +207,13 @@ final class LegacyMysqlDiagnosticReader
                 $session = $this->db->selectOne('SELECT @ct_diag_cancel_guard AS cancel_guard', [], false);
                 if (($session->cancel_guard ?? null) !== $this->controlMarker
                     || !$this->db->unprepared('KILL CONNECTION ' . $threadId)) {
-                    throw DiagnosticProblem::unavailable();
+                    throw DiagnosticProblem::unavailable('legacy_mysql_cancel');
                 }
             });
         } catch (QueryException $error) {
             // ER_NO_SUCH_THREAD means the dedicated connection has already stopped.
             if ((int) ($error->errorInfo[1] ?? 0) !== 1094) {
-                throw DiagnosticProblem::unavailable();
+                throw DiagnosticProblem::unavailable('legacy_mysql_cancel', $error);
             }
         }
     }

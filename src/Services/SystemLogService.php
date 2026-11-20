@@ -47,12 +47,15 @@ class SystemLogService
             }
             $requestBody = $this->serializeBody($data['request_body'] ?? null);
             $responseBody = $this->serializeBody($data['response_body'] ?? null);
+            $serverParams = $data['server_params'] ?? [];
+            $ipAddress = ClientIpResolver::validIp($data['ip_address'] ?? null)
+                ?? ClientIpResolver::fromServerParams($serverParams);
             $serverMeta = $this->buildServerMeta(
-                $data['server_params'] ?? [],
+                $serverParams,
                 [
                     'method' => $data['method'] ?? null,
                     'path' => $data['path'] ?? null,
-                    'ip_address' => $data['ip_address'] ?? null,
+                    'ip_address' => $ipAddress,
                 ]
             );
             $userUuid = $this->resolveUserUuid($data);
@@ -68,7 +71,7 @@ class SystemLogService
                 $data['status_code'] ?? null,
                 $data['user_id'] ?? null,
                 $userUuid,
-                $data['ip_address'] ?? null,
+                $ipAddress,
                 $data['user_agent'] ?? null,
                 $data['duration_ms'] ?? null,
                 $requestBody,
@@ -113,7 +116,8 @@ class SystemLogService
         $server['_summary'] = [
             'method' => $this->resolveSummaryMethod($server, $summaryOverride),
             'uri' => $this->resolveSummaryUri($server, $summaryOverride),
-            'ip' => $this->resolveSummaryIp($server, $summaryOverride),
+            'ip' => array_key_exists('ip_address', $summaryOverride)
+                ? $summaryOverride['ip_address'] : ClientIpResolver::fromServerParams($server),
         ];
         $json = json_encode($server, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if ($json === false) { return '{}'; }
@@ -147,26 +151,6 @@ class SystemLogService
             $server['PATH_INFO'] ?? null,
             $_SERVER['PATH_INFO'] ?? null,
         ]);
-    }
-
-    private function resolveSummaryIp(array $server, array $context): ?string
-    {
-        return ClientIpResolver::fromServerParams($server)
-            ?? $this->firstValidIp([$context['ip_address'] ?? null]);
-    }
-
-    private function firstValidIp(array $candidates): ?string
-    {
-        foreach ($candidates as $raw) {
-            if (!is_string($raw)) {
-                continue;
-            }
-            $first = trim(explode(',', trim($raw))[0]);
-            if ($first !== '' && filter_var($first, FILTER_VALIDATE_IP)) {
-                return $first;
-            }
-        }
-        return null;
     }
 
     private function firstNonEmptyString(array $candidates): ?string

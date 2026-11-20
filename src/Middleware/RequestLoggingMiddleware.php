@@ -76,13 +76,21 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         $_SERVER['HTTP_X_REQUEST_ID'] = $requestId;
 
         if ($diagnosticPath !== null) {
+            $context = new LogDiagnosticRequest();
+            $request = $request->withAttribute(LogDiagnosticRequest::class, $context);
             $response = $handler->handle($request);
+            $serverParams = ['REQUEST_URI' => $diagnosticPath];
+            if ($context->query !== []) {
+                $serverParams['_diagnostic'] = $context->query;
+            }
             $this->systemLogService->log([
                 'request_id' => $requestId,
                 'method' => $request->getMethod(),
                 'path' => $diagnosticPath,
-                'server_params' => ['REQUEST_URI' => $diagnosticPath],
+                'server_params' => $serverParams,
                 'status_code' => $response->getStatusCode(),
+                'user_id' => $context->adminId,
+                'ip_address' => ClientIpResolver::fromRequest($request, null),
                 'duration_ms' => round((microtime(true) - $start) * 1000, 2),
             ]);
             return $response->withHeader('X-Request-ID', $requestId)->withHeader('Cache-Control', 'no-store');
@@ -113,7 +121,7 @@ class RequestLoggingMiddleware implements MiddlewareInterface
 
         if (!$skip) {
             $serverParams = $this->snapshotServerParams($request);
-            $ipAddress = $this->resolveClientIp($serverParams);
+            $ipAddress = ClientIpResolver::fromRequest($request, null);
 
             $duration = (microtime(true) - $start) * 1000.0;
             $respBody = null;
@@ -215,11 +223,4 @@ class RequestLoggingMiddleware implements MiddlewareInterface
         return array_replace($globals, $psrServer);
     }
 
-    /**
-     * Resolve client IP preferring Cloudflare's connecting IP headers when present.
-     */
-    private function resolveClientIp(array $serverParams): ?string
-    {
-        return ClientIpResolver::fromServerParams($serverParams);
-    }
 }

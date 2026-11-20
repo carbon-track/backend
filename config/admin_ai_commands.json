@@ -202,7 +202,7 @@
       "id": "systemLogs",
       "label": "System Logs",
       "route": "/admin/system-logs",
-      "description": "Inspect audit logs and request traces. Open AI diagnostic access to manage external-agent log grants, credentials, and access history. Viewing enabled diagnostic settings records log_diagnostic_settings_viewed.",
+      "description": "Inspect audit logs and request traces, including diagnostic authorization owners and failure details. Open AI diagnostic access to copy MCP setup instructions for an agent and manage diagnostic authorizations, credentials and access history. Viewing enabled diagnostic settings records log_diagnostic_settings_viewed.",
       "keywords": [
         "log",
         "日志",
@@ -213,7 +213,9 @@
         "diagnostic authorization",
         "AI 诊断授权",
         "日志诊断授权",
-        "外部 Agent 授权"
+        "外部 Agent 授权",
+        "MCP setup instructions",
+        "复制接入说明"
       ]
     },
     {

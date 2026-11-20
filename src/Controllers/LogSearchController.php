@@ -34,8 +34,10 @@ class LogSearchController
     private const KW_WHERE = 'WHERE ';
     private const LIMIT_PARAM = ':limit';
     private const OFFSET_PARAM = ':offset';
+    private const DIAGNOSTIC_AUDIT_DATA = "CASE WHEN operation_category = 'log_diagnostics' THEN data END AS data";
+    private const DIAGNOSTIC_ERROR_CONTEXT = "CASE WHEN error_type = 'LogDiagnosticFailure' THEN client_server END AS diagnostic_context";
 
-    public function __construct(Connection $db, AuthService $authService, AuditLogService $auditLogService, ErrorLogService $errorLogService = null)
+    public function __construct(Connection $db, AuthService $authService, AuditLogService $auditLogService, ?ErrorLogService $errorLogService = null)
     {
         $this->db = $db;
         $this->authService = $authService;
@@ -286,9 +288,17 @@ class LogSearchController
                 if ($rid === null) {
                     return $this->json($response, ['success'=>false,'message'=>'request_id required'], 400);
                 }
-                $system = $this->fetchByRequestId('system_logs', $rid, ['id','request_id','method','path','status_code','user_id','duration_ms','created_at']);
-                $audit = $this->fetchByRequestId('audit_logs', $rid, ['id','conversation_id','request_id','action','operation_category','actor_type','status','user_id','ip_address','created_at']);
-                $error = $this->fetchByRequestId('error_logs', $rid, ['id','request_id','error_type','error_message','error_file','error_line','error_time']);
+                $system = $this->fetchByRequestId('system_logs', $rid, [
+                    'id', 'request_id', 'method', 'path', 'status_code', 'user_id', 'ip_address', 'duration_ms', 'created_at',
+                ]);
+                $audit = $this->fetchByRequestId('audit_logs', $rid, [
+                    'id', 'conversation_id', 'request_id', 'action', 'operation_category', 'actor_type', 'status',
+                    'user_id', 'ip_address', 'endpoint', 'affected_id', 'response_code', 'created_at', self::DIAGNOSTIC_AUDIT_DATA,
+                ]);
+                $error = $this->fetchByRequestId('error_logs', $rid, [
+                    'id', 'request_id', 'error_type', 'error_message', 'error_file', 'error_line', 'error_time',
+                    self::DIAGNOSTIC_ERROR_CONTEXT,
+                ]);
                 $llm = $this->fetchByRequestId('llm_logs', $rid, ['id','conversation_id','request_id','turn_no','actor_type','actor_id','source','model','status','prompt','response_id','total_tokens','latency_ms','created_at']);
 
                 $this->logAudit('admin_logs_related_viewed', $admin, $request, [
@@ -485,8 +495,9 @@ class LogSearchController
         }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-    // Include old_data & new_data for diff visualization on frontend (may be NULL for many rows)
-    $sql = "SELECT id, user_id, conversation_id, request_id, actor_type, action, operation_category, status, ip_address, created_at, old_data, new_data FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT id, user_id, conversation_id, request_id, actor_type, action, operation_category, status, ip_address,
+            endpoint, affected_id, response_code, created_at, old_data, new_data, " . self::DIAGNOSTIC_AUDIT_DATA
+            . " FROM audit_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $queryBindings = [];
         foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
         $queryBindings[self::LIMIT_PARAM] = (int) $limit;
@@ -528,7 +539,8 @@ class LogSearchController
         }
         $where = $conditions ? (self::KW_WHERE . implode(self::SEP_AND, $conditions)) : '';
         $offset = ($page - 1) * $limit;
-        $sql = "SELECT id, request_id, error_type, error_message, error_file, error_line, error_time FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT id, request_id, error_type, error_message, error_file, error_line, error_time, "
+            . self::DIAGNOSTIC_ERROR_CONTEXT . " FROM error_logs {$where} ORDER BY id DESC LIMIT :limit OFFSET :offset";
         $queryBindings = [];
         foreach ($params as $k=>$v) { $queryBindings[':' . $k] = $v; }
         $queryBindings[self::LIMIT_PARAM] = (int) $limit;

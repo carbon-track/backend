@@ -66,7 +66,8 @@ class ErrorLogService
         if (LogDiagnosticRequest::path($request->getUri()->getPath()) !== null) {
             $reason = $type === 'LogDiagnosticFailure' && preg_match('/^[a-z_]{1,60}$/D', $message) === 1
                 ? $message : 'request_failed';
-            return $this->logDiagnosticError($request, $reason);
+            $diagnostic = $context['diagnostic'] ?? [];
+            return $this->logDiagnosticError($request, $reason, is_array($diagnostic) ? $diagnostic : []);
         }
 
         return $this->insertLog([
@@ -86,13 +87,25 @@ class ErrorLogService
         ]);
     }
 
-    private function logDiagnosticError(Request $request, string $reason): ?int
+    private function logDiagnosticError(Request $request, string $reason, array $diagnostic = []): ?int
     {
+        $fields = [
+            'failure_stage', 'failure_component', 'exception_type', 'sqlstate', 'driver_code',
+            'duration_ms', 'channel', 'tool', 'authorization_id', 'credential_id', 'error_file', 'error_line',
+        ];
+        $details = array_filter(
+            array_intersect_key($diagnostic, array_fill_keys($fields, true)),
+            static fn (mixed $value): bool => is_int($value)
+                || (is_string($value) && preg_match('/\A[A-Za-z0-9_.\\\\-]{1,150}\z/', $value) === 1)
+        );
         return $this->insertLog([
             'error_type' => 'LogDiagnosticFailure',
             'error_message' => $reason,
+            'error_file' => $details['error_file'] ?? null,
+            'error_line' => $details['error_line'] ?? null,
             'error_time' => date(self::DATE_FMT),
             'script_name' => LogDiagnosticRequest::path($request->getUri()->getPath()),
+            'client_server' => $details === [] ? null : $this->safeJson(['_diagnostic' => $details]),
             'request_id' => LogDiagnosticRequest::requestId($request),
         ]);
     }

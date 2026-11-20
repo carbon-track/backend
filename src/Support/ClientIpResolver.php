@@ -63,19 +63,21 @@ final class ClientIpResolver
     private static function firstValidIp(array $candidates): ?string
     {
         foreach ($candidates as $raw) {
-            if (!is_string($raw)) {
-                continue;
-            }
-            $value = trim($raw);
-            if ($value === '') {
-                continue;
-            }
-            $first = trim(explode(',', $value)[0]);
-            if ($first !== '' && filter_var($first, FILTER_VALIDATE_IP)) {
-                return $first;
+            $ip = self::validIp($raw);
+            if ($ip !== null) {
+                return $ip;
             }
         }
         return null;
+    }
+
+    public static function validIp(mixed $raw): ?string
+    {
+        if (!is_string($raw)) {
+            return null;
+        }
+        $first = trim(explode(',', $raw, 2)[0]);
+        return filter_var($first, FILTER_VALIDATE_IP) !== false ? $first : null;
     }
 
     private static function resolveForwardedForClient(string $header): ?string

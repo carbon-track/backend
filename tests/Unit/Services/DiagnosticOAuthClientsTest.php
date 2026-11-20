@@ -60,6 +60,68 @@ final class DiagnosticOAuthClientsTest extends TestCase
         $clients->validateRedirect($clients->registered(self::CLIENT_ID), self::REDIRECT, true);
     }
 
+    public function testCimdAndRegistrationAcceptTheRuntimeLoopbackPort(): void
+    {
+        $redirects = ['http://127.0.0.1/callback', 'http://[::1]/callback?flow=agent'];
+        $document = [
+            'client_id' => self::CLIENT_ID,
+            'client_name' => 'Fixture native client',
+            'redirect_uris' => $redirects,
+            'token_endpoint_auth_methods_supported' => ['none', 'private_key_jwt'],
+            'jwks_uri' => self::JWKS_URI,
+        ];
+        [$clients] = $this->clients($document, $document, $document);
+        $client = array_replace($clients->registered(self::CLIENT_ID), ['redirect_uris' => $redirects]);
+        foreach ([
+            'http://127.0.0.1:30471/callback',
+            'http://127.0.0.1:17643/callback',
+            'http://[::1]:65535/callback?flow=agent',
+        ] as $uri) {
+            self::assertSame($uri, $clients->validateRedirect($client, $uri, true));
+        }
+    }
+
+    /** @dataProvider invalidLoopbackRedirects */
+    public function testDynamicLoopbackMatchingPreservesTheRegisteredUri(string $registered, string $requested): void
+    {
+        [$clients] = $this->clients();
+        $client = array_replace($clients->registered(self::CLIENT_ID), ['redirect_uris' => [$registered]]);
+        $this->expectException(DiagnosticProblem::class);
+        $this->expectExceptionMessage('The OAuth redirect URI is invalid.');
+        $clients->validateRedirect($client, $requested, false);
+    }
+
+    public static function invalidLoopbackRedirects(): array
+    {
+        return [
+            'path' => ['http://127.0.0.1/callback', 'http://127.0.0.1:17643/other'],
+            'query' => ['http://127.0.0.1/callback?flow=agent', 'http://127.0.0.1:17643/callback?flow=other'],
+            'host' => ['http://127.0.0.1/callback', 'http://localhost:17643/callback'],
+            'userinfo' => ['http://127.0.0.1/callback', 'http://127.0.0.1:17643@agent.diagnostics.test/callback'],
+            'fixed port' => ['http://127.0.0.1:17643/callback', 'http://127.0.0.1:30471/callback'],
+            'zero port' => ['http://127.0.0.1/callback', 'http://127.0.0.1:0/callback'],
+            'out of range port' => ['http://127.0.0.1/callback', 'http://127.0.0.1:65536/callback'],
+            'remote HTTPS' => [self::REDIRECT, 'https://connector.diagnostics.test:8443/callback'],
+        ];
+    }
+
+    public function testCimdStillRequiresItsOwnMatchingLoopbackRegistration(): void
+    {
+        [$clients] = $this->clients([
+            'client_id' => self::CLIENT_ID,
+            'client_name' => 'Fixture native client',
+            'redirect_uris' => ['http://127.0.0.1:17643/callback'],
+            'token_endpoint_auth_methods_supported' => ['none', 'private_key_jwt'],
+            'jwks_uri' => self::JWKS_URI,
+        ]);
+        $client = array_replace($clients->registered(self::CLIENT_ID), [
+            'redirect_uris' => ['http://127.0.0.1/callback'],
+        ]);
+        $this->expectException(DiagnosticProblem::class);
+        $this->expectExceptionMessage('OAuth client validation failed.');
+        $clients->validateRedirect($client, 'http://127.0.0.1:30471/callback', true);
+    }
+
     public function testPrivateKeyAssertionChecksClaimsAndReturnsReplayKey(): void
     {
         $key = $this->signingKey(['private_key_type' => OPENSSL_KEYTYPE_RSA]);

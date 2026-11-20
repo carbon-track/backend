@@ -6,6 +6,7 @@ namespace CarbonTrack\Services\LogDiagnostics;
 
 use CarbonTrack\Services\AuditLogService;
 use CarbonTrack\Services\ErrorLogService;
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\LogDiagnosticRequest;
 use CarbonTrack\Support\Uuid;
 use Illuminate\Database\Connection;
@@ -238,19 +239,40 @@ final class DiagnosticAccess
         $deadline = $started + $this->config->timeoutMs * 1000000;
         $requestId = LogDiagnosticRequest::requestId($request) ?? Uuid::generateV4();
         $request = $request->withAttribute('request_id', $requestId);
-        $identity = ['channel' => $channel, 'tool' => $tool, 'filter_keys' => self::safeFilterNames($input)];
-        $credential = null;
+        $identity = [
+            'channel' => $channel,
+            'tool' => $tool,
+            'filter_keys' => self::safeFilterNames($input),
+            'timeout_ms' => $this->config->timeoutMs,
+        ];
+        $sessionId = null;
+        $adminId = null;
+        $stage = 'credential_lookup';
         $reserved = false;
         try {
             $credential = $this->findCredential($request, $channel);
             $sessionId = (int) $credential->session_id;
             $credentialId = (int) $credential->id;
+            $adminId = isset($credential->owner_id) ? (int) $credential->owner_id : null;
             $identity['credential_id'] = $credentialId;
+            if ($credential->client_id !== null) {
+                $identity['client_id'] = $credential->client_id;
+            }
+            $stage = 'reserve';
             $session = $this->reserve($sessionId, $credentialId, $requestId);
             $reserved = true;
+            $adminId = (int) $session->created_by;
+            $identity += [
+                'authorized_log_types' => explode(',', $session->log_types),
+                'authorized_log_from' => DiagnosticConfig::iso((int) $session->log_from),
+                'authorized_log_to' => DiagnosticConfig::iso((int) $session->log_to),
+            ];
+            $stage = 'read';
             $result = $query($session, $deadline);
+            $stage = 'encode';
             $size = strlen(json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
-            $this->db->transaction(function () use ($sessionId, $credentialId, $requestId, $identity, $request, $result, $size, $started, $deadline): void {
+            $stage = 'delivery';
+            $this->db->transaction(function () use ($sessionId, $credentialId, $requestId, $identity, $request, $result, $size, $started, $deadline, $adminId): void {
                 $this->lockIdentity($sessionId, $credentialId);
                 if (hrtime(true) >= $deadline) {
                     throw DiagnosticProblem::queryTimeout();
@@ -259,7 +281,7 @@ final class DiagnosticAccess
                     'log_count' => $result['log_count'],
                     'response_bytes' => $size,
                     'duration_ms' => self::elapsedMs($started),
-                ]);
+                ], $adminId);
                 $this->db->table(self::SESSIONS)->where('id', $sessionId)->incrementEach([
                     'query_count' => 1, 'result_bytes' => $size,
                 ]);
@@ -268,7 +290,11 @@ final class DiagnosticAccess
             $reserved = false;
             return $result;
         } catch (\Throwable $e) {
-            $problem = $e instanceof DiagnosticProblem ? $e : DiagnosticProblem::unavailable();
+            $problem = $e instanceof DiagnosticProblem ? $e : DiagnosticProblem::unavailable(previous: $e);
+            $failure = $problem->logDetails() + [
+                'failure_stage' => $stage,
+                'duration_ms' => self::elapsedMs($started),
+            ];
             if ($reserved) {
                 try {
                     $this->db->table(self::LEASES)->where('request_id', $requestId)->delete();
@@ -277,14 +303,18 @@ final class DiagnosticAccess
                 }
             }
             try {
-                $this->record($request, 'query', $credential === null ? null : (int) $credential->session_id, $identity + [
-                    'reason' => $problem->reason,
-                    'duration_ms' => self::elapsedMs($started),
-                ], status: $problem->status);
+                $this->record($request, 'query', $sessionId, $identity + $failure, $adminId, $problem->status);
             } catch (\Throwable) {
                 // The diagnostic result remains blocked when the audit store is unavailable.
             }
-            $this->errors->logError('LogDiagnosticFailure', $problem->reason, $request);
+            $this->errors->logError('LogDiagnosticFailure', $problem->reason, $request, [
+                'diagnostic' => $failure + [
+                    'channel' => $channel,
+                    'tool' => $tool,
+                    'authorization_id' => $sessionId,
+                    'credential_id' => $identity['credential_id'] ?? null,
+                ],
+            ]);
             throw $problem;
         }
     }
@@ -297,6 +327,16 @@ final class DiagnosticAccess
         ?int $adminId = null,
         int $status = 200
     ): void {
+        $context = LogDiagnosticRequest::context($request);
+        if ($context !== null) {
+            $context->adminId = $adminId ?? $context->adminId;
+            if ($action === 'query') {
+                $context->query = [
+                    'authorization_id' => $sessionId,
+                    'response_code' => $status,
+                ] + $details;
+            }
+        }
         $saved = $this->audit->logAudit([
             'action' => 'log_diagnostic_' . $action,
             'operation_category' => DiagnosticConfig::AUDIT_CATEGORY,
@@ -312,7 +352,7 @@ final class DiagnosticAccess
             'referrer' => '',
             'session_id' => '',
             'user_agent' => '',
-            'ip_address' => '',
+            'ip_address' => ClientIpResolver::fromRequest($request, null) ?? '',
             'data' => $details,
         ]);
         if (!$saved || $this->audit->getLastInsertId() === null) {
@@ -327,8 +367,10 @@ final class DiagnosticAccess
             throw DiagnosticProblem::unauthorized();
         }
         $expected = $channel === 'mcp' ? $this->config->resource() : $this->config->apiOrigin . DiagnosticConfig::API;
-        $credential = $this->db->table(self::CREDENTIALS)->useWritePdo()
-            ->where('token_hash', hash('sha256', $matches[1]))->first();
+        $credential = $this->db->table(self::CREDENTIALS . ' as credentials')->useWritePdo()
+            ->leftJoin(self::SESSIONS . ' as grants', 'grants.id', '=', 'credentials.session_id')
+            ->where('credentials.token_hash', hash('sha256', $matches[1]))
+            ->first(['credentials.*', 'grants.created_by as owner_id']);
         if ($credential === null || $credential->channel !== $channel || $credential->audience !== $expected) {
             throw DiagnosticProblem::unauthorized();
         }

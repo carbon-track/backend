@@ -20734,6 +20734,7 @@
             "name": "redirect_uri",
             "in": "query",
             "required": true,
+            "description": "Registered callback URI. A portless HTTP registration on 127.0.0.1 or [::1] permits the client to add its runtime port. All other parts must match the registered URI and, for CIMD, the client document.",
             "schema": {
               "type": "string"
             }
@@ -20861,7 +20862,16 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Same-origin handoff page.",
+            "description": "CarbonTrack browser handoff page with authorization status and a link back to the client.",
+            "headers": {
+              "Content-Language": {
+                "description": "Chinese or English, selected from the browser's language preference.",
+                "schema": {
+                  "type": "string",
+                  "enum": ["zh", "en"]
+                }
+              }
+            },
             "content": {
               "text/html": {
                 "schema": {
@@ -20881,7 +20891,7 @@
             }
           }
         },
-        "description": "Presents an issuer-origin page that submits the one-time consent ticket with its binding cookie."
+        "description": "Presents an issuer-origin page that submits the one-time consent ticket with its binding cookie and returns the browser to the validated client callback."
       },
       "post": {
         "tags": [
@@ -20990,7 +21000,8 @@
                     "type": "string"
                   },
                   "redirect_uri": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Exact callback URI from the authorization request, including its runtime port."
                   },
                   "resource": {
                     "type": "string"
@@ -25612,6 +25623,31 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "endpoint": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "affected_id": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "response_code": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "data": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "JSON-encoded audit details for a log diagnostics operation."
+                        },
                         "id": {
                           "type": "integer"
                         },
@@ -25683,6 +25719,13 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "diagnostic_context": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "JSON-encoded failure stage and database error metadata for a log diagnostics failure."
+                        },
                         "id": {
                           "type": "integer"
                         },
@@ -25849,6 +25892,12 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "ip_address": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
                     "id": {
                       "type": "integer"
                     },
@@ -25892,6 +25941,31 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "endpoint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "affected_id": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "response_code": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    },
+                    "data": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "JSON-encoded audit details for a log diagnostics operation."
+                    },
                     "id": {
                       "type": "integer"
                     },
@@ -26031,6 +26105,13 @@
                 "items": {
                   "type": "object",
                   "properties": {
+                    "diagnostic_context": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "JSON-encoded failure stage and database error metadata for a log diagnostics failure."
+                    },
                     "id": {
                       "type": "integer"
                     },

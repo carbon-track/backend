@@ -62,7 +62,7 @@ final class DiagnosticOAuthClients
 
     public function validateRedirect(array $client, mixed $uri, bool $checkCimd): string
     {
-        if (!is_string($uri) || strlen($uri) > 1024 || !in_array($uri, $client['redirect_uris'], true)
+        if (!is_string($uri) || strlen($uri) > 1024 || !self::matchesRedirect($uri, $client['redirect_uris'])
             || (!self::httpsUrl($uri) && !self::localRedirect($uri))) {
             throw new DiagnosticProblem(400, 'invalid_request', 'The OAuth redirect URI is invalid.');
         }
@@ -76,7 +76,7 @@ final class DiagnosticOAuthClients
                 ?? [$document['token_endpoint_auth_method'] ?? 'none'];
             $allowed = $this->allowedMethods($client);
             if (($document['client_id'] ?? null) !== $client['id'] || !is_string($document['client_name'] ?? null)
-                || !is_array($document['redirect_uris'] ?? null) || !in_array($uri, $document['redirect_uris'], true)
+                || !is_array($document['redirect_uris'] ?? null) || !self::matchesRedirect($uri, $document['redirect_uris'])
                 || !is_array($methods) || array_diff($allowed, array_filter($methods, 'is_string')) !== []
                 || (in_array('private_key_jwt', $allowed, true) && ($document['jwks_uri'] ?? null) !== ($client['jwks_uri'] ?? null))) {
                 throw self::invalid();
@@ -228,6 +228,21 @@ final class DiagnosticOAuthClients
         }
 
         throw self::invalid();
+    }
+
+    private static function matchesRedirect(string $uri, array $registered): bool
+    {
+        if (in_array($uri, $registered, true)) {
+            return true;
+        }
+
+        // A portless loopback IP registration allows the port selected at runtime (RFC 8252).
+        if (!preg_match('~\A(http://(?:127\.0\.0\.1|\[::1\])):([1-9][0-9]{0,4})(?=/|\?|$)~', $uri, $match)
+            || (int) $match[2] > 65535) {
+            return false;
+        }
+
+        return in_array($match[1] . substr($uri, strlen($match[0])), $registered, true);
     }
 
     private static function localRedirect(string $url): bool

@@ -9,6 +9,15 @@ use Psr\Http\Message\ServerRequestInterface;
 
 final class LogDiagnosticRequest
 {
+    public ?int $adminId = null;
+    public array $query = [];
+
+    public static function context(ServerRequestInterface $request): ?self
+    {
+        $context = $request->getAttribute(self::class);
+        return $context instanceof self ? $context : null;
+    }
+
     public static function path(string $path): ?string
     {
         if (preg_match('#/api/v1/(?:admin/)?log-diagnostics(?=/|$)#', $path, $matches, PREG_OFFSET_CAPTURE) === 1) {

@@ -39,6 +39,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
     private const FRONTEND_ORIGIN = 'https://admin.diagnostics.test';
     private const CLIENT = 'diagnostics-fixture-client';
     private const CALLBACK = 'https://agent.diagnostics.test/callback';
+    private const LOOPBACK_CALLBACK = 'http://127.0.0.1/callback';
 
     private App $app;
     private Connection $db;
@@ -67,7 +68,8 @@ final class LogDiagnosticIntegrationTest extends TestCase
         $utc = new DateTimeZone('UTC');
         $this->config = new DiagnosticConfig(true, self::API_ORIGIN, self::FRONTEND_ORIGIN, str_repeat('k', 32), $utc, $utc,
             requestsPerMinute: 100, maxConcurrent: 2, oauthClients: [
-                ['id' => self::CLIENT, 'name' => 'Fixture connector', 'redirect_uris' => [self::CALLBACK], 'auth_method' => 'none'],
+                ['id' => self::CLIENT, 'name' => 'Fixture connector',
+                    'redirect_uris' => [self::CALLBACK, self::LOOPBACK_CALLBACK], 'auth_method' => 'none'],
             ]);
         $this->container = new Container();
         $init = require __DIR__ . '/../../src/dependencies.php';
@@ -97,6 +99,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
             return ['user_id' => $id, 'user' => $actor($id), 'email' => null, 'role' => $actor($id)['role']];
         });
         $auth->method('isAdminUser')->willReturnCallback(static fn (array $user): bool => $user['is_admin']);
+        $this->container->set(AuthService::class, $auth);
         $this->container->set(AuthMiddleware::class, new AuthMiddleware($auth, $audit));
         $this->container->set(AdminMiddleware::class, new AdminMiddleware($auth, $errors));
         $this->container->set(RequestLoggingMiddleware::class, new RequestLoggingMiddleware(
@@ -293,7 +296,8 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertSame($totalBytes, $detail['result_bytes']);
     }
 
-    public function testOAuthBrowserHandoffPkceAndBothMcpLifecycles(): void
+    /** @dataProvider oauthCallbackUris */
+    public function testOAuthBrowserHandoffPkceAndBothMcpLifecycles(string $redirectUri, string $wrongRedirectUri): void
     {
         $grant = $this->grant(['system']);
         $resource = $this->json($this->http('GET', DiagnosticConfig::RESOURCE_METADATA));
@@ -305,7 +309,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertTrue($issuer['authorization_response_iss_parameter_supported']);
         $verifier = DiagnosticConfig::secret();
         $params = [
-            'client_id' => self::CLIENT, 'redirect_uri' => self::CALLBACK, 'resource' => $this->config->resource(),
+            'client_id' => self::CLIENT, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
             'state' => 'fixture-state', 'response_type' => 'code', 'code_challenge_method' => 'S256',
             'code_challenge' => DiagnosticConfig::base64Url(hash('sha256', $verifier, true)),
         ];
@@ -337,14 +341,20 @@ final class LogDiagnosticIntegrationTest extends TestCase
             'approve' => true, 'session_id' => $grant['session']['id'],
         ], 'fixture-admin', headers: ['Origin' => self::FRONTEND_ORIGIN]));
         $ticket = explode('=', parse_url($decision['continue_url'], PHP_URL_FRAGMENT), 2)[1];
-        $issuerPage = $this->http('GET', self::REST . '/oauth/consent');
+        $issuerPage = $this->http('GET', self::REST . '/oauth/consent', headers: ['Accept-Language' => 'zh-CN,en;q=0.9']);
+        self::assertSame(200, $issuerPage->getStatusCode());
+        self::assertSame('zh', $issuerPage->getHeaderLine('Content-Language'));
+        self::assertSame('no-store', $issuerPage->getHeaderLine('Cache-Control'));
         self::assertStringContainsString("connect-src 'self'", $issuerPage->getHeaderLine('Content-Security-Policy'));
+        self::assertMatchesRegularExpression("/style-src 'nonce-[A-Za-z0-9_-]{43}'/", $issuerPage->getHeaderLine('Content-Security-Policy'));
+        self::assertStringContainsString('正在确认连接', (string) $issuerPage->getBody());
         $headers = ['Origin' => self::API_ORIGIN, 'Content-Type' => 'application/x-www-form-urlencoded'];
         $handoff = self::REST . '/oauth/consent';
         self::assertSame(400, $this->http('POST', $handoff, ['ticket' => $ticket], headers: $headers,
             cookies: [DiagnosticOAuth::BROWSER_COOKIE => DiagnosticConfig::secret()])->getStatusCode());
         $cookie = [DiagnosticOAuth::BROWSER_COOKIE => $browser];
         $confirmation = $this->json($this->http('POST', $handoff, ['ticket' => $ticket], headers: $headers, cookies: $cookie));
+        self::assertStringStartsWith($redirectUri . '?', $confirmation['callback_url']);
         parse_str(parse_url($confirmation['callback_url'], PHP_URL_QUERY), $callback);
         self::assertSame('fixture-state', $callback['state']);
         self::assertSame($this->config->issuer(), $callback['iss']);
@@ -352,9 +362,14 @@ final class LogDiagnosticIntegrationTest extends TestCase
 
         $tokenRequest = [
             'grant_type' => 'authorization_code', 'code' => $callback['code'], 'code_verifier' => $verifier,
-            'client_id' => self::CLIENT, 'redirect_uri' => self::CALLBACK, 'resource' => $this->config->resource(),
+            'client_id' => self::CLIENT, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
         ];
         $tokenPath = self::REST . '/oauth/token';
+        $wrongTokenRedirect = $this->http('POST', $tokenPath, array_replace($tokenRequest, [
+            'redirect_uri' => $wrongRedirectUri,
+        ]), headers: $headers);
+        self::assertSame(400, $wrongTokenRedirect->getStatusCode());
+        self::assertSame('invalid_grant', $this->json($wrongTokenRedirect)['error']);
         self::assertSame(400, $this->http('POST', $tokenPath, array_replace($tokenRequest, [
             'code_verifier' => DiagnosticConfig::secret(),
         ]), headers: $headers)->getStatusCode());
@@ -392,7 +407,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertSame(401, $this->mcp('tools/call', $args, $token, '2026-07-28')->getStatusCode());
 
         $system = $this->db->table('system_logs')->where('path', self::REST . '/oauth/token')->get();
-        self::assertCount(3, $system);
+        self::assertCount(4, $system);
         foreach ($system as $entry) {
             self::assertNull($entry->request_body);
             self::assertNull($entry->response_body);
@@ -405,6 +420,14 @@ final class LogDiagnosticIntegrationTest extends TestCase
             self::assertNull($entry->client_get);
             self::assertNull($entry->client_cookie);
         }
+    }
+
+    public static function oauthCallbackUris(): array
+    {
+        return [
+            'HTTPS' => [self::CALLBACK, 'https://agent.diagnostics.test:8443/callback'],
+            'loopback' => ['http://127.0.0.1:30471/callback', 'http://127.0.0.1:30472/callback'],
+        ];
     }
 
     public function testMcpRejectsDisallowedOriginWithAnOperationAudit(): void
@@ -501,6 +524,52 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertSame(503, $response->getStatusCode());
         self::assertArrayNotHasKey('counts_by_type', $this->json($response));
         self::assertSame(0, $this->db->table('log_diagnostic_query_leases')->count());
+    }
+
+    public function testDiagnosticFailureKeepsGrantOwnerIpAndSafeDetailsInRelatedLogs(): void
+    {
+        $_ENV['TRUSTED_PROXY_CIDRS'] = '173.245.48.0/20';
+        $grant = $this->grant(['llm']);
+        $token = $grant['issued']['access_token'];
+        $this->db->getSchemaBuilder()->rename('llm_logs', 'unavailable_llm_logs');
+        $response = $this->http('POST', self::REST . '/summary', ['types' => ['llm']], $token,
+            headers: ['CF-Connecting-IP' => '203.0.113.42', 'X-Forwarded-For' => '198.51.100.4'],
+            server: ['REMOTE_ADDR' => '173.245.48.9']);
+        self::assertSame(503, $response->getStatusCode());
+        self::assertSame('diagnostics_unavailable', $this->json($response)['error']);
+        $requestId = $response->getHeaderLine('X-Request-ID');
+
+        $system = $this->db->table('system_logs')->where('request_id', $requestId)->first();
+        self::assertSame(1, (int) $system->user_id);
+        self::assertSame('203.0.113.42', $system->ip_address);
+        self::assertNull($system->request_body);
+        self::assertNull($system->response_body);
+        $systemMeta = json_decode($system->server_meta, true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame($system->ip_address, $systemMeta['_summary']['ip']);
+        self::assertSame(503, $systemMeta['_diagnostic']['response_code']);
+
+        $this->db->getSchemaBuilder()->rename('unavailable_llm_logs', 'llm_logs');
+        $related = $this->http('GET', '/api/v1/admin/logs/related', bearer: 'fixture-admin', query: ['request_id' => $requestId]);
+        self::assertSame(200, $related->getStatusCode(), (string) $related->getBody());
+        $logs = $this->json($related)['data'];
+        $audit = $logs['audit'][0];
+        self::assertSame('admin', $audit['actor_type']);
+        self::assertSame(1, (int) $audit['user_id']);
+        self::assertSame($system->ip_address, $audit['ip_address']);
+        self::assertSame($grant['session']['id'], (int) $audit['affected_id']);
+        self::assertSame(503, (int) $audit['response_code']);
+        $details = json_decode($audit['data'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('read', $details['failure_stage']);
+        self::assertSame('rest', $details['channel']);
+        self::assertSame(['llm'], $details['authorized_log_types']);
+
+        $error = json_decode($logs['error'][0]['diagnostic_context'], true, 512, JSON_THROW_ON_ERROR);
+        self::assertSame('read', $error['_diagnostic']['failure_stage']);
+        self::assertNotEmpty($error['_diagnostic']['exception_type']);
+        self::assertNotEmpty($logs['error'][0]['error_file']);
+        self::assertArrayHasKey('driver_code', $error['_diagnostic']);
+        self::assertStringNotContainsString($token, (string) $related->getBody());
+        self::assertStringNotContainsString('SELECT ', (string) $related->getBody());
     }
 
     public function testExpiredAuthorizationInactiveOwnerAndExpiredLeaseCleanup(): void
@@ -606,13 +675,13 @@ final class LogDiagnosticIntegrationTest extends TestCase
         });
         $schema->create('llm_logs', static function (Blueprint $t): void {
             $t->increments('id');
-            foreach (['request_id', 'source', 'model', 'status'] as $column) {
+            foreach (['request_id', 'conversation_id', 'actor_type', 'source', 'model', 'status', 'response_id'] as $column) {
                 $t->string($column)->nullable();
             }
             foreach (['prompt', 'response_raw', 'error_message'] as $column) {
                 $t->text($column)->nullable();
             }
-            foreach (['prompt_tokens', 'completion_tokens', 'total_tokens'] as $column) {
+            foreach (['turn_no', 'actor_id', 'prompt_tokens', 'completion_tokens', 'total_tokens'] as $column) {
                 $t->integer($column)->nullable();
             }
             $t->decimal('latency_ms', 10, 2)->nullable();
@@ -682,10 +751,11 @@ final class LogDiagnosticIntegrationTest extends TestCase
         ?string $bearer = null,
         array $query = [],
         array $headers = [],
-        array $cookies = []
+        array $cookies = [],
+        array $server = []
     ): ResponseInterface {
         $uri = $path . ($query === [] ? '' : '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986));
-        $request = (new ServerRequestFactory())->createServerRequest($method, self::API_ORIGIN . $uri)
+        $request = (new ServerRequestFactory())->createServerRequest($method, self::API_ORIGIN . $uri, $server)
             ->withQueryParams($query)->withCookieParams($cookies);
         if ($bearer !== null) {
             $request = $request->withHeader('Authorization', 'Bearer ' . $bearer);

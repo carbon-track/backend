@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarbonTrack\Services;
 
+use CarbonTrack\Support\ClientIpResolver;
 use CarbonTrack\Support\DatabaseRows;
 use CarbonTrack\Support\LogDiagnosticRequest;
 use Illuminate\Database\Connection;
@@ -166,7 +167,7 @@ class AuditLogService
                 $data['actor_type'] ?? 'user',
                 $data['action'],
                 $data['data'] ?? null,
-                $data['ip_address'] ?? ($_SERVER['REMOTE_ADDR'] ?? null),
+                $data['ip_address'] ?? ClientIpResolver::fromServerParams($_SERVER ?? []),
                 $data['user_agent'] ?? ($_SERVER['HTTP_USER_AGENT'] ?? null),
                 $data['request_method'] ?? ($_SERVER['REQUEST_METHOD'] ?? null),
                 $data['endpoint'] ?? ($_SERVER['REQUEST_URI'] ?? null),

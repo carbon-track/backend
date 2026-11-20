@@ -154,47 +154,21 @@ final class LogDiagnosticController
                 ]);
             }
             $nonce = DiagnosticConfig::secret();
-            $html = <<<HTML
-<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Confirm the CarbonTrack connection</title>
-<main>
-<h1>Confirm the CarbonTrack connection</h1>
-<p id="status" role="status">Checking the authorization in this browser.</p>
-<noscript>Enable JavaScript to confirm this connection.</noscript>
-</main>
-<script nonce="$nonce">
-const ticket = /^#ticket=([A-Za-z0-9_-]{43})$/.exec(location.hash);
-history.replaceState(null, '', location.pathname);
-async function confirmConnection() {
-    try {
-        if (!ticket) throw new Error();
-        const response = await fetch(location.pathname, {
-            method: 'POST',
-            credentials: 'same-origin',
-            body: new URLSearchParams({ticket: ticket[1]}),
-            redirect: 'error',
-        });
-        if (!response.ok) throw new Error();
-        const result = await response.json();
-        location.replace(result.callback_url);
-    } catch {
-        document.querySelector('#status').textContent = 'Return to CarbonTrack and confirm the connection again.';
-    }
-}
-confirmConnection();
-</script>
-</html>
-HTML;
+            $language = preg_match('/^\s*zh(?:[-;,]|$)/i', $request->getHeaderLine('Accept-Language')) ? 'zh' : 'en';
+            ob_start();
+            try {
+                require __DIR__ . '/../../templates/log-diagnostics/consent.php';
+            } finally {
+                $html = ob_get_clean();
+            }
             $response->getBody()->write($html);
             return $response
                 ->withHeader('Content-Type', 'text/html; charset=utf-8')
+                ->withHeader('Content-Language', $language)
                 ->withHeader('Cache-Control', 'no-store')
                 ->withHeader('Referrer-Policy', 'no-referrer')
                 ->withHeader('X-Content-Type-Options', 'nosniff')
-                ->withHeader('Content-Security-Policy', "default-src 'none'; script-src 'nonce-$nonce'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+                ->withHeader('Content-Security-Policy', "default-src 'none'; script-src 'nonce-$nonce'; style-src 'nonce-$nonce'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");
         });
     }
 
