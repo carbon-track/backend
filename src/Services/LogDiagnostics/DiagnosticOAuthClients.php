@@ -57,7 +57,7 @@ final class DiagnosticOAuthClients
                 }
             }
         }
-        throw self::invalid();
+        throw self::invalid('oauth_client_registration');
     }
 
     public function validateRedirect(array $client, mixed $uri, bool $checkCimd): string
@@ -70,8 +70,13 @@ final class DiagnosticOAuthClients
         if (array_intersect(['code', 'error', 'state', 'iss'], array_keys($query)) !== []) {
             throw new DiagnosticProblem(400, 'invalid_request', 'The OAuth redirect URI contains a reserved parameter.');
         }
-        if ($checkCimd && self::httpsUrl($client['id'])) {
-            $document = $this->document($client['id']);
+        $hasRegisteredDocument = array_key_exists('client_metadata_document', $client);
+        if (self::httpsUrl($client['id']) && ($checkCimd || $hasRegisteredDocument)) {
+            // A pre-registered document uses the same checks as a document retrieved over HTTPS.
+            $document = $hasRegisteredDocument ? $client['client_metadata_document'] : $this->document($client['id']);
+            if (!is_array($document)) {
+                throw self::invalid('oauth_client_metadata_invalid');
+            }
             $methods = $document['token_endpoint_auth_methods_supported']
                 ?? [$document['token_endpoint_auth_method'] ?? 'none'];
             $allowed = $this->allowedMethods($client);
@@ -79,7 +84,7 @@ final class DiagnosticOAuthClients
                 || !is_array($document['redirect_uris'] ?? null) || !self::matchesRedirect($uri, $document['redirect_uris'])
                 || !is_array($methods) || array_diff($allowed, array_filter($methods, 'is_string')) !== []
                 || (in_array('private_key_jwt', $allowed, true) && ($document['jwks_uri'] ?? null) !== ($client['jwks_uri'] ?? null))) {
-                throw self::invalid();
+                throw self::invalid('oauth_client_metadata_mismatch');
             }
         }
         return $uri;
@@ -189,13 +194,13 @@ final class DiagnosticOAuthClients
     private function document(mixed $url): array
     {
         if (!self::httpsUrl($url)) {
-            throw self::invalid();
+            throw self::invalid('oauth_metadata_url');
         }
         $host = parse_url($url, PHP_URL_HOST);
         $addresses = gethostbynamel($host) ?: [];
         $address = $addresses[0] ?? '';
         if (filter_var($address, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) === false) {
-            throw self::invalid();
+            throw self::invalid('oauth_metadata_dns');
         }
         try {
             $response = $this->http->request('GET', $url, [
@@ -217,17 +222,23 @@ final class DiagnosticOAuthClients
                     }
                 },
             ]);
+            $status = $response->getStatusCode();
+            if ($status !== 200) {
+                throw self::invalid('oauth_metadata_http_' . $status);
+            }
             $body = $response->getBody();
             $encoded = $body->read(65537);
             $document = json_decode($encoded, true);
-            if ($response->getStatusCode() === 200 && strlen($encoded) <= 65536 && $body->eof() && is_array($document)) {
+            if (strlen($encoded) <= 65536 && $body->eof() && is_array($document)) {
                 return $document;
             }
-        } catch (\Throwable) {
-            // Metadata is part of the client's identity, so unavailable data fails closed.
+        } catch (DiagnosticProblem $failure) {
+            throw $failure;
+        } catch (\Throwable $failure) {
+            throw self::invalid('oauth_metadata_transport', $failure);
         }
 
-        throw self::invalid();
+        throw self::invalid('oauth_metadata_response');
     }
 
     private static function matchesRedirect(string $uri, array $registered): bool
@@ -261,8 +272,9 @@ final class DiagnosticOAuthClients
             && ($parts['port'] ?? 443) === 443 && filter_var($url, FILTER_VALIDATE_URL) !== false;
     }
 
-    private static function invalid(): DiagnosticProblem
+    private static function invalid(?string $component = null, ?\Throwable $previous = null): DiagnosticProblem
     {
-        return new DiagnosticProblem(401, 'invalid_client', 'OAuth client validation failed.');
+        return new DiagnosticProblem(401, 'invalid_client', 'OAuth client validation failed.',
+            component: $component, previous: $previous);
     }
 }

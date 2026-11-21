@@ -122,6 +122,59 @@ final class DiagnosticOAuthClientsTest extends TestCase
         $clients->validateRedirect($client, 'http://127.0.0.1:30471/callback', true);
     }
 
+    public function testPreRegisteredCimdUsesLocalMetadataForAuthorizationAndExchange(): void
+    {
+        [$clients, $http] = $this->clients();
+        $loopback = 'http://127.0.0.1/callback';
+        $client = array_replace($clients->registered(self::CLIENT_ID), [
+            'redirect_uris' => [$loopback, self::REDIRECT],
+            'client_metadata_document' => [
+                'client_id' => self::CLIENT_ID,
+                'client_name' => 'Fixture native client',
+                'redirect_uris' => [$loopback],
+                'token_endpoint_auth_methods_supported' => ['none', 'private_key_jwt'],
+                'jwks_uri' => self::JWKS_URI,
+            ],
+        ]);
+
+        $redirect = 'http://127.0.0.1:30471/callback';
+        self::assertSame($redirect, $clients->validateRedirect($client, $redirect, true));
+        self::assertSame($redirect, $clients->validateRedirect($client, $redirect, false));
+        self::assertNull($http->getLastRequest());
+
+        // The registered redirect must also be allowed by the local document at exchange.
+        $this->expectException(DiagnosticProblem::class);
+        $this->expectExceptionMessage('OAuth client validation failed.');
+        $clients->validateRedirect($client, self::REDIRECT, false);
+    }
+
+    public function testMalformedPreRegisteredMetadataIsRejectedWithoutFetching(): void
+    {
+        [$clients, $http] = $this->clients();
+        $client = $clients->registered(self::CLIENT_ID) + ['client_metadata_document' => null];
+        try {
+            $clients->validateRedirect($client, self::REDIRECT, true);
+            self::fail('Malformed pre-registered metadata should fail closed.');
+        } catch (DiagnosticProblem $problem) {
+            self::assertSame('invalid_client', $problem->reason);
+            self::assertSame('oauth_client_metadata_invalid', $problem->logDetails()['failure_component']);
+        }
+        self::assertNull($http->getLastRequest());
+    }
+
+    public function testOnlineCimdRetainsHttpFailureForDiagnostics(): void
+    {
+        [$clients, $http] = $this->clients();
+        $http->append(new Response(403, [], 'Blocked response body'));
+        try {
+            $clients->validateRedirect($clients->registered(self::CLIENT_ID), self::REDIRECT, true);
+            self::fail('A failed metadata request should reject client authorization.');
+        } catch (DiagnosticProblem $problem) {
+            self::assertSame('OAuth client validation failed.', $problem->getMessage());
+            self::assertSame('oauth_metadata_http_403', $problem->logDetails()['failure_component']);
+        }
+    }
+
     public function testPrivateKeyAssertionChecksClaimsAndReturnsReplayKey(): void
     {
         $key = $this->signingKey(['private_key_type' => OPENSSL_KEYTYPE_RSA]);

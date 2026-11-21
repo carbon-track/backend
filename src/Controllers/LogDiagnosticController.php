@@ -202,13 +202,16 @@ final class LogDiagnosticController
             $error = $failure instanceof DiagnosticProblem ? $failure : DiagnosticProblem::unavailable();
             if ($this->config->enabled) {
                 $userId = (int) $request->getAttribute('user_id');
+                $details = $error->logDetails();
                 try {
-                    $this->access->record($request, 'rejected', null, ['reason' => $error->reason],
+                    $this->access->record($request, 'rejected', null, $details,
                         $userId > 0 ? $userId : null, $error->status);
                 } catch (\Throwable) {
                     // A failed audit can never make a protected result available.
                 }
-                $this->errorLogService->logError('LogDiagnosticFailure', $error->reason, $request);
+                $this->errorLogService->logError('LogDiagnosticFailure', $error->reason, $request, [
+                    'diagnostic' => $details,
+                ]);
             }
             return $this->problem($request, $response, $error, $oauthToken);
         }

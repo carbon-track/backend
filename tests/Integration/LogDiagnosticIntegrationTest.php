@@ -38,6 +38,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
     private const API_ORIGIN = 'https://api.diagnostics.test';
     private const FRONTEND_ORIGIN = 'https://admin.diagnostics.test';
     private const CLIENT = 'diagnostics-fixture-client';
+    private const REGISTERED_CIMD_CLIENT = 'https://codex.diagnostics.test/client.json';
     private const CALLBACK = 'https://agent.diagnostics.test/callback';
     private const LOOPBACK_CALLBACK = 'http://127.0.0.1/callback';
 
@@ -70,6 +71,14 @@ final class LogDiagnosticIntegrationTest extends TestCase
             requestsPerMinute: 100, maxConcurrent: 2, oauthClients: [
                 ['id' => self::CLIENT, 'name' => 'Fixture connector',
                     'redirect_uris' => [self::CALLBACK, self::LOOPBACK_CALLBACK], 'auth_method' => 'none'],
+                [
+                    'id' => self::REGISTERED_CIMD_CLIENT, 'name' => 'Fixture connector',
+                    'redirect_uris' => [self::CALLBACK, self::LOOPBACK_CALLBACK], 'auth_method' => 'none',
+                    'client_metadata_document' => [
+                        'client_id' => self::REGISTERED_CIMD_CLIENT, 'client_name' => 'Fixture connector',
+                        'redirect_uris' => [self::LOOPBACK_CALLBACK], 'token_endpoint_auth_method' => 'none',
+                    ],
+                ],
             ]);
         $this->container = new Container();
         $init = require __DIR__ . '/../../src/dependencies.php';
@@ -297,8 +306,11 @@ final class LogDiagnosticIntegrationTest extends TestCase
     }
 
     /** @dataProvider oauthCallbackUris */
-    public function testOAuthBrowserHandoffPkceAndBothMcpLifecycles(string $redirectUri, string $wrongRedirectUri): void
-    {
+    public function testOAuthBrowserHandoffPkceAndBothMcpLifecycles(
+        string $redirectUri,
+        string $wrongRedirectUri,
+        string $clientId = self::CLIENT
+    ): void {
         $grant = $this->grant(['system']);
         $resource = $this->json($this->http('GET', DiagnosticConfig::RESOURCE_METADATA));
         $issuer = $this->json($this->http('GET', DiagnosticConfig::ISSUER_METADATA));
@@ -307,9 +319,10 @@ final class LogDiagnosticIntegrationTest extends TestCase
         self::assertSame(['S256'], $issuer['code_challenge_methods_supported']);
         self::assertSame(['RS256', 'ES256'], $issuer['token_endpoint_auth_signing_alg_values_supported']);
         self::assertTrue($issuer['authorization_response_iss_parameter_supported']);
+        self::assertTrue($issuer['client_id_metadata_document_supported']);
         $verifier = DiagnosticConfig::secret();
         $params = [
-            'client_id' => self::CLIENT, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
+            'client_id' => $clientId, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
             'state' => 'fixture-state', 'response_type' => 'code', 'code_challenge_method' => 'S256',
             'code_challenge' => DiagnosticConfig::base64Url(hash('sha256', $verifier, true)),
         ];
@@ -362,7 +375,7 @@ final class LogDiagnosticIntegrationTest extends TestCase
 
         $tokenRequest = [
             'grant_type' => 'authorization_code', 'code' => $callback['code'], 'code_verifier' => $verifier,
-            'client_id' => self::CLIENT, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
+            'client_id' => $clientId, 'redirect_uri' => $redirectUri, 'resource' => $this->config->resource(),
         ];
         $tokenPath = self::REST . '/oauth/token';
         $wrongTokenRedirect = $this->http('POST', $tokenPath, array_replace($tokenRequest, [
@@ -427,7 +440,34 @@ final class LogDiagnosticIntegrationTest extends TestCase
         return [
             'HTTPS' => [self::CALLBACK, 'https://agent.diagnostics.test:8443/callback'],
             'loopback' => ['http://127.0.0.1:30471/callback', 'http://127.0.0.1:30472/callback'],
+            'pre-registered CIMD' => [
+                'http://127.0.0.1:30471/callback', 'http://127.0.0.1:30472/callback', self::REGISTERED_CIMD_CLIENT,
+            ],
         ];
+    }
+
+    public function testOAuthMetadataRejectionLogsTheFailureComponentWithoutRequestSecrets(): void
+    {
+        $response = $this->http('GET', self::REST . '/oauth/authorize', query: [
+            'client_id' => self::REGISTERED_CIMD_CLIENT,
+            'redirect_uri' => self::CALLBACK,
+            'state' => 'private-fixture-state',
+        ]);
+        self::assertSame(401, $response->getStatusCode());
+        self::assertSame('invalid_client', $this->json($response)['error']);
+        self::assertFalse($response->hasHeader('Location'));
+        self::assertStringNotContainsString('oauth_client_metadata_mismatch', (string) $response->getBody());
+
+        $requestId = $response->getHeaderLine('X-Request-ID');
+        $error = $this->db->table('error_logs')->where('request_id', $requestId)->sole();
+        $audit = $this->db->table('audit_logs')->where('request_id', $requestId)
+            ->where('action', 'log_diagnostic_rejected')->sole();
+        self::assertNull($error->client_get);
+        self::assertSame('oauth_client_metadata_mismatch',
+            json_decode($error->client_server, true, 512, JSON_THROW_ON_ERROR)['_diagnostic']['failure_component']);
+        self::assertSame('oauth_client_metadata_mismatch',
+            json_decode($audit->data, true, 512, JSON_THROW_ON_ERROR)['failure_component']);
+        self::assertStringNotContainsString('private-fixture-state', $audit->data);
     }
 
     public function testMcpRejectsDisallowedOriginWithAnOperationAudit(): void

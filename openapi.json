@@ -20711,6 +20711,7 @@
           "Log diagnostics"
         ],
         "summary": "Start a PKCE S256 authorization request.",
+        "description": "Accepts registered OAuth clients. For a URL client ID, the issuer validates the configured client metadata document or retrieves it from the registered HTTPS URL. Metadata validation failures return invalid_client and are correlated in the administrative diagnostic logs.",
         "operationId": "authorizeLogDiagnosticMcp",
         "security": [],
         "parameters": [
@@ -20734,7 +20735,7 @@
             "name": "redirect_uri",
             "in": "query",
             "required": true,
-            "description": "Registered callback URI. A portless HTTP registration on 127.0.0.1 or [::1] permits the client to add its runtime port. All other parts must match the registered URI and, for CIMD, the client document.",
+            "description": "Registered callback URI. A portless HTTP registration on 127.0.0.1 or [::1] permits the client to add its runtime port. All other parts must match the registered URI and, for a URL client ID, its pre-registered or retrieved metadata document.",
             "schema": {
               "type": "string"
             }
